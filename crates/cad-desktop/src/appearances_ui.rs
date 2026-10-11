@@ -1416,6 +1416,7 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
             ("/roughness", "Roughness"),
             ("/clearcoat", "Clear coat"),
             ("/clearcoat_roughness", "Coat roughness"),
+            ("/anisotropy", "Directional reflections"),
         ] {
             field(ui, w, &fields, pointer, label, json!([]));
         }
@@ -1492,7 +1493,20 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
                 );
             }
             if slot == "height" {
+                field(
+                    ui,
+                    w,
+                    &fields,
+                    "/builtin_bump",
+                    "Built-in bump",
+                    json!([{"value":"none","label":"None"},{"value":"brushed","label":"Brushed grain"}]),
+                );
                 field(ui, w, &fields, "/height_mm", "Bump depth (mm)", json!([]));
+                description(
+                    ui,
+                    "appearance:grain-help",
+                    "The grayscale bump map drives surface grain. An imported height image overrides the built-in bump; Clear returns to the selected built-in map. Clear the image and choose None to remove bump relief. Tile size and texture direction scale and rotate the bump; depth controls its lighting relief.",
+                );
             } else if slot == "normal" {
                 field(
                     ui,
@@ -1665,6 +1679,11 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "appearance:shared-library-help",
             "appearance-description",
             "Shared finishes can be assigned to many parts. Editing a shared finish updates every assignment that uses it.",
+        ),
+        (
+            "appearance:grain-help",
+            "appearance-description",
+            "The grayscale bump map drives surface grain. An imported height image overrides the built-in bump; Clear returns to the selected built-in map. Clear the image and choose None to remove bump relief. Tile size and texture direction scale and rotate the bump; depth controls its lighting relief.",
         ),
         (
             "appearance:texture-help",

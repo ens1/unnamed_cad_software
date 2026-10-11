@@ -2,7 +2,7 @@
 
 TCAD stores surface appearance separately from engineering material. A part's engineering material still supplies its density, mass and manufacturing/BOM identity. Its visual finish supplies tint, roughness, metallic response, clearcoat and texture maps. Changing one does not change the other.
 
-New parts use **Aluminum · Clear Anodized** (`clear-anodized-aluminum`). The finish library also includes bare aluminum, green anodized aluminum and painted RAL 1015. The RAL preset is a display approximation, not a calibrated color specification. These presets provide tint and surface response; they do not require bundled image files. The default finish may be edited or duplicated but cannot be deleted, because new parts depend on its stable identity.
+New parts use **Aluminum · Clear Anodized** (`clear-anodized-aluminum`). The finish library also includes bare aluminum, green anodized aluminum and painted RAL 1015. The RAL preset is a display approximation, not a calibrated color specification. Aluminum presets use a bundled grayscale brushed-height image and directional reflections. Painted RAL 1015 defaults to no bump and isotropic reflections. The default finish may be edited or duplicated but cannot be deleted, because new parts depend on its stable identity.
 
 ## Editing a finish
 
@@ -17,7 +17,7 @@ deliberately edits the library definition and every assignment using it.
 Occurrence overrides and inheritance remain separate from the base part finish.
 
 The panel includes tint, metallic, roughness, clearcoat, clearcoat roughness,
-normal strength and bump depth. **Height / bump → Import/Replace** accepts a
+directional reflections, built-in bump selection, normal strength and bump depth. **Height / bump → Import/Replace** accepts a
 user's grayscale image. Each texture slot also supports Clear and selection of
 an existing pinned project image. Mapping controls set projection, physical tile
 width/height, direction and U/V offsets. Complete finish JSON remains under
@@ -39,6 +39,10 @@ Changes use the shared document draft and undo history. The viewport displays th
 
 Height gradients perturb the lighting normal, so relief responds to studio reflections and direct lights. A grayscale image can therefore produce the appearance of pores, machining marks or a raised pattern without encoding RGB normals. Bump depth defaults to **0.02 mm** and accepts **0–10 mm**. Normal and height contributions can be combined; normal strength does not scale the independently specified bump depth.
 
+**The bump map drives grain.** With no imported height resource, **Built-in bump → Brushed grain** samples the original TCAD image at `assets/appearance/brushed-height-v1.png`: a seamless 1024×1024, 16-bit grayscale map containing irregular machining streaks along texture U. It follows the same floating-point height and mip pipeline as user images. There is no additional procedural shader grain layered over an import. An assigned height image replaces this map, including while that image is loading or has a reported error. Clear returns to the selected built-in map; selecting None with no imported height image removes bump relief. Tile sizes, texture direction and bump depth affect the actual grayscale map. The bundled file can also be imported as a regular project image; `scripts/generate-finish-maps.py` authors it deterministically.
+
+Height gradients use a mip and finite-difference distance matched to the projected pixel footprint, then divide by that distance in physical millimetres. Fine relief filters away as the model recedes rather than retaining the full-resolution derivative at every zoom. **Directional reflections** (0–1) controls anisotropic specular response: 0 is isotropic, 1 is strongest. Its tangent follows the part-local texture U direction and remains independent of tessellation UVs. It defaults to 0.45 for clear/green anodized aluminum and 0.65 for bare aluminum. A separate imported roughness map can modulate surface response; the height map supplies surface relief.
+
 Relief is a rendering effect. It does not move CAD surfaces, change silhouettes, create measurable geometry or alter volume, mass, tolerances, drawing geometry or STEP/STL output. There is no mesh displacement, parallax occlusion or volumetric texture contract in this implementation. Image alpha does not create surface transparency.
 
 ## Physical mapping and portable images
@@ -55,16 +59,17 @@ The renderer generates a full mip chain, averages color in linear light, average
 
 **Studio Lighting** exposes environment rotation, exposure in stops, environment intensity, key/fill intensity and shadows. These are saved scene settings and share the finish editor's draft/Apply/Cancel path. Exposure accepts **−8 to +8 stops**; intensity multipliers accept **0–10**.
 
-The Bevy adapter generates a local studio environment with softbox-shaped radiance, cosine-filtered diffuse illumination and GGX-prefiltered specular mip levels. It combines those reflections with key/fill directional lights and cascaded key-light shadows. Disabling shadows also disables screen-space occlusion. Rendering uses an HDR camera, ACES fitted tone mapping, screen-space ambient occlusion and FXAA. Studio resources are generated locally; no network assets are needed. This is interactive rasterized PBR shading, not a ray-traced renderer. User HDR environment imports and a render/export workbench are not implemented.
+The Bevy adapter generates a local studio environment with bright surrounding walls, five softbox reflection cards, cosine-filtered diffuse illumination and GGX-prefiltered specular mip levels. The environment supplies most metallic illumination; lower-intensity key/fill directional lights provide local highlights and cascaded key-light shadows. The studio uses 32-pixel diffuse faces and 128-pixel specular faces with eight roughness mip levels and 256 filter samples. A coarse studio is available at startup while full resources generate asynchronously. Cubemap handedness and environment rotation match direct-light directions. Disabling shadows also disables screen-space occlusion. Rendering uses an HDR camera, ACES fitted tone mapping, screen-space ambient occlusion and FXAA. Studio resources are generated locally; no network assets are needed. This is interactive rasterized PBR shading, not a ray-traced renderer. User HDR environment imports and a render/export workbench are not implemented. Sharp modeled edges remain sharp; textures do not substitute for geometric fillets or chamfers.
 
 ## Source and presentation contracts
 
-The application-owned `tcad.appearance` contract is version **1**, defined in `cad-core::appearance`. It contains no Bevy materials, image handles or shader types. Visual numeric source values remain `f64`; the desktop adapter converts them at the rendering boundary.
+The application-owned `tcad.appearance` contract is version **2**, defined in `cad-core::appearance`. It contains no Bevy materials, image handles or shader types. Visual numeric source values remain `f64`; the desktop adapter converts them at the rendering boundary.
 
 - `Document.finishes` owns named `Finish` definitions; `Document.lighting` owns saved studio settings.
 - `Part.finish` chooses the base finish. `configuration::Overrides.finish` optionally chooses a configured part finish. `Instance.finish` optionally overrides a component occurrence.
 - Nested occurrences inherit the nearest explicit ancestor override; a nearer override wins. With no occurrence override, the selected part configuration's finish wins over the base assignment. Patterned occurrences inherit their seed's appearance. Editing the base assignment preserves configured overrides.
 - `TextureMaps` contains optional resource IDs for `base_color`, `normal`, `roughness`, `metallic`, `occlusion` and `height`. `TextureMapping` contains `mode`, `scale_mm`, `rotation_deg` and `offset_mm`.
+- `Finish.builtin_bump` selects `brushed` or `none` when no imported height resource is assigned. `Finish.anisotropy` controls directional reflection strength. Version 2 reads older explicit finishes with these omitted fields defaulting to brushed and 0.45; existing stored colors, PBR values, texture resources and mappings remain intact. Previously texture-free legacy finishes therefore gain the built-in grain unless it is disabled.
 - `PutFinish`, `DeleteFinish`, `SetPartFinish`, `SetInstanceFinish` and `SetLighting` use the common command transaction. Texture import adds its resource and finish reference together through that transaction.
 
 Native schema 1 remains readable. Absent finish/lighting fields receive defaults. Unchanged default part assignments, default lighting, inherited instance assignments and the unchanged built-in library are omitted from serialization, preserving legacy source hashes and pinned part bytes. Library linking materializes default finish assignments before namespacing so an imported component retains its own visual definitions.

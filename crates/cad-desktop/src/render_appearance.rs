@@ -22,19 +22,26 @@ use bevy::{
 };
 use cad_core::{
     Document, PlacedPart,
-    appearance::{Finish, MappingMode},
+    appearance::{BuiltinBump, Finish, MappingMode},
 };
 use half::f16;
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     path::{Path, PathBuf},
-    sync::{Mutex, mpsc},
+    sync::{Mutex, OnceLock, mpsc},
 };
 
 const FINISH_SHADER: Handle<Shader> = uuid_handle!("c201dc9b-78b5-40d4-a148-a153ba4f04d4");
 const CACHE_BYTES: usize = 512 * 1024 * 1024;
 const CACHE_ITEMS: usize = 128;
 const PARALLEL_LOADS: usize = 2;
+// The surrounding studio supplies most of a metal's light. Small direct lights
+// retain readable contact shadows without washing the finish into flat white.
+const STUDIO_INTENSITY: f32 = 1300.;
+const KEY_ILLUMINANCE: f32 = 3000.;
+const FILL_ILLUMINANCE: f32 = 1500.;
+const KEY_DIRECTION: Vec3 = Vec3::new(-3., 7., 5.);
+const FILL_DIRECTION: Vec3 = Vec3::new(4., 3., -4.);
 pub type FinishMaterial = ExtendedMaterial<StandardMaterial, FinishExtension>;
 
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
@@ -44,6 +51,7 @@ pub struct FinishUniform {
     mapping: Vec4,
     settings: Vec4,
     relief: Vec4,
+    surface: Vec4,
 }
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 pub struct FinishExtension {
@@ -108,6 +116,7 @@ struct LoadRequest {
 }
 enum Reply {
     Texture(TextureKey, Result<Image, String>),
+    BuiltinHeight(Result<Image, String>),
     Studio(Image, Image),
 }
 #[derive(Resource)]
@@ -120,6 +129,7 @@ pub struct Runtime {
     image_bytes: usize,
     white: Handle<Image>,
     flat_normal: Handle<Image>,
+    builtin_height: TextureState,
     pub epoch: u64,
     studio: Option<(Handle<Image>, Handle<Image>)>,
     usage_key: String,
@@ -136,6 +146,7 @@ impl Default for Runtime {
             image_bytes: 0,
             white: Handle::default(),
             flat_normal: Handle::default(),
+            builtin_height: TextureState::Pending,
             epoch: 0,
             studio: None,
             usage_key: String::new(),
@@ -226,6 +237,19 @@ impl Runtime {
     }
     pub fn diagnostics(&self, doc: &Document, root: &Path, validating: bool) -> Vec<String> {
         let mut messages = vec![];
+        if doc.finishes.values().any(|finish| {
+            finish.textures.height.is_none() && finish.builtin_bump == BuiltinBump::Brushed
+        }) {
+            match &self.builtin_height {
+                TextureState::Pending => {
+                    messages.push("Loading texture built-in brushed grain".into())
+                }
+                TextureState::Failed(error) => {
+                    messages.push(format!("Built-in brushed bump: {error}"))
+                }
+                TextureState::Loaded(_) => {}
+            }
+        }
         let mut used = std::collections::BTreeSet::new();
         for finish in doc.finishes.values() {
             for (slot, (id, srgb)) in [
@@ -276,6 +300,17 @@ pub struct StudioLight(pub bool);
 pub fn setup(commands: &mut Commands, images: &mut Assets<Image>, runtime: &mut Runtime) {
     runtime.white = images.add(pixel([255, 255, 255, 255]));
     runtime.flat_normal = images.add(pixel([128, 128, 255, 255]));
+    let height_sender = runtime.sender.clone();
+    std::thread::spawn(move || {
+        let result = crate::texture_assets::builtin_brushed_height();
+        let _ = height_sender.send(Reply::BuiltinHeight(result));
+    });
+    // A coarse studio is available immediately. Filtering the final resources
+    // stays off the main thread, but metal never starts in an unlit void.
+    runtime.studio = Some((
+        images.add(cube_image(4, 1, true)),
+        images.add(cube_image(8, 4, false)),
+    ));
     let sender = runtime.sender.clone();
     std::thread::spawn(move || {
         let (diffuse, specular) = studio_maps();
@@ -286,8 +321,8 @@ pub fn setup(commands: &mut Commands, images: &mut Assets<Image>, runtime: &mut 
         ..default()
     });
     for (key, position, illuminance) in [
-        (true, Vec3::new(-3., 7., 5.), 12500.),
-        (false, Vec3::new(4., 3., -4.), 5000.),
+        (true, KEY_DIRECTION, KEY_ILLUMINANCE),
+        (false, FILL_DIRECTION, FILL_ILLUMINANCE),
     ] {
         commands.spawn((
             DirectionalLight {
@@ -430,7 +465,21 @@ pub fn poll_assets(
                 runtime.textures.insert(key, state);
                 runtime.epoch = runtime.epoch.wrapping_add(1);
             }
+            Reply::BuiltinHeight(result) => {
+                runtime.builtin_height = match result {
+                    Ok(image) => {
+                        runtime.image_bytes += image.data.as_ref().map(Vec::len).unwrap_or(0);
+                        TextureState::Loaded(images.add(image))
+                    }
+                    Err(error) => TextureState::Failed(error),
+                };
+                runtime.epoch = runtime.epoch.wrapping_add(1);
+            }
             Reply::Studio(diffuse, specular) => {
+                if let Some((diffuse, specular)) = runtime.studio.take() {
+                    images.remove(&diffuse);
+                    images.remove(&specular);
+                }
                 runtime.studio = Some((images.add(diffuse), images.add(specular)));
                 runtime.epoch = runtime.epoch.wrapping_add(1);
             }
@@ -554,8 +603,10 @@ pub fn lighting(
             commands.entity(entity).insert(EnvironmentMapLight {
                 diffuse_map: diffuse.clone(),
                 specular_map: specular.clone(),
-                intensity: 650. * environment,
-                rotation: Quat::from_rotation_y(rotation),
+                intensity: STUDIO_INTENSITY * environment,
+                // Bevy rotates lookup rays, rather than the cubemap itself.
+                // Use the inverse so cards and direct lights turn together.
+                rotation: Quat::from_rotation_y(-rotation),
                 ..default()
             });
         }
@@ -566,17 +617,17 @@ pub fn lighting(
     for (entity, mut light, mut transform, role) in &mut lights {
         commands.entity(entity).insert(shadow_config(distance));
         light.illuminance = if role.0 {
-            12500. * key_intensity
+            KEY_ILLUMINANCE * key_intensity
         } else {
-            5000. * fill_intensity
+            FILL_ILLUMINANCE * fill_intensity
         };
         light.shadow_maps_enabled = shadows && role.0;
         light.shadow_normal_bias = 0.015;
         let direction = rotation
             * if role.0 {
-                Vec3::new(-3., 7., 5.)
+                KEY_DIRECTION
             } else {
-                Vec3::new(4., 3., -4.)
+                FILL_DIRECTION
             };
         *transform = Transform::from_translation(target + direction.normalize() * distance * 4.)
             .looking_at(target, Vec3::Y);
@@ -635,6 +686,15 @@ pub fn material(
     extension.metallic = map(finish.textures.metallic.as_deref(), false, 8, &white);
     extension.occlusion = map(finish.textures.occlusion.as_deref(), false, 16, &white);
     extension.height = map(finish.textures.height.as_deref(), false, 32, &white);
+    // An explicitly assigned image owns the bump slot even while loading or
+    // after a decode error. Do not silently layer or substitute built-in grain.
+    if finish.textures.height.is_none()
+        && finish.builtin_bump == BuiltinBump::Brushed
+        && let TextureState::Loaded(height) = &runtime.builtin_height
+    {
+        extension.height = height.clone();
+        flags |= 32;
+    }
     extension.uniform.relief.y = flags as f32;
     // Draft/comparison tint is a semantic overlay; it does not rewrite visual finish source.
     let base = StandardMaterial {
@@ -645,6 +705,11 @@ pub fn material(
             finish.metallic as f32
         },
         perceptual_roughness: finish.roughness as f32,
+        anisotropy_strength: if translucent {
+            0.
+        } else {
+            finish.anisotropy as f32
+        },
         reflectance: 0.5,
         clearcoat: if translucent {
             0.
@@ -704,6 +769,7 @@ fn extension(finish: &Finish, instance: &PlacedPart) -> FinishExtension {
                 },
             ),
             relief: Vec4::new(finish.height_mm as f32, 0., 0., 0.),
+            surface: Vec4::new(0., 0., finish.anisotropy as f32, 0.),
         },
         color: Handle::default(),
         normal: Handle::default(),
@@ -740,41 +806,78 @@ fn pixel(value: [u8; 4]) -> Image {
 }
 
 // Code-native studio resources: no network, external asset bundle or photographic content.
+struct StudioCard {
+    axis: Vec3,
+    side: Vec3,
+    up: Vec3,
+    inverse_widths: Vec2,
+    radiance: Vec3,
+}
+fn studio_cards() -> &'static [StudioCard; 5] {
+    static CARDS: OnceLock<[StudioCard; 5]> = OnceLock::new();
+    CARDS.get_or_init(|| {
+        [
+            (
+                KEY_DIRECTION,
+                Vec3::X,
+                [0.75, 0.40],
+                3.8,
+                Vec3::new(1., 0.97, 0.92),
+            ),
+            (
+                FILL_DIRECTION,
+                Vec3::Y,
+                [0.62, 0.95],
+                2.2,
+                Vec3::new(0.88, 0.94, 1.),
+            ),
+            (
+                Vec3::new(-4., 1., -3.),
+                Vec3::Y,
+                [0.38, 1.20],
+                2.5,
+                Vec3::new(0.98, 0.99, 1.),
+            ),
+            (Vec3::new(2., 2., 5.), Vec3::Y, [0.30, 0.90], 2.6, Vec3::ONE),
+            (Vec3::new(2., 6., 1.), Vec3::Z, [0.95, 0.36], 2.4, Vec3::ONE),
+        ]
+        .map(|(axis, tangent, widths, strength, color)| {
+            let axis = axis.normalize();
+            let side = tangent.cross(axis).normalize();
+            StudioCard {
+                axis,
+                side,
+                up: axis.cross(side),
+                inverse_widths: Vec2::new(1. / widths[0], 1. / widths[1]),
+                radiance: color * strength,
+            }
+        })
+    })
+}
 fn studio_radiance(direction: Vec3) -> Vec3 {
-    let sky = (direction.y * 0.5 + 0.5).clamp(0., 1.);
-    let mut radiance = Vec3::new(0.085, 0.095, 0.12).lerp(Vec3::new(0.35, 0.38, 0.43), sky);
-    for (axis, tangent, widths, strength, color) in [
-        (
-            Vec3::new(-3., 7., 5.).normalize(),
-            Vec3::X,
-            [0.48, 0.22],
-            10.,
-            Vec3::new(1., 0.96, 0.90),
-        ),
-        (
-            Vec3::new(4., 3., -4.).normalize(),
-            Vec3::Y,
-            [0.22, 0.65],
-            5.,
-            Vec3::new(0.83, 0.91, 1.),
-        ),
-        (
-            Vec3::new(2., 6., 1.).normalize(),
-            Vec3::Z,
-            [0.65, 0.12],
-            6.,
-            Vec3::ONE,
-        ),
-    ] {
-        let side = tangent.cross(axis).normalize();
-        let up = axis.cross(side);
-        let facing = direction.dot(axis);
+    // Neutral floor and continuous bright walls provide reflected fill from
+    // every side. A metal has almost no diffuse response, so directional fill
+    // alone cannot illuminate a face whose reflection misses a small softbox.
+    let wall = (direction.y + 1.).clamp(0., 1.);
+    let ceiling = direction.y.max(0.).powi(2);
+    let mut radiance = Vec3::new(0.36, 0.37, 0.39).lerp(Vec3::new(0.80, 0.84, 0.90), wall)
+        + Vec3::new(0.24, 0.25, 0.25) * ceiling;
+    for card in studio_cards() {
+        let facing = direction.dot(card.axis);
         if facing > 0. {
-            let u = direction.dot(side) / facing;
-            let v = direction.dot(up) / facing;
+            let uv = Vec2::new(direction.dot(card.side), direction.dot(card.up))
+                * card.inverse_widths
+                / facing;
+            // Beyond this bound the eighth-power falloff contributes < 3e-9.
+            if uv.abs().max_element() > 1.45 {
+                continue;
+            }
             // Smooth rectangle softboxes preserve recognizable highlights without aliasing hard rims.
-            let shape = (-(u / widths[0]).powi(8) - (v / widths[1]).powi(8)).exp();
-            radiance += color * strength * shape;
+            let squared = uv * uv;
+            let fourth = squared * squared;
+            let eighth = fourth * fourth;
+            let shape = (-eighth.element_sum()).exp();
+            radiance += card.radiance * shape;
         }
     }
     radiance
@@ -782,21 +885,33 @@ fn studio_radiance(direction: Vec3) -> Vec3 {
 fn cube_direction(face: u32, x: u32, y: u32, size: u32) -> Vec3 {
     let u = 2. * (x as f32 + 0.5) / size as f32 - 1.;
     let v = 2. * (y as f32 + 0.5) / size as f32 - 1.;
-    match face {
+    let direction = match face {
         0 => Vec3::new(1., -v, -u),
         1 => Vec3::new(-1., -v, u),
         2 => Vec3::new(u, 1., v),
         3 => Vec3::new(u, -1., -v),
         4 => Vec3::new(u, -v, 1.),
         _ => Vec3::new(-u, -v, -1.),
-    }
-    .normalize()
+    };
+    // Texture cubemaps are left-handed; Bevy's PBR lookup reverses world Z.
+    // Evaluate the studio in world axes so its softboxes match direct lights.
+    Vec3::new(direction.x, direction.y, -direction.z).normalize()
 }
 fn sample_pair(sample: u32, count: u32) -> Vec2 {
     Vec2::new(
         (sample as f32 + 0.5) / count as f32,
         sample.reverse_bits() as f32 * 2.328_306_4e-10,
     )
+}
+fn filter_samples() -> &'static [Vec3; 256] {
+    static SAMPLES: OnceLock<[Vec3; 256]> = OnceLock::new();
+    SAMPLES.get_or_init(|| {
+        std::array::from_fn(|sample| {
+            let pair = sample_pair(sample as u32, 256);
+            let phi = std::f32::consts::TAU * pair.x;
+            Vec3::new(phi.cos(), phi.sin(), pair.y)
+        })
+    })
 }
 fn tangent_frame(normal: Vec3) -> (Vec3, Vec3) {
     let tangent = if normal.z.abs() < 0.99 {
@@ -813,18 +928,16 @@ fn filtered_radiance(normal: Vec3, roughness: f32, diffuse: bool) -> Vec3 {
     let (tangent, bitangent) = tangent_frame(normal);
     let mut sum = Vec3::ZERO;
     let mut weight = 0.;
-    const SAMPLES: u32 = 96;
-    for sample in 0..SAMPLES {
-        let pair = sample_pair(sample, SAMPLES);
-        let phi = std::f32::consts::TAU * pair.x;
+    // More samples reduce seams and speckled reflections on rough finishes.
+    for sample in filter_samples() {
         let cosine = if diffuse {
-            (1. - pair.y).sqrt()
+            (1. - sample.z).sqrt()
         } else {
             let alpha_squared = roughness.powi(4);
-            ((1. - pair.y) / (1. + (alpha_squared - 1.) * pair.y)).sqrt()
+            ((1. - sample.z) / (1. + (alpha_squared - 1.) * sample.z)).sqrt()
         };
         let sine = (1. - cosine * cosine).max(0.).sqrt();
-        let half = tangent * (phi.cos() * sine) + bitangent * (phi.sin() * sine) + normal * cosine;
+        let half = tangent * (sample.x * sine) + bitangent * (sample.y * sine) + normal * cosine;
         let direction = if diffuse {
             half
         } else {
@@ -841,7 +954,10 @@ fn filtered_radiance(normal: Vec3, roughness: f32, diffuse: bool) -> Vec3 {
     sum / weight.max(0.0001)
 }
 fn cube_image(size: u32, levels: u32, diffuse: bool) -> Image {
-    let mut bytes = vec![];
+    let texels = (0..levels)
+        .map(|mip| (size >> mip).max(1).pow(2) as usize * 6)
+        .sum::<usize>();
+    let mut bytes = Vec::with_capacity(texels * 8);
     // Explicit mip-major ordering matches wgpu upload order across the six cubemap faces.
     for mip in 0..levels {
         let width = (size >> mip).max(1);
@@ -888,5 +1004,5 @@ fn cube_image(size: u32, levels: u32, diffuse: bool) -> Image {
     image
 }
 fn studio_maps() -> (Image, Image) {
-    (cube_image(16, 1, true), cube_image(64, 7, false))
+    (cube_image(32, 1, true), cube_image(128, 8, false))
 }

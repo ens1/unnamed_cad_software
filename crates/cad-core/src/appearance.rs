@@ -3,7 +3,7 @@ use crate::{CadError, Document, Id, PlacedPart, Result, presentation::SemanticEl
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 pub const DEFAULT_FINISH: &str = "clear-anodized-aluminum";
 pub const TEXTURE_KINDS: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "webp"];
 
@@ -73,6 +73,17 @@ impl TextureMaps {
         .filter_map(Option::as_ref)
     }
 }
+/// Built-in grayscale height image used when no imported height resource is assigned.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinBump {
+    None,
+    #[default]
+    Brushed,
+}
+/// Contract v2 adds a built-in grayscale bump selection and directional reflection controls.
+/// Older serialized finishes use these fields' default values without changing their existing
+/// tint, texture resources or other explicitly stored surface properties.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Finish {
@@ -86,6 +97,10 @@ pub struct Finish {
     pub clearcoat_roughness: f64,
     pub normal_strength: f64,
     pub height_mm: f64,
+    /// Imported height textures take precedence over this built-in grayscale height image.
+    pub builtin_bump: BuiltinBump,
+    /// Directional reflection strength; zero gives isotropic reflections.
+    pub anisotropy: f64,
     pub textures: TextureMaps,
     pub mapping: TextureMapping,
 }
@@ -101,6 +116,8 @@ impl Default for Finish {
             clearcoat_roughness: 0.25,
             normal_strength: 0.25,
             height_mm: 0.02,
+            builtin_bump: BuiltinBump::Brushed,
+            anisotropy: 0.45,
             textures: TextureMaps::default(),
             mapping: TextureMapping::default(),
         }
@@ -115,6 +132,7 @@ pub fn default_finishes() -> BTreeMap<Id, Finish> {
             base_color: [0.80, 0.81, 0.83],
             roughness: 0.22,
             clearcoat: 0.,
+            anisotropy: 0.65,
             ..Finish::default()
         },
         Finish {
@@ -131,6 +149,8 @@ pub fn default_finishes() -> BTreeMap<Id, Finish> {
             metallic: 0.,
             roughness: 0.40,
             clearcoat: 0.10,
+            builtin_bump: BuiltinBump::None,
+            anisotropy: 0.,
             ..Finish::default()
         },
     ]
@@ -192,6 +212,7 @@ pub fn validate_finish(doc: &Document, finish: &Finish) -> Result<()> {
             &finish.roughness,
             &finish.clearcoat,
             &finish.clearcoat_roughness,
+            &finish.anisotropy,
         ])
         .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
         || !finish.normal_strength.is_finite()
@@ -200,7 +221,7 @@ pub fn validate_finish(doc: &Document, finish: &Finish) -> Result<()> {
         || !(0.0..=10.0).contains(&finish.height_mm)
     {
         return Err(invalid(
-            "Finish color/PBR values must be 0–1, normal strength 0–4 and relief depth 0–10 mm",
+            "Finish color/PBR and anisotropy values must be 0–1; normal strength 0–4 and relief depth 0–10 mm",
         ));
     }
     let mapping = &finish.mapping;
@@ -464,7 +485,7 @@ pub fn semantic(doc: &Document, active: Option<&str>, state: &str) -> Vec<Semant
             id: identity.clone(), role: "surface-finish".into(), label: finish.name.clone(), value: None,
             state: state.into(), commands: vec!["appearance.edit".into(), "appearance.duplicate".into(), "appearance.delete".into()],
             relationships: finish.textures.resources().cloned().collect(),
-            data: serde_json::json!({"contract":"tcad.appearance","version":CONTRACT_VERSION,"finish":finish.id,"source":finish,"engineering_material":false,"color_space":"srgb","scalar_channel":"red","normal_convention":"opengl-positive-y","height_unit":"mm","height_changes_geometry":false,"actions":[{"command":"appearance.delete","label":"Delete Finish","enabled":delete_reason(doc,&finish.id).is_none(),"disabled_reason":delete_reason(doc,&finish.id),"arguments":{"finish":finish.id}}]}),
+            data: serde_json::json!({"contract":"tcad.appearance","version":CONTRACT_VERSION,"finish":finish.id,"source":finish,"engineering_material":false,"color_space":"srgb","scalar_channel":"red","normal_convention":"opengl-positive-y","height_unit":"mm","height_changes_geometry":false,"height_source_precedence":["textures.height","builtin_bump"],"actions":[{"command":"appearance.delete","label":"Delete Finish","enabled":delete_reason(doc,&finish.id).is_none(),"disabled_reason":delete_reason(doc,&finish.id),"arguments":{"finish":finish.id}}]}),
         });
         for (field, label, minimum, maximum, unit, choices) in [
             ("/name", "Finish Name", None, None, None, vec![]),
@@ -498,6 +519,22 @@ pub fn semantic(doc: &Document, active: Option<&str>, state: &str) -> Vec<Semant
             (
                 "/clearcoat_roughness",
                 "Clearcoat Roughness",
+                Some(0.),
+                Some(1.),
+                None,
+                vec![],
+            ),
+            (
+                "/builtin_bump",
+                "Built-in Bump Map",
+                None,
+                None,
+                None,
+                vec!["none", "brushed"],
+            ),
+            (
+                "/anisotropy",
+                "Directional Reflections",
                 Some(0.),
                 Some(1.),
                 None,

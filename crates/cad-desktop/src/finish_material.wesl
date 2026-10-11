@@ -12,6 +12,7 @@ struct FinishUniform {
     mapping: vec4<f32>, // scale U/V mm, rotation cosine/sine
     settings: vec4<f32>, // offset U/V mm, normal strength, planar flag
     relief: vec4<f32>, // height range in physical mm
+    surface: vec4<f32>, // reserved, reserved, anisotropy strength, reserved
 };
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> finish: FinishUniform;
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var color_map: texture_2d<f32>;
@@ -41,16 +42,29 @@ fn detail(normal: vec3<f32>, tangent: vec3<f32>, bitangent: vec3<f32>) -> vec3<f
 
 fn height_detail(uv: vec2<f32>, tangent: vec3<f32>, bitangent: vec3<f32>) -> vec3<f32> {
     let dimensions = vec2<f32>(textureDimensions(height_map));
-    let texel = 1.0 / dimensions;
-    let left = textureSample(height_map, color_sampler, uv - vec2<f32>(texel.x, 0.0)).r;
-    let right = textureSample(height_map, color_sampler, uv + vec2<f32>(texel.x, 0.0)).r;
-    let bottom = textureSample(height_map, color_sampler, uv - vec2<f32>(0.0, texel.y)).r;
-    let top = textureSample(height_map, color_sampler, uv + vec2<f32>(0.0, texel.y)).r;
-    // Preserve the requested relief amplitude as texture tile size changes.
-    let slope = -vec2<f32>(right - left, top - bottom) * finish.relief.x * dimensions / (2.0 * finish.mapping.xy);
+    let dx = dpdx(uv);
+    let dy = dpdy(uv);
+    // Differentiate the filtered height field at the current pixel footprint. A base-level
+    // texel step becomes numerically tiny at distant or grazing views and exaggerates aliasing.
+    // Per-axis steps retain directional grain; explicit gradients keep the four samples on
+    // the same mip footprint and let the sampler filter anisotropically.
+    let footprint = vec2<f32>(length(vec2<f32>(dx.x, dy.x)), length(vec2<f32>(dx.y, dy.y)));
+    let step = max(1.0 / dimensions, footprint * 0.5);
+    let left = textureSampleGrad(height_map, color_sampler, uv - vec2<f32>(step.x, 0.0), dx, dy).r;
+    let right = textureSampleGrad(height_map, color_sampler, uv + vec2<f32>(step.x, 0.0), dx, dy).r;
+    let bottom = textureSampleGrad(height_map, color_sampler, uv - vec2<f32>(0.0, step.y), dx, dy).r;
+    let top = textureSampleGrad(height_map, color_sampler, uv + vec2<f32>(0.0, step.y), dx, dy).r;
+    // Preserve physical relief amplitude independently of image resolution, mip level,
+    // texture tile size and document units. Height is lighting detail, never CAD displacement.
+    let slope = -vec2<f32>(right - left, top - bottom) * finish.relief.x / (2.0 * step * finish.mapping.xy);
     let c = finish.mapping.z;
     let s = finish.mapping.w;
     return (tangent * c + bitangent * s) * slope.x + (-tangent * s + bitangent * c) * slope.y;
+}
+
+fn mapped_tangent(tangent: vec3<f32>, bitangent: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    let direction = tangent * finish.mapping.z + bitangent * finish.mapping.w;
+    return direction - normal * dot(direction, normal);
 }
 
 @fragment
@@ -116,7 +130,37 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let facing = select(-1.0, 1.0, dot(local_n, geometric_n) >= 0.0);
     let mapped_n = normalize(local_n + tangent_bump * facing);
     pbr.N = normalize((finish.part_to_world * vec4<f32>(mapped_n, 0.0)).xyz);
-    pbr.clearcoat_N = pbr.N;
+    // The coating follows the carrier and imported normal map, while the grayscale
+    // machining relief belongs to the underlying finish. Keep its broad reflection smooth.
+    let tangent_normal = normal_detail - geometric_n * dot(normal_detail, geometric_n);
+    let coat_n = normalize(local_n + tangent_normal * facing);
+    pbr.clearcoat_N = normalize((finish.part_to_world * vec4<f32>(coat_n, 0.0)).xyz);
+    @if(STANDARD_MATERIAL_ANISOTROPY) {
+        // Supply physical part-local directions directly: tessellation UVs and vertex
+        // tangents do not define the appearance mapping and may be absent entirely.
+        var tx = mapped_tangent(vec3<f32>(0.0, signs.x, 0.0), vec3<f32>(0.0, 0.0, 1.0), mapped_n);
+        var ty = mapped_tangent(vec3<f32>(0.0, 0.0, signs.y), vec3<f32>(1.0, 0.0, 0.0), mapped_n);
+        var tz = mapped_tangent(vec3<f32>(signs.z, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), mapped_n);
+        var reference = tz;
+        if weights.x > max(weights.y, weights.z) {
+            reference = tx;
+        } else if weights.y > weights.z {
+            reference = ty;
+        }
+        // A brush direction is an unoriented axis. Align the axes before blending so
+        // opposite projections cannot cancel and create a singular highlight direction.
+        tx *= select(-1.0, 1.0, dot(tx, reference) >= 0.0);
+        ty *= select(-1.0, 1.0, dot(ty, reference) >= 0.0);
+        tz *= select(-1.0, 1.0, dot(tz, reference) >= 0.0);
+        var tangent = tx * weights.x + ty * weights.y + tz * weights.z;
+        if dot(tangent, tangent) < 0.000001 {
+            let axis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(mapped_n.x) > 0.8);
+            tangent = cross(mapped_n, axis);
+        }
+        pbr.anisotropy_T = normalize((finish.part_to_world * vec4<f32>(tangent, 0.0)).xyz);
+        pbr.anisotropy_B = normalize(cross(pbr.N, pbr.anisotropy_T));
+        pbr.anisotropy_strength = clamp(finish.surface.z, 0.0, 1.0);
+    }
     pbr.material.base_color = vec4<f32>(pbr.material.base_color.rgb * color.rgb, pbr.material.base_color.a);
     pbr.material.perceptual_roughness = clamp(pbr.material.perceptual_roughness * roughness, 0.045, 1.0);
     pbr.material.metallic *= metallic;

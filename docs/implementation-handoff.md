@@ -783,3 +783,49 @@ existing `proc-macro-error2 2.0.1` future-compatibility notice remains. No tests
 probes, app/CLI modeling launches or manual/UI acceptance checks were run.
 The implementation and verification record are committed and pushed to the
 private canonical origin; interactive acceptance remains with the user.
+
+## Bump-driven machining grain and studio fidelity — 2026-10-11
+
+The user's flat-metal screenshot and machined-aluminum reference prompted a
+rendering update. Their clarification that bump maps must drive grain supersedes
+an initial procedural shader-grain plan. The shipped shader has no procedural
+grain overlay: height pixels drive the relief.
+
+Appearance contract **2** adds `Finish.builtin_bump` (`brushed` / `none`) and
+finite 0–1 `Finish.anisotropy`. Aluminum defaults to the original bundled
+`assets/appearance/brushed-height-v1.png`, a seamless 1024-square, 16-bit grayscale
+map authored by `scripts/generate-finish-maps.py`. Painted RAL 1015 defaults to no
+bump and isotropic response. Imported height resources replace the built-in map,
+even while loading or failed; Clear restores the selected built-in. These maps
+share the asynchronous red-channel/float-mip/R16Float decode path. Existing tile
+size, direction and depth control actual map sampling. Texture decoding readiness
+still gates Apply; Cancel and common undo behavior are preserved.
+
+The finish shader differentiates filtered grayscale height at its projected
+pixel footprint, retaining physical millimetre gradients across image resolution
+and zoom. Anisotropic reflection directions follow rotated part-local texture
+axes without mesh UVs or tangents. Clearcoat uses carrier/imported normals for
+broad reflections. The studio now supplies brighter walls and five broad cards,
+with a stronger environment and weaker direct lights; cubemap handedness and
+rotation align reflected cards with direct lights. Full 32-pixel diffuse and
+128-pixel/eight-mip specular faces filter asynchronously with 256 samples while a
+coarse startup studio is available. CAD surfaces and sharp edges are unchanged;
+real fillets/chamfers remain responsible for geometric edge highlights.
+
+Older explicit finishes retain stored colors, PBR values, imports and mapping;
+omitted v2 fields gain brushed/0.45 defaults. Both native docked and custom semantic
+controls expose built-in selection, anisotropy, choices, bounds and help through
+the common validated command path. No dependency/kernel revision changed.
+
+Completed source checks: `cargo check --workspace --locked`,
+`cargo fmt --all -- --check`, `cargo clippy --workspace --locked -- -D warnings`,
+`python3 -m py_compile scripts/generate-finish-maps.py`, and `git diff --check`.
+The actual finish shader compiled against pinned Bevy 0.20 WESL imports and
+passed Naga 30 IR validation for plain, clearcoat/environment/SSAO, anisotropic,
+and depth/normal-prepass variants (Rust 1.99 compiler utility). The HDR camera uses
+a separate tone pass; in-shader tone mapping is not an active TCAD variant.
+`scripts/package-macos.sh` rebuilt and signature-verified `dist/TCAD.app` with
+`TCAD`, `tcad-worker` and `tcad-cli`. The repository remains private. The existing
+`proc-macro-error2` future-incompatibility notice remains. No tests, assertion
+probes, model exercises, app launches or UI smoke runs were performed; visual
+acceptance is still the user's next step.

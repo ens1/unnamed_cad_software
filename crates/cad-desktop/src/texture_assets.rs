@@ -225,7 +225,17 @@ pub(crate) fn load_height(root: &Path, resource: &Resource) -> Result<Image, Str
             resource.path
         ));
     }
-    let source = decode(&bytes, &resource.kind)?;
+    height_image(decode(&bytes, &resource.kind)?)
+}
+
+/// The bundled original grayscale texture follows exactly the imported height
+/// path: red-channel heights, floating-point mip averaging, physical gradients.
+pub(crate) fn builtin_brushed_height() -> Result<Image, String> {
+    let bytes = include_bytes!("../../../assets/appearance/brushed-height-v1.png");
+    height_image(decode(bytes, "png")?)
+}
+
+fn height_image(source: DynamicImage) -> Result<Image, String> {
     let (mut width, mut height) = (source.width(), source.height());
     let original = (width, height);
     let red_u8 = |pixels: &[u8], channels: usize| {
