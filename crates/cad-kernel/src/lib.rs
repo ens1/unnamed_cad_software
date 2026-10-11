@@ -15,20 +15,26 @@ mod sketches;
 
 mod validation;
 
+mod analytic_offset;
 mod axis_geometry;
 mod body_filter;
+mod boolean_ops;
 mod bounded_carriers;
 mod curve_pattern;
 mod curve_sampling;
+mod curved_shell;
 mod direct_edit;
 mod drilled_pockets;
 mod edge_round;
 mod extrusion;
 mod extrusion_surface;
+mod general_chamfer;
+mod general_round;
 mod holes;
 mod join;
 mod loft_correspondence;
 mod mold;
+mod native_bounds;
 mod operation_preview;
 mod placement_pattern;
 mod pocket_shell;
@@ -49,6 +55,7 @@ mod surface_fill;
 mod surfaces;
 mod swept;
 mod tangent_plane;
+mod turned_shell;
 
 mod assemblies;
 mod assembly_inspection;

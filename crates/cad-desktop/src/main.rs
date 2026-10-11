@@ -65,7 +65,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1;adapter/22;solver/tcad-native-lm/12";
+const BACKEND: &str = "monstertruck/0.4.1+b70826f22737;adapter/23;solver/tcad-native-lm/12";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,

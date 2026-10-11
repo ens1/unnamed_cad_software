@@ -231,3 +231,125 @@ Final `cargo fmt --all -- --check`,
 `TCAD`, `tcad-worker` and `tcad-cli` executable names. No tests, probes or manual
 UI smoke checks were performed; interactive acceptance remains with the user.
 The existing `proc-macro-error2` 2.0.1 future-incompatibility notice remains.
+
+## Astra kernel reliability work — 2026-10-11
+
+The user resumed this scope with Astra. Open CASCADE remains prohibited. Work
+continues in Monstertruck and TCAD's replaceable native adapter; compilation,
+formatting and linting are allowed, but tests, runtime probes and manual/UI
+smoke checks remain prohibited. Interactive acceptance stays with the user.
+
+The scope is solid modeling reliability and its necessary shared editor/worker
+integration. Continue using Monstertruck and application-owned contracts. Keep
+TCAD private. A public upstream dependency fork is authorized, but must contain
+only dependency work, without private TCAD source or design data. This handoff
+does not relax the no-tests/no-probes/no-manual-smoke-check policy.
+
+### Concrete implementation scope
+
+1. **Join/cut/common and feature contact.** Correct material classification for
+   outward/inverted faces, cavities and disconnected bodies; distinguish valid
+   empty results from algorithm failures. Support face-attached bosses,
+   overhangs, differently partitioned coincident outlines, blind/through/side
+   pockets and repeated operations over every scoped solid. Preserve exact
+   native intersection curves and shared topology. Repair coplanar/tangent
+   boundary handling without perturbing source geometry to manufacture overlap.
+2. **Constant-radius fillets.** Support practical convex/concave straight and
+   circular/curved edges, complete connected selections, hole mouths, adjoining
+   corners and operations after pockets, rounds or bevels. Construct real native
+   tangent boundaries and blends; check corner joins, radius collisions and
+   self-intersections before publication. Existing simultaneous planar stock
+   rounds remain available. Finish common geometry coverage rather than treating
+   a new command label or one bounded rim family as completion.
+3. **Chamfers.** Preserve equal distance, two distances and distance/angle on
+   connected straight and curved chains, hole mouths and previously edited
+   stock. Repair shared corner closures, split-edge chains, interacting pocket
+   boundaries and deterministic Distance 1 face semantics. Preserve source
+   containment relationships and account for every selected rim during collision
+   classification.
+4. **Shell, surface offset and thicken.** Extend to everyday turned/curved and
+   blended bodies, pockets and multiple openings. Offset along true oriented
+   normals, intersect adjacent offset carriers, reconstruct rims and cavities,
+   and handle thickness collapse explicitly. Exact cylinder/cone/sphere cases
+   are useful foundations, but mixed carriers and offset joins remain required.
+5. **Integration invariants.** Current validated results gate Apply; one feature
+   remains one undoable operation; Cancel restores the checkpoint. Retain f64
+   authority, explicit units/tolerances, construction-based topology references,
+   predictable failure diagnostics, worker resource limits and stale-result
+   rejection. Update kernel fingerprints and cache compatibility when behavior
+   changes. Keep selection and localized operation previews consistent with the
+   actual input/output geometry.
+
+Compile, format, strictly lint, package, document supported modes and commit/push
+cohesive completed changes. Interactive acceptance stays with the user. Do not
+claim “rock solid” or completion from compilation alone. Preserve unsupported
+diagnostics for genuine geometric singularities instead of unchanged-success,
+mesh CAD substitutes, sampled intersection guides as authority, or unexplained
+tolerance inflation. UI styling, appearance expansion, drawings, assemblies and
+new unrelated feature families are outside this focused implementation.
+
+### Current implementation state
+
+The public dependency fork is `https://github.com/ens1/monstertruck`, branch
+`tcad-modeling-reliability`, pinned by TCAD to
+`b70826f22737c4f25534bb1a0c26ab53552988ae`. Its parent code is the published
+Monstertruck 0.4.1 revision. The fork contains only generic dependency work,
+retains Apache-2.0 licensing, and removes an unrelated private `.blueprints`
+submodule that otherwise prevented public Cargo dependency resolution. The
+separate dependency checkout remains at
+`/Users/tyler/Software/Personal/tcad-dependencies/monstertruck`.
+
+Dependency checkpoint `bbbdf81b` corrects complete material-domain Boolean
+classification, oriented cavities/disconnected shells, empty/self results,
+parameter-domain loop area handling and untouched closed-component indexing.
+It adds bounded triangle-interference/chain construction, fixed-tolerance
+native projection checks, explicit ambiguity failures and stage-specific
+errors. Search tessellations and intersection guides remain derived aids;
+output boundaries retain native supporting surfaces. Generic tangent/coplanar
+SSI and globally certified freeform intersection tracing remain incomplete.
+
+TCAD now has set-correct multibody Boolean dispatch and valid empty body-set
+results. Exact planar contact joins retain native line/circle boundaries,
+including partial overlap, overhang, holes and different edge partitions.
+Shared split vertices/edges are reconstructed through adjoining faces and
+carry source/interval/component provenance. Extrude, Revolve, Loft, Sweep, Rib
+and Combine Union share this construction. Unsupported carriers and ambiguous
+or nonmanifold contact arrangements still fail explicitly.
+
+The new edge-treatment paths are registered and integrated before the existing
+simultaneous convex constructors. They add local straight convex/concave
+wedges, convex-void pocket/cavity chains, and complete cylindrical/conical
+rims with exact toroidal fillets or conical bevels. Every candidate keeps a
+private history snapshot. See `docs/edge-treatments.md` for precise limits.
+
+Surface Offset/Thicken recognizes exact plane/cylinder/cone/sphere/torus
+carriers. Curved Shell includes conical/cylindrical walls with intersected cap
+offsets and spherical shells. A mixed turned-shell constructor solves bounded
+line/circle meridian offset joins and preserves exact native revolution
+geometry. Offset work and independent source review are ongoing; noncoaxial
+blended-shell coverage and global collision/containment proofs must not be
+claimed complete merely from the existence of these files.
+
+The backend fingerprint is now
+`monstertruck/0.4.1+b70826f22737;adapter/23;solver/tcad-native-lm/12` in both
+adapter and desktop. Prior derived caches are invalidated, while saved source
+schema and authored definitions stay unchanged. Ambiguous old topology
+references require explicit repair instead of silent retargeting.
+
+### Verification and publication state
+
+The fork changes passed library compilation, strict Clippy with default and
+no-default features, targeted nightly rustfmt checks, and `git diff --check`.
+The pinned dependency and TCAD workspace libraries/binaries compiled together.
+`cargo clippy --workspace --lib --bins --locked -- -D warnings`,
+`cargo fmt --all -- --check`, `git diff --check` and
+`scripts/package-macos.sh` passed for the first private checkpoint. The refreshed
+`dist/TCAD.app` contains the distinct `TCAD`, `tcad-worker` and `tcad-cli`
+executables. The existing `proc-macro-error2` 2.0.1 future-incompatibility notice
+remains. No tests, assertion probes or manual/UI smoke tests were written or run.
+
+Further implementation is active for fully rounded convex-body shelling,
+repeated connected fillets on previously trimmed stock, and native coplanar
+Boolean handling. Those are separate work in progress, not part of the first
+checkpoint's supported behavior. This progress record is not a completed-kernel
+claim; interactive geometric acceptance remains with the user.

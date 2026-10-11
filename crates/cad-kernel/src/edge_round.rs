@@ -152,7 +152,9 @@ fn end_profile(
                 -axis
             };
             (
-                corner.vertex.point(),
+                corner
+                    .center
+                    .ok_or_else(|| invalid("The mitre corner has no common offset center"))?,
                 (own - direction).normalize(),
                 "mitre",
             )
@@ -356,17 +358,20 @@ pub(crate) fn round(
                         Err(error) => return Err(error),
                     }
                 }
-                protected.push(hull);
+                protected.push(crate::native_bounds::Enclosure::from_hull(hull)?);
             }
         } else {
-            match crate::extrusion::face_hull(face) {
-                Ok(hull) => protected.push(hull),
+            match crate::native_bounds::face(face) {
+                Ok(enclosure) => protected.push(enclosure),
                 Err(CadError::Unsupported(_)) => return Ok(None),
                 Err(error) => return Err(error),
             }
         }
     }
-    let protected_controls = protected.iter().map(Vec::len).sum::<usize>();
+    let protected_controls = protected
+        .iter()
+        .map(crate::native_bounds::Enclosure::len)
+        .sum::<usize>();
     if protected_controls > MAX_PROTECTED_CONTROLS
         || protected_controls.saturating_mul(selected.len()) > MAX_SEPARATION_WORK
     {
@@ -394,14 +399,19 @@ pub(crate) fn round(
                         .all(|edge| adjacency[edge].contains(face))
                 })
                 .unwrap();
-            if corner
+            let dihedrals = corner
                 .faces
                 .iter()
                 .filter(|face| *face != common)
-                .any(|face| planes[face].normal.dot(planes[common].normal).abs() > 1e-9)
-            {
+                .map(|face| planes[face].normal.dot(planes[common].normal))
+                .collect::<Vec<_>>();
+            // Equal-radius cylinders meeting above a common face intersect in
+            // a bisector plane. Their remaining tangent rails terminate on the
+            // same sharp edge exactly when these two dihedral cosines agree.
+            // The walls may be drafted; perpendicular walls are one case.
+            if (dihedrals[0] - dihedrals[1]).abs() > 1e-9 {
                 return Err(unsupported(
-                    "Two-edge corners require the common wall perpendicular to the remaining walls; this covers box and right-prism rim chains",
+                    "Two-edge corners with unequal dihedral angles require a transition patch beyond a circular mitre",
                 ));
             }
         }
@@ -535,29 +545,35 @@ pub(crate) fn round(
             },
         );
     }
-    for hull in &protected {
+    for enclosure in &protected {
         for blend in blends.values() {
-            let safe = blend.faces.iter().any(|face| {
-                let plane = &planes[face];
-                let mut depth = blend
-                    .ends
-                    .iter()
-                    .flat_map(|end| end.controls.iter())
-                    .map(|control| -plane.signed(point(*control)))
-                    .fold(0_f64, f64::max);
-                // The removed wedge is bounded by the original edge and its
-                // complete positive-control strip. At fully rounded vertices
-                // also include the complete analytic sphere, including its
-                // interior beyond the boundary circles.
-                for vertex in [blend.source.front(), blend.source.back()] {
-                    depth = depth.max(-plane.signed(vertex.point()));
-                    let corner = &corners[&vertex.id()];
-                    if corner.selected.len() == 3 {
-                        depth = depth.max(-plane.signed(corner.center.unwrap()) + radius);
+            let safe = blend
+                .faces
+                .iter()
+                .map(|face| -> Result<bool> {
+                    let plane = &planes[face];
+                    let mut depth = blend
+                        .ends
+                        .iter()
+                        .flat_map(|end| end.controls.iter())
+                        .map(|control| -plane.signed(point(*control)))
+                        .fold(0_f64, f64::max);
+                    // The removed wedge is bounded by the original edge and its
+                    // complete positive-control strip. At fully rounded vertices
+                    // also include the complete analytic sphere, including its
+                    // interior beyond the boundary circles.
+                    for vertex in [blend.source.front(), blend.source.back()] {
+                        depth = depth.max(-plane.signed(vertex.point()));
+                        let corner = &corners[&vertex.id()];
+                        if corner.selected.len() == 3 {
+                            depth = depth.max(-plane.signed(corner.center.unwrap()) + radius);
+                        }
                     }
-                }
-                hull.iter().all(|point| plane.signed(*point) < -depth - EPS)
-            });
+                    Ok(enclosure.projection(plane.origin, plane.normal)?.1 < -depth - EPS)
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .any(|safe| safe);
             if !safe {
                 return Err(unsupported(
                     "A hole or pocket is too close to the selected round for the native disjoint-carrier proof",

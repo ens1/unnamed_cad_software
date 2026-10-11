@@ -819,5 +819,10 @@ pub(crate) fn operation(
         "join",
         inputs,
         tolerance,
+        crate::revolution::Combination {
+            adapter,
+            owner,
+            generated,
+        },
     )
 }

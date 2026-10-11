@@ -91,13 +91,19 @@ pub(crate) fn straight_edge(edge: &Edge) -> Result<bool> {
     }
 }
 pub(crate) fn supporting_planes(solid: &Solid) -> Result<Vec<BoundaryPlane>> {
-    let hull = crate::adapter::solid_control_points(solid)?;
+    let enclosures = crate::native_bounds::solid(solid)?;
     let mut planes = Vec::new();
     for face in solid.face_iter() {
         let Some(plane) = boundary_plane(face)? else {
             continue;
         };
-        if !hull.iter().all(|p| plane.signed(*p) <= EPSILON) {
+        if enclosures
+            .iter()
+            .map(|enclosure| enclosure.projection(plane.origin, plane.normal))
+            .collect::<Result<Vec<_>>>()?
+            .iter()
+            .any(|(_, high)| *high > EPSILON)
+        {
             continue;
         }
         let boundaries = face.boundaries();
@@ -755,29 +761,11 @@ fn simple_polygon(vertices: &[Vertex], normal: Vector3) -> bool {
 }
 
 fn wholly_inside(face: &Face, origin: Point3, normal: Vector3) -> Result<bool> {
-    let signed = |p: Point3| (p - origin).dot(normal);
-    if !face.edge_iter().all(|edge| {
-        curve_hull(edge.curve())
-            .is_some_and(|points| points.iter().all(|point| signed(*point) <= EPSILON))
-    }) {
-        return Ok(false);
+    match crate::native_bounds::face(face) {
+        Ok(enclosure) => Ok(enclosure.projection(origin, normal)?.1 <= EPSILON),
+        Err(CadError::Unsupported(_)) => Ok(false),
+        Err(error) => Err(error),
     }
-    if boundary_plane(face)?.is_some() {
-        return Ok(true);
-    }
-    Ok(match face.surface() {
-        Surface::BsplineSurface(surface) => surface
-            .control_points()
-            .iter()
-            .flatten()
-            .all(|point| signed(*point) <= EPSILON),
-        Surface::NurbsSurface(surface) => surface.control_points().iter().flatten().all(|p| {
-            p.w.is_finite()
-                && p.w > 0.
-                && signed(Point3::new(p.x / p.w, p.y / p.w, p.z / p.w)) <= EPSILON
-        }),
-        _ => false,
-    })
 }
 
 // Open boundaries are the unmatched, oriented edge occurrences of the clipped
@@ -1072,8 +1060,8 @@ pub(crate) fn chamfer(
     let selected = selected.iter().copied().collect::<HashSet<_>>();
     let mut seen = HashSet::new();
     let mut planes: Vec<BevelPlane> = Vec::new();
-    let stock_hull = match crate::adapter::solid_control_points(solid) {
-        Ok(hull) => hull,
+    let stock_bounds = match crate::native_bounds::solid(solid) {
+        Ok(bounds) => bounds,
         Err(CadError::Unsupported(_)) => return Ok(None),
         Err(error) => return Err(error),
     };
@@ -1162,9 +1150,16 @@ pub(crate) fn chamfer(
         }
         let sum = normals[0] * spec.distance + normals[1] * second;
         let anchor = edge.front().point();
-        if stock_hull
+        if stock_bounds
             .iter()
-            .any(|point| normals.iter().any(|n| (*point - anchor).dot(*n) > EPSILON))
+            .map(|bounds| {
+                normals.iter().try_fold(false, |outside, normal| {
+                    Ok(outside || bounds.projection(anchor, *normal)?.1 > EPSILON)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .any(|outside| outside)
         {
             return Ok(None);
         }

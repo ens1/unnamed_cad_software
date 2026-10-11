@@ -1835,115 +1835,7 @@ fn cut_history(
     }
     Ok(())
 }
-fn join_history(
-    adapter: &MonstertruckAdapter,
-    owner: &NodeRef,
-    scope: &BTreeSet<NodeRef>,
-    output: &crate::join::ContactOutput,
-    generated: &mut crate::adapter::TopologyHistory,
-) -> Result<()> {
-    let face_source = |history: &crate::adapter::TopologyHistory, face: FaceId| {
-        history.face_source(face).or_else(|| {
-            scope
-                .iter()
-                .find_map(|body| adapter.face_source(body, face))
-        })
-    };
-    for (mapped, original) in &output.face_aliases {
-        let reference = face_source(generated, *original).ok_or_else(|| {
-            CadError::Unsupported(
-                "Planar boss join lost a retained tool face's source ancestry".into(),
-            )
-        })?;
-        generated.inherit_face(*mapped, reference);
-    }
-    for (mapped, original) in &output.edge_aliases {
-        let reference = generated
-            .edge_source(*original)
-            .or_else(|| {
-                scope
-                    .iter()
-                    .find_map(|body| adapter.edge_source(body, *original))
-            })
-            .ok_or_else(|| {
-                CadError::Unsupported(
-                    "Planar boss join lost a retained tool edge's source ancestry".into(),
-                )
-            })?;
-        generated.inherit_edge(*mapped, reference);
-    }
-    for tag in &output.trimmed {
-        let sources = tag
-            .sources
-            .iter()
-            .map(|face| {
-                face_source(generated, *face).ok_or_else(|| {
-                    CadError::Unsupported(
-                        "Planar boss contact trim has no current source-face ancestry".into(),
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let face = output
-            .solid
-            .face_iter()
-            .find(|face| face.id() == tag.face)
-            .ok_or_else(|| invalid("Planar boss join lost a constructed contact trim"))?;
-        generated.tool_face(
-            owner,
-            face,
-            &sources,
-            &serde_json::json!({"operation":"extrusion_join","constructor":"contact_trim"}),
-        )?;
-    }
-    let mut identities = BTreeSet::new();
-    let mut edges: std::collections::HashMap<EdgeId, (Edge, Vec<cad_core::TopologyRef>)> =
-        std::collections::HashMap::new();
-    for face in output.solid.face_iter() {
-        let source = face_source(generated, face.id()).ok_or_else(|| {
-            CadError::Unsupported(
-                "Planar boss join output has no current source-face ancestry".into(),
-            )
-        })?;
-        if !identities.insert(crate::adapter::construction_reference(&source)?.to_string()) {
-            return Err(CadError::Unsupported(
-                "Planar boss join has ambiguous retained face ancestry".into(),
-            ));
-        }
-        generated.inherit_face(face.id(), source.clone());
-        for edge in face.edge_iter() {
-            edges
-                .entry(edge.id())
-                .or_insert_with(|| (edge.clone(), vec![]))
-                .1
-                .push(source.clone());
-        }
-    }
-    identities.clear();
-    for (edge, sources) in edges.values() {
-        let reference = if let Some(reference) = generated.edge_source(edge.id()).or_else(|| {
-            scope
-                .iter()
-                .find_map(|body| adapter.edge_source(body, edge.id()))
-        }) {
-            generated.inherit_edge(edge.id(), reference.clone());
-            reference
-        } else {
-            generated.tool_edge(
-                owner,
-                edge,
-                sources,
-                &serde_json::json!({"operation":"extrusion_join","constructor":"shared_boundary"}),
-            )?
-        };
-        if !identities.insert(crate::adapter::construction_reference(&reference)?.to_string()) {
-            return Err(CadError::Unsupported(
-                "Planar boss join has ambiguous retained edge ancestry".into(),
-            ));
-        }
-    }
-    Ok(())
-}
+
 fn scoped_section_identity(
     adapter: &MonstertruckAdapter,
     scope: &BTreeSet<NodeRef>,
@@ -2256,12 +2148,11 @@ pub(crate) fn operation(
                     continue;
                 }
                 if let Some(contact) = crate::join::contact(&solid, &joined)? {
-                    join_history(adapter, owner, &scope_refs, &contact, generated)?;
+                    crate::join::record_history(adapter, owner, &scope_refs, &contact, generated)?;
                     joined = contact.solid;
                     continue;
                 }
-                joined = monstertruck::solid::or(&solid, &joined, tolerance).map_err(invalid)?;
-                crate::validation::solid(&joined)?;
+                joined = crate::boolean_ops::union(&solid, &joined, tolerance)?;
             }
             retained.push(joined);
             result = retained;
@@ -2350,16 +2241,24 @@ pub(crate) fn operation(
                         scope_identity,
                         generated,
                     )?;
-                    let cut = monstertruck::solid::difference(&solid, &cutter, tolerance)
-                        .map_err(invalid)?;
-                    crate::validation::solid(&cut)?;
-                    next.push(cut);
+                    if let Some(cut) = crate::boolean_ops::binary(
+                        &solid,
+                        &cutter,
+                        crate::boolean_ops::Mode::Difference,
+                        tolerance,
+                    )? {
+                        next.push(cut);
+                    }
                 }
                 "intersect" | "intersection" => {
-                    let common =
-                        monstertruck::solid::and(&solid, &tool, tolerance).map_err(invalid)?;
-                    crate::validation::solid(&common)?;
-                    next.push(common);
+                    if let Some(common) = crate::boolean_ops::binary(
+                        &solid,
+                        &tool,
+                        crate::boolean_ops::Mode::Intersection,
+                        tolerance,
+                    )? {
+                        next.push(common);
+                    }
                 }
                 _ => return Err(invalid("Unknown extrusion result mode")),
             }

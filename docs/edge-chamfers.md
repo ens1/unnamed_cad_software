@@ -1,5 +1,10 @@
 # Native edge chamfers
 
+This document describes the simultaneous convex-stock clipping constructor.
+The current dispatcher also handles local concave/convex wedges, pocket/cavity
+chains and complete cylindrical/conical rims; see
+[Native edge treatments](edge-treatments.md) for current coverage and limits.
+
 Chamfer evaluates the selected source edges together. Each edge contributes a
 setback plane calculated from its two original supporting walls. Equal distance,
 two distances, and distance plus angle use the same construction; Flip exchanges
@@ -43,8 +48,9 @@ setback for the actual material corner angle. Collapsed walls, branching corners
 reversed or disconnected bevel caps, and complete material removal produce
 chamfer-specific diagnostics that advise reducing the setbacks.
 
-This construction is not a general rolling bevel on curved carriers. Concave
-edges, intersecting holes, variable distances, partial-edge limits, and curved
-setback intersection networks still need a general exact chamfer constructor.
+This construction is not a general rolling bevel on curved carriers. The
+dispatcher has separate concave and circular constructors; intersecting holes,
+variable distances, partial-edge limits and arbitrary curved setback
+intersection networks still require further exact construction work.
 Compilation and linting are implementation checks; interactive geometric
 acceptance remains with the user.

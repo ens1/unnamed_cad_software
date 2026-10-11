@@ -1,8 +1,10 @@
 //! Join opposing planar contact faces without asking a volume Boolean to
 //! classify coincident caps. All boundaries retain their native carriers.
-use cad_core::{CadError, Result};
+use crate::adapter::MonstertruckAdapter;
+use cad_core::{CadError, NodeRef, Result};
 use monstertruck::modeling::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+mod region;
 
 const EPS: f64 = 1e-7;
 const MAX_FACES: usize = 4096;
@@ -15,12 +17,19 @@ const MAX_HULL_WORK: usize = 64_000_000;
 pub(crate) struct ContactFace {
     pub face: FaceId,
     pub sources: Vec<FaceId>,
+    pub component: usize,
+}
+pub(crate) struct ContactEdge {
+    pub edge: EdgeId,
+    pub sources: Vec<EdgeId>,
+    pub interval: usize,
 }
 pub(crate) struct ContactOutput {
     pub solid: Solid,
     pub trimmed: Vec<ContactFace>,
     pub face_aliases: Vec<(FaceId, FaceId)>,
     pub edge_aliases: Vec<(EdgeId, EdgeId)>,
+    pub split_edges: Vec<ContactEdge>,
 }
 fn invalid(message: impl std::fmt::Display) -> CadError {
     CadError::Invalid(format!("Geometry: planar boss join: {message}"))
@@ -445,6 +454,7 @@ fn inset(
         trimmed.push(ContactFace {
             face: face.id(),
             sources,
+            component: trimmed.len(),
         });
     }
     Ok(ContactOutput {
@@ -452,6 +462,7 @@ fn inset(
         trimmed,
         face_aliases: vec![],
         edge_aliases: vec![],
+        split_edges: vec![],
     })
 }
 fn continuation(
@@ -554,6 +565,7 @@ fn continuation(
         trimmed: vec![],
         face_aliases,
         edge_aliases,
+        split_edges: vec![],
     })
 }
 
@@ -629,7 +641,7 @@ pub(crate) fn contact(stock: &Solid, tool: &Solid) -> Result<Option<ContactOutpu
             } else if strict_inset(support, &cap.face, &mut hull_work)? {
                 Some(inset(stock, tool, support, &cap.face, &mut hull_work)?)
             } else {
-                None
+                region::contact(stock, tool, support, &cap.face, &mut work)?
             };
             if let Some(output) = output {
                 if candidate.is_some() {
@@ -642,4 +654,144 @@ pub(crate) fn contact(stock: &Solid, tool: &Solid) -> Result<Option<ContactOutpu
         }
     }
     Ok(candidate)
+}
+
+pub(crate) fn record_history(
+    adapter: &MonstertruckAdapter,
+    owner: &NodeRef,
+    scope: &BTreeSet<NodeRef>,
+    output: &crate::join::ContactOutput,
+    generated: &mut crate::adapter::TopologyHistory,
+) -> Result<()> {
+    let face_source = |history: &crate::adapter::TopologyHistory, face: FaceId| {
+        history.face_source(face).or_else(|| {
+            scope
+                .iter()
+                .find_map(|body| adapter.face_source(body, face))
+        })
+    };
+    for (mapped, original) in &output.face_aliases {
+        let reference = face_source(generated, *original).ok_or_else(|| {
+            CadError::Unsupported(
+                "Planar boss join lost a retained tool face's source ancestry".into(),
+            )
+        })?;
+        generated.inherit_face(*mapped, reference);
+    }
+    for (mapped, original) in &output.edge_aliases {
+        let reference = generated
+            .edge_source(*original)
+            .or_else(|| {
+                scope
+                    .iter()
+                    .find_map(|body| adapter.edge_source(body, *original))
+            })
+            .ok_or_else(|| {
+                CadError::Unsupported(
+                    "Planar boss join lost a retained tool edge's source ancestry".into(),
+                )
+            })?;
+        generated.inherit_edge(*mapped, reference);
+    }
+    for tag in &output.trimmed {
+        let sources = tag
+            .sources
+            .iter()
+            .map(|face| {
+                face_source(generated, *face).ok_or_else(|| {
+                    CadError::Unsupported(
+                        "Planar boss contact trim has no current source-face ancestry".into(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let face = output
+            .solid
+            .face_iter()
+            .find(|face| face.id() == tag.face)
+            .ok_or_else(|| invalid("Planar boss join lost a constructed contact trim"))?;
+        generated.tool_face(
+            owner,
+            face,
+            &sources,
+            &serde_json::json!({"operation":"extrusion_join","constructor":"contact_trim",
+                "base": crate::adapter::construction_reference(&sources[0])?, "component":tag.component}),
+        )?;
+    }
+    for tag in &output.split_edges {
+        let sources = tag
+            .sources
+            .iter()
+            .map(|original| {
+                generated
+                    .edge_source(*original)
+                    .or_else(|| {
+                        scope
+                            .iter()
+                            .find_map(|body| adapter.edge_source(body, *original))
+                    })
+                    .ok_or_else(|| {
+                        CadError::Unsupported(
+                            "Planar contact split lost its source-edge ancestry".into(),
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let edge = output
+            .solid
+            .edge_iter()
+            .find(|edge| edge.id() == tag.edge)
+            .ok_or_else(|| invalid("Planar contact split has no output boundary"))?;
+        generated.tool_edge(owner, &edge, &sources, &serde_json::json!({
+            "operation":"extrusion_join", "constructor":"contact_interval",
+            "base":crate::adapter::construction_reference(&sources[0])?, "interval":tag.interval,
+        }))?;
+    }
+    let mut identities = BTreeSet::new();
+    let mut edges: std::collections::HashMap<EdgeId, (Edge, Vec<cad_core::TopologyRef>)> =
+        std::collections::HashMap::new();
+    for face in output.solid.face_iter() {
+        let source = face_source(generated, face.id()).ok_or_else(|| {
+            CadError::Unsupported(
+                "Planar boss join output has no current source-face ancestry".into(),
+            )
+        })?;
+        if !identities.insert(crate::adapter::construction_reference(&source)?.to_string()) {
+            return Err(CadError::Unsupported(
+                "Planar boss join has ambiguous retained face ancestry".into(),
+            ));
+        }
+        generated.inherit_face(face.id(), source.clone());
+        for edge in face.edge_iter() {
+            edges
+                .entry(edge.id())
+                .or_insert_with(|| (edge.clone(), vec![]))
+                .1
+                .push(source.clone());
+        }
+    }
+    identities.clear();
+    for (edge, sources) in edges.values() {
+        let reference = if let Some(reference) = generated.edge_source(edge.id()).or_else(|| {
+            scope
+                .iter()
+                .find_map(|body| adapter.edge_source(body, edge.id()))
+        }) {
+            generated.inherit_edge(edge.id(), reference.clone());
+            reference
+        } else {
+            generated.tool_edge(
+                owner,
+                edge,
+                sources,
+                &serde_json::json!({"operation":"extrusion_join","constructor":"shared_boundary"}),
+            )?
+        };
+        if !identities.insert(crate::adapter::construction_reference(&reference)?.to_string()) {
+            return Err(CadError::Unsupported(
+                "Planar boss join has ambiguous retained edge ancestry".into(),
+            ));
+        }
+    }
+    Ok(())
 }

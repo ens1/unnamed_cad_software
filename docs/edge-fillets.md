@@ -1,5 +1,10 @@
 # Native circular edge fillets
 
+This document describes the simultaneous convex-stock constructor. The current
+dispatcher also supports local concave/convex wedges, pocket and cavity chains,
+and cylindrical/conical rims; see [Native edge treatments](edge-treatments.md)
+for the complete set of paths and their remaining limitations.
+
 TCAD constructs constant-radius round fillets on the body's actual B-rep. The
 entire selected edge set is reconstructed in one operation, preserving the
 original stock until all tangent rails and corner boundaries are available.
@@ -15,9 +20,9 @@ the stock envelope must have three incident edges and three incident walls.
 * An isolated selected edge ends at its actual third planar wall. A perpendicular
   cap gets an exact circular arc; an oblique cap gets an exact rational ellipse.
 * Two selected edges meeting at a corner share one exact rational end curve in
-  their cylindrical intersection mitre plane. Their common wall must be
-  perpendicular to both remaining walls. This covers connected box-edge sets
-  and arbitrary convex right-prism cap rim chains, including a complete rim.
+  their cylindrical intersection mitre plane. The remaining walls must have
+  equal dihedral angles to their common wall. This includes drafted corners,
+  connected box-edge sets and convex right-prism cap rim chains.
 * Three selected edges at a corner end at the common radius-offset plane center
   and share exact circular seams with a native spherical corner face. The sphere
   parameter frame keeps its periodic seam and poles outside the authored normal
@@ -59,11 +64,12 @@ pocket control points, and 8,000,000 control-point/selected-edge separation work
 items. These bounds are independent of the operation's larger overall selection
 limit. Unsupported input returns a diagnostic rather than an approximate blend.
 
-Concave edges, variable radii, general nonorthogonal two-edge transitions,
+Variable radii, unequal-dihedral two-edge transitions,
 nontrivalent corners, general curved-edge rounds, and existing rounded exterior
 stock without a closed straight/planar supporting envelope still need further
-kernel work. Separate enclosed-void shells are currently outside this round
-constructor. A later Fillet feature on such blended stock is not assumed to be
-supported; multiple practical stock edges can be grouped in one Fillet feature.
+kernel work in this constructor. Concave chains and enclosed-void shells use
+the separate void-duality path described in the dispatcher documentation. Later
+fillets may use the local or circular constructors when their complete support
+and separation proofs hold; arbitrary blended stock is not assumed supported.
 Compilation, formatting and strict linting were performed. Interactive and
 geometric acceptance remain with the user; no tests or smoke runs were added.

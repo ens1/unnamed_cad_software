@@ -66,34 +66,6 @@ pub(crate) fn surfaces<'a>(
         _ => Err(invalid("Select a surface body")),
     }
 }
-fn planar_normal(shell: &Shell) -> Result<Vector3> {
-    if shell.is_empty() || !matches!(shell[0].surface(), Surface::Plane(_)) {
-        return Err(CadError::Unsupported("Offset Surface and Thicken require coplanar face shells; curved normal offsets require additional exact surface construction".into()));
-    }
-    let normal = shell[0].oriented_surface().normal(0., 0.);
-    if !normal.magnitude().is_finite() || normal.magnitude() < 1e-9 {
-        return Err(invalid("Degenerate or non-finite surface normal"));
-    }
-    let normal = normal.normalize();
-    let origin = shell[0].oriented_surface().subs(0., 0.);
-    for face in shell {
-        let candidate = face.oriented_surface().normal(0., 0.);
-        let length = candidate.magnitude();
-        if !matches!(face.surface(), Surface::Plane(_))
-            || !length.is_finite()
-            || length < 1e-9
-            || (candidate / length).dot(normal) < 1. - 1e-10
-            || (face.oriented_surface().subs(0., 0.) - origin)
-                .dot(normal)
-                .abs()
-                > 1e-7
-        {
-            return Err(CadError::Unsupported("Normal offset and Thicken require all faces in a shell to be coplanar and consistently oriented".into()));
-        }
-    }
-    Ok(normal)
-}
-
 /// Resolve the solved, exact sketch again so every refined boundary retains its
 /// authored member identity. Sketch topology is intentionally not a model body
 /// and therefore is not named by the generic body-history fallback.
@@ -479,7 +451,7 @@ pub(crate) fn operation(
             Shape::Surfaces(
                 surfaces(inputs, surface)?
                     .iter()
-                    .map(|shell| Ok(builder::translated(shell, planar_normal(shell)? * distance)))
+                    .map(|shell| Ok(crate::analytic_offset::offset(shell, distance)?.shell))
                     .collect::<Result<Vec<_>>>()?,
             )
         }
@@ -552,13 +524,9 @@ pub(crate) fn operation(
             }
             let mut solids = Vec::new();
             for shell in surfaces(inputs, surface)? {
-                let delta = planar_normal(shell)? * thickness * if *reverse { -1. } else { 1. };
-                let start = if *mid_plane {
-                    builder::translated(shell, -delta * 0.5)
-                } else {
-                    shell.clone()
-                };
-                solids.extend(crate::surface_edit::thicken_planar(&start, delta)?);
+                solids.extend(crate::analytic_offset::thicken(
+                    shell, thickness, *mid_plane, *reverse,
+                )?);
             }
             Shape::Bodies(solids)
         }

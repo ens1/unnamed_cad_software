@@ -413,17 +413,24 @@ fn separated(a: &Solid, b: &Solid) -> bool {
         a1 < b0 - 1e-7 || b1 < a0 - 1e-7
     })
 }
+pub(crate) struct Combination<'a> {
+    pub adapter: &'a MonstertruckAdapter,
+    pub owner: &'a NodeRef,
+    pub generated: &'a mut crate::adapter::TopologyHistory,
+}
 pub(crate) fn combine(
     tools: Vec<Solid>,
     scope: &[NodeRef],
     mode: &str,
     inputs: &BTreeMap<NodeRef, Shape>,
     tolerance: f64,
+    context: Combination<'_>,
 ) -> Result<Shape> {
     if !matches!(mode, "" | "new" | "join" | "cut" | "intersect") {
         return Err(invalid("Unknown result mode"));
     }
     let mut result: Vec<Solid> = Vec::new();
+    let scope_refs = scope.iter().cloned().collect::<BTreeSet<_>>();
     for reference in scope {
         let Some(Shape::Bodies(solids)) = inputs.get(reference) else {
             return Err(invalid(
@@ -451,10 +458,14 @@ pub(crate) fn combine(
                 if separated(body, &tool) {
                     continue;
                 }
-                let common = monstertruck::solid::and(body, &tool, tolerance)
-                    .map_err(|error| invalid(&error.to_string()))?;
-                crate::validation::solid(&common)?;
-                intersections.push(common);
+                if let Some(common) = crate::boolean_ops::binary(
+                    body,
+                    &tool,
+                    crate::boolean_ops::Mode::Intersection,
+                    tolerance,
+                )? {
+                    intersections.push(common);
+                }
             }
         }
         return Ok(Shape::Bodies(intersections));
@@ -473,9 +484,18 @@ pub(crate) fn combine(
                     retained.push(body);
                     continue;
                 }
-                joined = monstertruck::solid::or(&body, &joined, tolerance)
-                    .map_err(|error| invalid(&error.to_string()))?;
-                crate::validation::solid(&joined)?;
+                if let Some(contact) = crate::join::contact(&body, &joined)? {
+                    crate::join::record_history(
+                        context.adapter,
+                        context.owner,
+                        &scope_refs,
+                        &contact,
+                        context.generated,
+                    )?;
+                    joined = contact.solid;
+                } else {
+                    joined = crate::boolean_ops::union(&body, &joined, tolerance)?;
+                }
             }
             retained.push(joined);
             result = retained;
@@ -489,14 +509,18 @@ pub(crate) fn combine(
                 }
                 continue;
             }
-            let combined = if mode == "cut" {
-                monstertruck::solid::difference(&body, &tool, tolerance)
-            } else {
-                monstertruck::solid::and(&body, &tool, tolerance)
+            if let Some(combined) = crate::boolean_ops::binary(
+                &body,
+                &tool,
+                if mode == "cut" {
+                    crate::boolean_ops::Mode::Difference
+                } else {
+                    crate::boolean_ops::Mode::Intersection
+                },
+                tolerance,
+            )? {
+                next.push(combined);
             }
-            .map_err(|error| invalid(&error.to_string()))?;
-            crate::validation::solid(&combined)?;
-            next.push(combined);
         }
         result = next;
     }
@@ -621,5 +645,16 @@ pub(crate) fn operation(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    combine(tools, &scope, mode, inputs, tolerance)
+    combine(
+        tools,
+        &scope,
+        mode,
+        inputs,
+        tolerance,
+        Combination {
+            adapter,
+            owner,
+            generated,
+        },
+    )
 }

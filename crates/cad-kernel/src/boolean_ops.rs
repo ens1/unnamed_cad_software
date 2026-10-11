@@ -1,0 +1,207 @@
+//! Set semantics and admission for the native Boolean boundary.
+//!
+//! An empty set is a successful Boolean result, but is never stored as an
+//! empty B-rep solid. Collections are unions of their member material regions.
+use cad_core::{CadError, Result};
+use monstertruck::modeling::*;
+use std::collections::HashSet;
+
+#[derive(Clone, Copy)]
+pub(crate) enum Mode {
+    Union,
+    Difference,
+    Intersection,
+}
+
+fn invalid(message: impl std::fmt::Display) -> CadError {
+    CadError::Invalid(format!("Geometry: Boolean: {message}"))
+}
+
+fn same(a: &Solid, b: &Solid) -> bool {
+    let faces = |solid: &Solid| {
+        solid
+            .face_iter()
+            .map(|face| (face.id(), face.orientation()))
+            .collect::<HashSet<_>>()
+    };
+    faces(a) == faces(b)
+}
+
+fn disjoint(a: &Solid, b: &Solid) -> bool {
+    crate::adapter::solid_control_points(a)
+        .ok()
+        .zip(crate::adapter::solid_control_points(b).ok())
+        .is_some_and(|(a, b)| {
+            !a.is_empty()
+                && !b.is_empty()
+                && a.iter()
+                    .chain(&b)
+                    .all(|point| [point.x, point.y, point.z].iter().all(|x| x.is_finite()))
+                && crate::extrusion_surface::bounds_disjoint(&a, &b, 0.)
+        })
+}
+
+pub(crate) fn binary(a: &Solid, b: &Solid, mode: Mode, tolerance: f64) -> Result<Option<Solid>> {
+    if !tolerance.is_finite() || tolerance <= 0. {
+        return Err(invalid("Tolerance must be finite and positive"));
+    }
+    if a.is_empty() || b.is_empty() {
+        let result = match mode {
+            Mode::Union => {
+                if a.is_empty() {
+                    b
+                } else {
+                    a
+                }
+            }
+            Mode::Difference => a,
+            Mode::Intersection => return Ok(None),
+        };
+        return Ok((!result.is_empty()).then(|| result.clone()));
+    }
+    if same(a, b) {
+        return Ok(match mode {
+            Mode::Difference => None,
+            Mode::Union | Mode::Intersection => Some(a.clone()),
+        });
+    }
+    if disjoint(a, b) {
+        match mode {
+            Mode::Difference => return Ok(Some(a.clone())),
+            Mode::Intersection => return Ok(None),
+            Mode::Union => {
+                let shells = a
+                    .boundaries()
+                    .iter()
+                    .chain(b.boundaries())
+                    .cloned()
+                    .collect();
+                return Solid::try_new(shells).map(Some).map_err(invalid);
+            }
+        }
+    }
+    let output = match mode {
+        Mode::Union => monstertruck::solid::or(a, b, tolerance),
+        Mode::Difference => monstertruck::solid::difference(a, b, tolerance),
+        Mode::Intersection => monstertruck::solid::and(a, b, tolerance),
+    }
+    .map_err(invalid)?;
+    if output.is_empty() {
+        return Ok(None);
+    }
+    crate::validation::solid(&output)?;
+    Ok(Some(output))
+}
+
+pub(crate) fn union(a: &Solid, b: &Solid, tolerance: f64) -> Result<Solid> {
+    binary(a, b, Mode::Union, tolerance)?
+        .ok_or_else(|| invalid("Union of nonempty material regions returned no material"))
+}
+
+fn insert_union(
+    result: &mut Vec<Solid>,
+    mut tool: Solid,
+    join: &mut impl FnMut(&Solid, &Solid) -> Result<Solid>,
+) -> Result<()> {
+    if tool.is_empty() {
+        return Ok(());
+    }
+    let mut retained = Vec::new();
+    for body in result.drain(..) {
+        if disjoint(&body, &tool) {
+            retained.push(body);
+        } else {
+            tool = join(&body, &tool)?;
+        }
+    }
+    retained.push(tool);
+    *result = retained;
+    Ok(())
+}
+
+pub(crate) fn sets(
+    left: &[Solid],
+    right: &[Solid],
+    mode: Mode,
+    tolerance: f64,
+) -> Result<Vec<Solid>> {
+    sets_using(left, right, mode, tolerance, &mut |a, b| {
+        union(a, b, tolerance)
+    })
+}
+
+pub(crate) fn union_with_contact(
+    left: &[Solid],
+    right: &[Solid],
+    tolerance: f64,
+    scope: &std::collections::BTreeSet<cad_core::NodeRef>,
+    context: crate::revolution::Combination<'_>,
+) -> Result<Vec<Solid>> {
+    sets_using(left, right, Mode::Union, tolerance, &mut |a, b| {
+        let contact = if let Some(contact) = crate::join::contact(a, b)? {
+            Some(contact)
+        } else {
+            crate::join::contact(b, a)?
+        };
+        if let Some(contact) = contact {
+            crate::join::record_history(
+                context.adapter,
+                context.owner,
+                scope,
+                &contact,
+                context.generated,
+            )?;
+            Ok(contact.solid)
+        } else {
+            union(a, b, tolerance)
+        }
+    })
+}
+
+fn sets_using(
+    left: &[Solid],
+    right: &[Solid],
+    mode: Mode,
+    tolerance: f64,
+    join: &mut impl FnMut(&Solid, &Solid) -> Result<Solid>,
+) -> Result<Vec<Solid>> {
+    if !tolerance.is_finite() || tolerance <= 0. {
+        return Err(invalid("Tolerance must be finite and positive"));
+    }
+    let count = left.len().saturating_add(right.len());
+    if count.saturating_mul(count) > 65536 {
+        return Err(CadError::Unsupported(
+            "Boolean body collection exceeds its bounded operation work".into(),
+        ));
+    }
+    let mut result = Vec::new();
+    match mode {
+        Mode::Union => {
+            for body in left.iter().chain(right) {
+                insert_union(&mut result, body.clone(), join)?;
+            }
+        }
+        Mode::Difference => {
+            for body in left {
+                let mut remaining = Some(body.clone());
+                for tool in right {
+                    let Some(stock) = remaining else { break };
+                    remaining = binary(&stock, tool, Mode::Difference, tolerance)?;
+                }
+                if let Some(body) = remaining {
+                    insert_union(&mut result, body, join)?;
+                }
+            }
+        }
+        Mode::Intersection => {
+            for body in left {
+                for tool in right {
+                    if let Some(common) = binary(body, tool, Mode::Intersection, tolerance)? {
+                        insert_union(&mut result, common, join)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(result)
+}

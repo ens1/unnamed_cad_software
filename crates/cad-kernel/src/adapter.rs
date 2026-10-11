@@ -791,7 +791,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1;adapter/22;solver/tcad-native-lm/12"
+        "monstertruck/0.4.1+b70826f22737;adapter/23;solver/tcad-native-lm/12"
     }
     fn sheet_metadata(
         &self,
@@ -1124,19 +1124,29 @@ impl KernelAdapter for MonstertruckAdapter {
                 &mut generated_history,
             )?,
             Operation::Boolean { left, right, mode } => {
-                let mut result = bodies(inputs, left)?.clone();
-                for b in bodies(inputs, right)? {
-                    for a in &mut result {
-                        *a = match mode.as_str() {
-                            "union" => monstertruck::solid::or(a, b, tolerance),
-                            "intersection" => monstertruck::solid::and(a, b, tolerance),
-                            "difference" => monstertruck::solid::difference(a, b, tolerance),
-                            _ => return Err(err("Unknown Boolean mode")),
-                        }
-                        .map_err(err)?;
-                    }
-                }
-                Shape::Bodies(result)
+                let mode = match mode.as_str() {
+                    "union" => crate::boolean_ops::Mode::Union,
+                    "intersection" => crate::boolean_ops::Mode::Intersection,
+                    "difference" => crate::boolean_ops::Mode::Difference,
+                    _ => return Err(err("Unknown Boolean mode")),
+                };
+                let left_bodies = bodies(inputs, left)?;
+                let right_bodies = bodies(inputs, right)?;
+                Shape::Bodies(if matches!(mode, crate::boolean_ops::Mode::Union) {
+                    crate::boolean_ops::union_with_contact(
+                        left_bodies,
+                        right_bodies,
+                        tolerance,
+                        &std::collections::BTreeSet::from([left.clone(), right.clone()]),
+                        crate::revolution::Combination {
+                            adapter: self,
+                            owner,
+                            generated: &mut generated_history,
+                        },
+                    )?
+                } else {
+                    crate::boolean_ops::sets(left_bodies, right_bodies, mode, tolerance)?
+                })
             }
             Operation::Hole {
                 body,
@@ -1151,12 +1161,12 @@ impl KernelAdapter for MonstertruckAdapter {
                     value(radius)?,
                     value(depth)?,
                 )?;
-                Shape::Bodies(
-                    bodies(inputs, body)?
-                        .iter()
-                        .map(|s| monstertruck::solid::difference(s, &tool, tolerance).map_err(err))
-                        .collect::<Result<_>>()?,
-                )
+                Shape::Bodies(crate::boolean_ops::sets(
+                    bodies(inputs, body)?,
+                    &[tool],
+                    crate::boolean_ops::Mode::Difference,
+                    tolerance,
+                )?)
             }
             Operation::DrilledHoles { definition } => crate::holes::operation(
                 self,
@@ -1568,6 +1578,11 @@ impl KernelAdapter for MonstertruckAdapter {
                     mode,
                     inputs,
                     tolerance,
+                    crate::revolution::Combination {
+                        adapter: self,
+                        owner,
+                        generated: &mut generated_history,
+                    },
                 )?
             }
             Operation::Sweep {
@@ -1616,6 +1631,11 @@ impl KernelAdapter for MonstertruckAdapter {
                     mode,
                     inputs,
                     tolerance,
+                    crate::revolution::Combination {
+                        adapter: self,
+                        owner,
+                        generated: &mut generated_history,
+                    },
                 )?
             }
             Operation::Shell {
@@ -1659,6 +1679,15 @@ impl KernelAdapter for MonstertruckAdapter {
                             crate::shell_history::ShellHistory::new(self, owner, body, solid)?;
                         let shells = if let Some(shells) = crate::prismatic_shell::shell(
                             doc,
+                            solid,
+                            thickness,
+                            &selected,
+                            options.outward,
+                            &face_thicknesses,
+                            &mut history,
+                        )? {
+                            shells
+                        } else if let Some(shells) = crate::curved_shell::shell(
                             solid,
                             thickness,
                             &selected,
@@ -2283,11 +2312,11 @@ impl MonstertruckAdapter {
                 },
             )?;
             let output = if let Some(specification) = &specification {
-                crate::planar::chamfer(solid, &local, specification, &mut history)?
+                crate::general_chamfer::chamfer(solid, &local, specification, &mut history)?
             } else {
-                crate::edge_round::round(solid, &local, size, &mut history)?
+                crate::general_round::round(solid, &local, size, &mut history)?
             }.ok_or_else(|| CadError::Unsupported(format!(
-                "{name}: This edge set requires curved, concave or more general corner blending; the current native constructor cannot prove it"
+                "{name}: This selection needs an unresolved carrier transition or corner junction; no complete native blend can be constructed for the selected edges"
             )))?;
             crate::validation::solid(&output)?;
             generated.merge(history.finish(std::slice::from_ref(&output))?);

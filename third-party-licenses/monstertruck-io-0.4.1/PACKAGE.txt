@@ -1,4 +1,5 @@
 monstertruck-io-0.4.1
 Declared SPDX license: Apache-2.0
-Source: https://github.com/virtualritz/monstertruck
-The published crate did not include a top-level license text.
+Upstream: https://github.com/virtualritz/monstertruck
+Locked source: git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae
+Dependency modifications retain the upstream license.

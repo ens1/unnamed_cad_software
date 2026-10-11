@@ -4325,8 +4325,7 @@ dependencies = [
 [[package]]
 name = "monstertruck"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a4b5a344fca34d42db960a588704f762847eaadda0e84095602509e61294ddd"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "monstertruck-assembly",
  "monstertruck-core",
@@ -4345,8 +4344,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-assembly"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1041107e797756c1176344c81461d7bb7298ee00c3e9ee5adf093d14f627d56"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "monstertruck-core",
  "rayon",
@@ -4355,8 +4353,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-core"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6f34f2f284b16af3672085cdcaf5d6521feecc104bacf1a37f1fac6c8c1a5884"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "cgmath",
  "matext4cgmath",
@@ -4368,8 +4365,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-derive"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05c2cdecf25f2d799557e29b5b8c9b6db4d766d150e29aad6d4bba5204f2ea58"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "proc-macro-error",
  "proc-macro2",
@@ -4380,8 +4376,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-fillet"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "512bba6a317473cd83210019054373af9d13af4273417f28ee54bee5d16bc6c3"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "ahash",
  "derive_more",
@@ -4399,8 +4394,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-geometry"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cee8ce45200826a20c752ae24c82f5048dcddd2f168230c1799c214b804d6f40"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "monstertruck-core",
  "monstertruck-traits",
@@ -4413,8 +4407,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-healing"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fd6d6800716835c77d7e5c1a5ce8061b23f5baf100a39307097aa07c93ac35f"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "ahash",
  "getrandom 0.3.4",
@@ -4430,8 +4423,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-io"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9db95ba8ed9ba913084f04e865b8e522813f9885f40497b8717ede6c6f1542e"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "chrono",
  "derive_more",
@@ -4452,8 +4444,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-mesh"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "875dbf22ba985790b87e652bfaa1ed24852d3746b1ac022ac7b6c28ba35121c6"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "array-macro",
  "bytemuck",
@@ -4469,8 +4460,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-meshing"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea03901ea0b3cfaf380c1cc8c2efee85500cdfe260c38bb8278c2a66a18de939"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "array-macro",
  "derive_more",
@@ -4489,8 +4479,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-modeling"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "518f0c01eb240558e830d6734ab88dc0bf559923811553302aa1f3c16051c211"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "derive_more",
  "itertools 0.14.0",
@@ -4510,8 +4499,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-solid"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29e8fab1d370bfe553a171c0b0948810eefc66ecb2e3dca87e26c985bda27e50"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "ahash",
  "derive_more",
@@ -4531,8 +4519,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-topology"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "def1bdeca2fd361435fec506495aaade7caba299accfbb4da1997a1bc300faf5"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "monstertruck-core",
  "monstertruck-traits",
@@ -4547,8 +4534,7 @@ dependencies = [
 [[package]]
 name = "monstertruck-traits"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77b8f72eb09b5f613f6ccc314c53bc4c43de1a0d1d5a29eae61f8b9b8b04eed1"
+source = "git+https://github.com/ens1/monstertruck.git?rev=b70826f22737c4f25534bb1a0c26ab53552988ae#b70826f22737c4f25534bb1a0c26ab53552988ae"
 dependencies = [
  "getrandom 0.4.3",
  "monstertruck-core",

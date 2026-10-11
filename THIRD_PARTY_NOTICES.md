@@ -1,6 +1,6 @@
 # Third-party notices
 
-TCAD's original code is WTFPL. Dependencies retain their own licenses. This catalog covers the locked Cargo graph, including dependencies used only on other platforms and build tooling. License files supplied by each published crate are copied below.
+TCAD's original code is WTFPL. Dependencies retain their own licenses. This catalog covers the locked Cargo graph, including dependencies used only on other platforms and build tooling. License files supplied by each locked dependency are copied below. Git dependencies also record their exact source revision.
 
 | Dependency | Version | Declared license | Notices |
 |---|---|---|---|
@@ -354,20 +354,20 @@ TCAD's original code is WTFPL. Dependencies retain their own licenses. This cata
 | memmap2 | 0.9.11 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/memmap2-0.9.11/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/memmap2-0.9.11/LICENSE-MIT) |
 | miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 | [LICENSE](third-party-licenses/miniz_oxide-0.8.9/LICENSE), [LICENSE-APACHE.md](third-party-licenses/miniz_oxide-0.8.9/LICENSE-APACHE.md), [LICENSE-MIT.md](third-party-licenses/miniz_oxide-0.8.9/LICENSE-MIT.md), [LICENSE-ZLIB.md](third-party-licenses/miniz_oxide-0.8.9/LICENSE-ZLIB.md) |
 | miniz_oxide | 0.9.1 | MIT OR Zlib OR Apache-2.0 | [LICENSE](third-party-licenses/miniz_oxide-0.9.1/LICENSE), [LICENSE-APACHE.md](third-party-licenses/miniz_oxide-0.9.1/LICENSE-APACHE.md), [LICENSE-MIT.md](third-party-licenses/miniz_oxide-0.9.1/LICENSE-MIT.md), [LICENSE-ZLIB.md](third-party-licenses/miniz_oxide-0.9.1/LICENSE-ZLIB.md) |
-| monstertruck | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-0.4.1/PACKAGE.txt) |
-| monstertruck-assembly | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-assembly-0.4.1/PACKAGE.txt) |
-| monstertruck-core | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-core-0.4.1/PACKAGE.txt) |
-| monstertruck-derive | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-derive-0.4.1/PACKAGE.txt) |
-| monstertruck-fillet | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-fillet-0.4.1/PACKAGE.txt) |
-| monstertruck-geometry | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-geometry-0.4.1/PACKAGE.txt) |
-| monstertruck-healing | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-healing-0.4.1/PACKAGE.txt) |
-| monstertruck-io | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-io-0.4.1/PACKAGE.txt) |
-| monstertruck-mesh | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-mesh-0.4.1/PACKAGE.txt) |
-| monstertruck-meshing | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-meshing-0.4.1/PACKAGE.txt) |
-| monstertruck-modeling | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-modeling-0.4.1/PACKAGE.txt) |
-| monstertruck-solid | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-solid-0.4.1/PACKAGE.txt) |
-| monstertruck-topology | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-topology-0.4.1/PACKAGE.txt) |
-| monstertruck-traits | 0.4.1 | Apache-2.0 | [PACKAGE.txt](third-party-licenses/monstertruck-traits-0.4.1/PACKAGE.txt) |
+| monstertruck | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-0.4.1/PACKAGE.txt) |
+| monstertruck-assembly | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-assembly-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-assembly-0.4.1/PACKAGE.txt) |
+| monstertruck-core | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-core-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-core-0.4.1/PACKAGE.txt) |
+| monstertruck-derive | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-derive-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-derive-0.4.1/PACKAGE.txt) |
+| monstertruck-fillet | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-fillet-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-fillet-0.4.1/PACKAGE.txt) |
+| monstertruck-geometry | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-geometry-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-geometry-0.4.1/PACKAGE.txt) |
+| monstertruck-healing | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-healing-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-healing-0.4.1/PACKAGE.txt) |
+| monstertruck-io | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-io-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-io-0.4.1/PACKAGE.txt) |
+| monstertruck-mesh | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-mesh-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-mesh-0.4.1/PACKAGE.txt) |
+| monstertruck-meshing | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-meshing-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-meshing-0.4.1/PACKAGE.txt) |
+| monstertruck-modeling | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-modeling-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-modeling-0.4.1/PACKAGE.txt) |
+| monstertruck-solid | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-solid-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-solid-0.4.1/PACKAGE.txt) |
+| monstertruck-topology | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-topology-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-topology-0.4.1/PACKAGE.txt) |
+| monstertruck-traits | 0.4.1 | Apache-2.0 | [LICENSE](third-party-licenses/monstertruck-traits-0.4.1/LICENSE), [PACKAGE.txt](third-party-licenses/monstertruck-traits-0.4.1/PACKAGE.txt) |
 | moxcms | 0.8.1 | BSD-3-Clause OR Apache-2.0 | [LICENSE-APACHE.md](third-party-licenses/moxcms-0.8.1/LICENSE-APACHE.md), [LICENSE.md](third-party-licenses/moxcms-0.8.1/LICENSE.md) |
 | mutants | 0.0.3 | MIT | [PACKAGE.txt](third-party-licenses/mutants-0.0.3/PACKAGE.txt) |
 | naga | 30.0.1 | MIT OR Apache-2.0 | [LICENSE.APACHE](third-party-licenses/naga-30.0.1/LICENSE.APACHE), [LICENSE.MIT](third-party-licenses/naga-30.0.1/LICENSE.MIT) |

@@ -17,6 +17,7 @@ struct FaceOrigin {
     original: Option<FaceId>,
     kind: Kind,
 }
+#[derive(Clone)]
 pub(crate) struct ShellHistory {
     owner: NodeRef,
     operation: &'static str,
@@ -184,12 +185,18 @@ impl ShellHistory {
     /// then follows the exact topological adjacency, never a centroid or fit.
     pub(crate) fn finish(mut self, solids: &[Solid]) -> Result<TopologyHistory> {
         let mut adjacency: HashMap<EdgeId, Vec<FaceOrigin>> = HashMap::new();
+        let mut face_identities = HashSet::new();
         for face in solids.iter().flat_map(Solid::face_iter) {
             let origin = self
                 .faces
                 .get(&face.id())
                 .cloned()
                 .ok_or_else(|| unavailable("An output wall has no constructor provenance"))?;
+            if !face_identities.insert(construction_reference(&origin.reference)?.to_string()) {
+                return Err(unavailable(
+                    "Distinct output faces share one construction identity; explicit component ancestry is required",
+                ));
+            }
             self.generated
                 .inherit_face(face.id(), origin.reference.clone());
             for edge in face.edge_iter() {
@@ -198,14 +205,19 @@ impl ShellHistory {
         }
         let mut constructed = HashSet::new();
         for (edge, origins) in adjacency {
-            if let Some(reference) = self.edges.get(&edge) {
-                self.generated.inherit_edge(edge, reference.clone());
-                continue;
-            }
             if origins.len() != 2 {
                 return Err(unavailable(
                     "A shell edge has ambiguous incident wall ownership",
                 ));
+            }
+            if let Some(reference) = self.edges.get(&edge) {
+                if !constructed.insert(construction_reference(reference)?.to_string()) {
+                    return Err(unavailable(
+                        "Distinct output edges share one construction identity; explicit endpoint or interval ancestry is required",
+                    ));
+                }
+                self.generated.inherit_edge(edge, reference.clone());
+                continue;
             }
             let retained = origins.iter().any(|origin| origin.kind == Kind::Retained)
                 && origins
@@ -221,7 +233,13 @@ impl ShellHistory {
                     .map(|(edge, _)| edge)
                     .collect::<Vec<_>>();
                 if inherited.len() == 1 {
-                    self.generated.inherit_edge(edge, self.edge(*inherited[0])?);
+                    let reference = self.edge(*inherited[0])?;
+                    if !constructed.insert(construction_reference(&reference)?.to_string()) {
+                        return Err(unavailable(
+                            "A source edge was split without distinct interval ancestry",
+                        ));
+                    }
+                    self.generated.inherit_edge(edge, reference);
                     continue;
                 }
             }
@@ -235,7 +253,7 @@ impl ShellHistory {
                 &sources,
                 &serde_json::json!({"operation":self.operation,"constructor":"shared_boundary"}),
             )?;
-            if !constructed.insert(reference.role) {
+            if !constructed.insert(construction_reference(&reference)?.to_string()) {
                 return Err(unavailable(
                     "Several new edges share the same constructor wall closure; explicit segmented-edge ancestry is required",
                 ));
