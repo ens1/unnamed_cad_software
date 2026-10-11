@@ -363,6 +363,18 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         w.tool_checkpoint.is_some() || w.sketch.is_some(),
     ));
     elements.extend(crate::selection_ui::semantics(w));
+    elements.extend(crate::part_edges::semantics(w));
+    let hover = w.hover_guide.as_ref().filter(|guide| {
+        crate::viewport::selection_evaluation(w).is_some_and(|evaluation| {
+            serde_json::to_value(&evaluation.identity).ok().as_ref()
+                == Some(&guide.element.data["evaluation_identity"])
+                && guide.element.data["view_context"].as_str()
+                    == Some(crate::viewport_guides::view_context(w).as_str())
+                && serde_json::to_value(&w.view.history_cursor).ok().as_ref()
+                    == Some(&guide.element.data["history_cursor"])
+        })
+    });
+    elements.extend(crate::viewport_guides::semantics(hover));
     elements.extend(crate::sketch_edit_ui::semantics(w));
     for element in crate::sketch_blocks_ui::semantics(w) {
         if let Some(existing) = elements

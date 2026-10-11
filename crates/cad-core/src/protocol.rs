@@ -62,6 +62,34 @@ pub struct EdgeData {
     /// is scoped to this mesh/evaluation; only source references become intent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native: Option<NativeEdgeTopology>,
+    /// Optional exact native carrier metadata for presentation guides. Positions
+    /// are mesh-local millimeters; this cache never establishes design intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<EdgeCenter>,
+}
+
+pub const EDGE_CENTER_VERSION: u32 = 1;
+/// Analytic center guides proved by the geometry adapter, independent from
+/// display subdivision. Unavailable or unrecognized carriers have no guide.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EdgeCenter {
+    /// Bounded non-retracing straight carrier; its midpoint is derived from the
+    /// exact native endpoints rather than from the displayed polyline.
+    Line {
+        version: u32,
+        start: [f64; 3],
+        end: [f64; 3],
+    },
+    /// Complete or partial circular carrier. The normal and in-plane radial
+    /// direction are unit vectors; radius is expressed in millimeters.
+    Circle {
+        version: u32,
+        center: [f64; 3],
+        normal: [f64; 3],
+        radius_mm: f64,
+        radial: [f64; 3],
+    },
 }
 
 pub const NATIVE_SELECTION_VERSION: u32 = 1;

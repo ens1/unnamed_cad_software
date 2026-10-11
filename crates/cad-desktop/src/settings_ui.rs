@@ -11,6 +11,7 @@ const CATEGORIES: &[(&str, &str, &str)] = &[
     ("model.geometry", "Geometry and parts", "Model"),
     ("model.lighting", "Lighting", "Model"),
     ("application.interface", "Interface", "Application"),
+    ("application.viewport", "Model display", "Application"),
     ("application.themes", "Themes", "Application"),
     (
         "application.navigation",
@@ -97,10 +98,29 @@ fn field(w: &Workspace, spec: FieldSpec<'_>) -> SemanticElement {
             "minimum":spec.range.map(|range|range[0]), "maximum":spec.range.map(|range|range[1]),
             "kind":if spec.choices.as_array().is_some_and(|choices|!choices.is_empty()) {"choice"} else if value.is_boolean() {"boolean"} else if value.is_number() {"number"} else {"text"},
             "accessibility_label":spec.label,
+            "description":field_description(spec.scope, spec.pointer),
             "model_mutation":!matches!(spec.scope,"application"|"presentation"),
             "contract":match spec.scope {"application"=>"tcad.application-preferences", "lighting"=>"tcad.appearance", "presentation"=>"tcad.presentation.theme-library", _=>"tcad.model-settings"},
             "version":1
         }),
+    }
+}
+
+fn field_description(scope: &str, pointer: &str) -> Option<&'static str> {
+    if scope != "application" {
+        return None;
+    }
+    match pointer {
+        "/show_part_edges" => Some(
+            "Draw visible topology edges over shaded parts. This changes only the viewport display.",
+        ),
+        "/hover_centerlines" => {
+            Some("Reveal center marks and axes when the pointer is near a circular edge or hole.")
+        }
+        "/hover_midpoints" => {
+            Some("Reveal midpoint marks and guides when the pointer is near a straight model edge.")
+        }
+        _ => None,
     }
 }
 
@@ -279,6 +299,27 @@ fn fields(w: &Workspace) -> Vec<SemanticElement> {
             None,
         ),
         (
+            "application.viewport",
+            "/show_part_edges",
+            "Show part edges",
+            None,
+            None,
+        ),
+        (
+            "application.viewport",
+            "/hover_centerlines",
+            "Show circular centers and axes on hover",
+            None,
+            None,
+        ),
+        (
+            "application.viewport",
+            "/hover_midpoints",
+            "Show straight-edge midpoint guides on hover",
+            None,
+            None,
+        ),
+        (
             "application.recovery",
             "/recovery_enabled",
             "Save recovery checkpoints",
@@ -450,7 +491,13 @@ pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Semantic
                 controls::apply_properties(ui, &properties);
                 ui.add_enabled_ui(editable, |ui| {
                     if let Some(mut candidate) = value.as_bool() {
-                        let changed = ui.checkbox(&mut candidate, &element.label).changed();
+                        let mut response = ui.checkbox(&mut candidate, &element.label);
+                        if let Some(description) =
+                            element.data.get("description").and_then(Value::as_str)
+                        {
+                            response = response.on_hover_text(description);
+                        }
+                        let changed = response.changed();
                         value = json!(candidate);
                         return changed;
                     }
@@ -636,6 +683,9 @@ fn category_description(category: &str) -> &'static str {
         }
         "application.interface" => {
             "Saved for this user across projects. Layout and theme files give independent control over composition, density, and styling."
+        }
+        "application.viewport" => {
+            "Saved for this user across projects. Edges, circular centers, and straight-edge midpoint guides preview immediately. Apply saves them; Cancel restores the starting display. Theme styles can override display and guide styling."
         }
         "application.themes" => {
             "Choose a complete layout and theme, or load a CSS / JSON style or presentation package. Changes preview immediately. Apply saves your default; Cancel restores the previous presentation."

@@ -1,7 +1,7 @@
 use cad_core::{
     CadError, Dimension, Document, Expr, NodeRef, Operation, Plane as CadPlane, Profile, Result,
     TopologyRef, TopologySignature, expression,
-    protocol::{EdgeData, FaceRange, MeshData},
+    protocol::{EDGE_CENTER_VERSION, EdgeCenter, EdgeData, FaceRange, MeshData},
 };
 use monstertruck::{
     geometry::prelude::{TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface},
@@ -455,6 +455,53 @@ fn selection_tangents(curve: &Curve) -> [Option<[f64; 3]>; 2] {
     })
 }
 
+/// Optional native guide geometry. Recognition verifies exact rational
+/// carriers, never sampled display points; unsupported cases remain absent and
+/// must not invalidate an otherwise supported mesh or modeling operation.
+fn edge_center(curve: &Curve) -> Option<EdgeCenter> {
+    if !matches!(
+        curve,
+        Curve::Line(_) | Curve::BsplineCurve(_) | Curve::NurbsCurve(_)
+    ) {
+        return None;
+    }
+    let (a, b) = curve.range_tuple();
+    if !a.is_finite() || !b.is_finite() || a >= b {
+        return None;
+    }
+    let start = curve.subs(a);
+    let end = curve.subs(b);
+    let coordinates = |point: Point3| [point.x, point.y, point.z];
+    if coordinates(start)
+        .into_iter()
+        .chain(coordinates(end))
+        .any(|value| !value.is_finite())
+    {
+        return None;
+    }
+    if crate::bounded_carriers::line(curve).is_ok() {
+        return Some(EdgeCenter::Line {
+            version: EDGE_CENTER_VERSION,
+            start: coordinates(start),
+            end: coordinates(end),
+        });
+    }
+    let (center, normal, radius_mm) = crate::axis_geometry::circle_geometry(curve).ok()?;
+    let radial = start - center;
+    let length = radial.magnitude();
+    if !length.is_finite() || length <= 1e-9 {
+        return None;
+    }
+    let radial = radial / length;
+    Some(EdgeCenter::Circle {
+        version: EDGE_CENTER_VERSION,
+        center: coordinates(center),
+        normal: [normal.x, normal.y, normal.z],
+        radius_mm,
+        radial: [radial.x, radial.y, radial.z],
+    })
+}
+
 pub(crate) fn exact_curve(curve: &Curve) -> Option<cad_core::sketch_edit::Curve3> {
     // Intersection guides are not the actual curve. Never convert them as if
     // they were an exact B-spline, even though the vendor conversion permits it.
@@ -860,7 +907,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/30;solver/tcad-native-lm/14"
+        "monstertruck/0.4.1+fc2306852a46;adapter/31;solver/tcad-native-lm/14"
     }
     fn sketch_material_regions(
         &self,
@@ -2111,6 +2158,7 @@ impl KernelAdapter for MonstertruckAdapter {
                     faces: vec![],
                     body: Some(producer.clone()),
                     native: None,
+                    center: edge_center(&curve),
                 });
             }
             return Ok(mesh);
@@ -2292,6 +2340,7 @@ impl KernelAdapter for MonstertruckAdapter {
                     points,
                     curve: exact_curve(&c),
                     native,
+                    center: edge_center(&c),
                     faces,
                     reference: TopologyRef {
                         producer: self

@@ -8,7 +8,7 @@ Open **Settings…** from **Edit** or **Tools**, or press **Cmd+,** on macOS
 (**Ctrl+,** on other platforms). The compact, resizable dialog groups searchable
 preferences under **Model** and **Application**. Model categories are **Units and
 precision**, **Geometry and parts**, and **Lighting**. Application categories are
-**Interface**, **Themes**, **Trackpad and navigation**, **Recovery**, and **New model defaults**.
+**Interface**, **Themes**, **Model display**, **Trackpad and navigation**, **Recovery**, and **New model defaults**.
 
 Current-model settings include the displayed length unit, length and angle
 decimal places, evaluation tolerance in millimetres, and the default visual finish
@@ -43,7 +43,9 @@ inside a hidden or heavily customized Settings dialog; there it remains an
 unapplied preview. [Nocturne](theme-example.md) demonstrates a right inspector,
 bottom tool dock, circular and pill buttons, larger targets, and a dark palette.
 
-Interface scale, navigation and external reload changes preview immediately.
+**Application → Model display** controls part edges, circular centerlines/axes on hover, and straight-edge midpoint guides on hover. All three default to enabled, including older preference files that omit these additive fields. Changes preview immediately and follow the personal Apply/Cancel path. Edges follow the displayed part/history stage and are depth-tested over the shaded model. Hover guides disappear when the pointer leaves or a drawing/navigation gesture owns it. Native centers are optional for carriers the kernel can prove; no center is invented for an unsupported curve. Theme overrides may alter the displayed visibility, colors, widths and hover distances without changing saved preferences.
+
+Interface scale, model display, navigation and external reload changes preview immediately.
 **Apply** saves personal preferences and commits model changes together only
 after the current model evaluation validates; pending or failed geometry cannot
 commit. Model settings changes create one undoable operation. **OK** applies and

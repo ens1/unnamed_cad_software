@@ -56,6 +56,16 @@ pub const SUPPORTED_STYLE_PROPERTIES: &[&str] = &[
     "preview-added-color",
     "preview-removed-color",
     "preview-edge-width",
+    "show-part-edges",
+    "part-edge-color",
+    "part-edge-width",
+    "hover-centerlines",
+    "hover-midpoints",
+    "centerline-color",
+    "centerline-width",
+    "centerline-hit-size",
+    "centerline-extension",
+    "centerline-mark-size",
     "comparison-color",
     "selection-opacity",
     "ghost-opacity",
@@ -663,6 +673,8 @@ fn validate_property(name: &str, value: &str) -> Result<()> {
             | "preview-color"
             | "preview-added-color"
             | "preview-removed-color"
+            | "part-edge-color"
+            | "centerline-color"
             | "comparison-color"
             | "reference-curve-color"
             | "explode-line-color"
@@ -687,6 +699,23 @@ fn validate_property(name: &str, value: &str) -> Result<()> {
                 "border requires '<width> solid <color>' or none; received {value:?}"
             )));
         }
+    }
+    if matches!(
+        name,
+        "part-edge-width"
+            | "centerline-width"
+            | "centerline-hit-size"
+            | "centerline-extension"
+            | "centerline-mark-size"
+    ) && value
+        .strip_suffix("px")
+        .or_else(|| (value == "0").then_some(value))
+        .and_then(|value| value.parse::<f32>().ok())
+        .is_none_or(|value| !value.is_finite() || value < 0.)
+    {
+        return Err(invalid(format!(
+            "{name} requires a nonnegative px length; received {value:?}"
+        )));
     }
     let length_property = matches!(
         name,
@@ -780,6 +809,7 @@ fn validate_property(name: &str, value: &str) -> Result<()> {
         )));
     }
     let allowed: Option<&[&str]> = match name {
+        "show-part-edges" | "hover-centerlines" | "hover-midpoints" => Some(&["true", "false"]),
         "shadows" => Some(&["true", "false", "none"]),
         "display" => Some(&["none", "block", "flex"]),
         "visibility" => Some(&["visible", "hidden"]),

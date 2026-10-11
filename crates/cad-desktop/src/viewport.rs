@@ -10,7 +10,7 @@ use cad_core::{
     PlacedPart, TopologyRef,
     protocol::{Evaluation, MeshData, OPERATION_PREVIEW_VERSION},
 };
-fn style_target(w: &Workspace) -> cad_core::presentation::StyleTarget {
+pub(crate) fn style_target(w: &Workspace) -> cad_core::presentation::StyleTarget {
     let [width, height] = w.presentation_resources.logical_size;
     let region = w
         .layout
@@ -115,6 +115,107 @@ pub fn ray(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> ([f64; 3], [f64; 3
         .normalize();
     (world_point(eye(w)), [d.x as f64, -d.z as f64, d.y as f64])
 }
+
+/// Display visibility for transient hover guides, using the same station and
+/// feature-input mesh as picking. Ray bounds avoid scanning unrelated parts.
+/// This tessellated visibility query never establishes a geometric center.
+pub(crate) fn visible_at(
+    w: &Workspace,
+    rect: egui::Rect,
+    point: [f64; 3],
+    remaining: &mut usize,
+) -> bool {
+    let Some(screen) = project(w, rect, point) else {
+        return false;
+    };
+    let Some(evaluation) = selection_evaluation(w) else {
+        return false;
+    };
+    let (origin, direction) = ray(w, rect, screen);
+    let origin = DVec3::from_array(origin);
+    let direction = DVec3::from_array(direction);
+    let limit = (DVec3::from_array(point) - origin).dot(direction);
+    if !limit.is_finite() || limit <= 0. {
+        return false;
+    }
+    let epsilon = (limit * 1e-5).max(1e-4);
+    let displayed = display_evaluation(w).unwrap_or(evaluation);
+    for display_instance in display_instances(w, displayed) {
+        let input = display_instances(w, evaluation).iter().find(|instance| {
+            instance.path == display_instance.path
+                && instance.definition == display_instance.definition
+        });
+        let input_meshes = input
+            .map(|instance| selection_meshes(w, evaluation, instance))
+            .unwrap_or_default();
+        let (instance, meshes) = if let Some(input) = input.filter(|_| !input_meshes.is_empty()) {
+            (input, input_meshes)
+        } else {
+            // Edge-feature picking filters unrelated occurrences; those solids
+            // still render and must continue to occlude the input-edge guides.
+            (
+                display_instance,
+                display_meshes(w, displayed, display_instance),
+            )
+        };
+        if !visible(w, instance) || ghost_neighbor(w, instance) {
+            continue;
+        }
+        let from_local =
+            bevy::math::DMat4::from_cols_array(&std::array::from_fn::<_, 16, _>(|index| {
+                instance.matrix[index % 4][index / 4]
+            }));
+        let to_local = from_local.inverse();
+        if !to_local.is_finite() {
+            continue;
+        }
+        let local_origin = to_local.transform_point3(origin);
+        let local_direction = to_local.transform_vector3(direction);
+        for mesh in meshes {
+            if mesh.indices.is_empty()
+                || !ray_bounds(local_origin, local_direction, mesh.bounds, limit)
+            {
+                continue;
+            }
+            for indices in mesh.indices.as_chunks::<3>().0 {
+                // Optional hover feedback yields conservatively under extreme
+                // display work instead of stalling a navigation or drawing gesture.
+                if *remaining == 0 {
+                    return false;
+                }
+                *remaining -= 1;
+                let [a, b, c] = indices.map(|index| mesh.positions[index as usize]);
+                if triangle(local_origin.to_array(), local_direction.to_array(), a, b, c)
+                    .is_some_and(|distance| distance < limit - epsilon)
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn ray_bounds(origin: DVec3, direction: DVec3, bounds: [[f64; 3]; 2], limit: f64) -> bool {
+    let mut near = 0_f64;
+    let mut far = limit;
+    for axis in 0..3 {
+        if direction[axis].abs() < 1e-15 {
+            if origin[axis] < bounds[0][axis] || origin[axis] > bounds[1][axis] {
+                return false;
+            }
+        } else {
+            let a = (bounds[0][axis] - origin[axis]) / direction[axis];
+            let b = (bounds[1][axis] - origin[axis]) / direction[axis];
+            near = near.max(a.min(b));
+            far = far.min(a.max(b));
+            if near > far {
+                return false;
+            }
+        }
+    }
+    true
+}
 fn triangle(o: [f64; 3], d: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Option<f64> {
     let o = DVec3::from_array(o);
     let d = DVec3::from_array(d);
@@ -215,14 +316,14 @@ pub(crate) fn display_meshes<'a>(
     }));
     meshes
 }
-fn visible(w: &Workspace, i: &PlacedPart) -> bool {
+pub(crate) fn visible(w: &Workspace, i: &PlacedPart) -> bool {
     !w.view.isolation
         || w.peek
         || w.view.active_part.as_deref() == Some(&i.definition)
         || w.view.pinned.iter().any(|p| i.path.contains(p))
         || w.view.ghost_others
 }
-fn ghost_neighbor(w: &Workspace, instance: &PlacedPart) -> bool {
+pub(crate) fn ghost_neighbor(w: &Workspace, instance: &PlacedPart) -> bool {
     w.view.isolation
         && !w.peek
         && w.view.active_part.as_ref() != Some(&instance.definition)

@@ -27,6 +27,12 @@ pub struct Preferences {
     pub version: u32,
     pub ui_scale: f32,
     pub navigation: navigation::Preferences,
+    /// View-only topology outlines, independent of saved engineering definitions.
+    pub show_part_edges: bool,
+    /// Show nearby circular-edge centers and analytic axes without selecting them.
+    pub hover_centerlines: bool,
+    /// Show nearby straight-edge midpoint guides without selecting them.
+    pub hover_midpoints: bool,
     pub watch_presentation_files: bool,
     pub recovery_enabled: bool,
     pub recovery_interval_seconds: u64,
@@ -39,6 +45,9 @@ impl Default for Preferences {
             version: CONTRACT_VERSION,
             ui_scale: 1.,
             navigation: navigation::Preferences::default(),
+            show_part_edges: true,
+            hover_centerlines: true,
+            hover_midpoints: true,
             watch_presentation_files: true,
             recovery_enabled: true,
             recovery_interval_seconds: 2,

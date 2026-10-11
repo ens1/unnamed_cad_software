@@ -142,4 +142,13 @@ share the same draft commands and current-result confirmation transaction.
 
 The appearance contract v2 separates engineering material IDs from visual finish IDs. Part/configuration assignments and nested occurrence overrides resolve through the same configured document hierarchy; semantic fields/actions are independent of native controls. The Bevy finish adapter uses part-local physical texture coordinates and converts transforms to f32 at the renderer boundary. Built-in and imported grayscale maps perturb lighting normals without changing native geometry. Imported height maps replace built-in grain. Anisotropic reflections follow part-local texture direction without depending on tessellation UVs. Bounded texture decoding and procedural studio-map generation run away from the UI thread; derived image caches retain resource hashes and reject obsolete replies. Adapter 21 invalidates previous derived caches containing the old placed-part protocol. See [visual finishes](visual-finishes.md).
 
+Adapter 31 publishes optional version 1 native edge-center display metadata in
+application-owned f64 units: bounded straight endpoints or a proven circular
+center/normal/radius/radial frame. It is separate from design intent and from the
+renderer. The desktop uses retained depth-tested native boundary lines over the
+shaded model, plus noninteractive hover center/midpoint guides. Personal settings,
+portable style properties and semantic roles control these displays. Curves
+without a proved supported center omit the optional guide; screen samples never
+supply its center. See [part edges and guides](presentation.md#part-edges-and-hover-center-guides).
+
 Settings use two independently versioned, renderer-free preference contracts. `cad-core::settings::ModelSettings` belongs to document source and the validated command/undo path; the desktop personal preference DTO and atomic file adapter retain application defaults, navigation, UI scale, presentation watching and recovery controls. The settings presentation publishes typed semantic descriptors with a whitelisted setter, so field semantics do not depend on default modal widgets. While model settings own a checkpoint, unrelated commands/source setters are blocked and completed STEP imports stay queued. Apply waits for the current evaluated identity; Cancel restores only the owned draft and live personal previews. The CLI uses saved model tolerance unless explicitly overridden. Display-unit formatting changes sketch dimension labels and inspection values while canonical geometry and explicit input units remain unchanged.

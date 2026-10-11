@@ -24,6 +24,7 @@ mod mold_ui;
 mod navigation;
 mod operation_editor_ui;
 mod operation_preview;
+mod part_edges;
 mod placement_pattern_ui;
 mod presentation_composition;
 mod presentation_controls;
@@ -53,6 +54,7 @@ mod texture_assets;
 mod theme_library;
 mod ui;
 mod viewport;
+mod viewport_guides;
 mod worker;
 mod workspace_controls;
 use bevy::{
@@ -72,7 +74,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/30;solver/tcad-native-lm/14";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/31;solver/tcad-native-lm/14";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -104,6 +106,9 @@ pub struct Workspace {
     pub theme_text: String,
     pub source_text: String,
     pub selected: Option<viewport::Selection>,
+    pub hover_guide: Option<viewport_guides::Guide>,
+    pub hover_cache: viewport_guides::Cache,
+    pub hover_viewport_seen: bool,
     /// View-only preselection; authored edge sets belong to their feature draft.
     pub geometry_selection: Vec<viewport::Selection>,
     /// Full occurrence anchor for edge selection; a leaf can repeat in subassemblies.
@@ -115,6 +120,7 @@ pub struct Workspace {
     pub candidate_index: usize,
     pub rendered_key: String,
     pub viewport_size: [u32; 2],
+    pub viewport_pixels_per_point: f32,
     pub git_text: String,
     pub commit_message: String,
     pub branch_name: String,
@@ -239,6 +245,9 @@ impl Workspace {
             theme_text,
             source_text: String::new(),
             selected: None,
+            hover_guide: None,
+            hover_cache: viewport_guides::Cache::default(),
+            hover_viewport_seen: false,
             geometry_selection: vec![],
             edge_selection_path: None,
             selected_feature_path: None,
@@ -248,6 +257,7 @@ impl Workspace {
             candidate_index: 0,
             rendered_key: String::new(),
             viewport_size: [1000, 800],
+            viewport_pixels_per_point: 1.,
             git_text: String::new(),
             commit_message: String::new(),
             branch_name: String::new(),
@@ -769,6 +779,7 @@ fn main() {
             ..default()
         }))
         .add_plugins(render_appearance::FinishRenderPlugin)
+        .init_resource::<part_edges::Cache>()
         .add_plugins(EguiPlugin::default())
         .add_systems(Startup, setup)
         .add_systems(
@@ -779,6 +790,7 @@ fn main() {
                 render_appearance::poll_assets,
                 render_appearance::lighting,
                 viewport::sync_scene,
+                part_edges::sync,
             )
                 .chain(),
         )

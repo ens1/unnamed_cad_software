@@ -394,3 +394,78 @@ it. All accepted changes enter the existing `PutDrawing` draft/checkpoint;
 current validated evaluation remains required for Apply, and Cancel restores the
 starting document. Native file/template pickers retain their operating-system
 presentation.
+
+## Part edges and hover center guides
+
+Parts default to **Shaded with edges**. The desktop retains native boundary line
+assets, scoped to the same displayed bodies, assembly occurrences and history
+station as the shaded model. Their depth test suppresses hidden edges; a small
+depth bias keeps front boundary lines from flickering on the surfaces. Default
+width is one logical pixel, scaled for the viewport's render target. Native
+selection outlines retain their existing accent above these neutral lines.
+
+Personal **Settings → Application → Model display** toggles edges, circular
+centerlines and straight-edge midpoint guides. All default to true. A theme may
+explicitly override the corresponding viewport visibility properties:
+
+```css
+[role=model-viewport] {
+  show-part-edges: true;
+  part-edge-color: #333A44;
+  part-edge-width: 1px;
+  hover-centerlines: true;
+  hover-midpoints: true;
+  centerline-color: #526B87;
+  centerline-width: 1.25px;
+  centerline-hit-size: 12px;
+  centerline-extension: 24px;
+  centerline-mark-size: 7px;
+}
+[role=part-edge][definition=part-1] { stroke-width: 1.5px; }
+[role=hover-centerline] { color: #FF5A00; opacity: 0.8; }
+[role=hover-midpoint] { size: 5px; hit-size: 16px; }
+```
+
+Bundled themes set suitable colors and leave visibility preferences in control.
+The new visibility properties require true/false. Their width, hit, extension and
+mark properties accept nonnegative pixel lengths (or unitless zero). Widths are
+bounded to 0–8 logical pixels, proximity to 0–64, extension to 0–200 and marks to
+0–40; zero width/alpha or `display: none` hides an overlay. Semantic role selectors
+also support color, opacity, stroke-width, hit-size, size and visibility. Edge
+IDs retain encoded occurrence, body and construction identities; attributes
+include definition, occurrence, producer, body and construction-role.
+
+Hovering near a proven circular rim or its center reveals a center mark, in-plane
+centerlines and normal axis. Hovering near a proven straight edge reveals its
+geometric midpoint and a perpendicular guide. These are noninteractive feedback;
+they do not open menus, add geometry, change the sketch or commit a draft. They
+respect occurrence transforms, the history station and edge-feature input
+selection. Opaque foreground occurrences still occlude input guides while editing
+an edge feature. The pointer leaving the viewport, drawing capture, navigation,
+component dragging or popup ownership clears feedback.
+
+The application-owned `EdgeData.center` display contract version 1 supplies
+mesh-local f64 endpoints for proven bounded straight carriers, or center, normal,
+radius and radial direction for proven circular carriers. Circle recognition uses
+complete native rational identities, including supported arcs; screen samples
+only locate nearby edges and assess occlusion. Elliptical/spline/implicit carriers
+without a proved supported center omit this metadata. Saved source and the native
+boundary are unchanged. Adapter 31 invalidates older derived caches so this
+optional metadata is regenerated.
+
+`workspace.edge-display` publishes effective display settings through contract
+`tcad.viewport-edge-display` version 1. Current guides publish
+`tcad.viewport-guides` version 1, roles `hover-centerline` / `hover-midpoint`,
+construction references, complete occurrence paths, native center metadata and
+transient visible/hover state. They carry no modeling command. The center-guide
+renderer remains replaceable independently of the native kernel and CAD source.
+
+Hover queries cache both hits and misses until the pointer, viewport clipping,
+evaluation, feature-input selection, camera, history/exploded view, isolation,
+theme or relevant preferences change. Each cache miss shares a 200,000-segment
+proximity budget and a 200,000-triangle occlusion budget across up to eight nearby
+candidates. Budget exhaustion conservatively omits optional feedback. Native
+center recognition remains in the geometry worker; cached guides retain only one
+analytic frame, occurrence, styling and semantic description. Transient semantic
+snapshots reject changed evaluation or view contexts. Duplicated custom viewport
+regions do not clear the pointer-owning region's cache.

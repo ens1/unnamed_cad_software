@@ -62,7 +62,7 @@ Native schema remains 1; additive defaults omit empty/None values so existing so
 | Split / assembly inspection / exploded views / drawing sheet formats | 1 / 1 / 1 / 1 |
 | Portable block resources / configured dimension fields / drawing symbols | 1 / 2 / 1 |
 
-Core solver source reports `tcad-native-lm/14`. Adapter and desktop source constants use `monstertruck/0.4.1+fc2306852a46;adapter/30;solver/tcad-native-lm/14`. Transient sketch diagnostics and assembly movement each use version 1. Internal boxing retains native JSON shapes. The kernel directly declares the existing workspace `serde` dependency for bounded report serialization; the desktop now directly declares the already-pinned `winit` 0.30.13 for primary-window gesture phases. No new third-party package or dependency version is introduced, and existing dependency notices cover both.
+Core solver source reports `tcad-native-lm/14`. Adapter and desktop source constants use `monstertruck/0.4.1+fc2306852a46;adapter/31;solver/tcad-native-lm/14`. Transient sketch diagnostics and assembly movement each use version 1. Internal boxing retains native JSON shapes. The kernel directly declares the existing workspace `serde` dependency for bounded report serialization; the desktop now directly declares the already-pinned `winit` 0.30.13 for primary-window gesture phases. No new third-party package or dependency version is introduced, and existing dependency notices cover both.
 
 The preceding interaction correction adds [exact face-attached boss joins](boss-joins.md), [two-pick Smart Dimension](sketch-smart-dimension.md), and saved [navigation preference contract version 1](navigation.md). Contact joins remove native opposing caps and retain real shared edge/face ancestry for supported inset and matching-outline contacts, including separated repeated bosses. Smart Dimension supports tool-first picking or Command/Shift preselection, signed-side center-to-line gaps, current owned straight model-edge construction conversions, live values and a local dimension checkpoint including promoted parameters. New conversions retain construction parameter orientation; legacy incident-face ordering remains explicitly readable. The trackpad adapter reverses the default scroll-orbit directions and adds cursor-anchor pinch, native roll/smart zoom, saved sensitivities/direction switches, precision modifiers and gesture ownership/cancellation. Geometry and hardware limits remain recorded in the capability documentation.
 
@@ -829,3 +829,48 @@ a separate tone pass; in-shader tone mapping is not an active TCAD variant.
 `proc-macro-error2` future-incompatibility notice remains. No tests, assertion
 probes, model exercises, app launches or UI smoke runs were performed; visual
 acceptance is still the user's next step.
+
+## Default part edges and hover center guides — 2026-10-11
+
+The user requested visible part edges by default and clarified that nearby hover
+should expose both circular centers/axes and straight-edge midpoint guides.
+Personal application preferences version 1 now add `show_part_edges`,
+`hover_centerlines` and `hover_midpoints`, all default true and readable from older
+files through additive defaults. **Settings → Application → Model display**
+provides independent semantic toggles using the existing staged personal
+preview/Apply/Cancel path. Portable CSS controls visibility, colors, widths,
+proximity, guide extent and marks; bundled themes set suitable colors without
+forcing visibility over preferences.
+
+The desktop retains native boundary line assets over the same displayed
+bodies/occurrences/history station, with depth testing and a small surface bias.
+Styles address `part-edge` roles and encoded occurrence/body/construction IDs.
+Assets rebuild for evaluation, theme, viewport ancestry, visibility or render
+scale changes; unchanged navigation reuses them. Existing selection outlines and
+localized operation feedback remain independent.
+
+Kernel adapter **31** publishes `EdgeData.center` version 1: exact native bounded
+line endpoints or a proved circular center/normal/radius/radial frame. Unsupported
+elliptical, spline or implicit carriers without a supported proof omit optional
+metadata; centers are never fit from display tessellation. Geometry/source
+operations are unchanged, and both desktop/worker fingerprints match. No
+Monstertruck revision or public fork change was needed.
+
+The new guide renderer locates nearby visible edge samples, then draws circular
+center marks, in-plane centerlines and normal axes, or straight midpoint marks
+and perpendicular guides. These noninteractive overlays never open menus or
+mutate modeling intent. They follow current occurrence placement, inspected
+history and feature-input picking; unrelated opaque assembly occurrences still
+occlude input-edge guides. Pointer exit, popup/cube/toolbar ownership, drawing
+capture, navigation and component dragging clear feedback. Cached hits/misses
+invalidate with source/view/selection/theme/preferences; each query shares
+200,000 segment checks and 200,000 triangle checks over up to eight candidates.
+Extreme display work conservatively omits optional feedback. Transient semantic
+snapshots include evaluation/view context and reject stale placements.
+
+Completed source checks: locked workspace compilation, focused desktop/kernel
+compilation, `cargo fmt --all -- --check`,
+`cargo clippy --workspace --locked -- -D warnings`, and `git diff --check`.
+No tests, probes, model exercises, app launches or UI smoke checks were performed;
+interactive acceptance remains the user's work. The existing
+`proc-macro-error2` future-incompatibility notice remains.

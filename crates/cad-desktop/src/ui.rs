@@ -71,6 +71,9 @@ pub fn workspace_ui(
     let size = ctx.content_rect().size();
     crate::presentation_controls::begin_frame(&w.theme, &w.view.active_layout);
     let semantics = crate::presentation_composition::semantics(&w);
+    // Only a viewport rendered during this frame may retain transient hover feedback.
+    w.hover_guide = None;
+    w.hover_viewport_seen = false;
     let composition = w.layout.expand_semantics(&semantics)?;
     let regions = composition.regions_presented(
         &w.view.active_layout,
@@ -90,6 +93,9 @@ pub fn workspace_ui(
         image.texture,
     );
     crate::assembly_motion_ui::finish_ui(&mut w, ctx);
+    if !w.hover_viewport_seen {
+        w.hover_cache = crate::viewport_guides::Cache::default();
+    }
     let resize_regions = regions.clone();
     let settings_open = w.settings.is_some();
     let viewport_center = regions
@@ -1362,6 +1368,9 @@ fn model_view(
     if index == 0 {
         let scale = ui.ctx().pixels_per_point();
         w.viewport_size = [(r.width() * scale) as u32, (r.height() * scale) as u32];
+        w.viewport_pixels_per_point = (w.viewport_size[0].clamp(32, 4096) as f32
+            / r.width().max(1.))
+        .min(w.viewport_size[1].clamp(32, 4096) as f32 / r.height().max(1.));
     }
     let response = ui.put(
         r,
@@ -1477,6 +1486,22 @@ fn model_view(
         });
     }
     viewport::overlay(w, ui, r);
+    let blocked = !response.hovered()
+        || motion_owned
+        || ui.input(|input| {
+            input
+                .pointer
+                .hover_pos()
+                .is_some_and(|point| toolbar.contains(point) || cube.contains(point))
+        });
+    if response.hovered() {
+        w.hover_viewport_seen = true;
+        let mut hover_cache = std::mem::take(&mut w.hover_cache);
+        if let Some(guide) = crate::viewport_guides::overlay(w, ui, r, blocked, &mut hover_cache) {
+            w.hover_guide = Some(guide);
+        }
+        w.hover_cache = hover_cache;
+    }
     if !motion_owned {
         crate::sketch::overlay(w, ui, r, &response, toolbar);
     }
