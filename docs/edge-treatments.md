@@ -26,6 +26,16 @@ authority.
   The two neighbouring edges at each terminal vertex must be straight, with
   exactly three incident faces. Connected selections at one vertex use the
   simultaneous corner path rather than sequential rounding.
+- **Segmented straight chains:** when selected collinear sketch or Boolean
+  edges divide one planar wedge, an additional native candidate removes paired,
+  oppositely oriented coplanar seams and joins the selected edges at proven
+  valence-two vertices. All source curves must lie within the bounded combined
+  straight carrier, and merged planar supports must have one closed native
+  boundary. The existing simultaneous constructor then treats the complete
+  chain and its real terminal corners. Combined edge and support ancestry is
+  explicit; an authored Distance 1 face follows its merged and trimmed native
+  descendant. Normalization is private to this operation's candidate and is
+  installed only with a complete validated treatment.
 - **Concave pocket and cavity chains:** a convex planar void is treated as the
   material dual of a convex solid. Blind pockets receive a temporary exact
   planar entry cap. The complete selected void edge network is treated with
@@ -48,6 +58,16 @@ authority.
   Revolved planar cap sectors are coalesced along shared native edges into
   complete circular disks or annuli; surviving rim edges, vertices and explicit
   Distance 1 face references retain their source relationships.
+- **Circular chains ending on radial planes:** partial cylinder/cone rims may
+  terminate at actual three-face corners on planar faces through the turning
+  axis. This includes circular and annular sketch sectors, half-round stock,
+  and corresponding radial-ended recesses in convex or concave material
+  arrangements. The original radial faces receive the same exact conical or
+  toroidal meridians as the new treatment faces. Cap radial edges and wall
+  generatrices are trimmed together, including selections at both ends of a
+  wall or both ends of a shared radial edge. Native planar revolution sectors
+  can coalesce into bounded concentric sectors as well as complete disks or
+  annuli. A selection cannot stop arbitrarily in an unselected smooth wall.
 
 ## Construction and validation
 
@@ -92,6 +112,16 @@ relationship must be preserved. For void duality, unrelated shells and material
 islands must be separated from the selected removal slabs in the original
 convex void, including full spherical-corner bounds.
 
+An open circular chain is admitted only when its native endpoint incidence
+identifies the cap, turned wall and one radial terminal plane. Its planar and
+wall rail endpoints must lie strictly within the original straight terminal
+edges. The constructed meridian's complete native enclosure must remain in that
+plane. Every other terminal boundary is protected by the same rational band
+separation proof, and the assembled radial and axial edge spans must remain
+positive after all selected setbacks. Existing terminal faces and trimmed
+source edges retain their provenance. Unchanged supports are preserved; no
+new plane is invented to close an arbitrary partial arc.
+
 Complete selections are attempted together first. If no complete constructor
 accepts the selection, independent groups may use different native constructors
 within the same operation. Groups are defined by shared source vertices; a
@@ -109,7 +139,8 @@ continues to commit one operation through the existing validation/undo path.
 ## Remaining limits
 
 These paths do not constitute a general rolling-ball surface solver. Arbitrary
-freeform or intersecting cylinder/spline edges, partial turned rims, unequal
+freeform or intersecting cylinder/spline edges, partial turned rims without
+radial planar terminations, unequal
 radius corner networks, variable-radius fillets, unequal-dihedral two-edge
 transitions, and arbitrary mixed-carrier corner patches remain unsupported.
 Local straight edges that terminate on curved edges or curved terminal faces
@@ -118,6 +149,10 @@ reject valid but inseparable control-hull cases rather than publish uncertain
 geometry. Conical walls ending at an apex require a separate singular topology
 constructor. Mixed construction families at a connected or geometrically interacting corner
 still require a simultaneous transition constructor.
+Straight-chain normalization does not merge multiply-connected planar support
+unions or curved supports, and it does not remove unselected authored edges
+along the chain. General transitions from straight edges onto curved terminal
+faces remain additional work.
 
 Compilation, formatting and strict linting are the available implementation
 checks. No code tests, probes or manual/UI smoke tests were written or run;

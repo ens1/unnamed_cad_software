@@ -1,4 +1,4 @@
-//! Exact conical bevels and toroidal rounds on complete turned rims.
+//! Exact conical bevels and toroidal rounds on turned rims.
 //! Circular controls remain rational; shared rails are built once and reused.
 //! No relay points, sampled strips, or display meshes are construction inputs.
 use crate::{planar::ChamferSpec, shell_history::ShellHistory};
@@ -10,10 +10,14 @@ use monstertruck::{
 use std::collections::{HashMap, HashSet};
 #[path = "circular_caps.rs"]
 mod circular_caps;
+#[path = "circular_terminals.rs"]
+mod circular_terminals;
 #[path = "concave_treatment.rs"]
 mod concave_treatment;
 #[path = "local_blend.rs"]
 mod local_blend;
+#[path = "straight_chains.rs"]
+mod straight_chains;
 
 const EPS: f64 = 1e-7;
 const MAX_FACES: usize = 4096;
@@ -891,7 +895,12 @@ fn band_separated(source: &Rim, other: &Rim, work: &mut usize) -> Result<bool> {
     Ok(true)
 }
 
-fn collision_proof(solid: &Solid, rims: &[Rim], work: &mut usize) -> Result<()> {
+fn collision_proof(
+    solid: &Solid,
+    rims: &[Rim],
+    terminals: &circular_terminals::Terminations,
+    work: &mut usize,
+) -> Result<()> {
     for other in rims {
         for source in rims.iter().filter(|source| !same_ring(source, other)) {
             if !band_separated(source, other, work)? {
@@ -909,11 +918,12 @@ fn collision_proof(solid: &Solid, rims: &[Rim], work: &mut usize) -> Result<()> 
             .filter(|other| same_ring(rim, other))
             .map(|other| other.wall)
             .collect::<HashSet<_>>();
-        let own_edges = rims
+        let mut own_edges = rims
             .iter()
             .filter(|other| same_ring(rim, other))
             .map(|other| other.edge.id())
             .collect::<HashSet<_>>();
+        own_edges.extend(terminals.cap_edges(rim, rims));
         for face in solid.face_iter() {
             if own_walls.contains(&face.id()) {
                 continue;
@@ -926,6 +936,14 @@ fn collision_proof(solid: &Solid, rims: &[Rim], work: &mut usize) -> Result<()> 
                     if !curve_separated(&edge.curve(), rim, work)? {
                         return Err(unsupported(
                             "A circular setback may cross another cap boundary; reduce its size",
+                        ));
+                    }
+                }
+            } else if let Some(protected) = terminals.protected_edges(face, rim, rims) {
+                for edge in protected {
+                    if !curve_separated(&edge.curve(), rim, work)? {
+                        return Err(unsupported(
+                            "A circular terminal setback may meet another boundary on its radial face; reduce its size",
                         ));
                     }
                 }
@@ -1195,6 +1213,45 @@ fn attempt(
     treatment: Treatment,
     history: &mut ShellHistory,
 ) -> Result<Option<Solid>> {
+    let original = match attempt_native(solid, selected, spec, treatment, history) {
+        Ok(Some(output)) => return Ok(Some(output)),
+        Ok(None) => None,
+        Err(error @ CadError::Unsupported(_)) => Some(error),
+        Err(error) => return Err(error),
+    };
+    let mut candidate = history.clone();
+    let Some(prepared) =
+        straight_chains::prepare(solid, selected, spec.first_face, &mut candidate)?
+    else {
+        return original.map_or(Ok(None), Err);
+    };
+    let prepared_spec = ChamferSpec {
+        first_face: prepared.first_face,
+        distance: spec.distance,
+        second_distance: spec.second_distance,
+        angle: spec.angle,
+        flip: spec.flip,
+    };
+    let result = attempt_native(
+        &prepared.solid,
+        &prepared.selected,
+        &prepared_spec,
+        treatment,
+        &mut candidate,
+    )?;
+    if result.is_some() {
+        *history = candidate;
+    }
+    Ok(result)
+}
+
+fn attempt_native(
+    solid: &Solid,
+    selected: &[EdgeId],
+    spec: &ChamferSpec,
+    treatment: Treatment,
+    history: &mut ShellHistory,
+) -> Result<Option<Solid>> {
     let mut diagnostic = None;
     for constructor in 0..4 {
         let mut candidate = history.clone();
@@ -1336,15 +1393,9 @@ fn circular(
             .into_iter()
             .find(|wire| wire.iter().any(|candidate| candidate.id() == edge.id()))
             .ok_or_else(|| invalid("The selected edge is absent from its cap boundary"))?;
-        if wire
-            .iter()
-            .any(|candidate| !selected.contains(&candidate.id()))
-            || crate::prismatic_shell::wire_circle(&wire)?.is_none()
-        {
-            return Err(unsupported(
-                "Select every arc of the complete circular rim; partial arc ends need corner transition geometry",
-            ));
-        }
+        // A selected circular chain may terminate on a real radial plane.
+        // Its native endpoint incidence and terminal trims are established
+        // together below; an arbitrary stop in a smooth wall is not admitted.
         let edge = source_edges[&edge.id()].clone();
         let ((center, normal, radius), _) = crate::bounded_carriers::circle(&edge.curve())?;
         if normal.dot(cap_plane.normal).abs() < 1. - 1e-10 {
@@ -1387,17 +1438,16 @@ fn circular(
                 "The wall orientation does not prove a regular inner or outer turned surface",
             ));
         }
-        let sweep = wire.iter().try_fold(0., |sum, member| -> Result<f64> {
-            let ((_, normal, _), angle) =
-                crate::bounded_carriers::circle(&member.oriented_curve())?;
-            Ok(sum + angle * normal.dot(cap_plane.normal))
-        })?;
-        let side = sweep.signum();
-        if (sweep.abs() - std::f64::consts::TAU).abs() > 1e-8
-            || axial_side != -side * outward.signum()
-        {
+        let occurrence = wire
+            .iter()
+            .find(|member| member.id() == edge.id())
+            .ok_or_else(|| invalid("The circular cap occurrence is absent"))?;
+        let ((_, oriented_normal, _), angle) =
+            crate::bounded_carriers::circle(&occurrence.oriented_curve())?;
+        let side = (angle * oriented_normal.dot(cap_plane.normal)).signum();
+        if axial_side != -side * outward.signum() {
             return Err(invalid(
-                "The complete cap winding and turned material orientation disagree",
+                "The circular cap traversal and turned material orientation disagree",
             ));
         }
         let (radial, depth, profile_weight) = match treatment {
@@ -1608,11 +1658,13 @@ fn circular(
             .ok_or_else(|| invalid("Circular rails were not prepared"))?
             .connectors = connectors;
     }
+    let terminals =
+        circular_terminals::Terminations::discover(solid, &rims, &plane_vertices, &wall_vertices)?;
     let mut proof_work = 0usize;
     for rim in &mut rims {
         rim.bounds = Some(band_bounds(rim, &mut proof_work)?);
     }
-    collision_proof(solid, &rims, &mut proof_work)?;
+    collision_proof(solid, &rims, &terminals, &mut proof_work)?;
     let mut plane_edges = HashMap::new();
     let mut wall_edges = HashMap::new();
     let mut seam_edges = HashMap::new();
@@ -1661,11 +1713,20 @@ fn circular(
             if start.id() == a.id() && end.id() == b.id() {
                 continue;
             }
+            let delta = b.point() - a.point();
+            if (end.point() - start.point()).dot(delta) <= EPS * delta.magnitude() {
+                return Err(invalid(
+                    "Circular setbacks meet or consume a shared axial seam",
+                ));
+            }
             let replacement = builder::line(start, end);
             history.retain_edge(replacement.id(), source.id())?;
             seam_edges.insert(edge.id(), replacement);
         }
     }
+    let radial_edges = terminals.radial_edges(&source_edges, &plane_vertices, history)?;
+    let mut cap_edges = plane_edges.clone();
+    cap_edges.extend(radial_edges.iter().map(|(id, edge)| (*id, edge.clone())));
     let mut output_faces = HashMap::new();
     for rim in &rims {
         if output_faces.contains_key(&rim.cap.id()) {
@@ -1675,7 +1736,7 @@ fn circular(
             .cap
             .boundaries()
             .iter()
-            .map(|wire| remap_wire(wire, &plane_edges))
+            .map(|wire| remap_wire(wire, &cap_edges))
             .collect();
         let face = preserve_surface(&rim.cap, wires)
             .map_err(|_| invalid("The planar rim setback breaks its cap boundary"))?;
@@ -1804,6 +1865,7 @@ fn circular(
         history.construct_face(face.id(), &[history.edge(rim.edge.id())?, history.face(rim.cap.id())?, history.face(rim.wall)?], serde_json::json!({"operation":treatment.name(),"constructor":match treatment { Treatment::Chamfer => "exact_conical_rim", Treatment::Fillet => "exact_toroidal_rim" },"column":rim.column}))?;
         bevels.entry(rim.cap.id()).or_default().push(face);
     }
+    output_faces.extend(terminals.rebuild(&radial_edges, &seam_edges, &connectors, history)?);
     let mut shells = Vec::new();
     for shell in solid.boundaries() {
         let mut out = Shell::new();

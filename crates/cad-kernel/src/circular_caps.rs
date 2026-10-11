@@ -1,4 +1,4 @@
-//! Join native planar sectors before treating a complete turned rim.
+//! Join native planar sectors before treating complete or radial-ended rims.
 //! Only existing shared edges are removed. Boundary edges, vertices and their
 //! authored identities survive; no coordinate welding or fitted wire is used.
 use crate::{native_bounds::Enclosure, shell_history::ShellHistory};
@@ -101,8 +101,128 @@ pub(super) struct Coalesced {
     pub faces: HashMap<FaceId, FaceId>,
 }
 
-/// This is deliberately a circular-cap operation: connected sectors must
-/// reduce to one complete outer circle and zero or more complete hole circles.
+/// A complete circle or an exact concentric sector has an unambiguous
+/// orientation from its outer circular run. Native edge incidence, monotone
+/// arcs, radial lines and the original validated sectors establish its bounded
+/// perimeter; no polygonal approximation supplies winding or containment.
+fn outer_boundary(wire: &Wire, normal: Vector3, work: &mut usize) -> Result<bool> {
+    let mut circles = Vec::new();
+    let mut straight = Vec::new();
+    for (index, edge) in wire.iter().enumerate() {
+        circle_budget(&edge.curve(), work)?;
+        match crate::bounded_carriers::circle(&edge.oriented_curve()) {
+            Ok(((center, axis, radius), sweep)) => {
+                if axis.dot(normal).abs() < 1. - 1e-10 {
+                    return Err(unsupported("A cap circle leaves its supporting plane"));
+                }
+                circles.push((index, center, radius, sweep * axis.dot(normal)));
+            }
+            Err(CadError::Unsupported(_)) => {
+                if !crate::planar::straight_edge(edge)? {
+                    return Err(unsupported(
+                        "Merged turned caps require circles or exact radial sector boundaries",
+                    ));
+                }
+                straight.push(edge);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    let Some((_, center, _, _)) = circles.first().copied() else {
+        return Err(unsupported("A merged turned cap has no circular boundary"));
+    };
+    if circles
+        .iter()
+        .any(|(_, other, _, _)| center.distance(*other) > EPS)
+    {
+        return Err(unsupported(
+            "A merged sector requires concentric circular boundaries",
+        ));
+    }
+    let outer_radius = circles
+        .iter()
+        .map(|(_, _, radius, _)| *radius)
+        .fold(0., f64::max);
+    let inner_radius = circles
+        .iter()
+        .map(|(_, _, radius, _)| *radius)
+        .fold(f64::INFINITY, f64::min);
+    let annular = outer_radius - inner_radius > EPS;
+    let mut classes = vec![0u8; wire.len()];
+    let mut sweeps = [0.; 2];
+    let mut signs = [0.; 2];
+    for (index, _, radius, sweep) in &circles {
+        let class = if (radius - outer_radius).abs() <= EPS {
+            0
+        } else if (radius - inner_radius).abs() <= EPS {
+            1
+        } else {
+            return Err(unsupported(
+                "A radial sector has more than two circular radii",
+            ));
+        };
+        if signs[class] != 0. && signs[class] != sweep.signum() {
+            return Err(unsupported("A sector boundary reverses circular traversal"));
+        }
+        signs[class] = sweep.signum();
+        sweeps[class] += sweep;
+        classes[*index] = (class + 1) as u8;
+    }
+    if straight.is_empty() {
+        if annular || (sweeps[0].abs() - std::f64::consts::TAU).abs() > 1e-8 {
+            return Err(unsupported(
+                "A cap boundary has uncertain complete circular winding",
+            ));
+        }
+        return Ok(sweeps[0] > 0.);
+    }
+    if sweeps[0].abs() >= std::f64::consts::TAU - 1e-8
+        || sweeps[0].abs() <= 1e-8
+        || (annular && (sweeps[0] + sweeps[1]).abs() > 1e-8)
+    {
+        return Err(unsupported(
+            "The radial sector has incompatible bounded arc traversals",
+        ));
+    }
+    for class in 1..=if annular { 2 } else { 1 } {
+        let runs = classes
+            .iter()
+            .enumerate()
+            .filter(|(index, current)| {
+                **current == class && classes[(index + classes.len() - 1) % classes.len()] != class
+            })
+            .count();
+        if runs != 1 {
+            return Err(unsupported(
+                "A radial sector must have one run on each circular radius",
+            ));
+        }
+    }
+    for edge in straight {
+        let start = edge.front().point() - center;
+        let end = edge.back().point() - center;
+        let radial = if start.magnitude2() > end.magnitude2() {
+            start
+        } else {
+            end
+        };
+        if !radial.magnitude2().is_finite() || radial.magnitude() <= EPS {
+            return Err(unsupported(
+                "A radial cap edge collapses at its circle axis",
+            ));
+        }
+        let perpendicular = normal.cross(radial.normalize());
+        let enclosure = crate::native_bounds::curve(&edge.curve())?;
+        charge(work, enclosure.len())?;
+        let (low, high) = enclosure.projection(center, perpendicular)?;
+        if low < -EPS || high > EPS {
+            return Err(unsupported("A noncircular sector boundary is not radial"));
+        }
+    }
+    Ok(sweeps[0] > 0.)
+}
+
+/// Connected sectors reduce to one outer turned boundary and optional holes.
 /// Their native orientation supplies nesting, inherited from the source shell.
 fn ordered_wires(
     edges: Vec<Edge>,
@@ -160,24 +280,7 @@ fn ordered_wires(
                 break;
             }
         }
-        for edge in &wire {
-            circle_budget(&edge.curve(), work)?;
-        }
-        if crate::prismatic_shell::wire_circle(&wire)?.is_none() {
-            return Err(unsupported(
-                "Merged turned caps require complete circular outer and hole boundaries",
-            ));
-        }
-        let mut sweep = 0.;
-        for edge in &wire {
-            circle_budget(&edge.curve(), work)?;
-            let ((_, axis, _), angle) = crate::bounded_carriers::circle(&edge.oriented_curve())?;
-            sweep += angle * axis.dot(normal);
-        }
-        if (sweep.abs() - std::f64::consts::TAU).abs() > 1e-8 {
-            return Err(unsupported("A cap boundary has uncertain complete winding"));
-        }
-        loops.push((sweep > 0., key, wire));
+        loops.push((outer_boundary(&wire, normal, work)?, key, wire));
     }
     if loops.iter().filter(|(outer, _, _)| *outer).count() != 1 {
         return Err(unsupported(
