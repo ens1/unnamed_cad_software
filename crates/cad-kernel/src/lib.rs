@@ -24,6 +24,7 @@ mod boolean_ops;
 mod bounded_carriers;
 mod curve_pattern;
 mod curve_sampling;
+mod curved_blend_proof;
 mod curved_shell;
 mod direct_edit;
 mod drilled_pockets;

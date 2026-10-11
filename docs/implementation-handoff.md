@@ -544,3 +544,54 @@ The existing dependency future-incompatibility notice is `proc-macro-error2`
 2.0.1. No tests, assertion probes, CLI modeling exercises, app launches or manual
 UI smoke checks were performed. Interactive modeling acceptance remains with
 the user. The repository was verified private before publication.
+
+## 2026-10-11: Straight fillet ending on a cylindrical wall
+
+Read-only inspection of the reported recovery draft identified a 3 mm fillet
+on a straight top edge of an added extrusion. One endpoint joins a circular
+extrusion wall at an inward sketch corner. The previous local wedge constructor
+required planar terminal faces and declined this case. Correct construction
+needs both a cylinder/cylinder intersection and continuation of the neighboring
+arc and terminal wall; a planar end profile would change the intended geometry.
+
+`curved_blend_proof.rs` certifies the complete native intersection branch using
+outward quadratic root bounds and actual homogeneous meridian controls. The
+source wall must be a complete four-edge cylindrical patch, the selected edge
+must be a convex right-angle planar wedge, and native root separation, angular
+extent, generator length and terminal order must remain valid. The integration
+in `local_blend.rs` / `curved_blend_end.rs` retains one cylindrical fillet
+surface, shares the real intersection with the continued terminal cylinder,
+and preserves source ancestry without putting radius-derived coordinates in
+topology identities. Complete changed-material enclosures protect other trims
+and exclude the opposite cylinder branch. General oblique, conical, freeform
+and connected mixed-carrier junctions remain work.
+
+The public Monstertruck fork commit
+`fc2306852a463573d35f9204ac76b1a6f712cc84` corrects intersection evaluation,
+including endpoints, subdivision and parameter-boundary conversion to use both
+native carriers instead of a search guide. Persistent branch halfspaces survive
+serialization, transforms, inversion, cutting and content hashing. Unresolved
+evaluation fails explicitly, and exact rational conversion refuses implicit
+intersection guides. No private application source or recovery data was added
+to the public fork. TCAD pins this revision and refreshes its dependency notices.
+Both desktop and kernel now use
+`monstertruck/0.4.1+fc2306852a46;adapter/27;solver/tcad-native-lm/12`.
+Dependency integration checkpoint `6c60ae3` was pushed to the private origin.
+
+Native TCAD source saving remains unchanged. STEP export of branch-constrained
+intersection trims is explicitly refused before formatting or touching the
+destination, because the current STEP writer would otherwise serialize the
+guide as the spatial boundary and lose the selected branch. Export fidelity
+for these trims remains an explicit gap.
+
+After the final source-review corrections, workspace formatting, locked
+library/binary compilation, strict Clippy (`-D warnings`) and diff checks passed.
+`scripts/package-macos.sh` rebuilt `dist/TCAD.app`, validated its plist, and
+completed nested and whole-bundle signature verification. The public fork's
+geometry/modeling/io libraries passed stable compilation and strict lint;
+nightly formatting passed. Its initial nightly compile encountered the existing
+`branches 0.4.6` removed-intrinsic issue, so compilation used stable. TCAD retains
+the pre-existing `proc-macro-error2 2.0.1` future-compatibility notice. No tests,
+assertion probes, CLI modeling exercises, app launches or manual acceptance
+checks were run. This is implementation and source-review evidence, not a
+claim of interactively verified fillet behavior.

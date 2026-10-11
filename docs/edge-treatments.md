@@ -26,6 +26,18 @@ authority.
   The two neighbouring edges at each terminal vertex must be straight, with
   exactly three incident faces. Connected selections at one vertex use the
   simultaneous corner path rather than sequential rounding.
+- **Straight rounds ending on cylindrical walls:** a constant-radius round of
+  a convex right-angle planar wedge can end on a native circular extrusion wall whose
+  axis follows one supporting plane's normal. The fillet retains a cylindrical
+  carrier and shares its actual intersection curve with the terminal wall.
+  At an inward corner of the source sketch, the neighboring circular edge and
+  cylindrical wall continue on their original analytic geometry before being
+  trimmed. A straight-ended approximation would give a different shape here.
+  The source terminal must be a complete four-edge cylinder patch. Outward
+  intervals isolate the intersection branch, preserve end order and bound the
+  changed material; other trims and bodies must remain separated. Native
+  intersection curves retain branch halfspaces through serialization and
+  transforms, and never substitute their search guides for geometry.
 - **Segmented straight chains:** when selected collinear sketch or Boolean
   edges divide one planar wedge, an additional native candidate removes paired,
   oppositely oriented coplanar seams and joins the selected edges at proven
@@ -143,16 +155,19 @@ freeform or intersecting cylinder/spline edges, partial turned rims without
 radial planar terminations, unequal
 radius corner networks, variable-radius fillets, unequal-dihedral two-edge
 transitions, and arbitrary mixed-carrier corner patches remain unsupported.
-Local straight edges that terminate on curved edges or curved terminal faces
-also need further intersection/transition construction. Native proofs may
+Other straight-edge terminations on curved faces need further
+intersection/transition construction. Native proofs may
 reject valid but inseparable control-hull cases rather than publish uncertain
 geometry. Conical walls ending at an apex require a separate singular topology
 constructor. Mixed construction families at a connected or geometrically interacting corner
 still require a simultaneous transition constructor.
 Straight-chain normalization does not merge multiply-connected planar support
 unions or curved supports, and it does not remove unselected authored edges
-along the chain. General transitions from straight edges onto curved terminal
-faces remain additional work.
+along the chain. Oblique cylindrical ends, conical/freeform ends and combined
+extensions of one terminal face remain additional work. STEP export of the new
+branch-constrained intersection trims is explicitly unavailable until the
+exporter can preserve their geometry and branch; native TCAD source remains
+editable and saveable.
 
 Compilation, formatting and strict linting are the available implementation
 checks. No code tests, probes or manual/UI smoke tests were written or run;

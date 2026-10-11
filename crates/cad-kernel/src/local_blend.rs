@@ -10,6 +10,8 @@ use crate::{
 use cad_core::{CadError, Result};
 use monstertruck::modeling::*;
 use std::collections::{HashMap, HashSet};
+#[path = "curved_blend_end.rs"]
+mod curved_blend_end;
 const EPS: f64 = 1e-7;
 const WORK_LIMIT: usize = 4_000_000;
 fn invalid(s: &str) -> CadError {
@@ -34,11 +36,17 @@ fn oriented(edge: &Edge, source: &Edge) -> Edge {
 }
 struct End {
     source: Vertex,
-    cap: BoundaryPlane,
+    cap: Face,
     points: [Vertex; 2],
     neighbours: [EdgeId; 2],
     curve: Edge,
     controls: Vec<Vector4>,
+    /// Complete terminal displacement along the selected edge, relative to
+    /// its source vertex. Curved terminals carry an analytic branch enclosure.
+    axial_range: Option<[f64; 2]>,
+    neighbour_curves: [Option<Curve>; 2],
+    cap_surface: Option<Surface>,
+    branch_halfspace: Option<(Point3, Vector3)>,
 }
 struct Blend {
     edge: Edge,
@@ -46,6 +54,7 @@ struct Blend {
     ends: [End; 2],
     rails: [Edge; 2],
     bounds: Vec<(Point3, Vector3)>,
+    surface: Option<Surface>,
 }
 fn outside(hull: &[Point3], planes: &[(Point3, Vector3)]) -> Result<bool> {
     if hull.is_empty() {
@@ -181,6 +190,7 @@ fn end(
     vertices: &HashMap<VertexId, HashSet<FaceId>>,
     edges: &HashMap<EdgeId, Edge>,
     treatment: Treatment,
+    surface: Option<&Surface>,
     history: &mut ShellHistory,
 ) -> Result<Option<End>> {
     let Some(incident) = vertices.get(&source.id()) else {
@@ -196,7 +206,20 @@ fn end(
         return Ok(None);
     };
     let Some(cap) = crate::planar::boundary_plane(&faces[cap_id])? else {
-        return Ok(None);
+        return curved_blend_end::construct(
+            source,
+            edge,
+            walls,
+            axis,
+            offsets,
+            weight,
+            &faces[cap_id],
+            adjacency,
+            edges,
+            treatment,
+            surface,
+            history,
+        );
     };
     let denominator = axis.dot(cap.normal);
     if denominator.abs() < 1e-9 {
@@ -276,14 +299,93 @@ fn end(
     )?;
     Ok(Some(End {
         source: source.clone(),
-        cap,
+        cap: cap.face,
         points,
         neighbours,
         curve,
         controls,
+        axial_range: None,
+        neighbour_curves: [None, None],
+        cap_surface: None,
+        branch_halfspace: None,
     }))
 }
+fn terminal_stations(edge: &Edge, end: &End) -> Result<[f64; 2]> {
+    use crate::native_bounds::{Enclosure, Interval};
+    let origin = edge.front().point();
+    let axis = (edge.back().point() - origin).normalize();
+    if let Some(range) = end.axial_range {
+        let (low, high) =
+            Enclosure::from_hull(vec![end.source.point()])?.projection(origin, axis)?;
+        let interval = Interval::new(low, high)?.add(Interval::new(range[0], range[1])?)?;
+        Ok([interval.low, interval.high])
+    } else {
+        let curve = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
+            KnotVector::bezier_knot(end.controls.len() - 1),
+            end.controls.clone(),
+        )));
+        let (low, high) = crate::native_bounds::curve(&curve)?.projection(origin, axis)?;
+        Ok([low, high])
+    }
+}
+
 fn changed_hull(edge: &Edge, ends: &[End; 2]) -> Result<Vec<Point3>> {
+    if ends.iter().any(|end| end.axial_range.is_some()) {
+        let axis = (edge.back().point() - edge.front().point()).normalize();
+        let origin = edge.front().point();
+        let mut low = 0.0_f64;
+        let mut high = (edge.back().point() - origin).magnitude();
+        for end in ends {
+            let stations = terminal_stations(edge, end)?;
+            low = low.min(stations[0]);
+            high = high.max(stations[1]);
+        }
+        // The curved terminal is contained by the analytically bounded axis
+        // stations and the unmodified rational fillet's transverse control
+        // triangle. Include outward rational-control projection roundoff.
+        let transverse = [origin, ends[0].points[0].point(), ends[0].points[1].point()];
+        let mut hull = Vec::new();
+        for station in [low, high] {
+            for point in transverse {
+                hull.push(point + axis * (station - (point - origin).dot(axis)));
+            }
+        }
+        for end in ends {
+            let curve = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
+                KnotVector::bezier_knot(end.controls.len() - 1),
+                end.controls.clone(),
+            )));
+            for point in crate::native_bounds::curve(&curve)?.points() {
+                for station in [low, high] {
+                    use crate::native_bounds::{Interval, dot_intervals, exact_point};
+                    let point = exact_point(*point)?;
+                    let origin = exact_point(origin)?;
+                    let direction = exact_point(Point3::from_vec(axis))?;
+                    let mut delta = point;
+                    for i in 0..3 {
+                        delta[i] = delta[i].sub(origin[i])?;
+                    }
+                    let displacement =
+                        Interval::exact(station)?.sub(dot_intervals(&delta, &direction)?)?;
+                    let mut shifted = point;
+                    for i in 0..3 {
+                        shifted[i] = shifted[i].add(direction[i].mul(displacement)?)?;
+                    }
+                    for mask in 0..8 {
+                        let value = std::array::from_fn::<_, 3, _>(|i| {
+                            if mask & (1 << i) == 0 {
+                                shifted[i].low
+                            } else {
+                                shifted[i].high
+                            }
+                        });
+                        hull.push(Point3::new(value[0], value[1], value[2]));
+                    }
+                }
+            }
+        }
+        return Ok(hull);
+    }
     let mut hull = vec![
         edge.front().point(),
         ends[0].points[0].point(),
@@ -445,6 +547,33 @@ pub(super) fn construct(
                 )
             }
         };
+        // Keep one unchanged cylindrical carrier when a terminal is curved.
+        // The terminal intersection trims this carrier; it must never be
+        // constructed by interpolating unequal terminal profiles.
+        let surface = if matches!(treatment, Treatment::Fillet) && sign > 0. {
+            let length = edge.front().point().distance(edge.back().point());
+            let rows = [offsets[0], Vector3::zero(), offsets[1]]
+                .into_iter()
+                .zip([1., weight, 1.])
+                .map(|(offset, weight)| {
+                    [-length, 2. * length]
+                        .into_iter()
+                        .map(|station| {
+                            (edge.front().point() + offset + axis * station).to_homogeneous()
+                                * weight
+                        })
+                        .collect()
+                })
+                .collect();
+            Some(Surface::NurbsSurface(NurbsSurface::new(
+                BsplineSurface::new(
+                    (KnotVector::bezier_knot(2), KnotVector::bezier_knot(1)),
+                    rows,
+                ),
+            )))
+        } else {
+            None
+        };
         let Some(first) = end(
             edge.front(),
             edge,
@@ -457,6 +586,7 @@ pub(super) fn construct(
             &vertices,
             &edges,
             treatment,
+            surface.as_ref(),
             history,
         )?
         else {
@@ -474,12 +604,33 @@ pub(super) fn construct(
             &vertices,
             &edges,
             treatment,
+            surface.as_ref(),
             history,
         )?
         else {
             return Ok(None);
         };
         let ends = [first, last];
+        let surface = ends
+            .iter()
+            .any(|end| end.axial_range.is_some())
+            .then_some(surface)
+            .flatten();
+        if surface.is_some() {
+            let first = terminal_stations(edge, &ends[0])?;
+            let last = terminal_stations(edge, &ends[1])?;
+            let length = edge.front().point().distance(edge.back().point());
+            if first[1] + EPS >= last[0] {
+                return Err(invalid(
+                    "The complete curved terminal branches meet or reverse; reduce the radius",
+                ));
+            }
+            if first[0] <= -length || last[1] >= 2. * length {
+                return Err(unsupported(
+                    "The cylindrical terminal leaves the finite native fillet carrier",
+                ));
+            }
+        }
         if ends[0]
             .controls
             .iter()
@@ -502,12 +653,27 @@ pub(super) fn construct(
             history.construct_edge(rail.id(),&[history.edge(id)?,history.face(walls[side].face.id())?],serde_json::json!({"operation":treatment.name(),"constructor":"local_tangent_rail"}))?;
         }
         let bounds = bounds(edge, &ends)?;
+        for end in &ends {
+            if let Some((origin, normal)) = end.branch_halfspace {
+                let hull = changed_hull(edge, &ends)?;
+                if crate::native_bounds::Enclosure::from_hull(hull)?
+                    .projection(origin, normal)?
+                    .0
+                    <= EPS
+                {
+                    return Err(unsupported(
+                        "The complete fillet wedge reaches another branch of its cylindrical terminal",
+                    ));
+                }
+            }
+        }
         blends.push(Blend {
             edge: edge.clone(),
             walls,
             ends,
             rails,
             bounds,
+            surface,
         });
     }
     let mut work = 0usize;
@@ -516,7 +682,7 @@ pub(super) fn construct(
             .walls
             .iter()
             .map(|wall| wall.face.id())
-            .chain(blend.ends.iter().map(|end| end.cap.face.id()))
+            .chain(blend.ends.iter().map(|end| end.cap.id()))
             .collect::<HashSet<_>>();
         let local_edges = std::iter::once(blend.edge.id())
             .chain(blend.ends.iter().flat_map(|end| end.neighbours))
@@ -596,7 +762,23 @@ pub(super) fn construct(
                 "Selected treatments consume a shared neighbouring edge",
             ));
         }
-        let output = builder::line(a, b);
+        let supplied = blends
+            .iter()
+            .flat_map(|blend| &blend.ends)
+            .flat_map(|end| end.neighbours.iter().zip(&end.neighbour_curves))
+            .filter_map(|(id, curve)| (*id == edge.id()).then_some(curve.as_ref()).flatten())
+            .collect::<Vec<_>>();
+        if supplied.len() > 1 {
+            return Err(unsupported(
+                "Two curved terminal treatments cannot yet extend the same neighbouring curve",
+            ));
+        }
+        let output = if let Some(curve) = supplied.first() {
+            Edge::try_new(a, b, (**curve).clone())
+                .map_err(|_| invalid("The curved terminal extension has inconsistent endpoints"))?
+        } else {
+            builder::line(a, b)
+        };
         history.retain_edge(output.id(), edge.id())?;
         trimmed.insert(edge.id(), output);
     }
@@ -604,7 +786,7 @@ pub(super) fn construct(
     for face in solid.face_iter() {
         let affected = blends.iter().any(|blend| {
             blend.walls.iter().any(|wall| wall.face.id() == face.id())
-                || blend.ends.iter().any(|end| end.cap.face.id() == face.id())
+                || blend.ends.iter().any(|end| end.cap.id() == face.id())
         });
         if !affected {
             continue;
@@ -640,8 +822,7 @@ pub(super) fn construct(
                         .iter()
                         .flat_map(|blend| &blend.ends)
                         .find(|end| {
-                            end.cap.face.id() == face.id()
-                                && end.source.id() == wire[index].back().id()
+                            end.cap.id() == face.id() && end.source.id() == wire[index].back().id()
                         })
                         .ok_or_else(|| invalid("A terminal face has an unfilled corner"))?;
                     let arc = if end.curve.front().id() == current.back().id()
@@ -660,7 +841,21 @@ pub(super) fn construct(
             }
             wires.push(output);
         }
-        let output = Face::try_new(wires, face.oriented_surface())
+        let replacements_on_face = blends
+            .iter()
+            .flat_map(|blend| &blend.ends)
+            .filter(|end| end.cap.id() == face.id())
+            .filter_map(|end| end.cap_surface.as_ref())
+            .collect::<Vec<_>>();
+        if replacements_on_face.len() > 1 {
+            return Err(unsupported(
+                "Multiple extensions of the same curved terminal carrier require a combined construction",
+            ));
+        }
+        let surface = replacements_on_face
+            .first()
+            .map_or_else(|| face.oriented_surface(), |surface| (**surface).clone());
+        let output = Face::try_new(wires, surface)
             .map_err(|_| invalid("A setback leaves an inconsistent face boundary"))?;
         history.retain_face(output.id(), face.id())?;
         replacements.insert(face.id(), output);
@@ -673,20 +868,22 @@ pub(super) fn construct(
             .zip(&blend.ends[1].controls)
             .map(|(a, b)| vec![*a, *b])
             .collect();
-        let surface = NurbsSurface::new(BsplineSurface::new(
-            (
-                KnotVector::bezier_knot(blend.ends[0].controls.len() - 1),
-                KnotVector::bezier_knot(1),
-            ),
-            controls,
-        ));
+        let surface = blend.surface.clone().unwrap_or_else(|| {
+            Surface::NurbsSurface(NurbsSurface::new(BsplineSurface::new(
+                (
+                    KnotVector::bezier_knot(blend.ends[0].controls.len() - 1),
+                    KnotVector::bezier_knot(1),
+                ),
+                controls,
+            )))
+        });
         let wire = Wire::from(vec![
             blend.ends[0].curve.clone(),
             blend.rails[1].clone(),
             blend.ends[1].curve.inverse(),
             blend.rails[0].inverse(),
         ]);
-        let mut face = Face::try_new(vec![wire], Surface::NurbsSurface(surface))
+        let mut face = Face::try_new(vec![wire], surface)
             .map_err(|_| invalid("The blend has inconsistent boundaries"))?;
         let source_occurrence = blend.walls[0]
             .face
