@@ -6,13 +6,14 @@ TCAD's document and command schemas are the product boundary. No Bevy, egui, cgm
 |---|---|---|
 | Document + commands | `cad-core` JSON DTOs | Preserve stable IDs, units, graph semantics, explicit schema migrations |
 | Geometry service | Framed protocol v1 | Preserve request identity, cancellation, diagnostics, backend identity, derived mesh contracts |
-| Operation/mesh adapter | Monstertruck 0.4.1, adapter 10 | Implement operations, exact B-rep validation, reference reconstruction, tessellation; report unsupported cases |
-| Constraint solver | Native scaled damped SVD solver v7 | Record solver identity, report convergence, residual and degrees of freedom |
-| Sketch handles | Application-owned handle and drag-target contracts v1 | Preserve stable targets, f64 plane coordinates, engineering constraints and explicit unsupported capability errors |
+| Operation/mesh adapter | Monstertruck 0.4.1, adapter 21 | Implement operations, exact B-rep validation, reference reconstruction, tessellation; report unsupported cases |
+| Constraint solver | Native scaled damped SVD solver v12 | Record solver identity, report convergence, residual and degrees of freedom |
+| Sketch handles | Application-owned handle and drag-target contracts v2 | Preserve stable targets, f64 plane coordinates, engineering constraints and explicit unsupported capability errors |
 | Project store | Recoverable multi-file JSON store v1 | Preserve deterministic definitions, relative resources and crash recovery |
 | Feature-history display | Application-owned stage/cache contract v1 | Preserve source identity, body branches, sketch visibility, configuration geometry and view-only inspection commands |
 | Semantic presentation | `presentation::project` | Expose IDs, typed data, expressions, prior values, relationships, states and commands |
 | Layout/style | Versioned core contracts; hierarchical native composition, typed bindings, validated CSS cascade and local resource packages | Keep data/action identities and editing transactions independent of renderer registration, collection templates and visual organization |
+| Visual finishes and lighting | `cad-core::appearance` contract v1 | Preserve f64 finish/mapping/lighting values, pinned texture resources and independent engineering materials |
 | Desktop renderer | Bevy 0.20.0 + egui 0.43.1 | Render derived artifacts and adapt gestures; keep application state outside renderer objects |
 | Version control | Git process adapter | Preserve ordinary repositories and explicit semantic conflicts |
 | Manufacturing/export | Application DTOs + exchange adapters | Preserve source identity, units, tolerances and artifact meaning |
@@ -138,3 +139,5 @@ See [round construction](edge-fillets.md) and [chamfer construction](edge-chamfe
 for supported stock and corner classes. Editing an existing edge feature picks
 its cached input-stage geometry; desktop preselection and edge-list controls
 share the same draft commands and current-result confirmation transaction.
+
+The appearance contract v1 separates engineering material IDs from visual finish IDs. Part/configuration assignments and nested occurrence overrides resolve through the same configured document hierarchy; semantic fields/actions are independent of native controls. The Bevy finish adapter uses part-local physical texture coordinates and converts transforms to f32 at the renderer boundary. Grayscale maps perturb lighting normals without changing native geometry. Bounded texture decoding and procedural studio-map generation run away from the UI thread; derived image caches retain resource hashes and reject obsolete replies. Adapter 21 invalidates previous derived caches containing the old placed-part protocol. See [visual finishes](visual-finishes.md).
