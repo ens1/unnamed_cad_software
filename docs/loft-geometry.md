@@ -75,7 +75,11 @@ Position-continuous carriers with nonsmooth interior knots retain the stronger
 positive-definite symmetric-Jacobian certificate. Proof coefficient subdivision
 keeps the same projection axes and cancellation bounds across the complete face;
 it never fits or samples replacement geometry. The generic proof supports
-carrier degrees one through eight in each direction. The specialized ruled
+carrier degrees one through sixteen in each direction. Genuine constant-weight
+carriers use their exact polynomial derivatives, avoiding unnecessary rational
+degree growth and zero-denominator-derivative cancellation. Bernstein product
+weights are reused within each proof product; proof budgets still bound the
+complete operation. The specialized ruled
 chart proof shares the source-degree-through-sixteen limit. An exhausted or
 uncertain certificate remains an unsupported case; it is not proof that the
 authored section is folded. Fallback diagnostics identify the section pair and

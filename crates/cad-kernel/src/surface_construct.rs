@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 const EPS: f64 = 1e-7;
 const MAX_FACES: usize = 4096;
+const MAX_CARRIER_DEGREE: usize = 16;
 const MAX_PROOF_TERMS: usize = 8_000_000;
 const MAX_OPERATION_PROOF_TERMS: usize = 32_000_000;
 fn invalid(message: &str) -> CadError {
@@ -274,20 +275,39 @@ fn product(
         .ok_or_else(|| unsupported("The rational proof budget overflowed"))?;
     charge_proof(budget, operation_work, terms)?;
     let (u, v) = (a.u + b.u, a.v + b.v);
+    charge_proof(
+        budget,
+        operation_work,
+        (a.u + 1) * (b.u + 1) + (a.v + 1) * (b.v + 1),
+    )?;
+    // Bernstein product weights depend only on the two degrees and indices.
+    // Reusing them keeps high-degree native proofs within their existing work
+    // budgets without repeating binomial arithmetic for every coefficient.
+    let u_weights = (0..=a.u)
+        .map(|i| {
+            (0..=b.u)
+                .map(|k| binomial(a.u, i) * binomial(b.u, k) / binomial(u, i + k))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let v_weights = (0..=a.v)
+        .map(|j| {
+            (0..=b.v)
+                .map(|l| binomial(a.v, j) * binomial(b.v, l) / binomial(v, j + l))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
     let mut result = Polynomial {
         u,
         v,
         coefficients: vec![vec![0.; v + 1]; u + 1],
         majorant: a.majorant * b.majorant,
     };
-    for i in 0..=a.u {
-        for j in 0..=a.v {
-            for k in 0..=b.u {
-                for l in 0..=b.v {
-                    let weight = binomial(a.u, i) * binomial(b.u, k) / binomial(u, i + k)
-                        * binomial(a.v, j)
-                        * binomial(b.v, l)
-                        / binomial(v, j + l);
+    for (i, u_weights) in u_weights.iter().enumerate() {
+        for (j, v_weights) in v_weights.iter().enumerate() {
+            for (k, u_weight) in u_weights.iter().enumerate() {
+                for (l, v_weight) in v_weights.iter().enumerate() {
+                    let weight = u_weight * v_weight;
                     result.coefficients[i + k][j + l] +=
                         weight * a.coefficients[i][j] * b.coefficients[k][l];
                 }
@@ -371,9 +391,11 @@ fn prove_injective_projection(
         surface.knot_vector_u().len() - rows.len() - 1,
         surface.knot_vector_v().len() - rows[0].len() - 1,
     );
-    if !(1..=8).contains(&degree_u) || !(1..=8).contains(&degree_v) {
+    if !(1..=MAX_CARRIER_DEGREE).contains(&degree_u)
+        || !(1..=MAX_CARRIER_DEGREE).contains(&degree_v)
+    {
         return Err(unsupported(
-            "Surface regularity proof supports degrees one through eight",
+            "Surface regularity proof supports degrees one through sixteen",
         ));
     }
     let ((u0, u1), (v0, v1)) = surface.range_tuple();
@@ -487,12 +509,28 @@ fn prove_injective_projection(
                 .collect::<Result<Vec<_>>>()?;
             let weight = Polynomial::from_net(&net, 3);
             let ((a, b), (c, d)) = patch.range_tuple();
-            let duw = weight.derivative(true, b - a);
-            let dvw = weight.derivative(false, d - c);
+            let constant_weight = net.iter().flatten().all(|h| h.w == 1.);
+            let weight_derivatives = (!constant_weight).then(|| {
+                (
+                    weight.derivative(true, b - a),
+                    weight.derivative(false, d - c),
+                )
+            });
             let mut nu = Vec::new();
             let mut nv = Vec::new();
             for component in 0..3 {
                 let position = Polynomial::from_net(&net, component);
+                if constant_weight {
+                    // A genuine constant denominator cancels exactly. Using
+                    // polynomial derivatives avoids raising the proof degree
+                    // and propagating artificial zero-weight cancellation.
+                    nu.push(position.derivative(true, b - a).elevate(true));
+                    nv.push(position.derivative(false, d - c).elevate(false));
+                    continue;
+                }
+                let (duw, dvw) = weight_derivatives
+                    .as_ref()
+                    .ok_or_else(|| invalid("A rational proof lost its denominator derivatives"))?;
                 nu.push(
                     product(
                         &position.derivative(true, b - a),
@@ -500,7 +538,7 @@ fn prove_injective_projection(
                         &mut budget,
                         operation_work,
                     )?
-                    .subtract(&product(&position, &duw, &mut budget, operation_work)?)
+                    .subtract(&product(&position, duw, &mut budget, operation_work)?)
                     .elevate(true),
                 );
                 nv.push(
@@ -510,7 +548,7 @@ fn prove_injective_projection(
                         &mut budget,
                         operation_work,
                     )?
-                    .subtract(&product(&position, &dvw, &mut budget, operation_work)?)
+                    .subtract(&product(&position, dvw, &mut budget, operation_work)?)
                     .elevate(false),
                 );
             }
@@ -667,9 +705,9 @@ fn ruled(
                 ));
             }
             curve.clamp();
-            if !(1..=8).contains(&curve.degree()) {
+            if !(1..=MAX_CARRIER_DEGREE).contains(&curve.degree()) {
                 return Err(unsupported(
-                    "Ruled Surface regularity supports native degrees one through eight",
+                    "Ruled Surface regularity supports native degrees one through sixteen",
                 ));
             }
             let range = curve.range_tuple();

@@ -748,7 +748,7 @@ pub fn fields(
                 });
             }
             changed |= ui.checkbox(reverse, "Reverse face orientation").changed();
-            ui.small("Four ordered, end-connected open polynomial curves. Exact Coons fill retains the boundaries.");
+            ui.small("Four ordered, end-connected open curves. Exact Euclidean Coons fill supports lines, splines, conics and positive-weight NURBS boundaries; the complete patch must have a certified injective projection.");
         }
         SurfaceOperation::Trim {
             surface,

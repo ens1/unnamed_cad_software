@@ -462,8 +462,13 @@ pub(crate) fn operation(
             }
             Shape::Surfaces(shells)
         }
-        SurfaceOperation::Fill { .. }
-        | SurfaceOperation::Trim { .. }
+        SurfaceOperation::Fill {
+            boundaries,
+            reverse,
+        } => crate::surface_fill::operation(
+            adapter, doc, owner, boundaries, *reverse, inputs, history,
+        )?,
+        SurfaceOperation::Trim { .. }
         | SurfaceOperation::TrimDomain { .. }
         | SurfaceOperation::Untrim { .. }
         | SurfaceOperation::Extend { .. } => {

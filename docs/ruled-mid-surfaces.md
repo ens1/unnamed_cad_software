@@ -23,7 +23,7 @@ without fitting. Circular/elliptic arcs and suitable spline spans therefore
 retain their exact rational carriers. Each proven span is an independent surface
 strip; adjacent strips can be joined with the existing Knit command.
 
-Supported native degree is 1–8, with 1–256 source records, at most 4096 source
+Supported native degree is 1–16, with 1–256 source records, at most 4096 source
 controls per curve and 4096 output strips. Singular, retracing, folded or
 ill-conditioned cases without the regularity certificate below are rejected.
 Analytic parameter curves, including nonzero-pitch helices, and implicit
@@ -55,7 +55,7 @@ sides or periodic seams. The second patch has explicit U/V swap and U and V
 reversal controls. After that correspondence, the normalized knot bases and
 control-grid dimensions must match, and normalized rational weights must be
 exactly equal. The result is the exact mean of corresponding native U/V
-positions, with at most 1024 source controls and degree 1–8 in each direction.
+positions, with at most 1024 source controls and degree 1–16 in each direction.
 This construction supports suitable curved patches; it is a normal-distance
 midpoint only for parallel planar inputs. Automatic surface pairing, general
 trimmed rational patches, unequal-weight means, incompatible basis refinement,
@@ -90,6 +90,14 @@ positive signs require a conditioning margin relative to those majorants.
 Numerical uncertainty or exhausted proof bounds reports an explicit
 unsupported case. Separate strips/source bodies are not subjected to a general
 surface-intersection or collision-trimming workflow.
+
+Genuine constant-weight cells use their exact polynomial derivatives instead
+of forming rational numerator products with a zero denominator derivative.
+Bernstein product factors are reused within each coefficient product, and their
+work is charged to the same bounded proof budget. This expands native carrier
+degrees without relaxing the conditioning margin, continuity checks or
+injectivity requirement; higher degrees or many spans can still exhaust the
+existing budgets.
 
 Generated faces and edges carry source construction ancestry. Ruled strips use
 their persistent source record, actual native source reference, normalized native

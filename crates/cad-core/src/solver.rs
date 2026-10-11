@@ -114,6 +114,11 @@ fn jacobian(
     f: &impl Fn(&DVector<f64>) -> Result<DVector<f64>>,
 ) -> Result<DMatrix<f64>> {
     let mut j = DMatrix::zeros(r.len(), x.len());
+    if r.is_empty() {
+        // With no equations every derivative is an empty vector. Avoid cloning
+        // and deriving an entire unconstrained sketch for each coordinate.
+        return Ok(j);
+    }
     for col in 0..x.len() {
         let step = f64::EPSILON.cbrt() * x[col].abs().max(1.);
         let mut shifted = x.clone();
@@ -306,7 +311,7 @@ fn axis_residual(a: Vector3<f64>, b: Vector3<f64>) -> Vector3<f64> {
 }
 impl ConstraintSolver for NativeSolver {
     fn fingerprint(&self) -> &str {
-        "tcad-native-lm/11"
+        "tcad-native-lm/12"
     }
     fn solve_sketch(&self, doc: &Document, part: &str, sketch: &mut Sketch) -> Result<SolveReport> {
         if sketch.points.keys().chain(sketch.members.keys()).any(|id| {

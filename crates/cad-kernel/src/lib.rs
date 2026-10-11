@@ -42,6 +42,7 @@ mod solid_sections;
 mod split;
 mod surface_construct;
 mod surface_edit;
+mod surface_fill;
 mod surfaces;
 mod swept;
 mod tangent_plane;

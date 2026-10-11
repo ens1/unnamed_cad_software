@@ -3,9 +3,7 @@ use crate::adapter::{MonstertruckAdapter, Shape};
 use cad_core::{
     CadError, Dimension, Document, NodeRef, Result, expression, surface::SurfaceOperation,
 };
-use monstertruck::geometry::prelude::{
-    TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface,
-};
+use monstertruck::geometry::prelude::TryIntoHomogeneousBsplineSurface;
 use monstertruck::modeling::*;
 use std::collections::BTreeMap;
 
@@ -106,167 +104,6 @@ fn natural_rectangle(face: &Face, patch: &Face) -> bool {
                 )
             })
         })
-}
-
-fn polynomial(curve: Curve) -> Result<BsplineCurve<Point3>> {
-    if matches!(curve, Curve::IntersectionCurve(_)) {
-        return Err(unsupported(
-            "Filling requires exact authored boundaries rather than intersection guides",
-        ));
-    }
-    let mut h = curve
-        .try_into_homogeneous_bspline_curve()
-        .ok_or_else(|| unsupported("Filling boundary has no exact rational representation"))?;
-    h.clamp();
-    let weight = h.control_points()[0].w;
-    if weight <= 0.
-        || h.control_points().iter().any(|p| {
-            ![p.x, p.y, p.z, p.w].iter().all(|x| x.is_finite()) || (p.w / weight - 1.).abs() > 1e-12
-        })
-    {
-        return Err(unsupported(
-            "Coons Fill currently requires finite polynomial boundaries (constant rational weights); conic boundary filling requires rational blending",
-        ));
-    }
-    BsplineCurve::try_new(
-        h.knot_vector().clone(),
-        h.control_points()
-            .iter()
-            .map(|p| Point3::new(p.x / p.w, p.y / p.w, p.z / p.w))
-            .collect(),
-    )
-    .map_err(invalid)
-}
-fn greville(curve: &BsplineCurve<Point3>) -> Vec<f64> {
-    let d = curve.degree();
-    (0..curve.control_points().len())
-        .map(|i| curve.knot_vector()[i + 1..i + d + 1].iter().sum::<f64>() / d as f64)
-        .collect()
-}
-fn fill(
-    inputs: &BTreeMap<NodeRef, Shape>,
-    boundaries: &[NodeRef; 4],
-    reverse: bool,
-) -> Result<Face> {
-    let mut curves = Vec::new();
-    for reference in boundaries {
-        let wires = crate::surfaces::sections(inputs, reference)?;
-        if wires.len() != 1 || wires[0].len() != 1 || wires[0].is_closed() {
-            return Err(unsupported(
-                "Fill needs four ordered open sketch curves, one member per section",
-            ));
-        }
-        curves.push(polynomial(wires[0][0].oriented_curve())?);
-    }
-    // Preserve the first curve's direction, then orient the remaining curves
-    // by their shared endpoints. Reversing the result is an explicit option.
-    for i in 1..4 {
-        let end = curves[i - 1].subs(curves[i - 1].range_tuple().1);
-        if (curves[i].subs(curves[i].range_tuple().0) - end).magnitude() > EPS {
-            curves[i].invert();
-        }
-        if (curves[i].subs(curves[i].range_tuple().0) - end).magnitude() > EPS {
-            return Err(invalid(
-                "Ordered fill boundaries must share their end points",
-            ));
-        }
-    }
-    if (curves[3].subs(curves[3].range_tuple().1) - curves[0].subs(curves[0].range_tuple().0))
-        .magnitude()
-        > EPS
-    {
-        return Err(invalid(
-            "Fill boundaries must form a closed four-sided loop",
-        ));
-    }
-    let mut horizontal = vec![curves[0].clone(), curves[2].inverse()];
-    let mut vertical = vec![curves[3].inverse(), curves[1].clone()];
-    monstertruck::geometry::nurbs::compat::make_curves_compatible(&mut horizontal)
-        .map_err(invalid)?;
-    monstertruck::geometry::nurbs::compat::make_curves_compatible(&mut vertical)
-        .map_err(invalid)?;
-    if horizontal[0].degree() == 0 || vertical[0].degree() == 0 {
-        return Err(invalid("Fill boundaries must have positive degree"));
-    }
-    let u = greville(&horizontal[0]);
-    let v = greville(&vertical[0]);
-    let h0 = horizontal[0].control_points();
-    let h1 = horizontal[1].control_points();
-    let v0 = vertical[0].control_points();
-    let v1 = vertical[1].control_points();
-    let corners = [
-        h0[0].to_vec(),
-        h0[h0.len() - 1].to_vec(),
-        h1[0].to_vec(),
-        h1[h1.len() - 1].to_vec(),
-    ];
-    let net: Vec<Vec<Point3>> = u
-        .iter()
-        .enumerate()
-        .map(|(i, &u)| {
-            v.iter()
-                .enumerate()
-                .map(|(j, &v)| {
-                    let bilinear = corners[0] * (1. - u) * (1. - v)
-                        + corners[1] * u * (1. - v)
-                        + corners[2] * (1. - u) * v
-                        + corners[3] * u * v;
-                    Point3::from_vec(
-                        h0[i].to_vec() * (1. - v)
-                            + h1[i].to_vec() * v
-                            + v0[j].to_vec() * (1. - u)
-                            + v1[j].to_vec() * u
-                            - bilinear,
-                    )
-                })
-                .collect()
-        })
-        .collect();
-    let surface = BsplineSurface::try_new(
-        (
-            horizontal[0].knot_vector().clone(),
-            vertical[0].knot_vector().clone(),
-        ),
-        net,
-    )
-    .map_err(invalid)?;
-    // Both polynomial derivatives lie in their positive control-vector hulls.
-    // A common strict normal half-space proves the entire patch is regular
-    // with consistent orientation. Do not accept a few sampled normals as a
-    // substitute for a global bound on a potentially folded fill.
-    let normal = surface.normal(0.5, 0.5);
-    let normal_length = normal.magnitude();
-    if !normal_length.is_finite() || normal_length < 1e-9 {
-        return Err(invalid("Fill has a singular or non-finite interior normal"));
-    }
-    let normal = normal / normal_length;
-    let controls = surface.control_points();
-    let du: Vec<_> = controls
-        .windows(2)
-        .flat_map(|rows| rows[0].iter().zip(&rows[1]).map(|(a, b)| *b - *a))
-        .collect();
-    let dv: Vec<_> = controls
-        .iter()
-        .flat_map(|row| row.windows(2).map(|pair| pair[1] - pair[0]))
-        .collect();
-    if du
-        .iter()
-        .chain(&dv)
-        .any(|d| !d.magnitude().is_finite() || d.magnitude() <= 0.)
-        || du.iter().any(|u| {
-            dv.iter()
-                .any(|v| u.normalize().cross(v.normalize()).dot(normal) <= 1e-12)
-        })
-    {
-        return Err(unsupported(
-            "Fill cannot prove a consistent finite nonzero normal from its exact control hull; revise crossing or strongly folded boundaries",
-        ));
-    }
-    let homogeneous = surface
-        .try_into_homogeneous_bspline_surface()
-        .ok_or_else(|| invalid("Polynomial fill conversion failed"))?;
-    let face = patch_face(NurbsSurface::new(homogeneous))?;
-    Ok(if reverse { face.inverse() } else { face })
 }
 
 fn planar_trim(face: &Face, cutters: &[Face], keep_inside: bool) -> Result<Vec<Face>> {
@@ -414,10 +251,6 @@ pub(crate) fn operation(
 ) -> Result<Shape> {
     let mut shells = Vec::new();
     match operation {
-        SurfaceOperation::Fill {
-            boundaries,
-            reverse,
-        } => shells.push(vec![fill(inputs, boundaries, *reverse)?].into()),
         SurfaceOperation::Trim {
             surface,
             profile,

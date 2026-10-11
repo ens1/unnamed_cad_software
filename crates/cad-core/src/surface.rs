@@ -70,8 +70,9 @@ pub enum SurfaceOperation {
         #[serde(default)]
         path_sketch: Option<NodeRef>,
     },
-    /// Four ordered, end-connected polynomial sketch curves. The Coons patch
-    /// retains every source boundary exactly; no sampled curve becomes intent.
+    /// Four ordered, end-connected explicit sketch curves. Euclidean Coons
+    /// blending retains polynomial or positive-weight rational boundaries;
+    /// unsupported carriers and unproven folded patches fail explicitly.
     Fill {
         boundaries: [NodeRef; 4],
         #[serde(default)]
