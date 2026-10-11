@@ -218,15 +218,15 @@
         "border": "none",
         "background": "transparent",
         "height": "26px",
-        "icon-size": "8px"
+        "icon-size": "8px",
+        "text-overflow": "ellipsis"
       }
     },
     {
       "selector": ".feature-tree-row[state=selected], [role=history-station][state=selected]",
       "properties": {
         "color": "var(--active)",
-        "background": "#FFE3D2",
-        "height": "36px"
+        "background": "#FFE3D2"
       }
     },
     {
@@ -388,6 +388,149 @@
         "width": "24px",
         "border": "1px solid #A9ACAF",
         "border-radius": "3px"
+      }
+    },
+    {
+      "selector": "[role=workspace-action], [role=sketch-feedback-filter], [role=sketch-annotation-toggle], [role=sketch-dimension-mode], [role=edge-selection-action], [role=reference-repair-action]",
+      "properties": {
+        "height": "var(--control-height)",
+        "min-height": "var(--target-size)",
+        "padding": "2px 5px",
+        "border-radius": "3px"
+      }
+    },
+    {
+      "selector": "[role=workspace-action][state=selected], [role=sketch-feedback-filter][state=selected], [role=sketch-annotation-toggle][state=selected], [role=sketch-dimension-mode][state=selected]",
+      "properties": {
+        "color": "var(--active)",
+        "background": "#FFE3D2"
+      }
+    },
+    {
+      "selector": "[role=sketch-constraint], [role=edge-selection-item], [role=reference-repair-input], [role=reference-repair-failure]",
+      "properties": {
+        "height": "var(--control-height)",
+        "text-align": "left",
+        "padding": "2px 4px",
+        "border-radius": "2px"
+      }
+    },
+    {
+      "selector": "[role=sketch-constraint][state=selected], [role=edge-selection-item][state=selected], [role=reference-repair-input][state=selected]",
+      "properties": {
+        "color": "var(--active)",
+        "background": "#FFE3D2"
+      }
+    },
+    {
+      "selector": "[role=sketch-constraint][state=unsatisfied], [role=reference-repair-failure][state=invalid]",
+      "properties": {
+        "color": "var(--error)"
+      }
+    },
+    {
+      "selector": "[role=model-context-label], [role=workspace-heading]",
+      "properties": {
+        "font-size": "12px"
+      }
+    },
+    {
+      "selector": "[role=selection-summary], [role=selection-candidate-summary], [role=navigation-instructions], [role=workspace-description], [role=sketch-feedback-summary], [role=reference-repair-summary]",
+      "properties": {
+        "font-size": "10px"
+      }
+    },
+    {
+      "selector": "[role=sketch-constraint-delete]",
+      "properties": {
+        "width": "24px",
+        "height": "24px",
+        "padding": "2px"
+      }
+    },
+    {
+      "selector": "[role=viewport-toolbar]",
+      "properties": {
+        "height": "28px"
+      }
+    },
+    {
+      "selector": "[role=viewport-toolbar][state=selected], [role=viewport-toolbar][state=editing], [role=viewport-toolbar][state=inspection]",
+      "properties": {
+        "height": "56px"
+      }
+    },
+    {
+      "selector": "[role=validation-summary]",
+      "properties": {
+        "font-weight": "bold",
+        "font-size": "11px"
+      }
+    },
+    {
+      "selector": "[role=status-message]",
+      "properties": {
+        "font-size": "10px"
+      }
+    },
+    {
+      "selector": "[role=validation-summary][state=invalid], [role=status-message][state=invalid], [role=repair-message][state=error]",
+      "properties": {
+        "color": "var(--error)"
+      }
+    },
+    {
+      "selector": "[role=validation-summary][state=pending], [role=repair-message][state=warning]",
+      "properties": {
+        "color": "var(--warning)"
+      }
+    },
+    {
+      "selector": "[role=repair-action], [role=repair-input], [role=repair-feature-choice], [role=repair-candidate-choice]",
+      "properties": {
+        "height": "var(--control-height)",
+        "padding": "2px 4px"
+      }
+    },
+    {
+      "selector": "[role=repair-input][state=selected]",
+      "properties": {
+        "color": "var(--active)",
+        "background": "#FFE3D2"
+      }
+    },
+    {
+      "selector": "[role=repair-summary], [role=repair-message]",
+      "properties": {
+        "font-size": "10px"
+      }
+    },
+    {
+      "selector": "[role=sketch-constraint]",
+      "properties": {
+        "width": "100%",
+        "text-align": "left",
+        "text-overflow": "ellipsis"
+      }
+    },
+    {
+      "selector": "[role=repair-input], [role=repair-feature-choice], [role=repair-candidate-choice], [role=repair-history-choice], [role=repair-element-choice]",
+      "properties": {
+        "max-width": "100%",
+        "text-align": "left",
+        "text-overflow": "ellipsis"
+      }
+    },
+    {
+      "selector": "[role=sketch-solve-summary]",
+      "properties": {
+        "font-size": "10px"
+      }
+    },
+    {
+      "selector": "[role=sketch-feedback-error][state=invalid], [role=sketch-solve-summary][state=invalid]",
+      "properties": {
+        "color": "var(--error)"
       }
     }
   ]

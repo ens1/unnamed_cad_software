@@ -168,12 +168,12 @@
   background: transparent;
   height: 26px;
   icon-size: 8px;
+  text-overflow: ellipsis;
 }
 
 .feature-tree-row[state=selected], [role=history-station][state=selected] {
   color: var(--active);
   background: #FFE3D2;
-  height: 36px;
 }
 
 [role=history-path] {
@@ -295,4 +295,99 @@
   width: 24px;
   border: 1px solid #A9ACAF;
   border-radius: 3px;
+}
+
+/* Application-owned modeling controls can also be moved through bindings. */
+[role=workspace-action], [role=sketch-feedback-filter],
+[role=sketch-annotation-toggle], [role=sketch-dimension-mode],
+[role=edge-selection-action], [role=reference-repair-action] {
+  height: var(--control-height);
+  min-height: var(--target-size);
+  padding: 2px 5px;
+  border-radius: 3px;
+}
+[role=workspace-action][state=selected], [role=sketch-feedback-filter][state=selected],
+[role=sketch-annotation-toggle][state=selected], [role=sketch-dimension-mode][state=selected] {
+  color: var(--active);
+  background: #FFE3D2;
+}
+[role=sketch-constraint], [role=edge-selection-item], [role=reference-repair-input],
+[role=reference-repair-failure] {
+  height: var(--control-height);
+  text-align: left;
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+[role=sketch-constraint][state=selected], [role=edge-selection-item][state=selected],
+[role=reference-repair-input][state=selected] {
+  color: var(--active);
+  background: #FFE3D2;
+}
+[role=sketch-constraint][state=unsatisfied], [role=reference-repair-failure][state=invalid] {
+  color: var(--error);
+}
+[role=model-context-label], [role=workspace-heading] {
+  font-size: 12px;
+}
+[role=selection-summary], [role=selection-candidate-summary],
+[role=navigation-instructions], [role=workspace-description],
+[role=sketch-feedback-summary], [role=reference-repair-summary] {
+  font-size: 10px;
+}
+[role=sketch-constraint-delete] {
+  width: 24px;
+  height: 24px;
+  padding: 2px;
+}
+
+[role=viewport-toolbar] {
+  height: 28px;
+}
+[role=viewport-toolbar][state=selected], [role=viewport-toolbar][state=editing],
+[role=viewport-toolbar][state=inspection] {
+  height: 56px;
+}
+[role=validation-summary] {
+  font-weight: bold;
+  font-size: 11px;
+}
+[role=status-message] {
+  font-size: 10px;
+}
+[role=validation-summary][state=invalid], [role=status-message][state=invalid],
+[role=repair-message][state=error] {
+  color: var(--error);
+}
+[role=validation-summary][state=pending], [role=repair-message][state=warning] {
+  color: var(--warning);
+}
+[role=repair-action], [role=repair-input], [role=repair-feature-choice],
+[role=repair-candidate-choice] {
+  height: var(--control-height);
+  padding: 2px 4px;
+}
+[role=repair-input][state=selected] {
+  color: var(--active);
+  background: #FFE3D2;
+}
+[role=repair-summary], [role=repair-message] {
+  font-size: 10px;
+}
+
+[role=sketch-constraint] {
+  width: 100%;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+[role=repair-input], [role=repair-feature-choice], [role=repair-candidate-choice],
+[role=repair-history-choice], [role=repair-element-choice] {
+  max-width: 100%;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+[role=sketch-solve-summary] {
+  font-size: 10px;
+}
+[role=sketch-feedback-error][state=invalid], [role=sketch-solve-summary][state=invalid] {
+  color: var(--error);
 }

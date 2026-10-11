@@ -398,16 +398,9 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bo
     let Some(s) = &w.sketch else { return false };
     let source = sketch::sketch_definition(s);
     let geometry = sketch::display_definition(s);
-    let owner = s.definition.clone();
     let plane = s.plane.clone();
     let matrix = s.matrix;
-    let selected = s.selection.clone();
-    let conflicts = if s.error.is_some() {
-        cad_core::sketch_relations::conflict_residuals(w.session.visible(), &owner, &source)
-            .unwrap_or_default()
-    } else {
-        std::collections::BTreeMap::new()
-    };
+    let conflicts = s.feedback.unsatisfied.clone();
     // Last-valid geometry may precede a current suppression change. Admission
     // and selection must use the current source even while its solve is pending.
     let inactive = cad_core::sketch_transform::inactive_entities(&source);
@@ -447,10 +440,18 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bo
                 continue;
             };
             let active = annotation.constraint.as_ref().is_some_and(|constraint| {
-                selected.contains(&SketchEntity::Constraint {
-                    constraint: constraint.clone(),
-                })
+                source
+                    .constraints
+                    .iter()
+                    .find(|relation| &relation.id == constraint)
+                    .is_some_and(|relation| {
+                        crate::sketch_relations_ui::constraint_emphasized(s, relation)
+                    })
             });
+            let conflict = annotation
+                .constraint
+                .as_ref()
+                .and_then(|constraint| conflicts.get(constraint));
             let id = annotation
                 .constraint
                 .clone()
@@ -470,7 +471,13 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bo
             let props = w.theme.properties(
                 &region,
                 &w.view.active_layout,
-                if active { "selected" } else { "ready" },
+                if active {
+                    "selected"
+                } else if conflict.is_some() {
+                    "unsatisfied"
+                } else {
+                    "ready"
+                },
             );
             if props.get("display").is_some_and(|value| value == "none") {
                 continue;
@@ -482,22 +489,16 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bo
                     .filter(|value| value.is_finite())
                     .unwrap_or(default)
             };
-            let conflict = annotation
-                .constraint
-                .as_ref()
-                .and_then(|constraint| conflicts.get(constraint));
-            let color = if conflict.is_some() {
-                ui.visuals().error_fg_color
-            } else {
-                props
-                    .get("color")
-                    .and_then(|value| crate::ui::color(value))
-                    .unwrap_or(if active {
-                        ui.visuals().selection.stroke.color
-                    } else {
-                        ui.visuals().text_color()
-                    })
-            };
+            let color = props
+                .get("color")
+                .and_then(|value| crate::ui::color(value))
+                .unwrap_or(if active {
+                    viewport::selection_color(w)
+                } else if conflict.is_some() {
+                    ui.visuals().error_fg_color
+                } else {
+                    ui.visuals().text_color()
+                });
             let painter = ui.painter().with_clip_rect(rect);
             let project = |point| viewport::project(w, rect, sketch::world(&plane, &matrix, point));
             for segment in &annotation.segments {

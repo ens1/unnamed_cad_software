@@ -72,6 +72,7 @@ pub struct EditingSketch {
     pub error: Option<String>,
     pub placement_error: Option<String>,
     pub degrees_of_freedom: Option<usize>,
+    pub feedback: crate::sketch_relations_ui::Feedback,
     pub members: BTreeMap<Id, SketchMember>,
     pub chain: Vec<Id>,
     pub clicks: Vec<[f64; 2]>,
@@ -353,6 +354,7 @@ pub fn begin(w: &mut Workspace, existing: Option<Feature>) {
         error: None,
         placement_error: None,
         degrees_of_freedom: None,
+        feedback: crate::sketch_relations_ui::Feedback::default(),
         members: BTreeMap::new(),
         chain: vec![],
         clicks: vec![],
@@ -712,11 +714,13 @@ pub(crate) fn restore(s: &mut EditingSketch, source: Sketch) {
     s.clicks.clear();
     s.error = None;
     s.placement_error = None;
+    s.degrees_of_freedom = None;
     s.dimension = None;
     s.dimension_pick = None;
     s.dimension_model = None;
     s.selection.clear();
     s.last_valid = None;
+    s.feedback = crate::sketch_relations_ui::Feedback::default();
     s.drag = None;
 }
 pub fn undo_point(w: &mut Workspace) {
@@ -1116,6 +1120,7 @@ pub(crate) fn solve(w: &mut Workspace) {
                 s.last_valid = Some(source);
                 s.error = None;
             }
+            crate::sketch_relations_ui::refresh(w, Some(report.clone()));
             if let Some(s) = &w.sketch {
                 match preview_document(w, s) {
                     Ok(document) if document.fingerprint() != w.session.visible().fingerprint() => {
@@ -1141,6 +1146,7 @@ pub(crate) fn solve(w: &mut Workspace) {
                 s.degrees_of_freedom = None;
                 s.error = Some(e.to_string());
             }
+            crate::sketch_relations_ui::refresh(w, None);
             if let Some(s) = &w.sketch
                 && let Ok(document) = preview_document(w, s)
                 && document.fingerprint() != w.session.visible().fingerprint()
@@ -1221,6 +1227,11 @@ pub(crate) fn accept_evaluation(w: &mut Workspace) {
             }
         }
         s.last_valid = Some(solved);
+        let report = crate::sketch_relations_ui::retain_report(s);
+        if report.is_none() {
+            s.degrees_of_freedom = None;
+        }
+        crate::sketch_relations_ui::refresh(w, report);
     }
 }
 /// Edits from custom bindings and parameter panels reconcile into the active editor.
@@ -1375,9 +1386,11 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     if let Some(s) = &mut w.sketch {
         ui.strong(&s.name);
         ui.small(format!(
-            "{} members · {} degrees of freedom",
+            "{} members · {}",
             s.members.len(),
-            s.degrees_of_freedom.unwrap_or(s.points.len() * 2)
+            s.degrees_of_freedom
+                .map(|dof| format!("{dof} degrees of freedom"))
+                .unwrap_or_else(|| "degrees of freedom unavailable".into())
         ));
         ui.checkbox(&mut s.construction, "Construction geometry for new members");
         if s.tool == Tool::Polygon {
@@ -2270,13 +2283,22 @@ pub fn overlay(
             Stroke::new(0.5, Color32::from_black_alpha(26)),
         );
     }
-    let selected_axis = |axis| {
-        w.sketch
-            .as_ref()
-            .is_some_and(|sketch| sketch.selection.contains(&axis))
+    let related = w
+        .sketch
+        .as_ref()
+        .map(crate::sketch_relations_ui::related_entities)
+        .unwrap_or_default();
+    let problems = crate::sketch_relations_ui::problem_entities(w);
+    let selected_axis = |axis: cad_core::sketch_actions::SketchEntity| {
+        related.contains(axis.key())
+            || w.sketch
+                .as_ref()
+                .is_some_and(|sketch| sketch.selection.contains(&axis))
     };
     let x_selected = selected_axis(cad_core::sketch_actions::SketchEntity::XAxis);
     let y_selected = selected_axis(cad_core::sketch_actions::SketchEntity::YAxis);
+    let x_problem = problems.contains(cad_core::sketch_actions::X_AXIS);
+    let y_problem = problems.contains(cad_core::sketch_actions::Y_AXIS);
     draw_polyline(
         w,
         ui,
@@ -2285,9 +2307,11 @@ pub fn overlay(
         &[[-extent, 0.], [extent, 0.]],
         false,
         Stroke::new(
-            if x_selected { 3.5 } else { 1. },
+            if x_selected || x_problem { 3.5 } else { 1. },
             if x_selected {
                 accent
+            } else if x_problem {
+                ui.visuals().error_fg_color
             } else {
                 Color32::from_rgba_unmultiplied(190, 65, 65, 120)
             },
@@ -2301,20 +2325,32 @@ pub fn overlay(
         &[[0., -extent], [0., extent]],
         false,
         Stroke::new(
-            if y_selected { 3.5 } else { 1. },
+            if y_selected || y_problem { 3.5 } else { 1. },
             if y_selected {
                 accent
+            } else if y_problem {
+                ui.visuals().error_fg_color
             } else {
                 Color32::from_rgba_unmultiplied(65, 140, 65, 120)
             },
         ),
     );
-    if selected_axis(cad_core::sketch_actions::SketchEntity::Origin)
+    let origin_selected = selected_axis(cad_core::sketch_actions::SketchEntity::Origin);
+    if (origin_selected || problems.contains(cad_core::sketch_actions::ORIGIN))
         && let Some(origin) = viewport::project(w, r, world(&plane, &matrix, [0., 0.]))
     {
-        ui.painter()
-            .with_clip_rect(r)
-            .circle_stroke(origin, 7., Stroke::new(2.5, accent));
+        ui.painter().with_clip_rect(r).circle_stroke(
+            origin,
+            7.,
+            Stroke::new(
+                2.5,
+                if origin_selected {
+                    accent
+                } else {
+                    ui.visuals().error_fg_color
+                },
+            ),
+        );
     }
     let mut edited = false;
     let mut placed_conic = false;
@@ -2325,6 +2361,8 @@ pub fn overlay(
             &display_definition(s),
         ) {
             for path in paths {
+                let selected = related.contains(&path.member) || s.selection.iter().any(|e| matches!(e, cad_core::sketch_actions::SketchEntity::Member { member } if member == &path.member));
+                let unsatisfied = problems.contains(&path.member);
                 draw_polyline(
                     w,
                     ui,
@@ -2333,10 +2371,22 @@ pub fn overlay(
                     &path.points,
                     path.closed,
                     Stroke::new(
-                        if s.selection.iter().any(|e| matches!(e, cad_core::sketch_actions::SketchEntity::Member { member } if member == &path.member)) { 3.5 } else if path.construction { 1. } else { 2.5 },
-                        if s.selection.iter().any(|e| matches!(e, cad_core::sketch_actions::SketchEntity::Member { member } if member == &path.member)) {
+                        if selected || unsatisfied {
+                            3.5
+                        } else if path.construction {
+                            1.
+                        } else {
+                            2.5
+                        },
+                        if selected {
                             accent
-                        } else if path.construction { blue.gamma_multiply(0.45) } else { blue },
+                        } else if unsatisfied {
+                            ui.visuals().error_fg_color
+                        } else if path.construction {
+                            blue.gamma_multiply(0.45)
+                        } else {
+                            blue
+                        },
                     ),
                 );
             }
@@ -2572,11 +2622,17 @@ pub fn overlay(
                 continue;
             }
             let key = &w.sketch.as_ref().expect("active sketch").keys[index];
-            let active = w.sketch.as_ref().is_some_and(|s| s.selection.iter().any(|e| matches!(e, cad_core::sketch_actions::SketchEntity::Point { point } if point == key)));
+            let active = related.contains(key) || w.sketch.as_ref().is_some_and(|s| s.selection.iter().any(|e| matches!(e, cad_core::sketch_actions::SketchEntity::Point { point } if point == key)));
             ui.painter().with_clip_rect(r).circle_filled(
                 pos,
                 if active { 5. } else { 3. },
-                if active { accent } else { blue },
+                if active {
+                    accent
+                } else if problems.contains(key) {
+                    ui.visuals().error_fg_color
+                } else {
+                    blue
+                },
             );
             let hit = ui.interact(
                 egui::Rect::from_center_size(pos, egui::vec2(14., 14.)),

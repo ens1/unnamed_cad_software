@@ -571,20 +571,24 @@ fn edit_value(ui: &mut egui::Ui, v: &mut Value, path: &str) -> bool {
     changed
 }
 fn preview_status(ui: &mut egui::Ui, w: &Workspace) {
-    let draft = w.session.draft.as_ref();
-    let label = draft
-        .map(|d| {
-            if d.pending {
-                "◌  Evaluating proposed geometry"
-            } else if d.error.is_some() {
-                "!  Preview failed"
-            } else {
-                "●  Valid proposed geometry"
-            }
-        })
-        .unwrap_or("●  Committed model");
-    ui.label(RichText::new(label).strong().size(11.));
-    ui.small(&w.status).on_hover_text(&w.status);
+    let (label, state) = crate::workspace_controls::validation_summary(w);
+    crate::presentation_controls::label(
+        ui,
+        "workspace.validation-state",
+        "validation-summary",
+        &[],
+        label,
+        state,
+    );
+    crate::presentation_controls::label(
+        ui,
+        "workspace.status-message",
+        "status-message",
+        &[],
+        &w.status,
+        state,
+    )
+    .on_hover_text(&w.status);
     if let Some((state, label)) = crate::operation_preview::summary(w) {
         crate::presentation_controls::label(
             ui,
@@ -665,6 +669,30 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
         }
     });
     registry.register("sketch-editor", |ui, w, _| crate::sketch::controls(ui, w));
+    registry.register("viewport-toolbar", |ui, w, _| {
+        crate::workspace_controls::toolbar(ui, w)
+    });
+    registry.register("viewport-start-hint", |ui, w, _| {
+        crate::workspace_controls::start_hint(ui, w)
+    });
+    registry.register("isolation-controls", |ui, w, _| {
+        crate::workspace_controls::isolation(ui, w)
+    });
+    registry.register("navigation-hint", |ui, w, _| {
+        crate::workspace_controls::navigation_hint(ui, w)
+    });
+    registry.register("selection-candidates", |ui, w, _| {
+        crate::workspace_controls::candidates(ui, w)
+    });
+    registry.register("view-cube", |ui, w, _| {
+        viewport::view_cube_at(w, ui, ui.max_rect(), ui.clip_rect());
+    });
+    registry.register("reference-repair", |ui, w, _| {
+        crate::reference_repair_ui::show(ui, w)
+    });
+    registry.register("sketch-feedback", |ui, w, _| {
+        crate::sketch_relations_ui::panel(ui, w)
+    });
     registry.register("library-editor", |ui, w, _| library_editor(ui, w));
     registry
 }
@@ -818,6 +846,14 @@ fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) 
     }
     if w.settings.is_some() {
         w.status = "Apply or cancel Settings before using another command".into();
+        return;
+    }
+    if crate::reference_repair_ui::action(w, command, Some(&element.data))
+        || crate::sketch_relations_ui::semantic_action(w, element, command)
+    {
+        return;
+    }
+    if reference_repair_blocks(w, command) {
         return;
     }
     if crate::appearances_ui::action(w, command, Some(&element.data)) {
@@ -1112,9 +1148,10 @@ fn model_view(
     if viewport::navigate(w, ui.ctx(), &response) {
         w.selection_popup = None;
     }
-    let toolbar = crate::presentation_controls::overlay_rect(
+    let toolbar = crate::presentation_controls::overlay_rect_state(
         "viewport.toolbar",
         "viewport-toolbar",
+        crate::workspace_controls::toolbar_state(w),
         r,
         egui::Rect::from_min_size(
             r.min + egui::vec2(12., 8.),
@@ -1130,65 +1167,10 @@ fn model_view(
                 "viewport.toolbar",
                 "viewport-toolbar",
                 &["viewport-overlay"],
-                "ready",
+                crate::workspace_controls::toolbar_state(w),
             ),
         );
-        tools.horizontal(|ui| {
-            let document = w.session.visible();
-            let name = w
-                .view
-                .active_part
-                .as_ref()
-                .and_then(|id| document.parts.get(id))
-                .map(|p| p.name.as_str())
-                .unwrap_or(&document.name);
-            ui.strong(name);
-            if let Some(s) = &w.sketch {
-                ui.label(format!("› {} (Editing)", s.name));
-            }
-            if w.view.isolation {
-                ui.label("› Editing in Place");
-            }
-            if let Some(cursor) = &w.view.history_cursor {
-                let label = document
-                    .parts
-                    .get(&cursor.definition)
-                    .and_then(|p| p.features.iter().find(|f| f.id == cursor.node))
-                    .map(|f| f.name.clone())
-                    .unwrap_or_else(|| "Feature".into());
-                ui.colored_label(
-                    ui.visuals().selection.stroke.color,
-                    format!("› History: {label}"),
-                );
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.menu_button("View Orientation", |ui| crate::cad_ui::view_controls(ui, w));
-                if ui.button("Fit  F").clicked() {
-                    viewport::fit(w, false);
-                }
-            });
-        });
-        if w.view.history_cursor.is_some() {
-            tools.horizontal(|ui| {
-                ui.small("Viewing cached geometry");
-                if ui.button("Latest").clicked() {
-                    crate::history::latest(w);
-                }
-            });
-        }
-        if w.tool_checkpoint.is_some() {
-            tools.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                crate::cad_ui::confirmation(ui, w)
-            });
-        } else if let Some(selected) = &w.selected {
-            let label = format!("{} selected", selected.reference.topology);
-            tools.horizontal(|ui| {
-                ui.small(label);
-                if ui.small_button("Actions…").clicked() {
-                    crate::selection_ui::open(w, &response, toolbar.left_bottom());
-                }
-            });
-        }
+        crate::workspace_controls::toolbar(&mut tools, w);
     }
     let empty = w.sketch.is_none()
         && w.view
@@ -1215,32 +1197,7 @@ fn model_view(
                 "ready",
             ),
         );
-        hint.vertical_centered(|ui| {
-            ui.heading("Start your first sketch");
-            ui.label("Choose a plane");
-            ui.add_space(12.);
-            ui.horizontal(|ui| {
-                for name in ["Front Plane", "Top Plane", "Right Plane"] {
-                    if crate::presentation_controls::button(
-                        ui,
-                        &format!(
-                            "viewport.start-hint/{}",
-                            name.trim_end_matches(" Plane").to_lowercase()
-                        ),
-                        "sketch-plane-action",
-                        &["semantic-control"],
-                        name.trim_end_matches(" Plane"),
-                        true,
-                        false,
-                    )
-                    .clicked()
-                    {
-                        crate::sketch::choose_origin(w, name);
-                        action(w, "sketch.new");
-                    }
-                }
-            });
-        });
+        crate::workspace_controls::start_hint(&mut hint, w);
     }
     if response.secondary_clicked() && w.sketch.is_none() && w.tool_checkpoint.is_none() {
         w.selection_popup = None;
@@ -1318,7 +1275,9 @@ fn model_view(
             });
             if let Some(s) = w.candidates.first().cloned() {
                 if viewport::select_modified(w, s, toggle) {
-                    capture_feature_selection(w, false, toggle);
+                    if !crate::reference_repair_ui::capture_selection(w) {
+                        capture_feature_selection(w, false, toggle);
+                    }
                     if w.tool_checkpoint.is_none() {
                         crate::selection_ui::open(w, &response, p);
                     }
@@ -1339,7 +1298,9 @@ fn model_view(
     {
         w.candidate_index = (w.candidate_index + 1) % w.candidates.len();
         if viewport::select(w, w.candidates[w.candidate_index].clone()) {
-            capture_feature_selection(w, true, false);
+            if !crate::reference_repair_ui::capture_selection(w) {
+                capture_feature_selection(w, true, false);
+            }
             if w.tool_checkpoint.is_none() {
                 crate::selection_ui::open(w, &response, response.hover_pos().unwrap_or(r.center()));
             }
@@ -1356,35 +1317,8 @@ fn model_view(
             ),
         )
     {
-        let props = crate::presentation_controls::properties(
-            "viewport.candidates",
-            "selection-candidates",
-            &["viewport-overlay"],
-            "ready",
-        );
-        let text = format!(
-            "Candidate {}/{} · Tab to cycle · {}",
-            w.candidate_index + 1,
-            w.candidates.len(),
-            w.selected
-                .as_ref()
-                .map(|selection| selection.name.as_str())
-                .unwrap_or("")
-        );
-        ui.painter().text(
-            area.left_center(),
-            egui::Align2::LEFT_CENTER,
-            text,
-            egui::FontId::proportional(crate::presentation_controls::number(
-                &props,
-                "font-size",
-                11.,
-            )),
-            props
-                .get("color")
-                .and_then(|value| color(value))
-                .unwrap_or(ui.visuals().text_color()),
-        );
+        let mut controls = ui.new_child(egui::UiBuilder::new().max_rect(area));
+        crate::workspace_controls::candidates(&mut controls, w);
     }
     if w.view.isolation
         && w.sketch.is_none()
@@ -1408,19 +1342,7 @@ fn model_view(
                 "ready",
             ),
         );
-        controls.horizontal(|ui| {
-            ui.checkbox(&mut w.view.ghost_others, "Ghost others");
-            if ui.button("Hide others").clicked() {
-                w.view.ghost_others = false;
-            }
-            if ui.button("Finish Editing").clicked() {
-                w.isolate();
-            }
-            if !w.view.pinned.is_empty() && ui.button("Clear pins").clicked() {
-                w.view.pinned.clear();
-                w.rendered_key.clear();
-            }
-        });
+        crate::workspace_controls::isolation(&mut controls, w);
     }
     if let Some(area) = crate::presentation_controls::overlay_rect(
         "viewport.navigation-hint",
@@ -1431,34 +1353,53 @@ fn model_view(
             egui::vec2((r.width() - 32.).max(0.), 20.),
         ),
     ) {
-        let props = crate::presentation_controls::properties(
-            "viewport.navigation-hint",
-            "navigation-hint",
-            &["viewport-overlay"],
-            "ready",
-        );
-        ui.painter().text(
-            area.left_center(),
-            egui::Align2::LEFT_CENTER,
-            crate::navigation::hint(w),
-            egui::FontId::proportional(crate::presentation_controls::number(
-                &props,
-                "font-size",
-                10.,
-            )),
-            props
-                .get("color")
-                .and_then(|value| color(value))
-                .unwrap_or(ui.visuals().weak_text_color()),
-        );
+        let mut controls = ui.new_child(egui::UiBuilder::new().max_rect(area));
+        crate::workspace_controls::navigation_hint(&mut controls, w);
     }
 }
+fn reference_repair_blocks(w: &mut Workspace, command: &str) -> bool {
+    let starts_editor = command.starts_with("feature.")
+        || command.starts_with("sketch.")
+        || command.starts_with("assembly.")
+        || command.starts_with("drawing.")
+        || command.starts_with("appearance.")
+        || command.starts_with("lighting.")
+        || matches!(
+            command,
+            "part.new"
+                | "parameter.new"
+                | "source"
+                | "configurations"
+                | "equations"
+                | "materials"
+                | "appearances"
+                | "lighting"
+                | "drawings"
+                | "manufacturing"
+        );
+    if w.reference_repair.is_some() && starts_editor {
+        w.status = "Apply or cancel Reference Repair before starting another editor".into();
+        return true;
+    }
+    false
+}
+
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
     if crate::settings::action(w, cmd) {
         return;
     }
     if w.settings.is_some() {
         w.status = "Apply or cancel Settings before using another command".into();
+        return;
+    }
+    if crate::workspace_controls::action(w, cmd)
+        || crate::reference_repair_ui::action(w, cmd, None)
+        || crate::sketch_relations_ui::action(w, cmd)
+        || crate::selection_ui::set_action(w, cmd)
+    {
+        return;
+    }
+    if reference_repair_blocks(w, cmd) {
         return;
     }
     if crate::appearances_ui::action(w, cmd, None) {
@@ -2482,7 +2423,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         crate::cad_ui::properties(ui, w);
         return;
     }
-    if matches!(dialog.as_str(), "feature" | "sketch") {
+    if matches!(dialog.as_str(), "feature" | "sketch" | "reference-repair") {
         crate::cad_ui::confirmation(ui, w);
         if w.dialog.is_none() {
             return;
@@ -2491,6 +2432,8 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
     }
     ui.horizontal(|ui| {
         ui.strong(match dialog.as_str() {
+            "reference-repair" => "Repair References",
+            "selection" => "Selection Actions",
             "feature" => "Feature",
             "sketch" => "Sketch on model",
             "source" => "Source definitions",
@@ -2512,7 +2455,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         });
         if !matches!(
             dialog.as_str(),
-            "feature" | "sketch" | "configurations" | "appearances"
+            "feature" | "sketch" | "configurations" | "appearances" | "reference-repair"
         ) && !w.fields.contains_key("mate-editor")
             && !w.fields.contains_key("component-pattern-editor")
             && ui.small_button("Close").clicked()
@@ -2525,6 +2468,12 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
     egui::ScrollArea::vertical()
         .id_salt("workspace-editor")
         .show(ui, |ui| match dialog.as_str() {
+            "reference-repair" => crate::reference_repair_ui::show(ui, w),
+            "selection" => {
+                if let Some(target) = crate::selection_ui::current(w) {
+                    crate::selection_ui::contents(ui, w, &target);
+                }
+            }
             "configurations" => crate::configuration_ui::show(ui, w),
             "inspection" => crate::inspection_ui::controls(ui, w),
             "feature" => feature_editor(ui, w),

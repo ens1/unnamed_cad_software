@@ -157,6 +157,9 @@ fn render_mesh(source: &MeshData, instance: &PlacedPart) -> Mesh {
     .with_inserted_indices(Indices::U32(source.indices.clone()))
 }
 pub(crate) fn display_evaluation(w: &Workspace) -> Option<&Evaluation> {
+    if let Some(evaluation) = crate::reference_repair_ui::display_evaluation(w) {
+        return Some(evaluation);
+    }
     w.session
         .draft
         .as_ref()
@@ -416,7 +419,11 @@ pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
 }
 /// Editing an existing edge feature selects its authored input from the history
 /// cache. The checkpoint's final mesh may already contain the old fillet/chamfer.
-fn selection_meshes<'a>(w: &Workspace, e: &'a Evaluation, i: &PlacedPart) -> Vec<&'a MeshData> {
+pub(crate) fn selection_meshes<'a>(
+    w: &Workspace,
+    e: &'a Evaluation,
+    i: &PlacedPart,
+) -> Vec<&'a MeshData> {
     if let Some(feature) = crate::selection_ui::edge_feature(w)
         && let Some((body, _)) = crate::selection_ui::edge_selection(&feature)
     {
@@ -1498,6 +1505,18 @@ pub fn view_cube(w: &mut Workspace, ui: &egui::Ui, viewport: egui::Rect) -> egui
     ) else {
         return egui::Rect::NOTHING;
     };
+    view_cube_at(w, ui, rect, viewport)
+}
+
+pub(crate) fn view_cube_at(
+    w: &mut Workspace,
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    clip: egui::Rect,
+) -> egui::Rect {
+    if !rect.is_positive() {
+        return egui::Rect::NOTHING;
+    }
     let props = crate::presentation_controls::properties(
         "viewport.view-cube",
         "view-cube",
@@ -1516,7 +1535,7 @@ pub fn view_cube(w: &mut Workspace, ui: &egui::Ui, viewport: egui::Rect) -> egui
     let scale = rect.width().min(rect.height()) / 96.;
     let center = rect.center() - egui::vec2(0., 12. * scale);
     let (forward, right, up) = basis(w);
-    let painter = ui.painter().with_clip_rect(viewport);
+    let painter = ui.painter().with_clip_rect(clip);
     let screen = |p: [f64; 3]| {
         let p = render_point(p) * 100.;
         center + egui::vec2(p.dot(right), -p.dot(up)) * 28. * scale

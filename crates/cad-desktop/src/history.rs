@@ -2,6 +2,9 @@
 use crate::Workspace;
 use cad_core::{NodeRef, protocol::Evaluation};
 pub fn current(w: &Workspace) -> Option<&Evaluation> {
+    if let Some(evaluation) = crate::reference_repair_ui::display_evaluation(w) {
+        return Some(evaluation);
+    }
     w.session
         .draft
         .as_ref()

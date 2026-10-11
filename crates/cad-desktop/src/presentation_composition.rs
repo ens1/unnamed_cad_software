@@ -424,39 +424,17 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     }
     active_fields(w, &mut elements);
     dimension_fields(w, &mut elements);
-    for (id, role, label) in [
-        (
-            "viewport.toolbar",
-            "viewport-toolbar",
-            "Model context and view controls",
-        ),
-        (
-            "viewport.start-hint",
-            "viewport-start-hint",
-            "Start a sketch",
-        ),
-        ("viewport.view-cube", "view-cube", "View orientation cube"),
-        (
-            "viewport.candidates",
-            "selection-candidates",
-            "Selection candidates",
-        ),
-        (
-            "viewport.isolation",
-            "isolation-controls",
-            "Edit in place controls",
-        ),
-        (
-            "viewport.navigation-hint",
-            "navigation-hint",
-            "Navigation instructions",
-        ),
-    ] {
-        elements.push(SemanticElement {
-            id: id.into(), role: role.into(), label: label.into(), value: None,
-            state: "ready".into(), commands: vec![], relationships: vec!["workspace.viewport".into()],
-            data: serde_json::json!({"contract":"tcad.presentation.overlay","version":1,"styleable":true}),
-        });
+    elements.extend(crate::workspace_controls::semantics(w));
+    elements.extend(crate::reference_repair_ui::project(w));
+    for element in crate::sketch_relations_ui::semantics(w) {
+        if let Some(existing) = elements
+            .iter_mut()
+            .find(|existing| existing.id == element.id)
+        {
+            *existing = element;
+        } else {
+            elements.push(element);
+        }
     }
     crate::appearances_ui::reconcile_semantics(w, &mut elements);
     elements
@@ -661,6 +639,11 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "sketch-feedback",
+        crate::sketch_relations_ui::set_field,
+        crate::sketch_relations_ui::field_value,
+    );
     adapters.register(
         "settings",
         crate::settings_ui::set_field,

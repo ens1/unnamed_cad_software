@@ -2,7 +2,11 @@
 use crate::{Workspace, cad_ui, presentation_controls as controls, ui, viewport};
 use bevy_egui::egui;
 use cad_core::{
-    Feature, commands::Command, presentation::Region, selection_actions::SelectionTarget,
+    Feature,
+    commands::Command,
+    presentation::Region,
+    selection_actions::SelectionTarget,
+    selection_sets::{self, Mode as SetMode},
 };
 
 pub struct ActionPopup {
@@ -125,6 +129,279 @@ pub(crate) fn clear_edge_pick(w: &mut Workspace) {
     }
 }
 
+/// Resolve only the current native cache, on one output body and occurrence.
+/// A last-valid display fallback is useful while rebuilding but cannot author a set.
+fn expansion(w: &Workspace, mode: SetMode) -> cad_core::Result<Vec<viewport::Selection>> {
+    if w.view.history_cursor.is_some() || w.sketch.is_some() {
+        return Err(cad_core::CadError::Invalid(
+            "Finish sketch editing and return to Latest before selecting model edge sets".into(),
+        ));
+    }
+    let pick = w.selected.as_ref().ok_or_else(|| {
+        cad_core::CadError::Invalid("Select a face or edge on the model first".into())
+    })?;
+    let body = pick.body.as_ref().ok_or_else(|| {
+        cad_core::CadError::Invalid("This selection has no evaluated body owner".into())
+    })?;
+    if let Some(feature) = edge_feature(w)
+        && let Some((input, _)) = edge_selection(&feature)
+        && (body != input || !edge_occurrence(w, &pick.path))
+    {
+        return Err(cad_core::CadError::Invalid(
+            "Select geometry on this feature's input body and component".into(),
+        ));
+    }
+    let evaluation = viewport::selection_evaluation(w)
+        .ok_or_else(|| cad_core::CadError::Invalid("Wait for current model evaluation".into()))?;
+    let session = if edge_feature(w).is_some() {
+        w.tool_checkpoint.as_ref().unwrap_or(&w.session)
+    } else {
+        &w.session
+    };
+    if !evaluation.valid || evaluation.identity != session.identity() {
+        return Err(cad_core::CadError::Invalid(
+            "Wait for the current native geometry; an older display cache cannot expand selections"
+                .into(),
+        ));
+    }
+    let mut instances = viewport::display_instances(w, evaluation)
+        .iter()
+        .filter(|instance| instance.definition == pick.definition && instance.path == pick.path);
+    let instance = instances.next().ok_or_else(|| {
+        cad_core::CadError::Invalid(
+            "The selected component occurrence is no longer displayed".into(),
+        )
+    })?;
+    if instances.next().is_some() {
+        return Err(cad_core::CadError::Invalid(
+            "The selected component occurrence is ambiguous".into(),
+        ));
+    }
+    let candidates = viewport::selection_meshes(w, evaluation, instance)
+        .into_iter()
+        .filter(|mesh| {
+            if pick.reference.topology == "face" {
+                mesh.faces.iter().any(|face| {
+                    face.body.as_ref() == Some(body)
+                        && selection_sets::same_reference(&face.reference, &pick.reference)
+                })
+            } else {
+                mesh.edges.iter().any(|edge| {
+                    edge.body.as_ref() == Some(body) && same_edge(&edge.reference, &pick.reference)
+                })
+            }
+        })
+        .collect::<Vec<_>>();
+    if candidates.len() != 1 {
+        return Err(cad_core::CadError::Invalid(
+            "The selected topology is missing or ambiguous; select it again".into(),
+        ));
+    }
+    let mesh = candidates[0];
+    let references = selection_sets::expand(mesh, body, &pick.reference, mode)?;
+    let by_reference = mesh
+        .edges
+        .iter()
+        .filter(|edge| edge.body.as_ref() == Some(body))
+        .map(|edge| {
+            (
+                (
+                    edge.reference.producer.definition.as_str(),
+                    edge.reference.producer.node.as_str(),
+                    edge.reference.role.as_str(),
+                ),
+                edge,
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    Ok(references
+        .into_iter()
+        .map(|reference| {
+            let edge = by_reference
+                .get(&(
+                    reference.producer.definition.as_str(),
+                    reference.producer.node.as_str(),
+                    reference.role.as_str(),
+                ))
+                .unwrap();
+            let native = edge.native.as_ref().unwrap();
+            let center = native
+                .endpoints
+                .map(|point| viewport::placed(point, instance));
+            viewport::Selection {
+                reference,
+                point: std::array::from_fn(|axis| center[0][axis] * 0.5 + center[1][axis] * 0.5),
+                ..pick.clone()
+            }
+        })
+        .collect())
+}
+
+fn set_descriptors(
+    w: &Workspace,
+    target: &SelectionTarget,
+) -> Vec<cad_core::presentation::SemanticElement> {
+    let SelectionTarget::Geometry {
+        reference,
+        body: Some(body),
+        path,
+        ..
+    } = target
+    else {
+        return vec![];
+    };
+    let modes: &[SetMode] = match reference.topology.as_str() {
+        "face" => &[SetMode::FaceBoundary],
+        "edge" => &[SetMode::ClosedLoop, SetMode::TangentChain],
+        _ => return vec![],
+    };
+    modes.iter().map(|mode| {
+        let result = if current(w).as_ref() == Some(target) { expansion(w,*mode) } else { Err(cad_core::CadError::Invalid("Select this geometry again to expand its selection".into())) };
+        let command = format!("selection.set-{}",mode.suffix());
+        cad_core::presentation::SemanticElement {
+            id:command.clone(), role:"selection-action".into(), label:mode.label().into(),
+            value:Some(match &result { Ok(edges)=>format!("{} native edges on this body occurrence",edges.len()),Err(error)=>error.to_string() }),
+            state:if result.is_ok() {"ready"} else {"disabled"}.into(), commands:vec![command],
+            relationships:vec![body.node.clone()],
+            data:serde_json::json!({"contract":"tcad.presentation.selection-sets","version":selection_sets::CONTRACT_VERSION,"group":"Selection","target":target,"mode":mode,"input_body":body,"occurrence_path":path,"native_incidence":true,"current_evaluation_required":true,"classes":["menu-item","selection-action"]}),
+        }
+    }).collect()
+}
+
+/// A view-only set becomes authored input only through the shared feature draft.
+pub(crate) fn set_action(w: &mut Workspace, command: &str) -> bool {
+    let Some(mode) = command
+        .strip_prefix("selection.set-")
+        .and_then(SetMode::parse)
+    else {
+        return false;
+    };
+    match expansion(w, mode) {
+        Ok(selected) => {
+            w.geometry_selection = selected;
+            w.selected = w.geometry_selection.first().cloned();
+            if let Some(pick) = &w.selected {
+                w.edge_selection_path = Some(pick.path.clone());
+            }
+            if let Some(mut feature) = edge_feature(w) {
+                let edges = match &mut feature.operation {
+                    cad_core::Operation::Fillet { edges, .. }
+                    | cad_core::Operation::Chamfer { edges, .. } => edges,
+                    _ => unreachable!(),
+                };
+                for pick in &w.geometry_selection {
+                    if !edges.iter().any(|edge| same_edge(edge, &pick.reference)) {
+                        edges.push(pick.reference.clone());
+                    }
+                }
+                clear_edge_pick(w);
+                w.json = serde_json::to_string_pretty(&feature).unwrap_or_default();
+                ui::preview_feature(w, feature);
+            }
+            w.context_selection = None;
+            w.selection_popup = None;
+            w.candidates.clear();
+            w.rendered_key.clear();
+            w.status = format!("{} edges selected", w.geometry_selection.len());
+        }
+        Err(error) => w.status = error.to_string(),
+    }
+    true
+}
+
+fn focus_edge(
+    w: &mut Workspace,
+    body: &cad_core::NodeRef,
+    reference: &cad_core::TopologyRef,
+) -> cad_core::Result<()> {
+    let path = known_edge_occurrence(w, &body.definition).ok_or_else(|| {
+        cad_core::CadError::Invalid(
+            "Select the component occurrence before focusing this edge".into(),
+        )
+    })?;
+    let evaluation = viewport::selection_evaluation(w).ok_or_else(|| {
+        cad_core::CadError::Invalid("Wait for the current model evaluation".into())
+    })?;
+    let session = w.tool_checkpoint.as_ref().unwrap_or(&w.session);
+    if evaluation.identity != session.identity() {
+        return Err(cad_core::CadError::Invalid(
+            "Wait for current input geometry before focusing this edge".into(),
+        ));
+    }
+    let instances = viewport::display_instances(w, evaluation)
+        .iter()
+        .filter(|instance| instance.definition == body.definition && instance.path == path)
+        .collect::<Vec<_>>();
+    if instances.len() != 1 {
+        return Err(cad_core::CadError::Invalid(
+            "The component occurrence is missing or ambiguous".into(),
+        ));
+    }
+    let instance = instances[0];
+    let edges = viewport::selection_meshes(w, evaluation, instance)
+        .into_iter()
+        .flat_map(|mesh| &mesh.edges)
+        .filter(|edge| edge.body.as_ref() == Some(body) && same_edge(&edge.reference, reference))
+        .collect::<Vec<_>>();
+    if edges.len() != 1 {
+        return Err(cad_core::CadError::Invalid(
+            "This edge is missing or ambiguous; repair its reference first".into(),
+        ));
+    }
+    let edge = edges[0];
+    let mut low = [f64::INFINITY; 3];
+    let mut high = [f64::NEG_INFINITY; 3];
+    for point in &edge.points {
+        let point = viewport::placed(*point, instance);
+        for axis in 0..3 {
+            low[axis] = low[axis].min(point[axis]);
+            high[axis] = high[axis].max(point[axis]);
+        }
+    }
+    if low.iter().chain(&high).any(|value| !value.is_finite()) {
+        return Err(cad_core::CadError::Invalid(
+            "This edge has no usable display extent".into(),
+        ));
+    }
+    let center = std::array::from_fn(|axis| low[axis] * 0.5 + high[axis] * 0.5);
+    let camera_target = viewport::render_point(center);
+    if !camera_target.is_finite() {
+        return Err(cad_core::CadError::Invalid(
+            "This edge lies outside the viewport coordinate range".into(),
+        ));
+    }
+    let pick = viewport::Selection {
+        instance: path
+            .last()
+            .cloned()
+            .unwrap_or_else(|| body.definition.clone()),
+        path: path.clone(),
+        name: instance.name.clone(),
+        definition: body.definition.clone(),
+        reference: edge.reference.clone(),
+        body: Some(body.clone()),
+        distance: 0.,
+        point: center,
+    };
+    w.selected = Some(pick.clone());
+    w.geometry_selection = vec![pick];
+    w.edge_selection_path = Some(path);
+    w.context_selection = None;
+    w.view.target = camera_target.to_array();
+    let extent = low
+        .iter()
+        .zip(high)
+        .map(|(low, high)| (high - low).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    if extent.is_finite() && extent > 0. {
+        w.view.distance = (extent as f32 * 0.01 * 2.0).clamp(0.05, 10000.);
+    }
+    crate::navigation::stop(w);
+    w.rendered_key.clear();
+    Ok(())
+}
+
 fn edge_controls(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
     let Some(feature) = edge_feature(w) else {
         return vec![];
@@ -164,14 +441,21 @@ fn edge_controls(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             data:serde_json::json!({"presentation_control":true,"feature":feature.id,"input_body":body,"enabled":enabled,"classes":["property-control"]}),
         });
     }
+    out.extend(edge_set_controls(w, &feature.id, body));
     for (index, edge) in edges.iter().enumerate() {
         let key = edge_key(&feature.id, edge);
         let command = format!("selection.edge-remove/{key}");
+        let focus = format!("selection.edge-focus/{key}");
         out.push(cad_core::presentation::SemanticElement {
             id: format!("edge-selection/{key}"), role:"edge-selection-item".into(), label:format!("Edge {}", index + 1),
-            value:Some(edge.role.clone()), state:"selected".into(), commands:vec![command.clone()],
+            value:Some(edge.role.clone()), state:"selected".into(), commands:vec![focus.clone(),command.clone()],
             relationships:vec![feature.id.clone()],
             data:serde_json::json!({"feature":feature.id,"edge":edge,"input_body":body,"classes":["property-control"]}),
+        });
+        out.push(cad_core::presentation::SemanticElement {
+            id:focus.clone(),role:"edge-selection-action".into(),label:format!("Focus edge {}",index+1),
+            value:Some(edge.role.clone()),state:"ready".into(),commands:vec![focus],relationships:vec![feature.id.clone()],
+            data:serde_json::json!({"presentation_control":true,"feature":feature.id,"edge":edge,"input_body":body,"classes":["property-control","edge-focus"]}),
         });
         out.push(cad_core::presentation::SemanticElement {
             id: command.clone(), role:"edge-selection-action".into(), label:format!("Remove edge {}", index + 1),
@@ -202,6 +486,24 @@ pub(crate) fn edge_action(w: &mut Workspace, command: &str) -> bool {
     let Some(mut feature) = edge_feature(w) else {
         return true;
     };
+    if let Some(mode) = control
+        .data
+        .get("mode")
+        .and_then(|value| serde_json::from_value::<SetMode>(value.clone()).ok())
+    {
+        return set_action(w, &format!("selection.set-{}", mode.suffix()));
+    }
+    if command.starts_with("selection.edge-focus/") {
+        if let Some((body, _)) = edge_selection(&feature)
+            && let Some(reference) = control.data.get("edge").and_then(|value| {
+                serde_json::from_value::<cad_core::TopologyRef>(value.clone()).ok()
+            })
+            && let Err(error) = focus_edge(w, body, &reference)
+        {
+            w.status = error.to_string();
+        }
+        return true;
+    }
     let edges = match &mut feature.operation {
         cad_core::Operation::Fillet { edges, .. } | cad_core::Operation::Chamfer { edges, .. } => {
             edges
@@ -232,6 +534,166 @@ pub(crate) fn edge_action(w: &mut Workspace, command: &str) -> bool {
     w.json = serde_json::to_string_pretty(&feature).unwrap_or_default();
     ui::preview_feature(w, feature);
     true
+}
+
+fn edge_set_controls(
+    w: &Workspace,
+    feature: &str,
+    body: &cad_core::NodeRef,
+) -> Vec<cad_core::presentation::SemanticElement> {
+    [SetMode::FaceBoundary,SetMode::ClosedLoop,SetMode::TangentChain].into_iter().map(|mode| {
+        let result = if w.selected.as_ref().is_some_and(|pick|pick.body.as_ref()==Some(body) && edge_occurrence(w,&pick.path)) { expansion(w,mode) } else { Err(cad_core::CadError::Invalid("Select a face or edge on this feature's input body".into())) };
+        let command=format!("selection.edge-set-{}/{feature}",mode.suffix());
+        cad_core::presentation::SemanticElement {
+            id:command.clone(),role:"edge-selection-action".into(),label:mode.label().into(),value:Some(match &result { Ok(edges)=>format!("Add {} native edges",edges.len()),Err(error)=>error.to_string() }),
+            state:if result.is_ok() {"ready"} else {"disabled"}.into(),commands:vec![command],relationships:vec![feature.into(),body.node.clone()],
+            data:serde_json::json!({"presentation_control":true,"contract":"tcad.presentation.selection-sets","version":selection_sets::CONTRACT_VERSION,"feature":feature,"input_body":body,"mode":mode,"shared_draft":true,"classes":["property-control","selection-set"]}),
+        }
+    }).collect()
+}
+
+/// Default compact presentation; the same commands are available to custom layouts.
+pub(crate) fn edge_picker(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    feature: &str,
+    body: &cad_core::NodeRef,
+    edges: &mut Vec<cad_core::TopologyRef>,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        let selected = w
+            .selected
+            .as_ref()
+            .filter(|pick| accepts_edge(w, body, pick))
+            .cloned();
+        if controls::button(
+            ui,
+            &format!("selection.edge-add/{feature}"),
+            "edge-selection-action",
+            &["property-control"],
+            "Add edge",
+            selected
+                .as_ref()
+                .is_some_and(|pick| !edges.iter().any(|edge| same_edge(edge, &pick.reference))),
+            false,
+        )
+        .clicked()
+            && let Some(pick) = selected
+        {
+            edges.push(pick.reference);
+            changed = true;
+        }
+        if controls::button(
+            ui,
+            &format!("selection.edge-clear/{feature}"),
+            "edge-selection-action",
+            &["property-control"],
+            "Clear",
+            !edges.is_empty(),
+            false,
+        )
+        .clicked()
+        {
+            edges.clear();
+            changed = true;
+        }
+    });
+    for control in edge_set_controls(w, feature, body) {
+        if controls::button(
+            ui,
+            &control.id,
+            &control.role,
+            &["property-control", "selection-set"],
+            &control.label,
+            control.state != "disabled",
+            false,
+        )
+        .on_hover_text(control.value.as_deref().unwrap_or_default())
+        .on_disabled_hover_text(control.value.as_deref().unwrap_or_default())
+        .clicked()
+            && let Some(mode) = control
+                .data
+                .get("mode")
+                .and_then(|value| serde_json::from_value::<SetMode>(value.clone()).ok())
+        {
+            match expansion(w, mode) {
+                Ok(picks) => {
+                    for pick in &picks {
+                        if !edges.iter().any(|edge| same_edge(edge, &pick.reference)) {
+                            edges.push(pick.reference.clone());
+                            changed = true;
+                        }
+                    }
+                    w.geometry_selection = picks;
+                    w.selected = w.geometry_selection.first().cloned();
+                    if let Some(pick) = &w.selected {
+                        w.edge_selection_path = Some(pick.path.clone());
+                    }
+                }
+                Err(error) => w.status = error.to_string(),
+            }
+        }
+    }
+    let mut remove = None;
+    for (index, edge) in edges.iter().enumerate() {
+        let key = edge_key(feature, edge);
+        ui.push_id(&key, |ui| {
+            ui.horizontal(|ui| {
+                let active = w
+                    .selected
+                    .as_ref()
+                    .is_some_and(|pick| same_edge(&pick.reference, edge));
+                if controls::button(
+                    ui,
+                    &format!("selection.edge-focus/{key}"),
+                    "edge-selection-action",
+                    &["property-control", "edge-focus"],
+                    &format!("Edge {}", index + 1),
+                    true,
+                    active,
+                )
+                .on_hover_text(format!("Focus and highlight {}", edge.role))
+                .clicked()
+                    && let Err(error) = focus_edge(w, body, edge)
+                {
+                    w.status = error.to_string();
+                }
+                if controls::button(
+                    ui,
+                    &format!("selection.edge-remove/{key}"),
+                    "edge-selection-action",
+                    &["property-control", "edge-remove"],
+                    "×",
+                    true,
+                    false,
+                )
+                .on_hover_text("Remove edge from this draft")
+                .clicked()
+                {
+                    remove = Some(index);
+                }
+            })
+        });
+    }
+    if let Some(index) = remove {
+        edges.remove(index);
+        changed = true;
+    }
+    if changed {
+        clear_edge_pick(w);
+        w.geometry_selection
+            .retain(|pick| edges.iter().any(|edge| same_edge(edge, &pick.reference)));
+        if w.selected.as_ref().is_some_and(|pick| {
+            pick.reference.topology == "edge"
+                && !edges.iter().any(|edge| same_edge(edge, &pick.reference))
+        }) {
+            w.selected = w.geometry_selection.last().cloned();
+        }
+        w.rendered_key.clear();
+    }
+    ui.small("Click edges to add · ⌘/Shift-click to toggle · click a listed edge to focus");
+    changed
 }
 
 pub fn current(w: &Workspace) -> Option<SelectionTarget> {
@@ -389,6 +851,9 @@ fn descriptors(
             .then_some(w.view.active_part.as_deref())
             .flatten(),
     );
+    if w.sketch.is_none() && w.view.history_cursor.is_none() {
+        actions.extend(set_descriptors(w, target));
+    }
     if let Some(sketch) = &w.sketch
         && let SelectionTarget::Geometry {
             definition,
@@ -769,6 +1234,9 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
     // topology command to the geometry that is selected now.
     if matches!(target, SelectionTarget::Geometry { .. }) && current(w).as_ref() != Some(target) {
         w.status = "Selection changed. Select the geometry again to show its actions".into();
+        return;
+    }
+    if set_action(w, command) {
         return;
     }
     if command == "sketch.convert-entities" && matches!(target, SelectionTarget::Geometry { .. }) {

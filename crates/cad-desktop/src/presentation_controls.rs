@@ -290,13 +290,41 @@ pub fn icon_button(
     visual.x = visual
         .x
         .max(number(&props, "min-width", 0.))
-        .min(number(&props, "max-width", f32::MAX))
+        .min(length(&props, "max-width", ui.available_width(), f32::MAX))
         .max(0.);
     visual.y = visual
         .y
         .max(number(&props, "min-height", 0.))
-        .min(number(&props, "max-height", f32::MAX))
+        .min(length(
+            &props,
+            "max-height",
+            ui.available_height(),
+            f32::MAX,
+        ))
         .max(0.);
+    // Text overflow is an opt-in presentation choice. Keep the full source label
+    // in semantic/accessibility data even when a narrow control elides its text.
+    let galley = if props
+        .get("text-overflow")
+        .is_some_and(|value| value == "ellipsis")
+    {
+        let mut job = egui::text::LayoutJob::single_section(
+            label.into(),
+            egui::TextFormat {
+                font_id: font,
+                color,
+                ..Default::default()
+            },
+        );
+        job.wrap.max_width = (visual.x - pad[1] - pad[3] - icon_size - icon_gap).max(0.);
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        job.break_on_newline = false;
+        ui.painter().layout_job(job)
+    } else {
+        galley
+    };
+    let elided = galley.elided;
     let minimum = number(&props, "min-target-size", ui.spacing().interact_size.y).max(0.);
     let hit = egui::vec2(
         visual.x.max(number(&props, "hit-width", minimum)),
@@ -383,7 +411,11 @@ pub fn icon_button(
             color.gamma_multiply(opacity),
         );
     }
-    response
+    if elided {
+        response.on_hover_text(label)
+    } else {
+        response
+    }
 }
 
 pub fn selectable(
@@ -575,7 +607,17 @@ pub fn overlay_rect(
     viewport: egui::Rect,
     default: egui::Rect,
 ) -> Option<egui::Rect> {
-    let props = properties(id, role, &["viewport-overlay"], "ready");
+    overlay_rect_state(id, role, "ready", viewport, default)
+}
+
+pub fn overlay_rect_state(
+    id: &str,
+    role: &str,
+    state: &str,
+    viewport: egui::Rect,
+    default: egui::Rect,
+) -> Option<egui::Rect> {
+    let props = properties(id, role, &["viewport-overlay"], state);
     if props.get("display").is_some_and(|value| value == "none")
         || props
             .get("visibility")

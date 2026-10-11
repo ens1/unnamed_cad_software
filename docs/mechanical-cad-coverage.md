@@ -229,3 +229,32 @@ No row currently establishes completion of the shared mainstream mechanical CAD 
 ### Visual presentation update (2026-10-11)
 
 Independent appearance contract v1 supplies clear-anodized-aluminum defaults, named visual presets, part/configuration finish assignments, nested occurrence overrides, pinned PNG/JPEG/TIFF/WebP files, part-local triplanar/planar physical mapping, grayscale height relief, RGB normal and grayscale roughness/metallic/occlusion maps. The viewport adds HDR studio image-based lighting, key/fill controls, exposure, tone mapping and ambient occlusion. Finish and lighting fields/actions use semantic bindings and the shared validated transaction. Engineering materials continue to govern density/mass/BOM independently. True geometric displacement, per-face UV/decals, custom HDR environments, anisotropic highlights and final ray tracing remain gaps; rendered appearance has not received interactive acceptance. See [visual finishes](visual-finishes.md).
+
+
+### Everyday modeling workflow update (2026-10-11)
+
+SK constraint/dimension feedback and UX01 now include selection/all/unsatisfied
+relation filtering, exact current authored-equation residual vectors, honest
+unknown DOF on failed solves, participating-geometry emphasis and direct
+value/driving/reference/contact editing. This builds on the existing sketch
+solver; it is not a new conflict solver or minimal unsatisfiable-set algorithm.
+
+SO09/SO10 selection now expands native complete rims/unambiguous loops, unique
+supported tangent chains and all face boundary wires; the Fillet/Chamfer manager
+supports per-edge focus/highlight/remove. Incidence and endpoint derivatives come
+from native topology, not sampled display lines. Ambiguity, unknown tangency,
+stale evaluations and resource limits have explicit unavailable reasons. This
+does not broaden blend construction to arbitrary connected carrier networks.
+
+UX02 now includes explicit part-feature reference repair with typed paired
+body/member/point inputs, targeted current feature failures, blocked downstream
+diagnostics, actual current upstream stage picking and the shared validated
+transaction. Pre-build structural/resource/parameter/assembly failures, assembly
+and drawing repair, general sketch member/relation identity repair and automatic
+import healing remain gaps.
+
+UX03 now includes independent semantic viewport-control renderers, status/context
+labels, theme-state toolbar sizing, fixed-height selected history rows and
+style-controlled ellipsis/percentage control bounds. All of these workflows
+remain partial within the shared mechanical CAD baseline; interactive acceptance
+is outstanding. See [modeling workflows](modeling-workflows.md).

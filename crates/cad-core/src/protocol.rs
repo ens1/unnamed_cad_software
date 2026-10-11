@@ -58,6 +58,31 @@ pub struct EdgeData {
     pub faces: Vec<TopologyRef>,
     #[serde(default)]
     pub body: Option<crate::NodeRef>,
+    /// Exact native incidence for selection expansion. This disposable metadata
+    /// is scoped to this mesh/evaluation; only source references become intent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<NativeEdgeTopology>,
+}
+
+pub const NATIVE_SELECTION_VERSION: u32 = 1;
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NativeEdgeTopology {
+    pub version: u32,
+    /// Connected native shell token, never an authored body identity.
+    pub component: u32,
+    /// Opaque mesh-local native vertex tokens. Coincident positions do not join.
+    pub vertices: [u32; 2],
+    pub endpoints: [[f64; 3]; 2],
+    /// Native one-sided derivatives pointing away from each endpoint, normalized.
+    /// Missing or singular derivatives never establish a tangent continuation.
+    pub tangents: [Option<[f64; 3]>; 2],
+    pub boundaries: Vec<NativeEdgeBoundary>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NativeEdgeBoundary {
+    /// Exact wire incidence token, scoped to this mesh/evaluation.
+    pub boundary: u32,
+    pub face: TopologyRef,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Diagnostic {

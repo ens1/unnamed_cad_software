@@ -8,6 +8,9 @@ pub enum Command {
     ReplaceDocument {
         document: Document,
     },
+    RepairReferences {
+        repairs: Vec<crate::reference_repair::Repair>,
+    },
     SetParameter {
         definition: Id,
         parameter: Id,
@@ -152,6 +155,9 @@ impl Command {
     pub fn execute(self, document: &mut Document) -> Result<()> {
         let missing = || CadError::Invalid("The command target no longer exists".into());
         match self {
+            Self::RepairReferences { repairs } => {
+                crate::reference_repair::repair(document, &repairs)?;
+            }
             Self::ReplaceDocument { document: d } => {
                 let revision = document.revision;
                 *document = d;

@@ -411,3 +411,47 @@ compile/sign/verify packaging workflow passed. After publication,
 `codesign --verify --deep --strict --verbose=2 dist/TCAD.app` and independent
 worker/CLI signature checks also passed. No tests, app launch or interactive
 acceptance were performed; the user retains interactive acceptance.
+
+
+## Sol application pass before further kernel work — 2026-10-11
+
+The user requested the Sol application work before the remaining Astra geometry
+work. This pass integrates native incidence-based complete-rim/loop, tangent-chain
+and face-boundary selection; per-edge manager focus/removal; sketch relation
+filtering and exact current authored-equation feedback; explicit paired reference
+repair; and compact independently styleable workspace controls. See
+[modeling workflows](modeling-workflows.md) for implementation and remaining bounds.
+
+The part-feature evaluator now returns targeted current-source construction
+failures with valid=false, actual available upstream/history geometry and blocked
+dependent features. This supports repair of a failed draft without discarding its
+original modeling checkpoint. Explicit pre-feature stage picking finds consumed
+upstream outputs. Atomic source replacements check the exact expected record,
+paired body/sketch-element bindings, type, order and document dependencies. Apply
+requires current validation; Cancel restores the starting checkpoint. Structural,
+resource, parameter and assembly failures outside feature construction retain
+explicit worker errors without fabricated targets or stale geometry.
+
+The sketch relation manager retains exact successful SolveReport data only for
+its matching source and exposes current authored residual vectors separately.
+Failed solves have unknown DOF. No minimal-conflict claim is made. Geometry,
+handles and annotations emphasize selected or currently unsatisfied participants
+without mutating the actual selection. Field/command adapters share sketch
+history and source validation. The default rows are compact, with full labels
+available through semantics and hover text.
+
+The default toolbar has theme-controlled ready/selected/editing/inspection heights,
+while selected history/tree rows no longer grow. Viewport toolbar, start controls,
+cube, candidate status, isolation and navigation help now have registered semantic
+renderers and independent layout bindings. Repair/sketch managers and all their
+choice/field/action controls publish the same presentation contracts as native
+widgets. Custom Actions bindings cannot switch away from an active editor.
+
+Backend fingerprint:
+`monstertruck/0.4.1+e52aab067761;adapter/25;solver/tcad-native-lm/12`.
+The public Monstertruck fork revision and native solver algorithms are unchanged.
+Remaining curved intersections, general connected blends and freeform offset/
+loft proofs are still kernel work for the later Astra pass. Broader mechanical
+CAD coverage remains incomplete; completing this application pass does not close
+those families. No tests, assertion probes or interactive smoke tests were
+introduced or performed.

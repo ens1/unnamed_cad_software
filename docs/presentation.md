@@ -73,7 +73,7 @@ History is feature-sequence inspection using current parameter values, separate 
 
 The Size menu controls UI scale (0.75–1.5) and toolbar height (60–130 logical pixels), with Compact and Comfortable presets. Toolbars scroll horizontally; tree, history and controls scroll vertically. These controls edit presentation state/layout without changing the source model. `ui/workspace.json` stores UI scale, toolbar setting, graph scope, graph positions, pan/zoom, sketch annotation positions and dimension/relation visibility. Save presentation writes the current resized layout and state. Arbitrary saved layout heights are respected until the user explicitly changes sizing.
 
-The viewport has a clickable view cube and leaders for the selected feature/value or geometry measurement. Pinned assembly component references have separate labels; edit-in-place offers Ghost others, Hide others and Finish Editing in the viewport. These overlays remain native composite widgets. New documents stay empty and use the user's own part names.
+The viewport has a clickable view cube and leaders for the selected feature/value or geometry measurement. Pinned assembly component references have separate labels; edit-in-place offers Ghost others, Hide others and Finish Editing in the viewport. These views have independent registered renderers and semantic bindings, in addition to their default viewport overlay placement. New documents stay empty and use the user's own part names.
 
 Click an edge, face or sketch geometry in the model viewport to open a compact action popup beside the selection. Primary clicks in the tree, History, graph, property manager and semantic selection controls select or inspect without opening a popup. Clicking empty viewport space clears the selection without opening actions. Feature selection and popup opening are separate presentation operations; double-click editing and explicit right-click menus remain available. Edge actions include Fillet and Chamfer. Faces offer Sketch on Face, Shell with that face removed, and Draft; Sketch on Face explains when the selected face is not planar. Sketches offer boss/base and cut operations; solid features offer body modifiers and patterns. Edit, Suppress/Unsuppress, and Delete target the selected feature. Geometry actions prefill the existing modeling editors and keep the common validated Apply/Cancel transaction. While an operation is active, geometry clicks continue selecting its inputs and expose applicable view commands; competing modeling operations have disabled reasons. Active sketches project their own member/point/reference/constraint actions. Clicking outside, navigating, starting an action, or pressing Escape dismisses the popup while retaining the selection. Double-clicking a sketch or feature opens its editor.
 
@@ -212,3 +212,34 @@ shared-edit action. All import/clear actions still publish the finish and map
 slot independently of their widgets. See [visual finishes](visual-finishes.md).
 
 The Settings dialog exposes `settings:dialog`, `settings:category:<category>`, and `settings:field:<scope>:<pointer>` descriptors with typed values, ranges, choices, stable setter `settings`, and scope/editability metadata. Settings fields can be bound by user compositions; edits open the same scoped transaction as native controls. Search is a transient `settings-search` field. `settings`, `settings.model`, `settings.application`, category-opening commands, and Apply/OK/Cancel are ordinary actions. The default modal uses `settings-dialog`, `settings-category`, `settings-field`, `settings-heading`, `settings-description`, and `settings-action` style roles. CSS width/height, left/right/top/bottom and percentage lengths control modal sizing and placement; without explicit dimensions the native surface can be resized. Application and model data remain independent of these visual choices. See [settings](settings.md).
+
+
+## Modeling controls and independent viewport views (2026-10-11)
+
+Native set selection, the sketch relations manager and explicit reference repair
+use shared commands and presentation descriptors. See
+[everyday modeling controls](modeling-workflows.md) for exact contracts, available
+source types, solver feedback and geometric limits.
+
+Bindings to `viewport.toolbar`, `viewport.start-hint`, `viewport.view-cube`,
+`viewport.candidates`, `viewport.isolation` and `viewport.navigation-hint` render
+these controls in ordinary user layout regions. Their original overlay remains
+separately hideable with CSS. `workspace.model-context`,
+`workspace.selection-summary`, `workspace.candidate-summary`,
+`workspace.navigation-instructions`, `workspace.validation-state` and
+`workspace.status-message` expose their current text independently. Native buttons
+use `workspace-action` identity and styling. An Actions command is unavailable
+while an active editor owns the shared checkpoint.
+
+The default toolbar uses 28 px ready and 56 px selected/editing/inspection heights;
+selected history/tree rows retain their 26 px height. Users can override all of
+these values. Viewport overlay positioning now resolves the current state as well
+as its role/ID. Compact row text can use `text-overflow: ellipsis` while preserving
+complete semantic/accessibility and hover labels. Button `max-width` and
+`max-height` accept percentages relative to the actual available region.
+
+`<sketch-id>::feedback` and `reference-repair-manager` bind directly to the
+`sketch-feedback` and `reference-repair` panel renderers. Their individual filters,
+constraints, fields, failures, upstream stages and replacement choices can also
+be composed using ordinary semantic bindings. No alternate document, solver or
+undo state belongs to these renderers.

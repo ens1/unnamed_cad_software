@@ -1012,6 +1012,8 @@ fn parameter_links(doc: &Document, owner: &str, expression: &crate::Expr) -> Vec
 
 /// Command identities belong to the application; visual menus and shortcuts consume this catalog.
 pub const COMMANDS: &[(&str, &str)] = &[
+    ("reference.repair", "Repair References…"),
+    ("reference.repair-station", "Inspect Repair Upstream Stage"),
     ("sketch.finish-dimension", "Done · Pick Next Dimension"),
     ("sketch.cancel-dimension", "Cancel Dimension"),
     ("assembly.inspection-new", "Interference / Clearance"),

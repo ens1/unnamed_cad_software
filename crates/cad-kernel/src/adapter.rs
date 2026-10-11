@@ -407,6 +407,43 @@ fn err(e: impl std::fmt::Display) -> CadError {
     CadError::Invalid(format!("Geometry: {e}"))
 }
 
+/// Evaluate one-sided native derivatives without display sampling or an
+/// intersection curve's approximate guide. Singular derivatives stay unknown.
+fn selection_tangents(curve: &Curve) -> [Option<[f64; 3]>; 2] {
+    fn supported(curve: &Curve, depth: usize) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        match curve {
+            Curve::Line(_) | Curve::BsplineCurve(_) | Curve::NurbsCurve(_) => true,
+            Curve::ParameterCurve(parameter) => match parameter.surface().as_ref() {
+                Surface::RevolutionSurface(processor) => {
+                    supported(processor.entity().entity_curve(), depth + 1)
+                }
+                _ => true,
+            },
+            Curve::IntersectionCurve(_) => false,
+        }
+    }
+    if !supported(curve, 0) {
+        return [None; 2];
+    }
+    let (a, b) = curve.range_tuple();
+    if !a.is_finite() || !b.is_finite() || a >= b {
+        return [None; 2];
+    }
+    [curve.der(a), -curve.der(b)].map(|direction| {
+        let values = [direction.x, direction.y, direction.z];
+        let scale = values.iter().map(|value| value.abs()).fold(0., f64::max);
+        if !scale.is_finite() || scale <= 0. || values.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
+        let scaled = values.map(|value| value / scale);
+        let length = scaled.iter().map(|value| value * value).sum::<f64>().sqrt();
+        (length.is_finite() && length > 0.).then(|| scaled.map(|value| value / length))
+    })
+}
+
 pub(crate) fn exact_curve(curve: &Curve) -> Option<cad_core::sketch_edit::Curve3> {
     // Intersection guides are not the actual curve. Never convert them as if
     // they were an exact B-spline, even though the vendor conversion permits it.
@@ -812,7 +849,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+e52aab067761;adapter/24;solver/tcad-native-lm/12"
+        "monstertruck/0.4.1+e52aab067761;adapter/25;solver/tcad-native-lm/12"
     }
     fn sheet_metadata(
         &self,
@@ -2042,6 +2079,7 @@ impl KernelAdapter for MonstertruckAdapter {
                     curve: exact_curve(&curve),
                     faces: vec![],
                     body: Some(producer.clone()),
+                    native: None,
                 });
             }
             return Ok(mesh);
@@ -2059,7 +2097,22 @@ impl KernelAdapter for MonstertruckAdapter {
             bounds: [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]],
             volume_mm3: 0.,
         };
-        for shell in shells {
+        let mut native_vertices = std::collections::HashMap::new();
+        let mut boundary_token = 0u32;
+        // Optional selection metadata must never invalidate otherwise supported
+        // geometry. Preflight the native boundary graph before allocating it.
+        let selection_cache = shells.len() <= 65_536
+            && shells
+                .iter()
+                .flat_map(|shell| shell.iter())
+                .flat_map(Face::absolute_boundaries)
+                .try_fold(0usize, |count, wire| {
+                    count
+                        .checked_add(wire.len().max(1))
+                        .filter(|count| *count <= 65_536)
+                })
+                .is_some();
+        for (component, shell) in shells.into_iter().enumerate() {
             let b = shell_bounds(shell);
             for (axis, _) in b[0].iter().enumerate() {
                 mesh.bounds[0][axis] = mesh.bounds[0][axis].min(b[0][axis]);
@@ -2143,26 +2196,72 @@ impl KernelAdapter for MonstertruckAdapter {
                 });
             }
             let mut seen_edges = std::collections::HashSet::new();
+            let mut native_boundaries =
+                std::collections::HashMap::<_, Vec<cad_core::protocol::NativeEdgeBoundary>>::new();
+            let histories = self.histories.borrow();
+            let history = histories.get(producer);
+            for face in shell {
+                for wire in face.absolute_boundaries() {
+                    if selection_cache {
+                        boundary_token += 1;
+                    }
+                    for edge in wire {
+                        if let Some(reference) =
+                            history.and_then(|history| history.faces.get(&face.id()))
+                        {
+                            native_boundaries.entry(edge.id()).or_default().push(
+                                cad_core::protocol::NativeEdgeBoundary {
+                                    boundary: boundary_token,
+                                    face: reference.clone(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
             for edge in shell.edge_iter().filter(|e| seen_edges.insert(e.id())) {
                 // Retained edge direction survives removal/reordering of faces.
                 let c = edge.curve();
                 let points = crate::curve_sampling::display_points(&c, tolerance)?;
                 let signature = edge_signature(&edge)?;
+                let boundaries = native_boundaries.remove(&edge.id()).unwrap_or_default();
+                let mut faces = boundaries
+                    .iter()
+                    .map(|boundary| boundary.face.clone())
+                    .collect::<Vec<_>>();
+                faces.sort_by(|a, b| (&a.producer, &a.role).cmp(&(&b.producer, &b.role)));
+                faces.dedup_by(|a, b| a.producer == b.producer && a.role == b.role);
+                let native = if selection_cache
+                    && history
+                        .and_then(|history| history.edges.get(&edge.id()))
+                        .is_some()
+                {
+                    let vertices = [edge.absolute_front(), edge.absolute_back()];
+                    let mut tokens = [0u32; 2];
+                    for (index, vertex) in vertices.iter().enumerate() {
+                        let next = native_vertices.len() as u32;
+                        tokens[index] = *native_vertices.entry(vertex.id()).or_insert(next);
+                    }
+                    Some(cad_core::protocol::NativeEdgeTopology {
+                        version: cad_core::protocol::NATIVE_SELECTION_VERSION,
+                        component: component as u32,
+                        vertices: tokens,
+                        endpoints: vertices.map(|vertex| {
+                            let point = vertex.point();
+                            [point.x, point.y, point.z]
+                        }),
+                        tangents: selection_tangents(&c),
+                        boundaries,
+                    })
+                } else {
+                    None
+                };
                 mesh.edges.push(EdgeData {
                     body: Some(producer.clone()),
                     points,
                     curve: exact_curve(&c),
-                    faces: shell
-                        .iter()
-                        .filter(|face| face.edge_iter().any(|e| e.id() == edge.id()))
-                        .filter_map(|face| {
-                            self.histories
-                                .borrow()
-                                .get(producer)
-                                .and_then(|h| h.faces.get(&face.id()))
-                                .cloned()
-                        })
-                        .collect(),
+                    native,
+                    faces,
                     reference: TopologyRef {
                         producer: self
                             .histories

@@ -31,6 +31,7 @@ pub struct Evaluator<K: KernelAdapter = MonstertruckAdapter> {
     history_cache: BTreeMap<String, (String, f64, cad_core::history::PartHistory)>,
     preview_focus: Option<NodeRef>,
     focused_previews: BTreeMap<String, OperationPreviewChange>,
+    failed_build: Option<(Document, Vec<Diagnostic>)>,
 }
 impl Default for Evaluator {
     fn default() -> Self {
@@ -45,10 +46,134 @@ impl Default for Evaluator {
             history_cache: BTreeMap::new(),
             preview_focus: None,
             focused_previews: BTreeMap::new(),
+            failed_build: None,
         }
     }
 }
 impl<K: KernelAdapter> Evaluator<K> {
+    fn failure_evaluation(
+        &mut self,
+        identity: RequestIdentity,
+        source: &Document,
+        tolerance: f64,
+        elapsed_ms: u64,
+    ) -> Result<Option<Evaluation>> {
+        let Some((document, diagnostics)) = self.failed_build.take() else {
+            return Ok(None);
+        };
+        // All shapes in this cache came from the failing current-source build.
+        // Neither a last-valid document nor its adapter provenance is reused.
+        let mut history = BTreeMap::new();
+        let mut meshes = BTreeMap::new();
+        let mut sketches = BTreeMap::new();
+        let mut references = BTreeMap::new();
+        let mut reference_curves = BTreeMap::new();
+        let mut reference_curve_meshes = BTreeMap::new();
+        let mut available_keys = std::collections::BTreeSet::new();
+        let mut instances = cad_core::configuration::placed_parts(source, None)?;
+        let failed = diagnostics
+            .iter()
+            .filter_map(|d| d.target.as_ref().map(|id| (id.clone(), d.message.clone())))
+            .collect::<BTreeMap<_, _>>();
+        for part in document.parts.values() {
+            let configuration = document
+                .active_configurations
+                .get(&part.id)
+                .map(String::as_str);
+            let key = cad_core::configuration::key(&part.id, configuration);
+            available_keys.insert(key.clone());
+            let mut part_history = self.history_output(&document, &part.id, &key, tolerance);
+            let mut first_failure = None;
+            for feature in &part.features {
+                if let Some(message) = failed.get(&feature.id) {
+                    first_failure.get_or_insert_with(|| message.clone());
+                }
+                if let Some(reason) = &first_failure
+                    && let Some(stage) = part_history.stages.get_mut(&feature.id)
+                {
+                    stage.unavailable_reason = Some(reason.clone());
+                }
+            }
+            // The display endpoint is explicitly the last complete upstream station.
+            let station = part_history
+                .stages
+                .values()
+                .filter(|s| s.unavailable_reason.is_none())
+                .max_by_key(|s| s.index);
+            if let Some(station) = station {
+                let mut display_part = part.clone();
+                display_part.outputs = station.bodies.clone();
+                if let Ok((mesh, _, _)) = self.part_output(&display_part, tolerance) {
+                    meshes.insert(key.clone(), mesh);
+                }
+            }
+            let mut usable = document.clone();
+            usable
+                .parts
+                .get_mut(&part.id)
+                .unwrap()
+                .features
+                .retain(|f| self.shapes.contains_key(&part.reference(&f.id)));
+            if let Ok(output) = self.sketch_output(&usable, &part.id) {
+                sketches.extend(
+                    output
+                        .into_iter()
+                        .map(|(id, value)| (format!("{key}::{id}"), value)),
+                );
+            }
+            references.extend(
+                self.reference_output(&document, &part.id)
+                    .into_iter()
+                    .map(|(id, value)| (format!("{key}::{id}"), value)),
+            );
+            if let Ok(output) = self.curve_output(&document, &part.id, tolerance) {
+                for (id, value, mesh) in output {
+                    reference_curves.insert(format!("{key}::{id}"), value);
+                    reference_curve_meshes.insert(format!("{key}::{id}"), mesh);
+                }
+            }
+            // Base-part lookup is useful to semantic history even when this part is configured.
+            history.insert(part.id.clone(), part_history.clone());
+            history.insert(key.clone(), part_history);
+            for instance in instances.iter_mut().filter(|i| i.definition == part.id) {
+                let actual = instance.configuration.as_deref().or_else(|| {
+                    source
+                        .active_configurations
+                        .get(&part.id)
+                        .map(String::as_str)
+                });
+                if actual == configuration {
+                    instance.mesh_key = key.clone();
+                }
+            }
+        }
+        instances.retain(|i| available_keys.contains(cad_core::history::mesh_key(i)));
+        self.body_sets.clear();
+        self.surface_sets.clear();
+        self.history_cache.clear();
+        Ok(Some(Evaluation {
+            identity,
+            meshes,
+            instances,
+            diagnostics,
+            valid: false,
+            elapsed_ms,
+            sketches,
+            references,
+            reference_curves,
+            reference_curve_meshes,
+            assemblies: BTreeMap::new(),
+            exploded_views: BTreeMap::new(),
+            assembly_inspections: BTreeMap::new(),
+            properties: BTreeMap::new(),
+            sheets: BTreeMap::new(),
+            weldments: BTreeMap::new(),
+            mold_analyses: BTreeMap::new(),
+            configurations: cad_core::configuration::evaluated(&document).ok(),
+            history: std::sync::Arc::new(history),
+            operation_preview: None,
+        }))
+    }
     /// Evaluate authoritative geometry first-class, with optional isolated
     /// display comparison. Highlight failures never invalidate the CAD result.
     pub fn evaluate_with_operation_preview(
@@ -289,6 +414,7 @@ impl<K: KernelAdapter> Evaluator<K> {
     }
 
     fn build(&mut self, doc: &Document, root: &Path, tolerance: f64) -> Result<Document> {
+        self.failed_build = None;
         doc.validate()?;
         if !tolerance.is_finite() || !(1e-6..=1.).contains(&tolerance) {
             return Err(CadError::Invalid(
@@ -305,26 +431,8 @@ impl<K: KernelAdapter> Evaluator<K> {
                     parameter.dimension,
                 )?;
             }
-            let active = part
-                .features
-                .iter()
-                .filter(|f| !f.suppressed)
-                .filter_map(|f| match &f.operation {
-                    cad_core::Operation::Profile {
-                        profile: cad_core::Profile::Sketch { sketch },
-                        ..
-                    } => Some(sketch),
-                    _ => None,
-                })
-                .collect::<std::collections::BTreeSet<_>>();
-            for sketch in part
-                .sketches
-                .values()
-                .filter(|s| s.conversions.is_empty() && active.contains(&s.id))
-            {
-                let mut sketch = sketch.clone();
-                NativeSolver.solve_sketch(&solved, &part.id, &mut sketch)?;
-            }
+            // Profile operations solve their own sketches. Solving them here
+            // would discard targeted failures and all usable upstream geometry.
         }
         for assembly in solved.assemblies.values() {
             for parameter in assembly.parameters.values() {
@@ -386,8 +494,35 @@ impl<K: KernelAdapter> Evaluator<K> {
         }
         // A failed rebuild may have updated adapter provenance. Never reuse its prior cache key.
         self.last_source.clear();
-        let shapes =
-            crate::assemblies::build_shapes(&self.adapter, &solved, root, tolerance, true)?;
+        let report =
+            crate::assemblies::build_shapes_report(&self.adapter, &solved, root, tolerance, true)?;
+        if !report.failures.is_empty() {
+            let diagnostics = report
+                .failures
+                .iter()
+                .map(|(target, message)| Diagnostic {
+                    severity: "error".into(),
+                    target: Some(target.node.clone()),
+                    message: message.clone(),
+                })
+                .chain(report.blocked.iter().map(|(target, message)| Diagnostic {
+                    severity: "blocked".into(),
+                    target: Some(target.node.clone()),
+                    message: message.clone(),
+                }))
+                .collect::<Vec<_>>();
+            let message = diagnostics
+                .iter()
+                .map(|d| d.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.shapes = report.shapes;
+            self.assemblies.clear();
+            self.history_cache.clear();
+            self.failed_build = Some((solved, diagnostics));
+            return Err(CadError::Invalid(message));
+        }
+        let shapes = report.shapes;
         let assemblies =
             crate::assemblies::solve(&self.adapter, doc, &mut solved, &shapes, root, tolerance)?;
         // Restore base topology provenance after configured reference evaluation and
@@ -401,7 +536,40 @@ impl<K: KernelAdapter> Evaluator<K> {
                     .iter()
                     .any(|f| matches!(f.operation, cad_core::Operation::ReferenceBody { .. }))
             }) {
-            crate::assemblies::build_shapes(&self.adapter, &solved, root, tolerance, false)?
+            let report = crate::assemblies::build_shapes_report(
+                &self.adapter,
+                &solved,
+                root,
+                tolerance,
+                false,
+            )?;
+            if !report.failures.is_empty() {
+                let diagnostics = report
+                    .failures
+                    .iter()
+                    .map(|(target, message)| Diagnostic {
+                        severity: "error".into(),
+                        target: Some(target.node.clone()),
+                        message: message.clone(),
+                    })
+                    .chain(report.blocked.iter().map(|(target, message)| Diagnostic {
+                        severity: "blocked".into(),
+                        target: Some(target.node.clone()),
+                        message: message.clone(),
+                    }))
+                    .collect::<Vec<_>>();
+                let message = diagnostics
+                    .iter()
+                    .map(|d| d.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                self.shapes = report.shapes;
+                self.assemblies.clear();
+                self.history_cache.clear();
+                self.failed_build = Some((solved, diagnostics));
+                return Err(CadError::Invalid(message));
+            }
+            report.shapes
         } else {
             shapes
         };
@@ -823,7 +991,20 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 "Evaluation document fingerprint changed in transport".into(),
             ));
         }
-        let solved = self.build(document, root, tolerance)?;
+        let solved = match self.build(document, root, tolerance) {
+            Ok(solved) => solved,
+            Err(error) => {
+                if let Some(evaluation) = self.failure_evaluation(
+                    identity.clone(),
+                    document,
+                    tolerance,
+                    start.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                )? {
+                    return Ok(evaluation);
+                }
+                return Err(error);
+            }
+        };
         let assemblies = self.assemblies.clone();
         let mut meshes = BTreeMap::new();
         let mut body_sets = BTreeMap::new();
@@ -878,7 +1059,20 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                     &i.definition,
                     i.configuration.as_deref(),
                 );
-                let configured_solved = self.build(&variant, root, tolerance)?;
+                let configured_solved = match self.build(&variant, root, tolerance) {
+                    Ok(solved) => solved,
+                    Err(error) => {
+                        if let Some(evaluation) = self.failure_evaluation(
+                            identity.clone(),
+                            document,
+                            tolerance,
+                            start.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                        )? {
+                            return Ok(evaluation);
+                        }
+                        return Err(error);
+                    }
+                };
                 for (feature, geometry) in self.reference_output(&configured_solved, &i.definition)
                 {
                     references.insert(format!("{key}::{feature}"), geometry);

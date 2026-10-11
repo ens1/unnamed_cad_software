@@ -83,15 +83,24 @@ fn suppressed_shape<K: KernelAdapter>(
     adapter.alias_histories(&part.reference(&feature.id), &inputs)?;
     Ok(Some(shape))
 }
-pub(crate) fn build_shapes<K: KernelAdapter>(
+pub(crate) struct ShapeBuildReport {
+    pub shapes: BTreeMap<NodeRef, Shape>,
+    pub failures: BTreeMap<NodeRef, String>,
+    pub blocked: BTreeMap<NodeRef, String>,
+}
+/// Retain current-source upstream results when a feature fails. Partial results
+/// are display-only: callers must still reject the whole modeling evaluation.
+pub(crate) fn build_shapes_report<K: KernelAdapter>(
     adapter: &K,
     doc: &Document,
     root: &Path,
     tolerance: f64,
     defer_placement: bool,
-) -> Result<BTreeMap<NodeRef, Shape>> {
+) -> Result<ShapeBuildReport> {
     let mut shapes = BTreeMap::new();
     let mut deferred = BTreeSet::new();
+    let mut failures = BTreeMap::new();
+    let mut blocked = BTreeMap::new();
     for node in doc.evaluation_order()? {
         let part = &doc.parts[&node.definition];
         let feature = part
@@ -109,19 +118,58 @@ pub(crate) fn build_shapes<K: KernelAdapter>(
             deferred.insert(node);
             continue;
         }
+        if let Some(source) = part
+            .feature_dependencies(feature)
+            .into_iter()
+            .find(|source| failures.contains_key(source) || blocked.contains_key(source))
+        {
+            let source_label = doc
+                .parts
+                .get(&source.definition)
+                .and_then(|part| {
+                    part.features
+                        .iter()
+                        .find(|feature| feature.id == source.node)
+                        .map(|feature| format!("{} / {}", part.name, feature.name))
+                })
+                .unwrap_or_else(|| "unavailable source feature".into());
+            blocked.insert(
+                node,
+                format!(
+                    "{} / {}: blocked by failed source {source_label}",
+                    part.name, feature.name
+                ),
+            );
+            continue;
+        }
         let shape = if feature.suppressed {
-            let Some(shape) = suppressed_shape(adapter, part, feature, &shapes)? else {
+            let shape = match suppressed_shape(adapter, part, feature, &shapes) {
+                Ok(shape) => shape,
+                Err(error) => {
+                    failures.insert(node, format!("{} / {}: {error}", part.name, feature.name));
+                    continue;
+                }
+            };
+            let Some(shape) = shape else {
                 continue;
             };
             shape
         } else {
-            adapter
-                .operation(doc, &node, &feature.operation, &shapes, root, tolerance)
-                .map_err(|e| CadError::Invalid(format!("{} / {}: {e}", part.name, feature.name)))?
+            match adapter.operation(doc, &node, &feature.operation, &shapes, root, tolerance) {
+                Ok(shape) => shape,
+                Err(error) => {
+                    failures.insert(node, format!("{} / {}: {error}", part.name, feature.name));
+                    continue;
+                }
+            }
         };
         shapes.insert(node, shape);
     }
-    Ok(shapes)
+    Ok(ShapeBuildReport {
+        shapes,
+        failures,
+        blocked,
+    })
 }
 fn dependency_closure(doc: &Document, roots: Vec<NodeRef>) -> Result<BTreeSet<NodeRef>> {
     let mut closure = BTreeSet::new();

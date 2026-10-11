@@ -352,6 +352,7 @@ fn entity_for(source: &Sketch, element: &presentation::SemanticElement) -> Optio
     })
 }
 pub fn select(w: &mut Workspace, entity: Option<SketchEntity>, additive: bool) {
+    crate::sketch_relations_ui::end_edit(w);
     w.selection_popup = None;
     w.context_selection = None;
     w.selected = None;
@@ -1296,9 +1297,7 @@ pub fn action(w: &mut Workspace, command: &str) {
 pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     let mut promote = None;
     let mut changed = false;
-    let mut remove = None;
     let mut dimension_choice = None;
-    let mut clicked = None;
     let mut clicked_reference = None;
     let mut relation_command = None;
     let mut cancel_dimension_requested = false;
@@ -1332,10 +1331,6 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     .collect::<std::collections::BTreeMap<_, _>>()
             })
             .unwrap_or_default();
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut w.view.sketch_annotation_visibility[0], "Dimensions");
-        ui.checkbox(&mut w.view.sketch_annotation_visibility[1], "Relations");
-    });
     if let Some(s) = &mut w.sketch {
         let before = sketch::sketch_definition(s);
         let mut text_edit_started = false;
@@ -1439,47 +1434,10 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 }
             }
         }
-        egui::CollapsingHeader::new("Dimensions and Relations").default_open(true).show(ui, |ui| {
-            for c in &mut s.constraints {
-                ui.push_id(&c.id, |ui| {
-                    ui.horizontal(|ui| {
-                        let response = ui.selectable_label(s.selection.iter().any(|e| matches!(e, SketchEntity::Constraint { constraint } if constraint == &c.id)), a::label(&c.kind));
-                        if response.clicked() { clicked = Some((c.id.clone(), response)); }
-                        if ui.small_button("×").on_hover_text("Remove dimension or relation").clicked() { remove = Some(c.id.clone()); }
-                    });
-                    if a::is_dimension(&c.kind) {
-                        if c.driven {ui.label(measurements.get(&c.id).map(|value|value.as_ref().cloned().unwrap_or_else(ToString::to_string)).unwrap_or_else(||"Awaiting current measurement".into()));}
-                        let response = ui.add_enabled(!c.driven, egui::TextEdit::singleline(&mut c.value.0).id_salt(("constraint-value", &c.id)).desired_width(f32::INFINITY));
-                        changed |= response.changed();
-                        text_edit_started |= response.gained_focus();
-                        let response=ui.checkbox(&mut c.driven,"Driven / reference").on_hover_text("Reference measures the current geometry. Driving restores the saved dimension expression.");
-                        changed |= response.changed();
-                        text_edit_started |= response.changed();
-                    }
-                    if let Some(contact)=&mut c.contact {
-                        ui.small("Exact curve contact · normalized curve domain");
-                        for i in 0..2 {
-                            if c.kind=="point_on_curve" && i==0 {continue;}
-                            ui.horizontal(|ui| {
-                                ui.label(format!("Member {} contact",i+1));
-                                let response=ui.add(egui::DragValue::new(&mut contact.parameters[i]).speed(0.002).range(0.0..=1.0));
-                                changed |= response.changed();text_edit_started |= response.drag_started() || response.gained_focus();
-                                let response=ui.checkbox(&mut contact.free[i],"Slide along curve");
-                                changed |= response.changed();text_edit_started |= response.changed();
-                            });
-                        }
-                        if c.kind!="point_on_curve" {
-                            let mut opposed=c.value.0.trim().parse::<f64>().is_ok_and(|v|v<0.);
-                            if ui.checkbox(&mut opposed,"Opposed parameter tangents").changed() {c.value=if opposed {(-1.).into()} else {1.0.into()};changed=true;text_edit_started=true;}
-                        }
-                    }
-                });
-            }
-        });
         if text_edit_started {
             s.history.push(before);
         }
-        let reconcile = dimension_choice.is_some() || remove.is_some();
+        let reconcile = dimension_choice.is_some();
         if let Some((old, choice)) = dimension_choice {
             s.history.push(sketch::sketch_definition(s));
             let driven = s
@@ -1491,14 +1449,6 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             let constraint = attach_dimension(s, &choice, driven);
             if let Some(editor) = &mut s.dimension {
                 editor.constraint = constraint;
-            }
-            changed = true;
-        }
-        if let Some(id) = remove {
-            s.history.push(sketch::sketch_definition(s));
-            s.constraints.retain(|c| c.id != id);
-            if s.dimension.as_ref().is_some_and(|d| d.constraint == id) {
-                s.dimension = None;
             }
             changed = true;
         }
@@ -1526,14 +1476,6 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         );
         if w.fields.contains_key("smart-dimension-mode") {
             selection_changed(w);
-        }
-    }
-    if let Some((constraint, response)) = clicked {
-        select(w, Some(SketchEntity::Constraint { constraint }), false);
-        if w.fields.contains_key("smart-dimension-mode") {
-            selection_changed(w);
-        } else if response.double_clicked() {
-            smart_dimension(w);
         }
     }
     if let Some((constraint, value, dimension)) = promote
@@ -1564,6 +1506,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     if changed {
         sketch::solve(w);
     }
+    crate::sketch_relations_ui::panel(ui, w);
     let open_parameters = w.fields.remove("graph-parameters").is_some();
     egui::CollapsingHeader::new("Named Parameters")
         .open(open_parameters.then_some(true))
@@ -1639,11 +1582,8 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, r: egui::Rect) -> bool 
         if !w.view.sketch_annotation_visibility[if dimension { 0 } else { 1 }] {
             continue;
         }
-        let active = w.sketch.as_ref().is_some_and(|s| {
-            s.selection
-                .iter()
-                .any(|e| matches!(e,SketchEntity::Constraint{constraint} if constraint == &c.id))
-        });
+        let active = crate::sketch_relations_ui::constraint_emphasized(s, c);
+        let unsatisfied = s.feedback.unsatisfied.contains_key(&c.id);
         let region = presentation::Region {
             id: c.id.clone(),
             role: "sketch-annotation".into(),
@@ -1655,7 +1595,13 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, r: egui::Rect) -> bool 
         let props = w.theme.properties(
             &region,
             &w.view.active_layout,
-            if active { "selected" } else { "ready" },
+            if active {
+                "selected"
+            } else if unsatisfied {
+                "unsatisfied"
+            } else {
+                "ready"
+            },
         );
         if props.get("display").is_some_and(|v| v == "none") {
             continue;
@@ -1746,6 +1692,8 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, r: egui::Rect) -> bool 
             .and_then(|v| crate::ui::color(v))
             .unwrap_or(if active {
                 accent
+            } else if unsatisfied {
+                ui.visuals().error_fg_color
             } else {
                 ui.visuals().text_color()
             });

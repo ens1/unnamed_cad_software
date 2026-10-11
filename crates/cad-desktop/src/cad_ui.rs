@@ -253,6 +253,7 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
         ],
         "Tools" => vec![
             "settings",
+            "reference.repair",
             "assembly.edit",
             "assembly.pattern",
             "assembly.exploded-new",
@@ -868,6 +869,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::reference_repair_ui::current_source_is_valid(w) {
+        return Some("Preview the current explicit reference repair before applying");
+    }
     if w.confirm_requested {
         return Some("Waiting for the current operation to finish validation");
     }
@@ -1010,6 +1014,7 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
         menu_button(ui, "Tools", |ui| {
             for (label, command) in [
                 ("Settings…  ⌘,", "settings"),
+                ("Repair References…", "reference.repair"),
                 ("Assembly and Mates…", "assembly.edit"),
                 ("Component Pattern…", "assembly.pattern"),
                 ("Exploded View…", "assembly.exploded-new"),
@@ -1859,16 +1864,7 @@ fn history(ui: &mut egui::Ui, w: &mut Workspace, part: &Part) {
                         );
                     }
                 };
-                let label = if active {
-                    format!(
-                        "{:02}  {}\n{}",
-                        index + 1,
-                        feature.name,
-                        operation_summary(&feature.operation)
-                    )
-                } else {
-                    format!("{:02}  {}", index + 1, feature.name)
-                };
+                let label = format!("{:02}  {}", index + 1, feature.name);
                 let response = controls::icon_button(
                     ui,
                     &id,
@@ -1878,7 +1874,12 @@ fn history(ui: &mut egui::Ui, w: &mut Workspace, part: &Part) {
                     true,
                     active,
                     Some(&draw),
-                );
+                )
+                .on_hover_text(format!(
+                    "{}\n{}",
+                    feature.name,
+                    operation_summary(&feature.operation)
+                ));
                 if let Some(marker) = marker.get() {
                     let path = controls::properties(
                         &format!("history-path:{}", part.id),
@@ -2087,97 +2088,7 @@ fn selected_edges(
     body: &cad_core::NodeRef,
     edges: &mut Vec<cad_core::TopologyRef>,
 ) -> bool {
-    let mut changed = false;
-    let selected = w
-        .selected
-        .as_ref()
-        .filter(|pick| crate::selection_ui::accepts_edge(w, body, pick));
-    ui.horizontal(|ui| {
-        if controls::button(
-            ui,
-            &format!("selection.edge-add/{feature}"),
-            "edge-selection-action",
-            &["property-control"],
-            "Add selected edge",
-            selected.is_some_and(|pick| {
-                !edges
-                    .iter()
-                    .any(|edge| crate::selection_ui::same_edge(edge, &pick.reference))
-            }),
-            false,
-        )
-        .clicked()
-            && let Some(pick) = selected
-        {
-            edges.push(pick.reference.clone());
-            changed = true;
-        }
-        if controls::button(
-            ui,
-            &format!("selection.edge-clear/{feature}"),
-            "edge-selection-action",
-            &["property-control"],
-            "Clear",
-            !edges.is_empty(),
-            false,
-        )
-        .clicked()
-        {
-            edges.clear();
-            changed = true;
-        }
-    });
-    let mut remove = None;
-    for (index, edge) in edges.iter().enumerate() {
-        let key = crate::selection_ui::edge_key(feature, edge);
-        ui.push_id(&key, |ui| {
-            ui.horizontal(|ui| {
-                controls::label(
-                    ui,
-                    &format!("edge-selection/{key}"),
-                    "edge-selection-item",
-                    &["property-control"],
-                    &format!("Edge {}", index + 1),
-                    "selected",
-                )
-                .on_hover_text(&edge.role);
-                if controls::button(
-                    ui,
-                    &format!("selection.edge-remove/{key}"),
-                    "edge-selection-action",
-                    &["property-control", "edge-remove"],
-                    "Remove",
-                    true,
-                    false,
-                )
-                .clicked()
-                {
-                    remove = Some(index);
-                }
-            });
-        });
-    }
-    if let Some(index) = remove {
-        edges.remove(index);
-        changed = true;
-    }
-    if changed {
-        crate::selection_ui::clear_edge_pick(w);
-        if w.selected.as_ref().is_some_and(|pick| {
-            pick.reference.topology == "edge"
-                && !edges
-                    .iter()
-                    .any(|edge| crate::selection_ui::same_edge(edge, &pick.reference))
-        }) {
-            w.selected = None;
-            w.geometry_selection.clear();
-        }
-    }
-    ui.small("Click edges to add. ⌘/Shift-click toggles an edge. Tab cycles the current pick.");
-    if w.edge_selection_path.is_none() {
-        ui.small("Pick an edge on the component to anchor this selection to its occurrence.");
-    }
-    changed
+    crate::selection_ui::edge_picker(ui, w, feature, body, edges)
 }
 pub(crate) fn profile_selector(
     ui: &mut egui::Ui,

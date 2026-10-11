@@ -27,6 +27,7 @@ pub mod presentation;
 pub mod protocol;
 pub mod reference_curves;
 pub mod reference_geometry;
+pub mod reference_repair;
 pub mod revolution;
 pub mod rib;
 pub mod sketch_dimensions;
@@ -59,6 +60,7 @@ pub mod commands;
 pub mod library;
 pub mod release;
 pub mod selection_actions;
+pub mod selection_sets;
 pub mod settings;
 pub mod sketch_actions;
 

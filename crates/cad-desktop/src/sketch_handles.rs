@@ -17,6 +17,7 @@ pub struct DragGesture {
     selection: Vec<SketchEntity>,
     error: Option<String>,
     degrees_of_freedom: Option<usize>,
+    feedback_state: crate::sketch_relations_ui::Feedback,
     history_len: usize,
     grab: [f64; 2],
     last_goal: Option<[f64; 2]>,
@@ -60,6 +61,7 @@ pub fn cancel(w: &mut Workspace) -> bool {
         sketch::restore(s, gesture.source);
         s.last_valid = Some(gesture.display);
         s.degrees_of_freedom = gesture.degrees_of_freedom;
+        s.feedback = gesture.feedback_state;
         s.error = gesture.error;
         s.selection = gesture.selection;
         s.selected = s.selection.iter().find_map(|e| match e {
@@ -85,6 +87,7 @@ fn start(w: &mut Workspace, handle: SketchHandle, grab: [f64; 2], viewport: egui
     let selection = s.selection.clone();
     let error = s.error.clone();
     let degrees_of_freedom = s.degrees_of_freedom;
+    let feedback_state = s.feedback.clone();
     let history_len = s.history.len();
     let entity = handle.target.entity();
     sketch_ui::select(w, Some(entity), false);
@@ -105,6 +108,7 @@ fn start(w: &mut Workspace, handle: SketchHandle, grab: [f64; 2], viewport: egui
             selection,
             error,
             degrees_of_freedom,
+            feedback_state,
             history_len,
             grab,
             last_goal: None,
@@ -226,6 +230,8 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
     let source = sketch::sketch_definition(s);
     let display = sketch::display_definition(s);
     let selection = s.selection.clone();
+    let related = crate::sketch_relations_ui::related_entities(s);
+    let problems = crate::sketch_relations_ui::problem_entities(w);
     let fully_constrained = s.degrees_of_freedom == Some(0);
     let active_id = s.drag.as_ref().map(|g| g.handle.id.clone());
     let mut consumed = active_id.is_some();
@@ -274,7 +280,8 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
     }
     for mut handle in list {
         let entity = handle.target.entity();
-        let selected = selection.contains(&entity);
+        let selected = selection.contains(&entity) || related.contains(entity.key());
+        let unsatisfied = problems.contains(entity.key());
         let visible = matches!(handle.target, HandleTarget::Point { .. } | HandleTarget::BlockControl{..}) || selected
             || source.members.get(entity.key()).is_some_and(|member| selection.iter().any(|e| matches!(e,SketchEntity::Point { point } if member.curve.points().contains(&point.as_str()))));
         if !visible && active_id.as_ref() != Some(&handle.id) {
@@ -311,10 +318,12 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
             &w.view.active_layout,
             if dragging {
                 "dragging"
-            } else if locked {
-                "locked"
             } else if selected {
                 "selected"
+            } else if unsatisfied {
+                "unsatisfied"
+            } else if locked {
+                "locked"
             } else if ui
                 .input(|i| i.pointer.hover_pos())
                 .is_some_and(|p| p.distance(pos) < 10.)
@@ -342,6 +351,8 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
             .unwrap_or_else(|| {
                 if dragging || selected {
                     accent
+                } else if unsatisfied {
+                    ui.visuals().error_fg_color
                 } else if locked {
                     ui.visuals().weak_text_color()
                 } else {

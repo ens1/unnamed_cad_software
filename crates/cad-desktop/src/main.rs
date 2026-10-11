@@ -26,6 +26,7 @@ mod presentation_composition;
 mod presentation_controls;
 mod presentation_resources;
 mod reference_curves_ui;
+mod reference_repair_ui;
 mod reference_ui;
 mod render_appearance;
 mod rib_ui;
@@ -40,6 +41,7 @@ mod sketch_dimensions_ui;
 mod sketch_edit_ui;
 mod sketch_equation_ui;
 mod sketch_handles;
+mod sketch_relations_ui;
 mod sketch_ui;
 mod split_ui;
 mod surface_ui;
@@ -48,6 +50,7 @@ mod theme_library;
 mod ui;
 mod viewport;
 mod worker;
+mod workspace_controls;
 use bevy::{
     asset::RenderAssetUsages,
     camera::{RenderTarget, visibility::RenderLayers},
@@ -65,7 +68,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+e52aab067761;adapter/24;solver/tcad-native-lm/12";
+const BACKEND: &str = "monstertruck/0.4.1+e52aab067761;adapter/25;solver/tcad-native-lm/12";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -76,6 +79,7 @@ pub struct Workspace {
     pub presentation_resources: crate::presentation_resources::State,
     pub application_preferences: settings_preferences::Preferences,
     pub settings: Option<settings::State>,
+    pub reference_repair: Option<reference_repair_ui::State>,
     pub jobs: background::Jobs,
     pub worker: worker::WorkerClient,
     pub exporter: worker::WorkerClient,
@@ -208,6 +212,7 @@ impl Workspace {
             presentation_resources: crate::presentation_resources::State::default(),
             application_preferences,
             settings: None,
+            reference_repair: None,
             jobs: background::Jobs::new(),
             worker: worker::WorkerClient::new(),
             exporter: worker::WorkerClient::new(),
@@ -300,6 +305,12 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !reference_repair_ui::current_source_is_valid(self) {
+            self.status = "Preview the current explicit reference repair before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+
         if self.dialog.as_deref() == Some("feature")
             && !serde_json::from_str::<cad_core::Feature>(&self.json).is_ok_and(|source| {
                 self.fields.get("feature-editor-id") == Some(&source.id)
@@ -365,6 +376,7 @@ impl Workspace {
                     self.geometry_selection.clear();
                     self.candidates.clear();
                 }
+                reference_repair_ui::reset(self);
                 self.edge_selection_path = None;
                 self.tool_checkpoint = None;
                 self.dialog = None;
@@ -381,6 +393,7 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        reference_repair_ui::reset(self);
         navigation::stop(self);
         assembly_inspection_ui::cancel(self);
         exploded_views_ui::cancel(self);
@@ -394,7 +407,10 @@ impl Workspace {
         self.confirm_requested = false;
         self.after_confirm = None;
         self.sketch = None;
-        if matches!(self.dialog.as_deref(), Some("sketch" | "feature")) {
+        if matches!(
+            self.dialog.as_deref(),
+            Some("sketch" | "feature" | "reference-repair")
+        ) {
             self.dialog = None;
         }
         self.session.cancel();
@@ -484,6 +500,7 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        reference_repair_ui::reset(self);
         navigation::stop(self);
         assembly_inspection_ui::cancel(self);
         exploded_views_ui::cancel(self);
@@ -537,6 +554,12 @@ impl Workspace {
         self.status = "Operation cancelled".into();
     }
     pub fn confirm_tool(&mut self) {
+        if !reference_repair_ui::current_source_is_valid(self) {
+            self.status = "Preview the current explicit reference repair before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+
         if self.fields.contains_key("appearance-tool") && render_appearance::resources_pending(self)
         {
             self.confirm_requested = true;
