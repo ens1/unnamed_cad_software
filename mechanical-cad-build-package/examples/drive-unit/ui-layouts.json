@@ -1,0 +1,73 @@
+{
+  "schema_version": 0,
+  "kind": "ui_layout_fixture",
+  "status": "Illustrative grammar and semantic bindings; not an implemented layout engine.",
+  "semantic_contract_version": 0,
+  "components": {
+    "context": { "role": "document-context", "bind": "workspace.context" },
+    "navigation": { "role": "view-navigation", "bind": "workspace.navigation" },
+    "dependencies": { "role": "dependency-view", "bind": "workspace.dependencies" },
+    "parameters": { "role": "parameter-instrument", "bind": "workspace.active_operation.parameters" },
+    "preview": { "role": "preview-status", "bind": "workspace.draft.status" },
+    "apply": { "role": "apply-action", "command": "draft.apply" },
+    "cancel": { "role": "cancel-action", "command": "draft.cancel" },
+    "viewport": { "role": "model-viewport", "bind": "workspace.viewport" }
+  },
+  "layouts": {
+    "instrument-rail": {
+      "id": "rail-workspace",
+      "layout": "row",
+      "children": [
+        {
+          "id": "default-rail",
+          "role": "instrument-rail",
+          "layout": "column",
+          "width_logical_px": 336,
+          "resizable": true,
+          "children": [
+            { "use": "context" },
+            { "use": "navigation" },
+            { "use": "dependencies", "grow": 1 },
+            { "use": "parameters" },
+            { "use": "preview" },
+            {
+              "id": "rail-actions",
+              "role": "draft-actions",
+              "layout": "row",
+              "children": [ { "use": "apply" }, { "use": "cancel" } ]
+            }
+          ]
+        },
+        { "use": "viewport", "grow": 1 }
+      ]
+    },
+    "top-workspace": {
+      "id": "top-workspace",
+      "layout": "column",
+      "children": [
+        {
+          "id": "top-controls",
+          "role": "workspace-toolbar",
+          "layout": "row",
+          "children": [
+            { "use": "context", "grow": 1 },
+            { "use": "preview" },
+            { "use": "apply" },
+            { "use": "cancel" }
+          ]
+        },
+        { "use": "viewport", "grow": 1 },
+        {
+          "id": "bottom-editors",
+          "role": "editor-group",
+          "layout": "row",
+          "children": [
+            { "use": "navigation" },
+            { "use": "dependencies", "grow": 1 },
+            { "use": "parameters", "grow": 1 }
+          ]
+        }
+      ]
+    }
+  }
+}

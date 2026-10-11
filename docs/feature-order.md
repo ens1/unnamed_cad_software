@@ -1,0 +1,7 @@
+# Authored feature order
+
+Feature-order contract 1 preserves the ordered part feature definitions and all feature, sketch, body and topology identities. The `reorder_feature` domain command accepts a part, feature identity and destination index. It validates the complete proposed local order against each feature's explicit dependencies, including converted model-edge dependencies of sketch profiles. A consumer cannot move before its construction source. Suppressed definitions retain their relationships; reordering does not silently detach or retarget them.
+
+Feature-tree context actions and theme-independent feature/selection actions expose Move Up and Move Down. Boundaries and dependency conflicts provide disabled reasons or command diagnostics. The desktop starts one tool checkpoint, submits the source edit to the persistent worker draft, and requires its current valid result for Apply. Cancel restores the starting checkpoint; Apply is one undoable source operation. Source order is shared across configurations. A reorder is a source edit; cached History inspection remains a separate display operation without a rebuild.
+
+This does not implement tree drag/drop, editable rollback/freeze or automatic dependency retargeting. The command rejects an invalid requested order instead of manufacturing a different dependency graph. Only compilation, formatting, linting and source review are engineering verification; interactive acceptance belongs to the user.

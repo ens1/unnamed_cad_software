@@ -1,0 +1,4 @@
+taffy-0.14.0
+Declared SPDX license: MIT
+Source: https://github.com/DioxusLabs/taffy
+The published crate did not include a top-level license text.

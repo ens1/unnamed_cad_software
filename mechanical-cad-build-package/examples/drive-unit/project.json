@@ -1,0 +1,22 @@
+{
+  "schema_version": 0,
+  "kind": "project_fixture",
+  "id": "project-drive-unit",
+  "name": "Drive unit",
+  "root_assembly": "assembly-drive-unit",
+  "definitions": {
+    "part-bearing-support": {
+      "kind": "part",
+      "path": "parts/bearing-support.json"
+    },
+    "part-shaft": {
+      "kind": "part",
+      "path": "parts/shaft.json"
+    },
+    "assembly-drive-unit": {
+      "kind": "assembly",
+      "path": "assemblies/drive-unit.json"
+    }
+  },
+  "presentation_file": "presentation.json"
+}

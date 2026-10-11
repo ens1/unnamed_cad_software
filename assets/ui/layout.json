@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "components": {
+    "context": {
+      "role": "document-context",
+      "bind": "workspace.context"
+    },
+    "navigation": {
+      "role": "view-navigation",
+      "bind": "workspace.navigation"
+    },
+    "dependencies": {
+      "role": "dependency-view",
+      "bind": "workspace.dependencies"
+    },
+    "parameters": {
+      "role": "property-manager",
+      "bind": "workspace.active_operation.parameters"
+    },
+    "preview": {
+      "role": "preview-status",
+      "bind": "workspace.draft.status"
+    },
+    "apply": {
+      "role": "apply-action",
+      "command": "draft.apply"
+    },
+    "cancel": {
+      "role": "cancel-action",
+      "command": "draft.cancel"
+    },
+    "viewport": {
+      "role": "model-viewport",
+      "bind": "workspace.viewport"
+    },
+    "commands": {
+      "role": "command-manager"
+    },
+    "status": {
+      "role": "status-bar"
+    }
+  },
+  "layouts": {
+    "instrument-rail": {
+      "id": "cad-workspace",
+      "layout": "column",
+      "children": [
+        {
+          "use": "context",
+          "height_logical_px": 36
+        },
+        {
+          "use": "commands",
+          "height_logical_px": 68
+        },
+        {
+          "id": "model-workspace",
+          "layout": "row",
+          "grow": 1,
+          "children": [
+            {
+              "id": "default-rail",
+              "role": "instrument-rail",
+              "layout": "column",
+              "width_logical_px": 252,
+              "resizable": true,
+              "children": [
+                {
+                  "use": "navigation",
+                  "height_logical_px": 32
+                },
+                {
+                  "use": "dependencies",
+                  "grow": 1,
+                  "editing": {
+                    "height_logical_px": 142,
+                    "grow": 0
+                  }
+                },
+                {
+                  "use": "parameters",
+                  "height_logical_px": 0,
+                  "grow": 0,
+                  "editing": {
+                    "height_logical_px": 0,
+                    "grow": 1
+                  }
+                }
+              ]
+            },
+            {
+              "use": "viewport",
+              "grow": 1
+            }
+          ]
+        },
+        {
+          "use": "status",
+          "height_logical_px": 26
+        }
+      ]
+    },
+    "top-workspace": {
+      "id": "top-workspace",
+      "layout": "column",
+      "children": [
+        {
+          "id": "top-controls",
+          "role": "workspace-toolbar",
+          "layout": "row",
+          "children": [
+            {
+              "use": "context",
+              "grow": 1
+            },
+            {
+              "use": "preview",
+              "width_logical_px": 250
+            },
+            {
+              "use": "apply",
+              "width_logical_px": 120
+            },
+            {
+              "use": "cancel",
+              "width_logical_px": 120
+            }
+          ],
+          "height_logical_px": 92
+        },
+        {
+          "use": "viewport",
+          "grow": 1
+        },
+        {
+          "id": "bottom-editors",
+          "role": "editor-group",
+          "layout": "row",
+          "children": [
+            {
+              "use": "navigation",
+              "width_logical_px": 100
+            },
+            {
+              "use": "dependencies",
+              "grow": 1
+            },
+            {
+              "use": "parameters",
+              "grow": 1
+            }
+          ],
+          "height_logical_px": 300,
+          "editing": {
+            "height_logical_px": 420
+          }
+        }
+      ]
+    },
+    "graph-workspace": {
+      "id": "graph-workspace",
+      "layout": "column",
+      "children": [
+        {
+          "use": "context",
+          "height_logical_px": 36
+        },
+        {
+          "use": "commands",
+          "height_logical_px": 68
+        },
+        {
+          "layout": "column",
+          "grow": 1,
+          "children": [
+            {
+              "use": "viewport",
+              "grow": 1
+            },
+            {
+              "layout": "row",
+              "height_logical_px": 260,
+              "editing": {
+                "height_logical_px": 340
+              },
+              "children": [
+                {
+                  "use": "dependencies",
+                  "grow": 1
+                },
+                {
+                  "use": "parameters",
+                  "width_logical_px": 270
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "use": "status",
+          "height_logical_px": 26
+        }
+      ]
+    }
+  }
+}

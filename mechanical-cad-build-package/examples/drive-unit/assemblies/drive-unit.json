@@ -1,0 +1,61 @@
+{
+  "schema_version": 0,
+  "kind": "assembly_fixture",
+  "id": "assembly-drive-unit",
+  "name": "Drive unit",
+  "instances": {
+    "support-left": {
+      "definition": "part-bearing-support",
+      "placement": {
+        "translation_mm": [
+          -90,
+          -44,
+          0
+        ],
+        "rotation_xyz_deg": [
+          0,
+          0,
+          90
+        ]
+      }
+    },
+    "support-right": {
+      "definition": "part-bearing-support",
+      "placement": {
+        "translation_mm": [
+          90,
+          -44,
+          0
+        ],
+        "rotation_xyz_deg": [
+          0,
+          0,
+          90
+        ]
+      }
+    },
+    "shaft": {
+      "definition": "part-shaft",
+      "placement": {
+        "translation_mm": [
+          0,
+          0,
+          36
+        ],
+        "rotation_xyz_deg": [
+          0,
+          0,
+          0
+        ]
+      }
+    }
+  },
+  "placement_constraints": [],
+  "promoted_controls": {
+    "support-radius": {
+      "definition": "part-bearing-support",
+      "parameter": "param-support-radius"
+    }
+  },
+  "notes": "Minimal definition/instance fixture, not the complete rendered mechanism or a validated manufacturing assembly."
+}

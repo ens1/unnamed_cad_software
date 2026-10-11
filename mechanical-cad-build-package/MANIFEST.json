@@ -1,0 +1,207 @@
+{
+  "package": "mechanical-cad-build-package",
+  "prepared_on": "2026-10-10",
+  "kind": "implementation-handoff",
+  "manifest_excludes_itself": true,
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "bytes": 5882,
+      "sha256": "84360de7bb11fe8465dd8ba39c7dda9da42006b8af4f5912d25294aa4fa72f09"
+    },
+    {
+      "path": "README.md",
+      "bytes": 5441,
+      "sha256": "21f1155defcd1d771a6ca2d41042a679f2b91049ce42d515244e53090b148faa"
+    },
+    {
+      "path": "START-HERE.md",
+      "bytes": 2606,
+      "sha256": "57985d80d4aca1d264d9877495688e1f86d53a899be58418af7941dbd1f595d2"
+    },
+    {
+      "path": "VALIDATION.md",
+      "bytes": 3228,
+      "sha256": "dcaa146be85cd6f95ab2e5c05b9fb925a309ea7c4f2c157fb7195a855bf6baa7"
+    },
+    {
+      "path": "assets/design-tokens.json",
+      "bytes": 1307,
+      "sha256": "c0462ec8ff4870893dfffdd1e364b832a71060be1f78fd4b1682fc6e703281de"
+    },
+    {
+      "path": "assets/ui/flow-assembly-isolate.png",
+      "bytes": 2006189,
+      "sha256": "2762816d9eb567d5bd8d455bd858dbe2c74e6b9511bec9077d1649ffb9b8f4c1"
+    },
+    {
+      "path": "assets/ui/flow-assembly-linked-preview.png",
+      "bytes": 2002891,
+      "sha256": "741b7e393c50562e4fdb990f0063f0faed6aa871f7e0d8b33d10588e53a84244"
+    },
+    {
+      "path": "assets/ui/flow-assembly-overview.png",
+      "bytes": 1960352,
+      "sha256": "0be15fd9fdf61925f74d5e1a40eab2eaf184d49e6ad287c260ed550c9dc07f71"
+    },
+    {
+      "path": "assets/ui/flow-ghost-preview.png",
+      "bytes": 1739869,
+      "sha256": "a0527353e5285c1d8b750805ebebc7ae429890ad8216511215f35f341b3b8032"
+    },
+    {
+      "path": "assets/ui/flow-select-first.png",
+      "bytes": 1741070,
+      "sha256": "89bd1145e45f6e9312065590f71c2e55ff0a15b9e939ad460b3aebe9c14310ab"
+    },
+    {
+      "path": "assets/ui/flow.png",
+      "bytes": 1762142,
+      "sha256": "f8315d69751a3a59633dcccd7b0a16a04d270904683428a951802f8e9e2608a7"
+    },
+    {
+      "path": "assets/ui/instrument-rail.png",
+      "bytes": 2123768,
+      "sha256": "8b74b9dbe98f1e6fb4484cfc91d005034f6dd8e2c204b52b980620be35edcb71"
+    },
+    {
+      "path": "docs/00-decisions.md",
+      "bytes": 5072,
+      "sha256": "a83da65e20e92ce0d33be03c6ba29a2a85b300502c083b14267c6af7dc09f296"
+    },
+    {
+      "path": "docs/01-product-spec.md",
+      "bytes": 49323,
+      "sha256": "59ce2c998d9bb1d9d82061df37e62abf24c59e6e5bb2653f064a2fd47d89a11f"
+    },
+    {
+      "path": "docs/02-architecture.md",
+      "bytes": 8395,
+      "sha256": "7bec9c1c773988632d9323d3d986b5c2836d6c02927b5f47e9bcaa60b463d062"
+    },
+    {
+      "path": "docs/03-data-contracts.md",
+      "bytes": 6702,
+      "sha256": "7bc5493c8e6bcc06cfc5c09fe2fe02f29d85eab57928f4c6418ba1228f831b03"
+    },
+    {
+      "path": "docs/04-preview-and-undo.md",
+      "bytes": 3905,
+      "sha256": "7c1d85fa1571b7231e3716dade1d18b96680c69fcff7b00012a2f27bbbd215c2"
+    },
+    {
+      "path": "docs/05-instrument-rail.md",
+      "bytes": 5827,
+      "sha256": "94c9fd985b024c972f726a4677416fa937252c338ed565d98df634257da81651"
+    },
+    {
+      "path": "docs/06-trackpad.md",
+      "bytes": 4103,
+      "sha256": "69cab105f84f65fda1886abf7412d5f81b99a7f6faa40f99ca090796d998b021"
+    },
+    {
+      "path": "docs/07-first-build.md",
+      "bytes": 6863,
+      "sha256": "fa93dc0ffa88c8305f0ee4fd94a4179c3e34c77a4bc3998516132e2468195603"
+    },
+    {
+      "path": "docs/08-validation.md",
+      "bytes": 4541,
+      "sha256": "bb34ac01e9902871f93ab421dec6f3120de8e5714b176cf5b01cc50d4d97af52"
+    },
+    {
+      "path": "docs/09-dependencies.md",
+      "bytes": 4373,
+      "sha256": "f5f35480443408266cbf9369e5e248c099945cec96f401a12fc9fdee5e716a4b"
+    },
+    {
+      "path": "docs/10-open-decisions.md",
+      "bytes": 4082,
+      "sha256": "a055705201c75aa38eb36431cd2c4b0b47302e2fe1a332017e143dc3f4c5fa2e"
+    },
+    {
+      "path": "docs/11-replaceability-and-presentation.md",
+      "bytes": 7225,
+      "sha256": "ead64fb2ed262b86744ed7b9b53dc0c38951e7f0291949e36cf338e771db87e8"
+    },
+    {
+      "path": "docs/reference-index.md",
+      "bytes": 1742,
+      "sha256": "1931420840295e1d00c9b964c054ca8b2176a4bf029f993192bf9e4486df0261"
+    },
+    {
+      "path": "docs/research/trackpad-input.md",
+      "bytes": 2367,
+      "sha256": "3e92b1176fbbad03561e9c1e33bfa50ebebb2d56ba90528b243f266eb5ae998e"
+    },
+    {
+      "path": "examples/README.md",
+      "bytes": 2880,
+      "sha256": "2443759a434b11f678b797ec40169fd22c58fd4591a32656196850ce3cead4c5"
+    },
+    {
+      "path": "examples/drive-unit/assemblies/drive-unit.json",
+      "bytes": 1200,
+      "sha256": "8995a55ca211f0988c5e148cf41fe02267a756c053ab56e00152f1353c19854e"
+    },
+    {
+      "path": "examples/drive-unit/draft-preview.json",
+      "bytes": 626,
+      "sha256": "cd0e3b00d4a77a5c40f7bafcdfa5d2064d73e14a9b6d331e7207beca341c4e75"
+    },
+    {
+      "path": "examples/drive-unit/parts/bearing-support.json",
+      "bytes": 3059,
+      "sha256": "8a0e06962b0e9f2f8c926efa2103899250de9f1c15ae7d9a6434a3d9b7a95dbb"
+    },
+    {
+      "path": "examples/drive-unit/parts/shaft.json",
+      "bytes": 1006,
+      "sha256": "df56c09c890fd29d05e3dbbe0c6d16b84ab527a523476c57316ca6fb123cdde0"
+    },
+    {
+      "path": "examples/drive-unit/presentation.json",
+      "bytes": 704,
+      "sha256": "d9a092d80bf7fe84e9517761a9597e9aceb64c4eef09ef2c81196fd073ce68dc"
+    },
+    {
+      "path": "examples/drive-unit/project.json",
+      "bytes": 507,
+      "sha256": "51588a279ab27da1465653f1cc657d51da91f09a3cc6ff386b1075c4c0245b24"
+    },
+    {
+      "path": "examples/drive-unit/ui-layouts.json",
+      "bytes": 2370,
+      "sha256": "c60cc2c3dbd6e33d5623e7d1621838e92eee6d34ccd78d5882c59e3147d903f5"
+    },
+    {
+      "path": "examples/drive-unit/ui-theme.json",
+      "bytes": 1319,
+      "sha256": "ff3a13969869ecefa2ce6c0eadc1400001630b96d5a9cadebead0800d586a194"
+    },
+    {
+      "path": "implementation/BACKLOG.md",
+      "bytes": 4318,
+      "sha256": "362f39cf5301a70c19fdf23d5ae536e6eb610110d9765eb6d0e5634b1bbbcfaa"
+    },
+    {
+      "path": "implementation/FIRST-TASK.md",
+      "bytes": 4304,
+      "sha256": "a30b8dbb0851f37e5a6320d580beb3910655dccf5530c8cd956822958a8131ab"
+    },
+    {
+      "path": "implementation/REPO-LAYOUT.md",
+      "bytes": 3026,
+      "sha256": "bc86dea162d86e29a6148b5e8eb21a7b616f4007b2b4fec4ef956766427806c1"
+    },
+    {
+      "path": "implementation/dependency-candidates.toml",
+      "bytes": 1519,
+      "sha256": "c42903d68e656fcccd8498eddfe4c6c5cfab9ef627c25faf4912ea6fde37757a"
+    }
+  ],
+  "default_ui_form": "instrument rail",
+  "ui_presentation": "user-defined composition and styling over theme-agnostic information and actions",
+  "architecture": "independently replaceable subsystems behind application-owned versioned contracts",
+  "code_test_policy": "do not write tests for any code"
+}

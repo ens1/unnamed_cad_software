@@ -1,0 +1,29 @@
+{
+  "id": "19c963ae-08af-40c6-9832-06b954000c11",
+  "name": "Part1",
+  "instances": {
+    "551fb044-e479-439b-a6d6-ec7d0ba52c28": {
+      "id": "551fb044-e479-439b-a6d6-ec7d0ba52c28",
+      "name": "Part1",
+      "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_deg": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": true,
+      "translation_expressions": null
+    }
+  },
+  "mates": [],
+  "promoted_parameters": {},
+  "parameters": {}
+}

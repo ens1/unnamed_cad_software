@@ -1,0 +1,4 @@
+katexit-0.1.5
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://github.com/termoshtt/katexit
+The published crate did not include a top-level license text.

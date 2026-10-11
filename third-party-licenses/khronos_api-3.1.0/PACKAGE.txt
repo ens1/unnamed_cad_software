@@ -1,0 +1,4 @@
+khronos_api-3.1.0
+Declared SPDX license: Apache-2.0
+Source: https://github.com/brendanzab/gl-rs/
+The published crate did not include a top-level license text.

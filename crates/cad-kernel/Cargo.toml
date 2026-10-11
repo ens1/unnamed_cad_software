@@ -1,0 +1,14 @@
+[package]
+name = "cad-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cad-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+monstertruck = { version = "=0.4.1", default-features = false, features = ["modeling", "meshing", "solid", "step", "assembly"] }
+nalgebra.workspace = true
+step-p21 = "=0.1.1"

@@ -1,0 +1,49 @@
+{
+  "status": "bundled default theme prototype values; users can replace all composition and styling through separate resources",
+  "units": "logical pixels unless noted",
+  "palette": {
+    "panel": "#F4F1E9",
+    "ink": "#191919",
+    "inactive": "#777773",
+    "active": "#FF5A00",
+    "preview": "#FFB020",
+    "valid": "#2DAA45"
+  },
+  "form": {
+    "rail_width_initial": 336,
+    "rail_width_prototype_range": [
+      300,
+      360
+    ],
+    "panel_seam": 3,
+    "section_rule": 2,
+    "station_diameter": 18,
+    "selected_station_diameter": 28,
+    "minimum_compact_hit_area": 40,
+    "apply_diameter_prototype_range": [
+      72,
+      88
+    ],
+    "spacing_unit": 8,
+    "section_padding": 24
+  },
+  "typography": {
+    "family_intent": "clean grotesk, permissively licensed production font TBD",
+    "document_title": 28,
+    "operation_label": 16,
+    "context_label": 14,
+    "parameter_value": 56,
+    "numerals": "tabular"
+  },
+  "materials": {
+    "metal_detail": "coherent subtle grain and roughness; physically scaled",
+    "selection": "localized outline",
+    "proposal": "transparent changed surfaces plus hatching",
+    "neighbors": "subtle ghost treatment"
+  },
+  "accessibility": {
+    "color_only_status": false,
+    "keyboard_apply_cancel": true,
+    "text_scaling": true
+  }
+}

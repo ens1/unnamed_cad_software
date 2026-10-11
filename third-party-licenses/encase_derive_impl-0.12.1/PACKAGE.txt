@@ -1,0 +1,4 @@
+encase_derive_impl-0.12.1
+Declared SPDX license: MIT-0
+Source: https://github.com/teoxoy/encase
+The published crate did not include a top-level license text.

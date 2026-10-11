@@ -1,0 +1,4 @@
+jni-macros-0.22.4
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://github.com/jni-rs/jni-rs
+The published crate did not include a top-level license text.

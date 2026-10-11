@@ -1,0 +1,148 @@
+{
+  "schema_version": 0,
+  "kind": "part_fixture",
+  "id": "part-bearing-support",
+  "name": "Bearing support",
+  "parameters": {
+    "param-support-thickness": {
+      "name": "Thickness",
+      "dimension": "length",
+      "literal": {
+        "value": 8,
+        "unit": "mm"
+      }
+    },
+    "param-support-bore": {
+      "name": "Bearing bore diameter",
+      "dimension": "length",
+      "literal": {
+        "value": 36,
+        "unit": "mm"
+      }
+    },
+    "param-support-radius": {
+      "name": "Fillet radius",
+      "dimension": "length",
+      "literal": {
+        "value": 3,
+        "unit": "mm"
+      }
+    }
+  },
+  "nodes": {
+    "sketch": {
+      "operation": "rectangle_profile",
+      "operation_version": 0,
+      "inputs": {
+        "width": {
+          "literal": {
+            "value": 88,
+            "unit": "mm"
+          }
+        },
+        "height": {
+          "literal": {
+            "value": 64,
+            "unit": "mm"
+          }
+        },
+        "plane": "XZ"
+      },
+      "outputs": {
+        "profile": "closed_planar_profile"
+      }
+    },
+    "extrude": {
+      "operation": "extrude",
+      "operation_version": 0,
+      "inputs": {
+        "profile": {
+          "node": "sketch",
+          "output": "profile"
+        },
+        "distance": {
+          "parameter": "param-support-thickness"
+        }
+      },
+      "outputs": {
+        "body": "solid"
+      }
+    },
+    "bearing-bore": {
+      "operation": "through_hole",
+      "operation_version": 0,
+      "inputs": {
+        "body": {
+          "node": "extrude",
+          "output": "body"
+        },
+        "diameter": {
+          "parameter": "param-support-bore"
+        },
+        "axis": "Y",
+        "center_mm": [
+          44,
+          0,
+          36
+        ]
+      },
+      "outputs": {
+        "body": "solid"
+      }
+    },
+    "fillet": {
+      "operation": "edge_fillet",
+      "operation_version": 0,
+      "inputs": {
+        "body": {
+          "node": "bearing-bore",
+          "output": "body"
+        },
+        "edges": {
+          "reference": "ref-support-top-outer-edge"
+        },
+        "radius": {
+          "parameter": "param-support-radius"
+        }
+      },
+      "outputs": {
+        "body": "solid"
+      }
+    },
+    "body": {
+      "operation": "body_output",
+      "operation_version": 0,
+      "inputs": {
+        "body": {
+          "node": "fillet",
+          "output": "body"
+        }
+      },
+      "outputs": {
+        "body": "solid"
+      }
+    }
+  },
+  "references": {
+    "ref-support-top-outer-edge": {
+      "producer": {
+        "node": "bearing-bore",
+        "output": "body"
+      },
+      "topology": "edge",
+      "semantic_role": "outer_top_edge",
+      "resolution_policy": "require_unique",
+      "resolver_status": "construction/provenance policy must be implemented and validated"
+    }
+  },
+  "body_outputs": [
+    {
+      "node": "body",
+      "output": "body"
+    }
+  ],
+  "appearance": {
+    "preset": "brushed-aluminum",
+    "status": "production preset to be authored"
+  }
+}

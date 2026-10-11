@@ -1,0 +1,4 @@
+gilrs-core-0.6.8
+Declared SPDX license: Apache-2.0/MIT
+Source: https://gitlab.com/gilrs-project/gilrs
+The published crate did not include a top-level license text.

@@ -1,0 +1,4 @@
+constgebra-0.1.4
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://github.com/knickish/constgebra
+The published crate did not include a top-level license text.

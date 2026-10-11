@@ -1,0 +1,4 @@
+accesskit_consumer-0.38.0
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://github.com/AccessKit/accesskit
+The published crate did not include a top-level license text.

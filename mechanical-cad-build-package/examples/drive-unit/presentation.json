@@ -1,0 +1,36 @@
+{
+  "schema_version": 0,
+  "kind": "presentation_fixture",
+  "active_assembly": "assembly-drive-unit",
+  "active_instance": "support-left",
+  "ui": {
+    "layout_resource": "ui-layouts.json",
+    "active_layout": "instrument-rail",
+    "theme_resource": "ui-theme.json"
+  },
+  "selection": {
+    "dependency_view": "Flow",
+    "node": "fillet"
+  },
+  "component_preferences": {
+    "default-rail": {
+      "width_logical_px": 336
+    }
+  },
+  "isolation": {
+    "mode": "ghost_others",
+    "pinned_instances": [
+      "shaft"
+    ]
+  },
+  "graph_layout": {
+    "orientation": "vertical",
+    "node_order": [
+      "sketch",
+      "extrude",
+      "bearing-bore",
+      "fillet",
+      "body"
+    ]
+  }
+}

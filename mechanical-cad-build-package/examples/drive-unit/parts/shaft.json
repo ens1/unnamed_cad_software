@@ -1,0 +1,53 @@
+{
+  "schema_version": 0,
+  "kind": "part_fixture",
+  "id": "part-shaft",
+  "name": "Shaft",
+  "parameters": {
+    "param-shaft-diameter": {
+      "name": "Diameter",
+      "dimension": "length",
+      "literal": {
+        "value": 12,
+        "unit": "mm"
+      }
+    },
+    "param-shaft-length": {
+      "name": "Length",
+      "dimension": "length",
+      "literal": {
+        "value": 204,
+        "unit": "mm"
+      }
+    }
+  },
+  "nodes": {
+    "cylinder": {
+      "operation": "centered_cylinder",
+      "operation_version": 0,
+      "inputs": {
+        "diameter": {
+          "parameter": "param-shaft-diameter"
+        },
+        "length": {
+          "parameter": "param-shaft-length"
+        },
+        "axis": "X"
+      },
+      "outputs": {
+        "body": "solid"
+      }
+    }
+  },
+  "references": {},
+  "body_outputs": [
+    {
+      "node": "cylinder",
+      "output": "body"
+    }
+  ],
+  "appearance": {
+    "preset": "turned-steel",
+    "status": "production preset to be authored"
+  }
+}

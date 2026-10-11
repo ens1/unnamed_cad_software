@@ -1,0 +1,4 @@
+bevy_scene_macros-0.20.0
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://github.com/bevyengine/bevy
+The published crate did not include a top-level license text.

@@ -1,0 +1,4 @@
+objc2-io-kit-0.3.2
+Declared SPDX license: Zlib OR Apache-2.0 OR MIT
+Source: https://github.com/madsmtm/objc2
+The published crate did not include a top-level license text.

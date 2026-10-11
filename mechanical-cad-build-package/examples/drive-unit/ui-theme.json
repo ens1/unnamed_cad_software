@@ -1,0 +1,42 @@
+{
+  "schema_version": 0,
+  "kind": "ui_theme_fixture",
+  "status": "Illustrative CSS-like selectors and variables; not an implemented stylesheet grammar.",
+  "variables": {
+    "--panel": "#F4F1E9",
+    "--ink": "#191919",
+    "--active": "#FF5A00",
+    "--valid": "#2DAA45",
+    "--spacing": "8px"
+  },
+  "rules": [
+    {
+      "selector": "*",
+      "properties": { "color": "var(--ink)", "gap": "var(--spacing)" }
+    },
+    {
+      "selector": "[role=instrument-rail], [role=workspace-toolbar], [role=editor-group]",
+      "properties": { "background": "var(--panel)", "padding": "24px" }
+    },
+    {
+      "selector": "[role=parameter-instrument]",
+      "properties": { "font-size": "56px", "font-variant-numeric": "tabular-nums" }
+    },
+    {
+      "selector": "[role=apply-action]",
+      "properties": { "background": "var(--active)", "border": "2px solid var(--ink)" }
+    },
+    {
+      "selector": "[layout=instrument-rail] [role=apply-action]",
+      "properties": { "border-radius": "50%", "width": "80px", "height": "80px" }
+    },
+    {
+      "selector": "[layout=top-workspace] [role=apply-action]",
+      "properties": { "border-radius": "4px", "padding": "12px 24px" }
+    },
+    {
+      "selector": "[role=preview-status][state=valid]",
+      "properties": { "color": "var(--valid)" }
+    }
+  ]
+}

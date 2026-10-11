@@ -1,0 +1,4 @@
+array-macro-2.1.8
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://codeberg.org/xfix/array-macro
+The published crate did not include a top-level license text.

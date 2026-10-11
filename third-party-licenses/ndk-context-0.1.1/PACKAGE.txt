@@ -1,0 +1,4 @@
+ndk-context-0.1.1
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://github.com/rust-windowing/android-ndk-rs
+The published crate did not include a top-level license text.

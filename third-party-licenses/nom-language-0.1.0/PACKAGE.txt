@@ -1,0 +1,4 @@
+nom-language-0.1.0
+Declared SPDX license: MIT
+Source: https://github.com/rust-bakery/nom
+The published crate did not include a top-level license text.

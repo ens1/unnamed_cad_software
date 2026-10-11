@@ -1,0 +1,4 @@
+r-efi-6.0.0
+Declared SPDX license: MIT OR Apache-2.0 OR LGPL-2.1-or-later
+Source: https://github.com/r-efi/r-efi
+The published crate did not include a top-level license text.

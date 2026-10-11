@@ -1,0 +1,211 @@
+use crate::{CadError, Document, Id, PlacedPart, Result, TopologyRef};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    io::{Read, Write},
+};
+pub const PROTOCOL_VERSION: u32 = 1;
+pub const MAX_FRAME: usize = 256 * 1024 * 1024;
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestIdentity {
+    pub protocol: u32,
+    pub generation: u64,
+    pub base_revision: u64,
+    pub draft: Option<Id>,
+    pub edit: u64,
+    pub source: String,
+    pub backend: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MeshData {
+    pub positions: Vec<[f64; 3]>,
+    pub normals: Vec<[f64; 3]>,
+    pub indices: Vec<u32>,
+    pub faces: Vec<FaceRange>,
+    pub edges: Vec<EdgeData>,
+    pub bounds: [[f64; 3]; 2],
+    pub volume_mm3: f64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FaceRange {
+    pub start: usize,
+    pub count: usize,
+    pub reference: TopologyRef,
+    /// Evaluated output owner, independent from inherited construction provenance.
+    #[serde(default)]
+    pub body: Option<crate::NodeRef>,
+    #[serde(default)]
+    pub body_kind: BodyKind,
+    #[serde(default)]
+    pub plane: Option<crate::Plane>,
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BodyKind {
+    #[default]
+    Solid,
+    Surface,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EdgeData {
+    pub points: Vec<[f64; 3]>,
+    pub reference: TopologyRef,
+    /// Exact curve representation for projection; display points are never source geometry.
+    #[serde(default)]
+    pub curve: Option<crate::sketch_edit::Curve3>,
+    #[serde(default)]
+    pub faces: Vec<TopologyRef>,
+    #[serde(default)]
+    pub body: Option<crate::NodeRef>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Diagnostic {
+    pub severity: String,
+    pub target: Option<Id>,
+    pub message: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Evaluation {
+    pub identity: RequestIdentity,
+    pub meshes: BTreeMap<Id, MeshData>,
+    pub instances: Vec<PlacedPart>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub valid: bool,
+    pub elapsed_ms: u64,
+    #[serde(default)]
+    pub sketches: BTreeMap<String, EvaluatedSketch>,
+    /// Parametric datum display and selection geometry; source intent remains in document features.
+    #[serde(default)]
+    pub references: BTreeMap<String, crate::reference_geometry::EvaluatedReference>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reference_curves: BTreeMap<String, crate::reference_curves::Evaluated>,
+    /// Disposable edge-only display caches, excluded from body/property integration.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reference_curve_meshes: BTreeMap<String, MeshData>,
+    #[serde(default)]
+    pub assemblies: BTreeMap<String, crate::assembly_geometry::EvaluatedAssembly>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub exploded_views: BTreeMap<Id, crate::exploded_views::Evaluated>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub assembly_inspections: BTreeMap<Id, crate::assembly_inspection::Report>,
+    #[serde(default)]
+    pub properties: BTreeMap<String, crate::inspection::Properties>,
+    #[serde(default)]
+    pub sheets: BTreeMap<String, crate::sheet_metal::EvaluatedSheet>,
+    #[serde(default)]
+    pub weldments: BTreeMap<String, crate::weldment::EvaluatedWeldment>,
+    /// Exact source-linked analysis reports, separate from display meshes.
+    #[serde(default)]
+    pub mold_analyses: BTreeMap<String, crate::mold::DraftReport>,
+    #[serde(default)]
+    pub configurations: Option<crate::configuration::Evaluated>,
+    /// Optional versioned display cache; never authoritative or eligible for Apply.
+    #[serde(default)]
+    pub history: std::sync::Arc<BTreeMap<String, crate::history::PartHistory>>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EvaluatedSketch {
+    pub plane: crate::Plane,
+    pub profile_order: Vec<Id>,
+    pub points: BTreeMap<Id, [f64; 2]>,
+    pub circles: BTreeMap<Id, EvaluatedCircle>,
+    #[serde(default)]
+    pub polylines: Vec<crate::sketch_geometry::SketchPolyline>,
+    #[serde(default)]
+    pub solved: Option<crate::Sketch>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EvaluatedCircle {
+    pub center: Id,
+    pub radius_mm: f64,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "command", rename_all = "snake_case")]
+pub enum WorkerRequest {
+    Evaluate {
+        identity: RequestIdentity,
+        document: Document,
+        project_root: String,
+        tolerance: f64,
+    },
+    Export {
+        identity: RequestIdentity,
+        document: Document,
+        project_root: String,
+        path: String,
+        format: String,
+        tolerance: f64,
+    },
+    Release {
+        identity: RequestIdentity,
+        document: Document,
+        project_root: String,
+        path: String,
+        tolerance: f64,
+    },
+    Import {
+        identity: RequestIdentity,
+        document: Document,
+        project_root: String,
+        resource: Id,
+    },
+    Shutdown,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkerResponse {
+    Evaluation {
+        result: Evaluation,
+    },
+    Exported {
+        identity: RequestIdentity,
+        path: String,
+    },
+    Imported {
+        identity: RequestIdentity,
+        document: Document,
+    },
+    Error {
+        identity: Option<RequestIdentity>,
+        message: String,
+    },
+}
+pub fn write_frame(writer: &mut impl Write, value: &impl Serialize) -> Result<()> {
+    let data = serde_json::to_vec(value)?;
+    if data.len() > MAX_FRAME {
+        return Err(CadError::Invalid("IPC frame exceeds limit".into()));
+    }
+    writer.write_all(&(data.len() as u32).to_le_bytes())?;
+    writer.write_all(&data)?;
+    writer.flush()?;
+    Ok(())
+}
+pub fn read_frame<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> Result<T> {
+    let mut size = [0u8; 4];
+    reader.read_exact(&mut size)?;
+    let size = u32::from_le_bytes(size) as usize;
+    if size > MAX_FRAME {
+        return Err(CadError::Invalid("IPC frame exceeds limit".into()));
+    }
+    let mut data = vec![0; size];
+    reader.read_exact(&mut data)?;
+    Ok(serde_json::from_slice(&data)?)
+}
+pub trait GeometryService {
+    fn fingerprint(&self) -> &str;
+    fn evaluate(
+        &mut self,
+        identity: RequestIdentity,
+        document: &Document,
+        project_root: &std::path::Path,
+        tolerance: f64,
+    ) -> Result<Evaluation>;
+    fn export(
+        &mut self,
+        document: &Document,
+        root: &std::path::Path,
+        path: &std::path::Path,
+        format: &str,
+        tolerance: f64,
+    ) -> Result<()>;
+}

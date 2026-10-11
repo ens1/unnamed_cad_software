@@ -1,0 +1,472 @@
+{
+  "id": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+  "name": "Part1",
+  "parameters": {},
+  "features": [
+    {
+      "id": "e22f04e5-9cdf-474c-90a5-7dc57a6de618",
+      "name": "Sketch1",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "24cdec30-969f-4a86-828f-e07f4abb6845"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "8a9b4d19-92c0-4387-b465-f7f52e33898c",
+      "name": "Boss-Extrude1",
+      "operation": {
+        "kind": "extrude",
+        "profile": {
+          "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+          "node": "e22f04e5-9cdf-474c-90a5-7dc57a6de618"
+        },
+        "distance": "2 in",
+        "direction": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "body": null,
+        "mode": "new"
+      },
+      "suppressed": false
+    },
+    {
+      "id": "88b51e88-8497-4093-94fb-528c7e6e8aaa",
+      "name": "Sketch2",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "4a9f036b-00ef-43ba-864b-c03a4faab10c"
+        },
+        "plane": {
+          "origin": [
+            50.8,
+            50.7999999994657,
+            50.8
+          ],
+          "u": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            -1.0,
+            0.0
+          ]
+        },
+        "plane_reference": {
+          "producer": {
+            "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+            "node": "8a9b4d19-92c0-4387-b465-f7f52e33898c"
+          },
+          "role": "face:extrude:x:0.50000000;y:0.50000000;z:max",
+          "topology": "face",
+          "signature": {
+            "center": [
+              25.4,
+              25.399999999562745,
+              50.8
+            ],
+            "measure": 2580.6399999863957,
+            "tolerance": 0.00001
+          }
+        },
+        "reference_body": {
+          "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+          "node": "8a9b4d19-92c0-4387-b465-f7f52e33898c"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "171f2596-9c52-4973-825e-146b96f33fb3",
+      "name": "Cut-Extrude1",
+      "operation": {
+        "kind": "extrude",
+        "profile": {
+          "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+          "node": "88b51e88-8497-4093-94fb-528c7e6e8aaa"
+        },
+        "distance": "1 in",
+        "direction": [
+          -0.0,
+          -0.0,
+          -0.9999999999999998
+        ],
+        "body": {
+          "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+          "node": "8a9b4d19-92c0-4387-b465-f7f52e33898c"
+        },
+        "mode": "cut"
+      },
+      "suppressed": false
+    },
+    {
+      "id": "f5c89a79-2a0a-4615-803a-f3e78fa5a0b1",
+      "name": "Chamfer1",
+      "operation": {
+        "kind": "chamfer",
+        "body": {
+          "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+          "node": "171f2596-9c52-4973-825e-146b96f33fb3"
+        },
+        "edges": [
+          {
+            "producer": {
+              "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+              "node": "8a9b4d19-92c0-4387-b465-f7f52e33898c"
+            },
+            "role": "edge:extrude:x:0.50000000;y:max;z:max",
+            "topology": "edge",
+            "signature": {
+              "center": [
+                25.4,
+                50.79999999942885,
+                50.79999999999999
+              ],
+              "measure": 50.8,
+              "tolerance": 0.00001
+            }
+          },
+          {
+            "producer": {
+              "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+              "node": "8a9b4d19-92c0-4387-b465-f7f52e33898c"
+            },
+            "role": "edge:extrude:x:max;y:0.50000000;z:max",
+            "topology": "edge",
+            "signature": {
+              "center": [
+                50.79999999999999,
+                25.399999999534778,
+                50.79999999999999
+              ],
+              "measure": 50.79999999986184,
+              "tolerance": 0.00001
+            }
+          },
+          {
+            "producer": {
+              "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+              "node": "8a9b4d19-92c0-4387-b465-f7f52e33898c"
+            },
+            "role": "edge:extrude:x:0.50000000;y:min;z:max",
+            "topology": "edge",
+            "signature": {
+              "center": [
+                25.400000000000002,
+                -3.0335561827498763e-10,
+                50.79999999999999
+              ],
+              "measure": 50.8,
+              "tolerance": 0.00001
+            }
+          },
+          {
+            "producer": {
+              "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+              "node": "8a9b4d19-92c0-4387-b465-f7f52e33898c"
+            },
+            "role": "edge:extrude:x:min;y:0.50000000;z:max",
+            "topology": "edge",
+            "signature": {
+              "center": [
+                1.068482514313045e-79,
+                25.39999999959071,
+                50.79999999999999
+              ],
+              "measure": 50.79999999960256,
+              "tolerance": 0.00001
+            }
+          }
+        ],
+        "distance": "0.125 in"
+      },
+      "suppressed": false
+    },
+    {
+      "id": "e6291cda-58ab-4da1-a4f7-fd42fa4b2138",
+      "name": "Sketch3",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "6c44b625-e777-4cbb-8627-b35c452447f4"
+        },
+        "plane": {
+          "origin": [
+            50.8,
+            50.7999999994657,
+            50.8
+          ],
+          "u": [
+            -0.9999999999999999,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            -0.9999999999999999,
+            0.0
+          ]
+        },
+        "plane_reference": {
+          "producer": {
+            "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+            "node": "8a9b4d19-92c0-4387-b465-f7f52e33898c"
+          },
+          "role": "face:extrude:x:0.50000000;y:0.50000000;z:max",
+          "topology": "face",
+          "signature": {
+            "center": [
+              25.4,
+              25.399999999514222,
+              50.800000000000004
+            ],
+            "measure": 1472.3644611725422,
+            "tolerance": 0.00001
+          }
+        },
+        "reference_body": {
+          "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+          "node": "f5c89a79-2a0a-4615-803a-f3e78fa5a0b1"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "8047e843-af25-4c64-9f09-e367e238b1a2",
+      "name": "Cut-Extrude2",
+      "operation": {
+        "kind": "extrude",
+        "profile": {
+          "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+          "node": "e6291cda-58ab-4da1-a4f7-fd42fa4b2138"
+        },
+        "distance": "2 in",
+        "direction": [
+          -0.0,
+          -0.0,
+          -0.9999999999999998
+        ],
+        "body": {
+          "definition": "9d3e2e79-5322-41e9-8a41-91211dd84d76",
+          "node": "f5c89a79-2a0a-4615-803a-f3e78fa5a0b1"
+        },
+        "mode": "cut"
+      },
+      "suppressed": false
+    }
+  ],
+  "outputs": [
+    "8047e843-af25-4c64-9f09-e367e238b1a2"
+  ],
+  "material": "aluminum",
+  "properties": {},
+  "sketches": {
+    "24cdec30-969f-4a86-828f-e07f4abb6845": {
+      "id": "24cdec30-969f-4a86-828f-e07f4abb6845",
+      "name": "Sketch1",
+      "points": {
+        "p0": [
+          9.279929780924003e-80,
+          -2.1057211849253443e-10
+        ],
+        "p1": [
+          50.8,
+          -3.9613911805744083e-10
+        ],
+        "p2": [
+          50.8,
+          50.7999999994657
+        ],
+        "p3": [
+          1.2089720505336896e-79,
+          50.79999999939199
+        ]
+      },
+      "segments": [
+        [
+          "p0",
+          "p1"
+        ],
+        [
+          "p1",
+          "p2"
+        ],
+        [
+          "p2",
+          "p3"
+        ],
+        [
+          "p3",
+          "p0"
+        ]
+      ],
+      "constraints": [
+        {
+          "id": "f41f2380-5eb2-41ea-953e-920b15da93cc",
+          "kind": "fix_x",
+          "entities": [
+            "p0"
+          ],
+          "value": "-0 mm"
+        },
+        {
+          "id": "3b4c648b-9fa7-4993-a347-b03251a90cb2",
+          "kind": "fix_y",
+          "entities": [
+            "p0"
+          ],
+          "value": "-0 mm"
+        },
+        {
+          "id": "b666dfce-b95a-4083-99a8-2309853e60da",
+          "kind": "horizontal",
+          "entities": [
+            "p0",
+            "p1"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "ff7d411d-15d4-4f25-bef7-2b80fbb1c391",
+          "kind": "vertical",
+          "entities": [
+            "p1",
+            "p2"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "257a4d23-339f-43be-92bf-81aa28c66108",
+          "kind": "horizontal",
+          "entities": [
+            "p2",
+            "p3"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "a53717f7-9a36-4106-9bef-3144d9463142",
+          "kind": "vertical",
+          "entities": [
+            "p3",
+            "p0"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "cb8d6625-ab9c-4849-bbfa-2bc8d4f6c4a6",
+          "kind": "distance_x",
+          "entities": [
+            "p0",
+            "p1"
+          ],
+          "value": "2 in"
+        },
+        {
+          "id": "8571a772-a054-40a2-9ab2-4458a3de1907",
+          "kind": "distance_y",
+          "entities": [
+            "p1",
+            "p2"
+          ],
+          "value": "2 in"
+        }
+      ],
+      "profile_order": [
+        "p0",
+        "p1",
+        "p2",
+        "p3"
+      ],
+      "circles": {}
+    },
+    "4a9f036b-00ef-43ba-864b-c03a4faab10c": {
+      "id": "4a9f036b-00ef-43ba-864b-c03a4faab10c",
+      "name": "Sketch2",
+      "points": {
+        "center": [
+          25.4,
+          25.4
+        ]
+      },
+      "segments": [],
+      "constraints": [],
+      "profile_order": [],
+      "circles": {
+        "circle": {
+          "center": "center",
+          "radius": "0.5 in"
+        }
+      }
+    },
+    "6c44b625-e777-4cbb-8627-b35c452447f4": {
+      "id": "6c44b625-e777-4cbb-8627-b35c452447f4",
+      "name": "Sketch3",
+      "points": {
+        "p0": [
+          -5.0,
+          -5.0
+        ],
+        "p1": [
+          17.7,
+          -5.0
+        ],
+        "p2": [
+          -5.0,
+          17.7
+        ]
+      },
+      "segments": [
+        [
+          "p0",
+          "p1"
+        ],
+        [
+          "p1",
+          "p2"
+        ],
+        [
+          "p2",
+          "p0"
+        ]
+      ],
+      "constraints": [],
+      "profile_order": [
+        "p0",
+        "p1",
+        "p2"
+      ],
+      "circles": {}
+    }
+  },
+  "configurations": {}
+}

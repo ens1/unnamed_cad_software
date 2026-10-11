@@ -1,0 +1,4 @@
+ndk-0.9.0
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://github.com/rust-mobile/ndk
+The published crate did not include a top-level license text.

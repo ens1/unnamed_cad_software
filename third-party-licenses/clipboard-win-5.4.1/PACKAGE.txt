@@ -1,0 +1,4 @@
+clipboard-win-5.4.1
+Declared SPDX license: BSL-1.0
+Source: https://github.com/DoumanAsh/clipboard-win
+The published crate did not include a top-level license text.

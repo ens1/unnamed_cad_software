@@ -1,0 +1,4 @@
+block2-0.5.1
+Declared SPDX license: MIT
+Source: https://github.com/madsmtm/objc2
+The published crate did not include a top-level license text.

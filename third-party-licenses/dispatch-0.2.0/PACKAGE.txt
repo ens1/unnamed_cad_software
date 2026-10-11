@@ -1,0 +1,4 @@
+dispatch-0.2.0
+Declared SPDX license: MIT
+Source: http://github.com/SSheldon/rust-dispatch
+The published crate did not include a top-level license text.

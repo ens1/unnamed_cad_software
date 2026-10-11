@@ -1,0 +1,4 @@
+accesskit_macos-0.26.3
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://github.com/AccessKit/accesskit
+The published crate did not include a top-level license text.

@@ -1,0 +1,36 @@
+package_kind = "implementation-planning-input"
+checked_on = "2026-10-10"
+compatibility_status = "researched; compilation and lockfile resolution assigned to M0"
+
+[toolchain]
+channel = "1.99.0"
+edition = "2024"
+components_to_install = ["rustfmt", "clippy"]
+
+[bevy]
+version = "=0.20.0"
+default_features = false
+features_to_validate = ["3d", "ui"]
+role = "initial replaceable desktop, scene, viewport, input, and view adapters"
+
+[monstertruck]
+version = "=0.4.1"
+default_features = false
+features = ["modeling", "meshing", "solid", "step"]
+role = "initial replaceable geometry implementation inside worker adapter; exclude its render/gpu path"
+
+[open]
+ui_field_toolkit = "probe Bevy native UI/headless behavior first"
+sketch_solver = "select after permissive-license and constraint-corpus evaluation"
+assembly_solver = "select after permissive-license and placement-corpus evaluation"
+serialization = "choose a small versioned source/IPC contract"
+layout_style_grammar = "separate user-editable composition and CSS-like styling over semantic UI bindings"
+
+[policy]
+original_code_license = "WTFPL"
+runtime_dependency_policy = "prefer permissive licenses; retain each dependency's notices"
+geometry_authority = "analytic and NURBS B-rep"
+rendering_owner = "replaceable viewport adapter; initially Bevy"
+replaceability = "all subsystems behind application-owned versioned contracts"
+presentation = "theme-agnostic data/actions; separate user-defined layout and style resources"
+code_tests = "do not write tests for any code"

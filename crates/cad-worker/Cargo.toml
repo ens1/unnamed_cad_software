@@ -1,0 +1,14 @@
+[package]
+name = "cad-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tcad-worker"
+path = "src/main.rs"
+
+[dependencies]
+cad-core.workspace = true
+cad-kernel.workspace = true
+serde_json.workspace = true

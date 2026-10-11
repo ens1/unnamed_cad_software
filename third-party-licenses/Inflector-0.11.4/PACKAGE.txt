@@ -1,0 +1,4 @@
+Inflector-0.11.4
+Declared SPDX license: BSD-2-Clause
+Source: https://github.com/whatisinternet/inflector
+The published crate did not include a top-level license text.

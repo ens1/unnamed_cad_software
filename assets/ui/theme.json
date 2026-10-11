@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "variables": {
+    "--panel": "#F4F1E9",
+    "--ink": "#191919",
+    "--active": "#FF5A00",
+    "--valid": "#2DAA45",
+    "--spacing": "4px",
+    "--reference": "#0087BE"
+  },
+  "rules": [
+    {
+      "selector": "[role=selection-actions]",
+      "properties": {
+        "background": "var(--panel)",
+        "padding": "8px",
+        "border": "1px solid #A9ACAF",
+        "border-radius": "6px"
+      }
+    },
+    {
+      "selector": "*",
+      "properties": {
+        "color": "var(--ink)",
+        "gap": "var(--spacing)",
+        "font-size": "12px"
+      }
+    },
+    {
+      "selector": "[role=instrument-rail], [role=workspace-toolbar], [role=editor-group]",
+      "properties": {
+        "background": "var(--panel)",
+        "padding": "8px"
+      }
+    },
+    {
+      "selector": "[role=property-manager], [role=parameter-instrument]",
+      "properties": {
+        "font-size": "12px",
+        "font-variant-numeric": "tabular-nums"
+      }
+    },
+    {
+      "selector": "[role=apply-action]",
+      "properties": {
+        "background": "var(--active)",
+        "border": "2px solid var(--ink)"
+      }
+    },
+    {
+      "selector": "[layout=instrument-rail] [role=apply-action]",
+      "properties": {
+        "border-radius": "50%",
+        "width": "80px",
+        "height": "80px"
+      }
+    },
+    {
+      "selector": "[layout=top-workspace] [role=apply-action]",
+      "properties": {
+        "border-radius": "4px",
+        "padding": "12px 24px"
+      }
+    },
+    {
+      "selector": "[role=preview-status][state=valid]",
+      "properties": {
+        "color": "var(--valid)"
+      }
+    },
+    {
+      "selector": "[role=document-context], [role=command-manager], [role=status-bar]",
+      "properties": {
+        "background": "#F2F0EB",
+        "padding": "5px",
+        "border": "1px solid #C2C5CA"
+      }
+    },
+    {
+      "selector": "[role=model-viewport]",
+      "properties": {
+        "background": "#D5D9DF",
+        "selection-color": "#FF5A00",
+        "preview-color": "#FFAD4266"
+      }
+    },
+    {
+      "selector": "[role=dependency-view], [role=view-navigation], [role=property-manager]",
+      "properties": {
+        "background": "var(--panel)",
+        "padding": "8px"
+      }
+    }
+  ]
+}

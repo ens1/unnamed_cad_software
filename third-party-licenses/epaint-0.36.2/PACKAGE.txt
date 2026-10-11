@@ -1,0 +1,4 @@
+epaint-0.36.2
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://github.com/emilk/egui/tree/main/crates/epaint
+The published crate did not include a top-level license text.

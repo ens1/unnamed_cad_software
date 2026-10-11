@@ -1,0 +1,569 @@
+# Mechanical CAD specification
+
+- Product vision
+  - Create a free, open-source, local-first mechanical CAD application.
+  - Support professional mechanical design and manufacturing.
+  - Follow familiar parametric CAD principles.
+  - Make complex assemblies as easy to design as individual parts.
+  - Give users full ownership and control of their design data.
+  - Require no account, subscription, or internet connection.
+  - Support Windows, macOS, and Linux.
+  - Keep hardware requirements reasonable.
+  - Make the trackpad the primary input device for navigating and operating the CAD application.
+  - Design complete mechanical modeling and assembly workflows for a laptop trackpad and keyboard, with no external pointing device required.
+  - Treat trackpad comfort, precision, and responsiveness as defining product qualities and release requirements.
+  - License original application code under WTFPL.
+  - Favor a modern Rust stack that is enjoyable to develop and extend.
+- Minimum mechanical CAD feature baseline
+  - Provide the mainstream mechanical CAD capabilities shared by SolidWorks, NX, Onshape, and Creo. The user's latest 2026-10-10 clarification replaces the earlier full SolidWorks parity target. Preserve equivalent practical workflows; vendor-specific niche features are not required solely because one suite offers them.
+  - Cover 2D and 3D sketching, relations and Smart Dimension, solid and surface modeling, reference geometry, direct face editing, multibody operations, patterns, assemblies and mates, production drawings and tolerancing, sheet metal, weldments, molds, configurations, reusable libraries, inspection, and CAD exchange.
+  - Require equivalent practical capability, including feature modes, end conditions, selection types, supported geometry, associativity, and editable parameters. A tool label or a narrow implementation does not satisfy a complete feature family.
+  - Keep the [mechanical CAD coverage inventory](../../docs/mechanical-cad-coverage.md) aligned with the implementation. Compare shared practical capabilities using official documentation from the four reference applications; the inventory is not an exhaustive vendor command count.
+  - Treat missing kernel and solver capabilities as engineering requirements within scope. Report current limitations clearly while working to remove them.
+  - Deliver the complete application end to end. Earlier initial/later release lists and milestone-first implementation plans do not reduce the approved minimum.
+  - Exclude simulation, routing, CAM, electrical design, and PDM product-family parity from this clarified minimum. Preserve all TCAD-specific local-file, Git, replaceability, and presentation requirements.
+- Replaceability
+  - Build like a ship of Theseus: any subsystem or dependency can be ripped out and replaced at any development stage.
+  - Treat implementation languages, frameworks, kernels, solvers, renderers, widgets, transports, file encodings, and Git integrations as replaceable choices.
+  - Define narrow, application-owned, versioned contracts with explicit capabilities, lifecycle, errors, units, and identity semantics.
+  - Keep vendor-specific objects inside adapters and select implementations in composition code.
+  - Allow contracts to evolve through explicit migrations while preserving user data and stable identities.
+  - Expose optional implementation capabilities without reducing all functionality to a common minimum.
+  - Document changed semantics, unsupported capabilities, cache invalidation, and reference migration when replacing an implementation.
+- Initial technical stack
+  - Initially use Rust for the authoritative document model, feature evaluation, dependency tracking, persistence, and command-line interface.
+  - Initially use Bevy for the desktop application shell, 3D scene, input handling, and viewport rendering.
+  - Initially use Monstertruck for evaluated analytic and NURBS boundary-representation geometry.
+  - Build an application-owned parametric modeling engine behind contracts independent of the initial kernel.
+  - Keep the document and evaluation core independent of Bevy, editor widgets, and rendering types.
+  - Use the same document and evaluation core for interactive and headless workflows.
+  - Keep kernel integration behind a narrow application-owned interface for operations, shape inspection, topology history, validation, tessellation, and exchange formats.
+  - Add kernel-specific capabilities explicitly rather than limiting every operation to a hypothetical common subset of kernels.
+  - Treat kernel replacement as a migration that may change topology and references, rather than assuming interchangeable results.
+  - Provide sketch and assembly constraint solving through dedicated modules with independently recorded solver versions.
+  - Keep the choice of constraint solver and desktop panel/node-editor libraries open until their licensing and required behavior have been validated.
+  - Use double precision for authoritative geometry and transforms; convert to rendering precision at the viewport boundary.
+  - Run expensive geometry evaluation in persistent native worker processes so that the interface remains responsive and failed or cancelled jobs can be isolated.
+  - Tag evaluation requests and results with document revisions, and reject stale results.
+  - Transfer geometry handles, diagnostics, topology provenance, and tessellation data without making rendered meshes authoritative.
+  - Keep camera navigation and input response independent of expensive geometry evaluation.
+  - Provide an application-owned gesture layer with platform adapters and customizable semantic actions, rather than coupling CAD interactions directly to mouse-button conventions.
+  - Preserve high-resolution two-axis deltas, gesture phases, cancellation, and momentum information when the platform exposes them.
+  - Validate trackpad capabilities in the pinned Bevy and windowing stack early; add native integration where required to meet the supported-platform interaction goals.
+- Licensing and kernel development
+  - Choose permissively licensed runtime dependencies consistent with the application's licensing goals.
+  - Retain each dependency's applicable license, copyright notices, and attribution requirements.
+  - Retain Monstertruck's Apache-2.0 license and notices separately from the application's WTFPL license.
+  - Treat kernel integration, robustness improvements, and missing modeling capabilities as part of the project's engineering scope.
+  - Contribute reusable improvements upstream where practical, following the upstream project's contribution and licensing requirements.
+  - Fix or extend a kernel implementation, or replace it through the application-owned contract, according to engineering needs.
+  - Evaluate kernel suitability using representative mechanical parts and imported geometry, rather than feature lists or popularity alone.
+  - Pin and record manually verified versions of the application, selected kernel, geometry dependencies, and constraint solvers.
+- User interface
+  - Provide a clean, intuitive 3D workspace.
+  - Design selection, contextual actions, graph manipulation, sketching, and feature editing around trackpad use from the beginning.
+  - Default to an empty Part1, a familiar CAD menu/command bar with Features and Sketch tabs, a left feature tree/property manager, named Front/Top/Right planes and Origin, and one model viewport.
+  - Start new modeling from sketches without primitive creation commands. Draw and edit sketches on origin planes or planar model faces in the same model viewport as the part.
+  - Use the instrument rail as the default presentation of optional Flow: a continuous left panel with an editable dependency graph and active parameter controls beside the model viewport.
+  - Expose all UI information and actions through a theme-agnostic semantic presentation model independent of widgets, layout, and renderer.
+  - Let users position, color, order, group, resize, hide, duplicate, and restyle any exposed UI element through separate declarative layout and CSS-like style resources.
+  - Expose stable identities, roles, relationships, typed values, units, draft text, diagnostics, states, command availability, and accessibility semantics without fixed visual assumptions.
+  - Support layout/theme editing, switching, sharing, and reloading without application recompilation or changes to model definitions.
+  - Keep layout and styling separate from interaction semantics; every presentation uses the same parameter identities and command path.
+  - Treat the bundled rail as one user-replaceable composition and provide recovery to a usable default after malformed or inaccessible customization.
+  - Make selection-first interaction the primary workflow: select geometry, discover applicable actions, adjust parameters, inspect a preview, and commit.
+  - Show contextual actions appropriate to the selected face, edge, vertex, or component.
+  - Place a compact action menu near the selection, with commands such as Fillet, Chamfer, Measure, Edit in place, Isolate, and Mate offered when applicable.
+  - Open the on-click action menu for actual model or sketch geometry selections. Ordinary clicks on empty space, history, toolbars, and controls do not open it.
+  - Keep sketch handles draggable with constraint-aware, live evaluated previews. All member types may be construction geometry.
+  - Let a History station display its cached evaluated model state without changing committed definitions or triggering a rebuild.
+  - Keep command search and keyboard shortcuts available alongside contextual selection actions.
+  - Allow users to cycle through overlapping faces, edges, and components, highlighting each candidate before selection is confirmed.
+  - Make the candidate's component identity and selected geometry clear when choosing through occluded geometry.
+  - Highlight the relevant source operations in the graph when geometry is selected.
+  - Keep the graph scoped to the active assembly, component, or relevant dependencies, with a breadcrumb showing the current editing context.
+  - Keep graph-to-geometry association paths restrained and show them for relevant selections rather than drawing every relationship over the assembly.
+  - Keep parameter labels and contextual controls readable and facing the screen as the camera moves.
+  - Allow graph fields, instrument rail controls, and viewport handles to edit the same authoritative parameters.
+  - Show proposed geometry as a distinguishable ghost over the committed model before Apply.
+  - Evaluate previews asynchronously on temporary document states without changing the committed model.
+  - Cancel superseded preview requests and reject stale results.
+  - Clearly label approximate previews if they are used, and validate evaluated geometry before committing.
+  - Mark pending graph edits clearly; make Apply one undoable change and Cancel discard the preview.
+  - Provide an Antimony-style node graph for model definitions.
+  - Provide a familiar parametric feature tree alongside the node graph and 3D workspace.
+  - Allow users to create and edit geometry through the graph.
+  - Allow users to create and edit geometry through the feature tree.
+  - Allow users to create and edit geometry through the 3D workspace.
+  - Make all three views operate on the same authoritative document and remain synchronized.
+  - Support nested graphs and reusable node groups.
+  - Allow users to hide graph complexity through abstraction.
+  - Show parameter values and relationships directly in the graph.
+  - Provide clear errors and failed feature diagnostics.
+  - Support keyboard shortcuts and customizable controls.
+  - Avoid unnecessary modes and separate workbenches.
+- Default instrument rail form and rendering
+  - Implement the instrument rail as a bundled default layout/theme over the semantic UI contract: a continuous left panel and a spacious 3D viewport beside it.
+  - Apply the following form guidance to the bundled default; user layouts may replace positions, organization, colors, typography, and control shapes entirely.
+  - Organize document identity, Model/History/Flow navigation, dependencies, and active parameters into aligned sections separated by strong rules.
+  - Use flat surfaces, strong borders, precise typography, and deliberate spacing; avoid repeated boxed feature cards as the default graph presentation.
+  - Present graph nodes as labeled stations on visible dependency paths, with explicit branches for shared parameters and other inputs.
+  - Keep this station layout a presentation of the authoritative typed dependency graph; do not force branching definitions into a linear feature history.
+  - Reveal input/output identities, dependency direction, expressions, and relevant diagnostics when nodes or paths are selected.
+  - Allow the rail to resize and its graph area to expand when complex branches need more space, preserving selection and editing context.
+  - Show the selected operation's parameters in a dedicated instrument section, with large readable values, explicit units, and precise numerical or expression entry.
+  - Use adjustment scales where appropriate, with clearly defined units and bounds; do not restrict exact parameter entry to the illustrated scale range.
+  - Keep scale adjustments and other parameter controls in the pending ghost-preview transaction until Apply.
+  - Use a prominent circular Apply control alongside a clearly available Cancel action, with visible preview, evaluation, validation, and failure status.
+  - Keep the active part, in-place editing scope, and shared-instance scope visible without covering the model with unnecessary containers.
+  - Use vivid colors for interactions and status alongside labels, station shapes, outlines, or hatching; keep the surrounding interface quiet.
+  - Render models with realistic material appearance, including believable brushed or machined metal, turned steel, rubber, plastics, and surface roughness.
+  - Use physically based lighting and material response, with coherent texture scale and direction and restrained surface detail.
+  - Preserve the model's material appearance during selection; use localized outlines and translucent proposed surfaces to communicate edits.
+  - Keep interface surfaces flat while allowing realistic illumination, reflections, and contact shadows in the model viewport.
+- Trackpad navigation and operation
+  - Make all essential CAD operations accessible with a trackpad and keyboard, including navigation, selection, contextual actions, precise editing, preview, Apply, and Cancel.
+  - Provide a usable primary workflow without middle-button dragging, wheel-clicking, or simultaneous mouse-button chords.
+  - Keep mouse and other input-device profiles available alongside the primary trackpad profile.
+  - Use native continuous gestures and high-resolution scrolling where available, preserving small motions for precise work.
+  - Make gesture bindings, axis directions, sensitivity, and precision modifiers configurable.
+  - Offer an alternate two-finger-pan profile with a modifier for orbit, and validate the default profile through physical usability sessions rather than assuming a universal preference.
+  - Respect operating-system trackpad preferences where applicable, including tap-to-click, secondary click, drag behavior, and scrolling direction.
+  - Keep three-finger and four-finger gestures, pressure, and haptic feedback optional; essential operations must not depend on them or on changing system-wide gesture assignments.
+  - Provide discoverable on-screen and keyboard alternatives for unavailable gestures while keeping the workflow usable with a trackpad.
+  - Keep contextual actions available from primary geometry selection; secondary click may offer an additional route but is not required to discover operations.
+  - Provide a concise gesture guide and contextual hints that can be dismissed after learning the controls.
+  - Treat the following mapping as the initial usability prototype, with final defaults verified on physical hardware.
+    - One-finger pointing and primary click or system-enabled tap select geometry, graph nodes, and controls.
+    - Two-finger movement in the 3D viewport orbits around a stable target associated with the geometry being inspected.
+    - Shift plus two-finger movement pans the 3D viewport.
+    - Pinching zooms toward the point under the cursor when supported; provide a configurable modifier-plus-scroll equivalent on trackpads whose native pinch is unavailable.
+    - Two-finger movement pans the graph and planar sketch canvases; pinch zooms those canvases where supported.
+    - Two-finger rotation may optionally roll the 3D view where supported, with an accessible way to return to an upright view.
+    - Provide fit-selection and fit-assembly commands accessible through trackpad controls and keyboard shortcuts; native smart zoom may invoke fit-selection where available.
+  - Keep the orbit pivot stable during a gesture and avoid changing it as the pointer crosses different faces or components.
+  - Keep camera movement predictable across large assemblies and small details, with usable zoom limits and no abrupt target changes.
+  - Keep each gesture assigned to the viewport, graph, sketch, field, or handle where it began until it ends or is cancelled; define explicit handling when gesture phases are unavailable.
+  - Distinguish navigation from geometry edits and prevent one gesture from both moving the camera and changing a model parameter.
+  - Support simultaneous navigation components only when their event streams can be interpreted reliably, and avoid applying duplicate gesture and emulated-wheel input twice.
+  - Stop or suppress navigation momentum when a new selection or edit begins, and never apply momentum to parameter edits.
+  - Make navigation inertia optional and independently configurable from graph or list scrolling.
+  - Keep controls close to selected geometry, with forgiving hit targets and clear candidate highlighting for small edges, faces, and overlapping components.
+  - Provide exact numerical entry, units, snapping, and a precision modifier alongside gesture-driven adjustments.
+  - Allow explicitly activated parameter fields or handles to be scrubbed with a trackpad while updating the ghost preview; ordinary scrolling over an inactive value must not change the model.
+  - Support a click-to-engage, move, and click-to-finish option for handles and drafting interactions so that sustained physical button pressure is not required.
+  - Keep parameter scrubbing and handle manipulation in the pending preview state until Apply; ending a gesture alone does not commit the operation.
+  - Allow users to reposition their fingers and resume a precision adjustment without jumping the value or losing the active editing target.
+  - Handle gesture cancellation, lost focus, and device changes without leaving a stuck navigation or edit state or silently committing geometry.
+  - Keep gesture actions consistent between standalone part editing, in-place assembly editing, and isolation.
+- Interactive previews
+  - Use the same select, discover, adjust, preview, and commit workflow for individual parts and assemblies.
+  - Preserve the committed geometry while the proposed change is evaluated and inspected.
+  - Show proposed changed surfaces, added or removed material, and component placement changes in their actual model positions.
+  - Distinguish selection highlights, neighboring ghost components, and proposed geometry using labels, outlines, or hatching as well as color.
+  - Provide an Original and Ghost comparison control before a change is committed.
+  - Show pending nodes and parameter values in the graph, including the previous value where useful.
+  - Preview the affected downstream features, components, assembly placements, and instances when a shared parameter or part definition changes.
+  - Re-evaluate affected dependencies incrementally where possible and keep the interface responsive while previews are pending.
+  - Identify each preview request by its base document revision and draft edit so that an older result cannot replace a newer proposal.
+  - Provide useful evaluation progress and failure diagnostics without discarding the current valid model or the user's draft values.
+  - Require the current proposed result to be validated before committing; do not commit a stale or failed preview.
+  - Commit all linked changes together as one undoable transaction when Apply is selected.
+  - Discard draft changes when Cancel is selected and restore the committed graph and viewport state.
+- Parametric modeling
+  - Use an exact boundary-representation geometry kernel.
+  - Use explicit modeling tolerances while preserving analytic and NURBS surfaces.
+  - Support fully constrained and partially constrained sketches.
+  - Support geometric constraints and dimensional constraints.
+  - Support sketches on planes and planar faces, and spatial 3D sketches with appropriate relations.
+  - Support extrusion, cutting, revolution, sweep, and loft operations.
+  - Support holes, patterns, fillets, chamfers, shells, and drafts.
+  - Support reference geometry, including planes, axes, and coordinate systems.
+  - Support mathematical expressions and named parameters.
+  - Support equations between parameters across different parts.
+  - Allow users to edit any operation without rebuilding the model manually.
+  - Recalculate dependent geometry automatically.
+  - Preserve geometric references across model changes.
+  - Report ambiguous or broken references instead of silently replacing them.
+  - Support reusable parametric feature definitions.
+  - Support multiple configurations of a component.
+  - Support direct face editing through application-owned parametric operations; kernel objects remain implementation details.
+  - Support the full mechanical sketch, solid, surface, reference, and pattern families and modes recorded in the coverage inventory, including trim/extend, convert/offset, sketch fillets/chamfers, thin features, boundary features, guide-controlled sweeps/lofts, direct face editing, and feature suppression.
+- Assembly design
+  - Allow users to begin a project as a complete assembly.
+  - Allow users to create parts directly inside an assembly.
+  - Allow users to edit parts in their assembly context.
+  - Allow users to isolate and edit a component inside the active assembly without opening its part document separately.
+  - Keep isolated components in their assembled positions and preserve their reference context.
+  - Allow neighboring components to be hidden or ghosted independently of their model definitions and placements.
+  - Allow useful neighboring components or reference geometry to remain visible while editing an isolated part.
+  - Allow users to pin reference components, faces, axes, or planes while hiding unrelated assembly geometry.
+  - Provide deliberate reference selection from neighboring parts without accidentally switching the component being edited.
+  - Provide a configurable held shortcut that temporarily reveals the full assembly and restores the prior isolation state when released.
+  - Keep isolation, reference visibility pins, and temporary assembly peeking as presentation state rather than geometry or placement changes.
+  - Keep the isolated part's feature tree and graph available in the assembly workspace.
+  - Allow users to move between assembly relationships and the active component's feature graph in the same document and viewport.
+  - Show the active part and editing scope clearly, with an explicit Finish editing action that returns to the assembly context.
+  - Make it clear when an edit changes a shared part definition used by multiple instances, and preview the affected instances.
+  - Provide an explicit configuration or separate-definition workflow when an instance needs different geometry.
+  - Restore the assembly's prior visibility and selection state when in-place editing ends.
+  - Support associative references between components.
+  - Support references across nested assemblies.
+  - Update dependent components after source geometry changes.
+  - Support multiple instances of the same part definition.
+  - Support fixed and adjustable component positions.
+  - Support assembly constraints for component placement.
+  - Support purchased components with fixed geometry.
+  - Separate component identity from component placement.
+  - Separate physical assembly structure from geometric dependencies.
+  - Prevent circular dependencies or report them clearly.
+  - Allow parts to reference components outside their immediate parent assembly.
+  - Preserve dependencies when users reorganize assembly structures.
+- Assembly parameter controls
+  - Allow users to promote useful part parameters into a compact set of assembly-level controls.
+  - Reference the original parameter identities and definitions rather than creating independent copies when a control is promoted.
+  - Preserve units, expressions, constraints, and authoritative values when parameters are edited through assembly controls.
+  - Allow a shared named parameter to drive multiple components through explicit graph dependencies.
+  - Show the consumers of a promoted or shared parameter in the assembly graph and associate relevant results with their geometry.
+  - Support coordinated controls such as support spacing driving component placement, shaft length, and mounting-hole patterns.
+  - Preview the coordinated geometric and placement results before applying an assembly-level parameter change.
+  - Keep component definitions, assembly placements, physical hierarchy, and parameter dependencies distinct when presenting these controls.
+- Graph system
+  - Represent geometric operations as connected nodes.
+  - Represent parameters as explicit inputs.
+  - Support multiple outputs from one node.
+  - Allow one parameter to control multiple features or components.
+  - Support reusable graph definitions.
+  - Support nested graphs with named inputs and outputs.
+  - Show dependencies between parts and assemblies.
+  - Allow users to trace a parameter to every dependent result.
+  - Highlight failed nodes and affected downstream geometry.
+  - Support graph navigation from selected 3D geometry.
+  - Support 3D selection from graph nodes.
+  - Keep graph layout separate from model evaluation.
+  - Maintain a deterministic evaluation order.
+- Shared graph and feature-tree model
+  - Store one authoritative typed dependency graph with stable node identities and explicit inputs and outputs.
+  - Present a familiar feature history for each body using explicit primary body inputs and designated body outputs.
+  - Represent graph branches and multiple body outputs explicitly in the feature tree rather than forcing every graph into one linear history.
+  - Preserve shared sketches, parameters, and reusable nodes as shared definitions rather than duplicating them for each view.
+  - Route graph, feature-tree, and 3D edits through the same transactional command system and undo history.
+  - Keep graph positions and tree presentation metadata separate from geometric dependencies.
+  - Validate feature reordering and update dependencies atomically when the modeling sequence changes.
+  - Reject edits that introduce dependency cycles or invalid inputs with clear diagnostics.
+  - Explain the affected consumers when a shared feature is edited or deleted.
+  - Keep the physical assembly tree separate from per-body feature histories and the dependency graph.
+  - Treat each sketch or assembly constraint problem as a solve operation with explicit inputs and outputs; solve its internal constraint relationships within that operation.
+- Persistent geometric references
+  - Identify references using stable feature and sketch-entity identities, semantic origins, and operation provenance.
+  - Record generated, modified, split, merged, and deleted topology where supported, and add the necessary application or kernel support where it is missing.
+  - Do not use face enumeration indices or temporary kernel handles as persistent reference identities.
+  - Define explicit selection rules for references whose source topology splits or merges.
+  - Report unresolved or ambiguous references rather than choosing a replacement silently.
+  - Verify reference reconstruction after a fresh process rebuild with all geometry caches removed.
+- Physical product structure
+  - Distinguish geometric solids from manufactured parts.
+  - Allow one part to contain multiple solids.
+  - Allow a manufactured component to retain the identities of its constituent pieces.
+  - Represent welded structures as single fabricated components with individual members.
+  - Preserve purchased component identities.
+  - Support reusable subassemblies.
+  - Separate manufacturing relationships from geometric dependencies.
+  - Support part numbers, descriptions, materials, and custom properties.
+- Manufacturing
+  - Support standard materials and custom material libraries.
+  - Support structural profiles and weldment design.
+  - Generate weldment cut lists.
+  - Support sheet-metal features and flat patterns.
+  - Support configurable bend allowances and material thicknesses.
+  - Support hole and fastener standards.
+  - Support dimensional tolerances.
+  - Support geometric dimensioning and tolerancing.
+  - Support organization-specific engineering standards.
+  - Generate 2D manufacturing drawings from 3D models.
+  - Support orthographic, section, detail, and isometric drawing views.
+  - Support dimensions, annotations, and title blocks.
+  - Generate bills of materials from product structure.
+  - Support STEP import and export.
+  - Support DXF export for profiles and flat patterns.
+  - Support STL export for additive manufacturing.
+  - Support PDF export for drawings.
+- Document format
+  - Use a documented, human-readable native file format.
+  - Store authoritative design definitions as structured text.
+  - Keep generated B-rep data in rebuildable caches.
+  - Support meaningful Git diffs.
+  - Support deterministic serialization.
+  - Preserve stable identities for parts, features, and references.
+  - Support external component references.
+  - Support shared component libraries.
+  - Support project files without a central database.
+  - Allow users to inspect model definitions without the CAD application.
+- Reliability
+  - Prevent silent corruption of model dependencies.
+  - Preserve valid geometry when unrelated features change.
+  - Report failed operations with useful diagnostic information.
+  - Support undo and redo across all modeling operations.
+  - Support automatic recovery after application failures.
+  - Support deterministic model rebuilds.
+  - Verify imported and generated geometry.
+  - Provide useful performance on large assemblies.
+  - Keep the interface responsive during complex calculations.
+- Extensibility
+  - Provide a documented API.
+  - Document replaceable subsystem contracts and the semantic UI, layout, and styling interfaces.
+  - Support custom feature nodes.
+  - Support custom geometric operations.
+  - Support reusable libraries of graph definitions.
+  - Support configurable manufacturing standards.
+  - Allow external tools to read and generate native project files.
+- Required product delivery
+  - Deliver the complete minimum mechanical CAD feature set recorded above and in the coverage inventory.
+  - Deliver constrained sketches.
+  - Deliver core solid modeling operations.
+  - Deliver synchronized 3D, graph, and feature-tree interfaces.
+  - Deliver the familiar default CAD workspace and optional instrument rail as replaceable layouts/themes with dedicated parameter controls and explicit preview, Apply, and Cancel.
+  - Deliver user-defined UI layout and styling over theme-agnostic information and actions.
+  - Deliver a primary trackpad workflow for viewport navigation, selection, graph interaction, sketching, and precise parameter editing.
+  - Validate platform gesture support and any required native adapters early in development.
+  - Deliver selection-first contextual actions and non-destructive ghost previews for the supported modeling operations.
+  - Deliver native file save and load.
+  - Deliver STEP import and export.
+  - Deliver assemblies with standard, advanced, and mechanical mates, component patterns, configurations, and large-assembly workflows.
+  - Deliver in-context part creation.
+  - Deliver in-place part editing and isolation with neighboring reference geometry available.
+  - Deliver shared assembly parameter controls and coordinated previews for supported cross-part dependencies.
+  - Deliver associative references between parts.
+  - Deliver reliable parametric updates across assemblies.
+  - Deliver production manufacturing drawings, associative dimensions, GD&T, tables, BOMs, and release management.
+  - Deliver sheet-metal design and flat patterns, weldments and cut lists, mold tooling, reusable component libraries, inspection, and CAD exchange.
+- Engineering policy
+  - Do not write tests for any code, including unit, integration, end-to-end, property, snapshot, or other automated code tests.
+  - Do not recreate code tests as assertion scripts or automated probe suites.
+  - Do not run code tests, assertion probes, or manual smoke tests. Use compilation, formatting, and linting for engineering checks; leave interactive acceptance and physical usability evaluation to the user.
+  - Keep runtime schema, dependency, constraint, and geometry validation and user-facing headless validation/export commands.
+- Kernel behavior and user acceptance criteria
+  - The following describe required product behavior and evidence for eventual acceptance. They do not authorize the coding agent to run code tests, probes, or manual smoke tests.
+  - Keep the listed modeling operations as product requirements; validate their supported cases before claiming release readiness.
+  - Maintain representative modeling examples and manually inspected outputs covering brackets, plates, shafts, housings, and multi-part assemblies.
+  - Verify Boolean operations on transverse, tangent, coincident, touching, and nearly degenerate geometry.
+  - Verify individual and chained fillets, chamfers, shells, offsets, sweeps, lofts, and drafts against the intended release scope.
+  - Verify STEP import and export using files from multiple CAD systems, including assembly placements and analytic and NURBS geometry.
+  - Check shape validity, closure, tolerances, and expected geometric properties after operations and exchange round trips.
+  - Manually exercise parameter edits across topology changes and confirm that downstream references either resolve correctly or fail explicitly.
+  - Measure evaluation, tessellation, selection, and viewport performance on reasonable hardware.
+  - Verify preview cancellation and rejection of stale results during rapid parameter edits.
+  - Verify that preview and Cancel leave authoritative definitions unchanged, and that Apply commits the current validated draft as one undoable transaction.
+  - Verify coordinated previews and commits across shared parameters, repeated part instances, and assembly placement constraints.
+  - Verify in-place editing, reference visibility pins, temporary assembly peeking, and restoration of the prior assembly presentation state.
+  - Verify candidate highlighting and selection through overlapping geometry in dense assemblies.
+  - Verify complete representative modeling and assembly workflows using only a trackpad and keyboard on each supported desktop platform.
+  - Verify rail usability with varied parameter counts, branching graphs, display sizes, and text scaling; preserve access to the active parameter controls and preview actions.
+  - Manually switch between substantially different user layouts and themes using the same semantic UI data, drafts, selections, and commands.
+  - Validate built-in MacBook trackpads, an external Apple trackpad, Windows precision touchpads, and representative Linux touchpads under the supported windowing environments.
+  - Verify the actual gesture events, high-resolution deltas, pinch alternatives, and routing behavior available on each physically checked platform and device.
+  - Check orbit, pan, cursor-anchored zoom, selection, graph navigation, sketching, parameter scrubbing, contextual actions, and in-place editing with physical hardware.
+  - Verify that navigation gestures and ordinary field scrolling cannot accidentally edit parameters or commit a pending preview.
+  - Verify gesture cancellation, momentum suppression, finger repositioning, modifier transitions, focus loss, and switching between pointing devices.
+  - Verify that unavailable native gestures and reserved system gestures do not prevent any essential CAD operation.
+  - Measure input responsiveness, camera frame pacing, small-motion precision, and interaction comfort while geometry evaluation is running and while navigating dense assemblies.
+  - Evaluate task completion time, selection mistakes, accidental edits, and fatigue with mechanical CAD users, including comparisons with their existing mouse workflows.
+  - Verify reproducible rebuilds in fresh processes with pinned dependencies and disposable caches.
+  - Include a small set of independently checked outputs so that matching results from the same kernel do not constitute the only correctness evidence.
+  - Return clear unsupported-operation or invalid-geometry errors for cases that are not yet reliable.
+  - Keep any approximate or mesh-based results explicit; require the intended B-rep representation for operations and exports that depend on it.
+  - Close kernel and solver gaps until the complete mechanical CAD baseline is supported; narrow current adapters do not define the product's feature limits.
+- Optional access
+  - Support optional browser access without a cloud requirement.
+- Outside the mechanical CAD baseline
+  - No AI-assisted modeling.
+  - No generative design.
+  - No motion simulation.
+  - No integrated FEA or CFD.
+  - No cloud dependency.
+  - No proprietary project format.
+  - No requirement to replace established CAD modeling principles.
+- Core philosophy
+  - Treat the native CAD model as human-readable source code.
+  - Treat generated geometry as a reproducible result of that source.
+  - Make Git a first-class part of the workflow.
+  - Keep all design data local by default.
+  - Require no account, server, or proprietary database.
+  - Allow engineers to use familiar CAD workflows without knowledge of Git.
+  - Allow advanced users to inspect, edit, and automate design files.
+- Human-readable native format
+  - Store authoritative design definitions in structured text files.
+  - Use an open, documented file format.
+  - Store parameters, dimensions, constraints, features, and dependencies explicitly.
+  - Store graph connections as readable references.
+  - Store assembly structures separately from geometric dependencies.
+  - Give every part, feature, parameter, and reference a stable identifier.
+  - Preserve identifiers across normal model revisions.
+  - Use explicit units and coordinate systems.
+  - Use deterministic file serialization.
+  - Keep file changes small and localized.
+  - Preserve meaningful names provided by engineers.
+  - Avoid unnecessary file changes when users save a project.
+  - Support comments and custom metadata.
+  - Validate externally modified design files.
+  - Provide documented schemas and file format versions.
+  - Support migration between file format versions.
+- Project structure
+  - Store projects in ordinary filesystem directories.
+  - Store each part definition in a separate file.
+  - Store assembly definitions independently from part definitions.
+  - Store reusable graph definitions in separate files.
+  - Store materials, standards, and component libraries as project resources.
+  - Allow external references to shared libraries.
+  - Keep large binary assets separate from text definitions.
+  - Store imported STEP files as binary resources.
+  - Store generated B-reps and meshes in rebuildable caches.
+  - Exclude temporary caches from Git by default.
+  - Support relative paths for portable projects.
+- Git integration
+  - Support standard Git repositories directly.
+  - Allow users to initialize a repository from the CAD application.
+  - Show uncommitted design changes.
+  - Create commits with descriptive messages.
+  - Support branches for alternative design revisions.
+  - Support checkout of previous design revisions.
+  - Support comparison between commits.
+  - Support local commits without internet access.
+  - Support remote repositories through standard Git protocols.
+  - Support GitHub, GitLab, Forgejo, and self-hosted repositories.
+  - Preserve compatibility with command-line Git.
+  - Do not require users to adopt a proprietary version control system.
+- Visual design history
+  - Display the revision history of each part and assembly.
+  - Show who changed a design and when.
+  - Show commit messages and associated revisions.
+  - Allow users to open previous model states.
+  - Compare two revisions in the 3D workspace.
+  - Highlight added, removed, and modified geometry.
+  - Show changes to dimensions and parameters.
+  - Show changes to constraints and references.
+  - Show changes to assembly composition.
+  - Show changes to materials and properties.
+  - Allow users to inspect the dependency impact of a revision.
+- Semantic differences
+  - Compare CAD definitions, not only text lines.
+  - Identify changes to feature parameters.
+  - Identify changes to mathematical expressions.
+  - Identify added and removed graph nodes.
+  - Identify modified graph connections.
+  - Identify changes to cross-part references.
+  - Distinguish geometric changes from metadata changes.
+  - Present differences through the graph and 3D workspace.
+  - Keep ordinary text diffs available.
+- Branch and merge workflows
+  - Allow engineers to create separate branches for design alternatives.
+  - Allow independent work on different parts.
+  - Support standard Git merges.
+  - Provide CAD-aware merge conflict detection.
+  - Merge independent changes to different model entities.
+  - Detect conflicting changes to the same parameter or relationship.
+  - Detect broken references after a merge.
+  - Detect circular dependencies introduced by a merge.
+  - Show conflicting geometry and definitions visually.
+  - Require explicit resolution of ambiguous geometric conflicts.
+  - Recalculate affected geometry after a merge.
+  - Verify the complete model before accepting a merge.
+  - Never silently discard conflicting design changes.
+  - Preserve standard Git conflict resolution tools as a fallback.
+- Design review
+  - Support review of proposed changes before integration.
+  - Show changes to geometry, parameters, drawings, and BOMs.
+  - Show the parts and assemblies affected by a change.
+  - Allow reviewers to comment on specific features or parameters.
+  - Allow reviewers to comment on specific geometric references.
+  - Associate review comments with stable model identifiers.
+  - Support optional approval requirements.
+  - Integrate with standard pull request workflows.
+  - Keep review functionality independent from a specific cloud provider.
+- Component version control
+  - Give each component definition a stable identity.
+  - Separate component identity from its revision.
+  - Support references to specific component revisions.
+  - Support references to released component versions.
+  - Allow engineers to update references explicitly.
+  - Show available updates to referenced components.
+  - Show the effect of an update before acceptance.
+  - Support shared libraries across multiple projects.
+  - Preserve the exact component revisions used in an assembly.
+  - Prevent unexpected changes to released component definitions.
+- Manufacturing release management
+  - Distinguish work revisions from released revisions.
+  - Support immutable manufacturing releases.
+  - Associate released drawings with exact model revisions.
+  - Associate BOMs with exact assembly revisions.
+  - Record material and manufacturing specifications.
+  - Record the software and geometry kernel versions used for each release.
+  - Generate STEP, DXF, PDF, and other manufacturing outputs.
+  - Record the source revision for every generated output.
+  - Support revision identifiers for parts and drawings.
+  - Allow users to reproduce released manufacturing packages.
+  - Detect changes made after a release.
+  - Prevent accidental modification of released definitions.
+- Automation and validation
+  - Provide a command-line interface.
+  - Support headless model evaluation.
+  - Support automated geometry rebuilds.
+  - Support automated dependency validation.
+  - Verify references and constraint consistency.
+  - Check geometric validity after model revisions.
+  - Detect missing external components.
+  - Detect unresolved dependencies.
+  - Support organization-specific design rules.
+  - Support automated STEP and drawing exports.
+  - Support Git hooks and CI pipelines.
+  - Return clear errors when a model fails validation.
+  - Produce machine-readable validation reports.
+- Reliability and reproducibility
+  - Rebuild models from authoritative text definitions.
+  - Treat binary geometry caches as disposable.
+  - Record geometry kernel and solver versions.
+  - Detect differences between rebuild results.
+  - Preserve stable references wherever possible.
+  - Report ambiguous topology references.
+  - Avoid automatic reference substitutions without user approval.
+  - Use content hashes to verify external resources.
+  - Support reliable recovery from incomplete file operations.
+  - Preserve project integrity after failed model evaluation.
+- Important technical constraints
+  - Do not store authoritative geometry only as a B-rep.
+  - Do not assume every CAD change has a safe automatic merge.
+  - Do not treat equal final geometry as proof of equal design intent.
+  - Do not require one file for the entire product.
+  - Do not store large binary caches directly in Git.
+  - Support Git LFS for large imported resources when necessary.
+  - Separate physical product structure from the dependency graph.
+  - Keep document version history separate from parametric feature history.
+- User experience
+  - Make Save work like a conventional CAD application.
+  - Keep version control optional for individual users.
+  - Provide a simple revision history panel.
+  - Provide visual comparisons without requiring Git commands.
+  - Provide advanced Git controls without hiding standard Git functionality.
+  - Allow engineers to work entirely offline.
+  - Make Git conflicts understandable through the CAD interface.
+  - Keep the current model available during revision inspection.
+  - Allow users to restore earlier revisions without manual file operations.
+- Primary requirement
+  - Make a complete mechanical design readable, versionable, comparable, and reproducible without proprietary CAD infrastructure.
+- Key architectural principle
+  - Use text files as the authoritative source, Git for revision control, and application-owned contracts for parametric semantics, evaluated geometry, and presentation; Rust, Monstertruck, and Bevy are the initial implementations.
+  - Keep document persistence, revision control, parametric evaluation, kernel integration, and presentation independent.
+  - Keep semantic UI information/actions, user-defined composition, and visual styling independent and replaceable.
+  - Make the graph, feature tree, and 3D workspace operate on the same authoritative definitions.
+- Primary product requirement
+  - Allow an engineer to design a complete parametric assembly with associative parts, inspect its dependencies, and produce accurate manufacturing information.
+  - Make the trackpad the preferred way to navigate and operate that workflow through deliberate gesture design, precise controls, and verified hardware usability.
+- UI references
+  - Use the instrument rail reference for the bundled default interface; the earlier Flow mockups document the approved interaction behaviors. Users can replace the visual layout and styling. Example geometry, dimensions, and graph layouts are illustrative.
+  - [Instrument rail — default layout](../assets/ui/instrument-rail.png): a continuous left panel, open dependency stations, a dedicated parameter instrument, a circular Apply control, and a spacious viewport with realistic materials.
+  - [Flow baseline](../assets/ui/flow.png): spacious 3D workspace with a compact editable graph and a visible connection between a selected node and its geometry.
+  - [Select geometry first](../assets/ui/flow-select-first.png): geometry selection reveals nearby contextual actions and the relevant source feature.
+  - [Preview before Apply](../assets/ui/flow-ghost-preview.png): proposed surfaces appear over the committed model while the graph shows a pending edit with Apply and Cancel.
+  - [Assembly selection and relationships](../assets/ui/flow-assembly-overview.png): selecting assembly geometry reveals part actions and its relationship graph.
+  - [Isolate and edit in place](../assets/ui/flow-assembly-isolate.png): edit a part in the active assembly, retain useful references, and expose shared-instance scope.
+  - [Preview linked assembly changes](../assets/ui/flow-assembly-linked-preview.png): inspect the coordinated effects of a shared assembly parameter before committing.

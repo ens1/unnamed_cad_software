@@ -1,0 +1,27 @@
+{
+  "schema_version": 0,
+  "kind": "draft_edit_fixture",
+  "base_document_revision": 0,
+  "draft_id": "draft-radius-demo",
+  "edit_sequence": 1,
+  "source_fingerprint": "compute from the canonical committed project",
+  "changes": [
+    {
+      "definition": "part-bearing-support",
+      "parameter": "param-support-radius",
+      "proposed_literal": {
+        "value": 6,
+        "unit": "mm"
+      }
+    }
+  ],
+  "expected_affected_instances": [
+    "support-left",
+    "support-right"
+  ],
+  "expected_semantics": {
+    "preview_changes_source": false,
+    "cancel_changes_source": false,
+    "apply_undo_entries": 1
+  }
+}

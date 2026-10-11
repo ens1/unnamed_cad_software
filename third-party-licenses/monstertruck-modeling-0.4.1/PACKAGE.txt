@@ -1,0 +1,4 @@
+monstertruck-modeling-0.4.1
+Declared SPDX license: Apache-2.0
+Source: https://github.com/virtualritz/monstertruck
+The published crate did not include a top-level license text.

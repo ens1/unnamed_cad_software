@@ -1,0 +1,15 @@
+[package]
+name = "cad-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "tcad"
+path = "src/main.rs"
+
+[dependencies]
+cad-core.workspace = true
+cad-kernel.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive"] }

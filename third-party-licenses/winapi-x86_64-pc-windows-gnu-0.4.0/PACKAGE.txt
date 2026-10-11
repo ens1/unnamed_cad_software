@@ -1,0 +1,4 @@
+winapi-x86_64-pc-windows-gnu-0.4.0
+Declared SPDX license: MIT/Apache-2.0
+Source: https://github.com/retep998/winapi-rs
+The published crate did not include a top-level license text.

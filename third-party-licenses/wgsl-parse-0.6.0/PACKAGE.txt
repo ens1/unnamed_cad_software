@@ -1,0 +1,4 @@
+wgsl-parse-0.6.0
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://github.com/webgpu-tools/wesl-rs
+The published crate did not include a top-level license text.

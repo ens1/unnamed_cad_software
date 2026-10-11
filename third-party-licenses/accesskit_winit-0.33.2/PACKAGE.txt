@@ -1,0 +1,4 @@
+accesskit_winit-0.33.2
+Declared SPDX license: Apache-2.0
+Source: https://github.com/AccessKit/accesskit
+The published crate did not include a top-level license text.

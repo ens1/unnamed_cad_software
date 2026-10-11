@@ -1,0 +1,4 @@
+jni-sys-macros-0.4.1
+Declared SPDX license: MIT OR Apache-2.0
+Source: https://github.com/jni-rs/jni-sys
+The published crate did not include a top-level license text.

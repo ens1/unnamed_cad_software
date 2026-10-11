@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "document": {
+    "schema_version": 1,
+    "id": "1bb84ede-4885-4ed9-b0cf-d93f83db05c1",
+    "name": "Part1",
+    "revision": 7,
+    "root": "19c963ae-08af-40c6-9832-06b954000c11",
+    "parts": {},
+    "assemblies": {},
+    "materials": {
+      "aluminum": {
+        "id": "aluminum",
+        "name": "Aluminum",
+        "density_kg_m3": 2700.0,
+        "color": [
+          0.68,
+          0.72,
+          0.77
+        ],
+        "metallic": 1.0,
+        "roughness": 0.28
+      },
+      "plastic": {
+        "id": "plastic",
+        "name": "Polymer",
+        "density_kg_m3": 1200.0,
+        "color": [
+          0.17,
+          0.2,
+          0.25
+        ],
+        "metallic": 0.0,
+        "roughness": 0.4
+      },
+      "rubber": {
+        "id": "rubber",
+        "name": "Rubber",
+        "density_kg_m3": 1100.0,
+        "color": [
+          0.025,
+          0.028,
+          0.03
+        ],
+        "metallic": 0.0,
+        "roughness": 0.85
+      },
+      "steel": {
+        "id": "steel",
+        "name": "Steel",
+        "density_kg_m3": 7850.0,
+        "color": [
+          0.42,
+          0.46,
+          0.52
+        ],
+        "metallic": 1.0,
+        "roughness": 0.22
+      }
+    },
+    "resources": {},
+    "drawings": [],
+    "comments": [],
+    "properties": {
+      "document_kind": "part"
+    },
+    "libraries": {}
+  },
+  "parts": {
+    "9d3e2e79-5322-41e9-8a41-91211dd84d76": "parts/9d3e2e79-5322-41e9-8a41-91211dd84d76.json"
+  },
+  "assemblies": {
+    "19c963ae-08af-40c6-9832-06b954000c11": "assemblies/19c963ae-08af-40c6-9832-06b954000c11.json"
+  }
+}
