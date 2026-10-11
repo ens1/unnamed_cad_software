@@ -200,4 +200,15 @@ renderer/kernel objects become document source.
 
 Visual finish and studio-lighting editors publish contract-v1 `appearance-field`, `appearance-assignment`, `occurrence-appearance` and `lighting-field` descriptors. Native controls use their stable IDs and setters; custom layouts can repeat or bind the same fields/actions. Appearance input controls, tabs and source text also publish transient setters. Engineering material editing remains separate. Viewport styles additionally accept finite numeric `environment-intensity`, `key-light-intensity`, `fill-light-intensity` (0–20), `environment-rotation` (degrees, ±1000000), `exposure` (stops, −10–10), and `ambient-occlusion-radius` (render units, 0.001–10; one unit is 100 mm), plus `shadows: true | false | none`. These presentation overrides leave saved document lighting unchanged. See [visual finishes](visual-finishes.md) for mapping, relief, configuration assignments and limits.
 
+The dedicated `workspace.appearance-panel` view uses role `appearance-panel`
+and semantic `open`/`closed` state. Bundled compositions dock it beside the model
+viewport with user-resizable width; closed panels release their layout space.
+Users may move, restyle, duplicate or replace it through the ordinary composition
+contract. Existing custom compositions that omit it retain the property-manager
+appearance editor. Explicit target part/scope/instance fields use transient
+`appearance-ui` setters. Per-target customization duplicates and assigns a
+finish through the shared draft; editing a library finish requires the explicit
+shared-edit action. All import/clear actions still publish the finish and map
+slot independently of their widgets. See [visual finishes](visual-finishes.md).
+
 The Settings dialog exposes `settings:dialog`, `settings:category:<category>`, and `settings:field:<scope>:<pointer>` descriptors with typed values, ranges, choices, stable setter `settings`, and scope/editability metadata. Settings fields can be bound by user compositions; edits open the same scoped transaction as native controls. Search is a transient `settings-search` field. `settings`, `settings.model`, `settings.application`, category-opening commands, and Apply/OK/Cancel are ordinary actions. The default modal uses `settings-dialog`, `settings-category`, `settings-field`, `settings-heading`, `settings-description`, and `settings-action` style roles. CSS width/height, left/right/top/bottom and percentage lengths control modal sizing and placement; without explicit dimensions the native surface can be resized. Application and model data remain independent of these visual choices. See [settings](settings.md).

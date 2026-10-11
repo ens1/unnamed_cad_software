@@ -464,6 +464,11 @@ impl Workspace {
         self.manager_tree = false;
     }
     pub fn editing_manager(&self) -> bool {
+        if self.dialog.as_deref() == Some("appearances")
+            && presentation_composition::appearance_panel_hosted(self)
+        {
+            return false;
+        }
         (self.dialog.is_some() || self.recovery_draft.is_some()) && !self.manager_tree
     }
     pub fn start_tool(&mut self) {
@@ -874,7 +879,7 @@ fn poll_workers(mut w: ResMut<Workspace>) {
             >= w.application_preferences.recovery_interval_seconds
     {
         w.last_recovery_write = Instant::now();
-        let recovery = serde_json::json!({"source":w.saved_source,"committed":w.session.committed,"draft":w.session.draft.as_ref().map(|d|&d.document)});
+        let recovery = serde_json::json!({"source":w.saved_source,"resource_root":w.root(),"committed":w.session.committed,"draft":w.session.draft.as_ref().map(|d|&d.document)});
         let data = serde_json::to_string(&recovery).unwrap_or_default();
         if data != w.last_recovery {
             let path = w.recovery_path.clone();

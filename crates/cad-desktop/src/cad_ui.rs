@@ -1017,7 +1017,7 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Configurations…", "configurations"),
                 ("Equations…", "equations"),
                 ("Engineering Materials…", "materials"),
-                ("Visual Finishes…", "appearances"),
+                ("Appearance · Colors and Textures…", "appearances"),
                 ("Studio Lighting…", "lighting"),
                 ("Manufacturing…", "manufacturing"),
                 ("Drawings…", "drawings"),
@@ -1970,11 +1970,15 @@ pub fn properties(ui: &mut egui::Ui, w: &mut Workspace) {
         ui.label(&feature.name);
         ui.small(feature.operation.name());
         if ui
-            .button(if matches!(feature.operation, Operation::Profile { .. }) {
-                "Edit Sketch"
-            } else {
-                "Edit Feature"
-            })
+            .add_enabled(
+                !w.fields.contains_key("appearance-tool"),
+                egui::Button::new(if matches!(feature.operation, Operation::Profile { .. }) {
+                    "Edit Sketch"
+                } else {
+                    "Edit Feature"
+                }),
+            )
+            .on_disabled_hover_text("Apply or cancel appearance changes before editing a feature")
             .clicked()
         {
             ui::feature_dialog(w, Some(feature.clone()));

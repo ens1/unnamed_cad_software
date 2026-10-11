@@ -38,6 +38,10 @@
     },
     "status": {
       "role": "status-bar"
+    },
+    "appearance-panel": {
+      "role": "appearance-panel",
+      "bind": "workspace.appearance-panel"
     }
   },
   "layouts": {
@@ -239,6 +243,14 @@
                   ]
                 }
               ]
+            },
+            {
+              "id": "nocturne-workspace/appearance-panel",
+              "use": "appearance-panel",
+              "width_logical_px": 300,
+              "min_width_logical_px": 250,
+              "max_width_logical_px": 580,
+              "resizable": true
             }
           ]
         },
@@ -455,6 +467,14 @@
                   ]
                 }
               ]
+            },
+            {
+              "id": "instrument-rail/appearance-panel",
+              "use": "appearance-panel",
+              "width_logical_px": 300,
+              "min_width_logical_px": 250,
+              "max_width_logical_px": 580,
+              "resizable": true
             }
           ]
         },
@@ -680,6 +700,14 @@
                   ]
                 }
               ]
+            },
+            {
+              "id": "graph-workspace/appearance-panel",
+              "use": "appearance-panel",
+              "width_logical_px": 300,
+              "min_width_logical_px": 250,
+              "max_width_logical_px": 580,
+              "resizable": true
             }
           ]
         },

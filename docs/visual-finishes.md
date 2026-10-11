@@ -6,9 +6,23 @@ New parts use **Aluminum · Clear Anodized** (`clear-anodized-aluminum`). The fi
 
 ## Editing a finish
 
-Open **Visual Finishes** from the menu/command search or a part/component's context actions. Choose a finish, create a new finish or duplicate one. **Assign to part (base)** changes the part definition's base assignment. **Assign to occurrence** overrides the selected component instance; **Use part finish** clears that override and resumes inheritance. Changing a shared finish updates every assignment using that finish.
+Open **Appearance · Colors and Textures** from Tools, command search, or a
+part/component's context actions. The bundled layouts provide a separate,
+resizable Appearance panel beside the model viewport; the feature tree remains
+available. Choose an explicit part and assignment scope, then assign a named
+finish or customize that target. Target customization duplicates its finish and
+assigns the copy in the common draft, so changing its color or texture does not
+change unrelated parts that share the original. **Edit shared finish**
+deliberately edits the library definition and every assignment using it.
+Occurrence overrides and inheritance remain separate from the base part finish.
 
-The property manager includes tint, metallic, roughness, clearcoat, clearcoat roughness, normal strength and bump depth. Each texture slot supports Import/Replace, Clear and selection of an existing pinned project image. Mapping controls set projection, physical tile width/height, direction and U/V offsets. Complete finish JSON remains under Advanced source.
+The panel includes tint, metallic, roughness, clearcoat, clearcoat roughness,
+normal strength and bump depth. **Height / bump → Import/Replace** accepts a
+user's grayscale image. Each texture slot also supports Clear and selection of
+an existing pinned project image. Mapping controls set projection, physical tile
+width/height, direction and U/V offsets. Complete finish JSON remains under
+Advanced source. Older custom layouts without the dedicated panel retain the
+property-manager editor; bind `workspace.appearance-panel` to place it anywhere.
 
 Changes use the shared document draft and undo history. The viewport displays the proposed finish and lighting over the last valid geometry while the current evaluation is pending. **OK/Apply** requires that current validated evaluation, valid editor source and resolved renderer asset diagnostics; it commits one undoable change. **Cancel** restores the editor's starting checkpoint. Opening the editor and confirming without a source change closes it without adding an undo entry. Imported immutable files may remain as unreferenced project assets after Cancel; committed definitions stay unchanged.
 
@@ -33,7 +47,7 @@ Texture coordinates use the part's local CAD millimetres, so they follow the par
 
 Import accepts **PNG, JPEG, TIFF and WebP**. Files must be nonempty regular files, at most **64 MiB encoded**, at most **8192 pixels on either axis**, and at most **64 MiB of decoded RGBA pixels**. A 4096×4096 image fits the pixel limit. Decoder allocation is bounded to 128 MiB. Color, normal and ordinary scalar maps are converted to RGBA8. Height maps preserve 8/16-bit and normalized floating-point source values through floating-point mip generation, then use filterable single-channel R16Float GPU images. This retains more relief precision than RGBA8; the GPU half-float format still rounds source heights.
 
-Images become checksum-pinned `Resource` entries rather than references to the original file's absolute path. Their bytes live under portable `imports/<sha256>.<extension>` paths. A finish refers to the resource ID. Changed, missing, unsupported or oversized files produce diagnostics; replacement imports pin the intended new bytes. Save As copies committed, draft and checkpoint resources before switching project roots. Component library imports namespace finish/resource IDs and retain exact resource bytes.
+Images become checksum-pinned `Resource` entries rather than references to the original file's absolute path. Their bytes live under portable `imports/<sha256>.<extension>` paths. A finish refers to the resource ID. Import pins the exact bounded buffer checked for format and dimensions, without reopening the source. Changed, missing, unsupported or oversized files produce diagnostics; replacement imports pin the intended new bytes. Save As copies committed, draft and checkpoint resources before switching project roots. Component library imports namespace finish/resource IDs and retain exact resource bytes. Recovery snapshots record their resource root; manual recovery copies committed and pending resources into the recovered document's unsaved asset directory before replacing the active model. Missing recovery assets produce an error while preserving the active model.
 
 The renderer generates a full mip chain, averages color in linear light, averages scalar/normal data as linear values, and uses repeat sampling, trilinear filtering and anisotropy. Import checks format and bounded dimensions before pinning bytes; full decoding and height-value validation complete in the asset worker before Apply. Image loading runs outside the UI thread with up to two concurrent loads. All finish maps share a repeat/linear sampler; obsolete images are released as document/root/finish sources change, and obsolete load replies are discarded. The runtime image cache is bounded to 128 images and 512 MiB of image data; cache exhaustion is reported rather than silently accepting an unavailable texture. Decoded assets are renderer caches, not CAD authority.
 
@@ -57,6 +71,6 @@ Native schema 1 remains readable. Absent finish/lighting fields receive defaults
 
 Semantic roles include `appearance-library`, `surface-finish`, `appearance-field`, `appearance-assignment`, `occurrence-appearance`, `scene-lighting` and `lighting-field`. Stable IDs include `finish:<id>::/roughness`, `finish:<id>::/textures/height`, `<part-id>::finish` and `viewport-lighting::/exposure`. Value descriptors publish choices, None/Inherit, units, bounds, editable states and disabled action reasons. Custom layouts bind these same fields through `appearance-finish`, `appearance-part`, `appearance-instance` and `appearance-lighting` setters; native and custom controls share commands and drafts.
 
-CSS-like presentation resources can style, move, duplicate or hide these semantic controls. Styling a control does not change its finish or engineering material. The viewport adapter's lighting style overrides are separate presentation values; explicit overrides take precedence over saved scene settings without rewriting those settings. Supported viewport properties and their validation are published by the presentation contract. Selection continues to use localized outlines rather than replacing the finish; comparison and proposed geometry use their existing semantic overlay colors.
+CSS-like presentation resources can style, move, duplicate or hide these semantic controls. `workspace.appearance-panel` publishes open/closed state through the `appearance-panel` role; bundled themes reclaim its space when closed. Target selectors and customization actions are semantic controls with transient setters, separate from saved finish definitions. Styling a control does not change its finish or engineering material. The viewport adapter's lighting style overrides are separate presentation values; explicit overrides take precedence over saved scene settings without rewriting those settings. Supported viewport properties and their validation are published by the presentation contract. Selection continues to use localized outlines rather than replacing the finish; comparison and proposed geometry use their existing semantic overlay colors.
 
 Compilation, formatting and linting are implementation checks. No automated tests, probes or interactive acceptance runs were performed; visual acceptance remains with the user.

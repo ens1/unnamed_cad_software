@@ -137,7 +137,7 @@ pub fn project(
                     ("sketch.new", "New Sketch…", "Model", reason),
                     ("selection.fit", "Zoom to Part", "View", None),
                     ("materials", "Engineering Material…", "Properties", reason),
-                    ("appearances", "Surface Finish…", "Properties", reason),
+                    ("appearances", "Colors and Textures…", "Properties", reason),
                     ("parameter.new", "New Parameter", "Properties", reason),
                     ("configurations", "Configurations", "Properties", reason),
                     ("equations", "Equations", "Properties", reason),
@@ -161,7 +161,7 @@ pub fn project(
                         None,
                     ),
                     ("assembly.edit", "Edit Component", "Properties", reason),
-                    ("appearances", "Surface Finish…", "Properties", reason),
+                    ("appearances", "Colors and Textures…", "Properties", reason),
                     ("selection.mate", "Mate…", "Component", reason),
                 ],
                 "component-pattern" => vec![
@@ -185,7 +185,7 @@ pub fn project(
                 "parameter-field" => vec![("object.edit", "Edit Parameter", "Properties", None)],
                 "material" => vec![("materials", "Engineering Material…", "Properties", reason)],
                 "surface-finish" | "appearance-assignment" | "occurrence-appearance" => {
-                    vec![("appearances", "Surface Finish…", "Properties", reason)]
+                    vec![("appearances", "Colors and Textures…", "Properties", reason)]
                 }
                 "assembly" => vec![
                     (

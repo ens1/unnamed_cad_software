@@ -292,6 +292,103 @@
       "properties": {
         "color": "var(--error)"
       }
+    },
+    {
+      "selector": "[role=appearance-panel]",
+      "properties": {
+        "display": "none",
+        "background": "var(--panel)",
+        "padding": "6px",
+        "border": "1px solid #C2C5CA",
+        "gap": "4px",
+        "font-size": "11px"
+      }
+    },
+    {
+      "selector": "[role=appearance-panel][state=open]",
+      "properties": {
+        "display": "block"
+      }
+    },
+    {
+      "selector": "[role=appearance-panel][state=closed]",
+      "properties": {
+        "display": "none"
+      }
+    },
+    {
+      "selector": "[role=appearance-heading]",
+      "properties": {
+        "font-size": "12px",
+        "font-weight": "bold"
+      }
+    },
+    {
+      "selector": "[role=appearance-description]",
+      "properties": {
+        "font-size": "10px",
+        "color": "#666666"
+      }
+    },
+    {
+      "selector": "[role=appearance-panel] .semantic-control, [role=appearance-action], [role=appearance-tab], [role=appearance-target]",
+      "properties": {
+        "height": "24px",
+        "min-target-size": "24px",
+        "padding": "3px 6px",
+        "border-radius": "3px",
+        "font-size": "11px"
+      }
+    },
+    {
+      "selector": "[role=appearance-action], [role=appearance-tab], [role=appearance-target]",
+      "properties": {
+        "background": "#F4F1E9",
+        "border": "1px solid #C2C5CA"
+      }
+    },
+    {
+      "selector": "[role=appearance-action]:hover, [role=appearance-tab]:hover, [role=appearance-target]:hover",
+      "properties": {
+        "background": "#E4E0D8"
+      }
+    },
+    {
+      "selector": "[role=appearance-tab][state=selected], [role=appearance-target][state=selected]",
+      "properties": {
+        "background": "#FFE3D2",
+        "color": "var(--active)",
+        "border": "1px solid var(--active)"
+      }
+    },
+    {
+      "selector": "[role=appearance-field], [role=appearance-library-selection], [role=appearance-source]",
+      "properties": {
+        "font-size": "11px",
+        "gap": "4px",
+        "padding": "3px 4px",
+        "border-radius": "3px",
+        "min-target-size": "24px"
+      }
+    },
+    {
+      "selector": "[role=appearance-texture-row]",
+      "properties": {
+        "background": "#ECE9E2",
+        "padding": "5px",
+        "border": "1px solid #C2C5CA",
+        "border-radius": "3px",
+        "gap": "4px"
+      }
+    },
+    {
+      "selector": "[role=appearance-swatch]",
+      "properties": {
+        "height": "24px",
+        "width": "24px",
+        "border": "1px solid #A9ACAF",
+        "border-radius": "3px"
+      }
     }
   ]
 }

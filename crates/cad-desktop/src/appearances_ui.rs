@@ -16,6 +16,21 @@ const SOURCE: &str = "appearance-source";
 const INVALID: &str = "appearance-source-invalid";
 const IMPORT: &str = "appearance.texture.import/";
 const CLEAR: &str = "appearance.texture.clear/";
+const TARGET_PART: &str = "appearance-target-part";
+const TARGET_SCOPE: &str = "appearance-target-scope";
+const TARGET_INSTANCE: &str = "appearance-target-instance";
+const EDIT_MODE: &str = "appearance-edit-mode";
+const CUSTOM_TARGET: &str = "appearance-custom-target";
+const CUSTOM_FINISH: &str = "appearance-custom-finish";
+const SECTION_TOGGLE: &str = "appearance.section.toggle/";
+const SECTIONS: &[(&str, &str, bool)] = &[
+    ("shared-library", "Shared finish library", false),
+    ("color-values", "Color values", false),
+    ("surface", "Surface response", true),
+    ("textures", "Textures · import images", true),
+    ("mapping", "Tile size and mapping", true),
+    ("source", "Advanced source", false),
+];
 
 fn selected(w: &Workspace) -> Option<Id> {
     w.fields
@@ -24,25 +39,107 @@ fn selected(w: &Workspace) -> Option<Id> {
         .filter(|id| w.session.visible().finishes.contains_key(id))
 }
 fn initial(w: &Workspace) -> Option<Id> {
-    if let Ok(placed) = w.session.visible().placed_parts()
-        && let Some(part) = placed.iter().find(|placed| {
-            w.view.active_part.as_ref() == Some(&placed.definition)
-                && w.view
-                    .active_instance
-                    .as_ref()
-                    .is_none_or(|id| placed.path.last() == Some(id))
+    assigned_finish(w).or_else(|| w.session.visible().finishes.keys().next().cloned())
+}
+fn target_part(w: &Workspace) -> Option<Id> {
+    w.fields
+        .get(TARGET_PART)
+        .or(w.view.active_part.as_ref())
+        .filter(|id| w.session.visible().parts.contains_key(*id))
+        .cloned()
+        .or_else(|| w.session.visible().parts.keys().next().cloned())
+}
+fn instance_choices(w: &Workspace) -> Vec<(Id, Id, String)> {
+    let part = target_part(w);
+    w.session
+        .visible()
+        .assemblies
+        .values()
+        .flat_map(|assembly| {
+            assembly
+                .instances
+                .values()
+                .filter(|instance| part.as_ref() == Some(&instance.definition))
+                .map(|instance| {
+                    (
+                        assembly.id.clone(),
+                        instance.id.clone(),
+                        format!("{} / {}", assembly.name, instance.name),
+                    )
+                })
         })
-        && let Ok(finish) = cad_core::appearance::resolve_finish(w.session.visible(), part)
-    {
-        return Some(finish.id.clone());
+        .collect()
+}
+fn instance_key(assembly: &str, instance: &str) -> String {
+    format!("{assembly}/{instance}")
+}
+fn target_instance(w: &Workspace) -> Option<(Id, Id)> {
+    let choices = instance_choices(w);
+    if let Some(key) = w.fields.get(TARGET_INSTANCE) {
+        return choices.into_iter().find_map(|(assembly, instance, _)| {
+            (instance_key(&assembly, &instance) == *key).then_some((assembly, instance))
+        });
     }
-    w.view
-        .active_part
-        .as_ref()
-        .and_then(|id| w.session.visible().parts.get(id))
+    let id = w.view.active_instance.as_ref()?;
+    let mut matching = choices
+        .into_iter()
+        .filter(|(_, instance, _)| instance == id);
+    let (assembly, instance, _) = matching.next()?;
+    matching.next().is_none().then_some((assembly, instance))
+}
+fn instance_scope(w: &Workspace) -> bool {
+    w.fields.get(TARGET_SCOPE).map(String::as_str) == Some("instance")
+        && target_instance(w).is_some()
+}
+fn assigned_finish(w: &Workspace) -> Option<Id> {
+    let document = w.session.visible();
+    if instance_scope(w)
+        && let Some((assembly, instance)) = target_instance(w)
+    {
+        if let Ok(placed) = document.placed_parts()
+            && let Some(part) = placed.iter().find(|placed| {
+                target_part(w).as_ref() == Some(&placed.definition)
+                    && placed.path.last() == Some(&instance)
+            })
+            && let Ok(finish) = cad_core::appearance::resolve_finish(document, part)
+        {
+            return Some(finish.id.clone());
+        }
+        if let Some(finish) = document
+            .assemblies
+            .get(&assembly)
+            .and_then(|assembly| assembly.instances.get(&instance))
+            .and_then(|instance| instance.finish.clone())
+        {
+            return Some(finish);
+        }
+    }
+    target_part(w)
+        .and_then(|id| document.parts.get(&id))
         .map(|part| part.finish.clone())
-        .filter(|id| w.session.visible().finishes.contains_key(id))
-        .or_else(|| w.session.visible().finishes.keys().next().cloned())
+        .filter(|id| document.finishes.contains_key(id))
+}
+fn target_key(w: &Workspace) -> Option<String> {
+    if instance_scope(w) {
+        let (assembly, instance) = target_instance(w)?;
+        Some(format!("instance:{assembly}:{instance}"))
+    } else {
+        target_part(w).map(|part| format!("part:{part}"))
+    }
+}
+fn custom_is_current(w: &Workspace) -> bool {
+    w.fields.get(EDIT_MODE).map(String::as_str) == Some("custom")
+        && w.fields.get(CUSTOM_TARGET) == target_key(w).as_ref()
+        && w.fields.get(CUSTOM_FINISH) == selected(w).as_ref()
+        && selected(w) == assigned_finish(w)
+}
+fn reset_target_editor(w: &mut Workspace) {
+    w.fields.insert(EDIT_MODE.into(), "assignment".into());
+    w.fields.remove(CUSTOM_TARGET);
+    w.fields.remove(CUSTOM_FINISH);
+    if let Some(id) = initial(w) {
+        load(w, &id);
+    }
 }
 fn load(w: &mut Workspace, id: &str) {
     w.fields.insert(EDITOR.into(), id.into());
@@ -68,6 +165,19 @@ pub fn begin(w: &mut Workspace, lighting: bool) {
     }
     w.start_tool();
     w.fields.insert(TOOL.into(), "true".into());
+    if !w.fields.contains_key(TARGET_PART) {
+        if let Some(id) = target_part(w) {
+            w.fields.insert(TARGET_PART.into(), id);
+        }
+        if let Some((assembly, instance)) = target_instance(w) {
+            w.fields
+                .insert(TARGET_INSTANCE.into(), instance_key(&assembly, &instance));
+            w.fields.insert(TARGET_SCOPE.into(), "instance".into());
+        } else {
+            w.fields.insert(TARGET_SCOPE.into(), "part".into());
+        }
+        w.fields.insert(EDIT_MODE.into(), "assignment".into());
+    }
     if !w.fields.contains_key(EDITOR)
         && let Some(id) = initial(w)
     {
@@ -146,23 +256,6 @@ fn put(w: &mut Workspace, finish: Finish) -> Result<()> {
     }
     Ok(())
 }
-fn target_instance(w: &Workspace) -> Option<(Id, Id)> {
-    let id = w.view.active_instance.as_ref()?;
-    let mut choices = w
-        .session
-        .visible()
-        .assemblies
-        .values()
-        .filter_map(|assembly| {
-            assembly
-                .instances
-                .values()
-                .find(|instance| &instance.id == id)
-                .map(|instance| (assembly.id.clone(), instance.id.clone()))
-        });
-    let target = choices.next()?;
-    choices.next().is_none().then_some(target)
-}
 fn can_delete(w: &Workspace, id: &str) -> bool {
     cad_core::appearance::delete_reason(w.session.visible(), id).is_none()
 }
@@ -173,6 +266,70 @@ fn choose_id(w: &Workspace, arguments: Option<&Value>) -> Option<Id> {
         .map(str::to_owned)
         .or_else(|| selected(w))
 }
+fn customize_target(w: &mut Workspace) -> Result<()> {
+    if custom_is_current(w) {
+        return Ok(());
+    }
+    let key = target_key(w)
+        .ok_or_else(|| CadError::Invalid("Choose a part to customize its appearance".into()))?;
+    let source = assigned_finish(w)
+        .and_then(|id| w.session.visible().finishes.get(&id))
+        .ok_or_else(|| CadError::Invalid("The assigned visual finish is missing".into()))?;
+    let mut finish = source.clone();
+    finish.id = cad_core::id();
+    let name = if instance_scope(w) {
+        target_instance(w).and_then(|(assembly, instance)| {
+            w.session
+                .visible()
+                .assemblies
+                .get(&assembly)?
+                .instances
+                .get(&instance)
+                .map(|instance| instance.name.clone())
+        })
+    } else {
+        target_part(w)
+            .and_then(|id| w.session.visible().parts.get(&id))
+            .map(|part| part.name.clone())
+    }
+    .unwrap_or_else(|| "Part".into());
+    finish.name = format!("{name} · Custom appearance");
+    while finish.name.len() > 256 {
+        finish.name.pop();
+    }
+    let id = finish.id.clone();
+    let mut document = w.session.visible().clone();
+    document.finishes.insert(id.clone(), finish);
+    if instance_scope(w) {
+        let (assembly, instance) = target_instance(w)
+            .ok_or_else(|| CadError::Invalid("Choose a component instance".into()))?;
+        document
+            .assemblies
+            .get_mut(&assembly)
+            .and_then(|assembly| assembly.instances.get_mut(&instance))
+            .ok_or_else(|| CadError::Invalid("The component instance no longer exists".into()))?
+            .finish = Some(id.clone());
+    } else {
+        let part =
+            target_part(w).ok_or_else(|| CadError::Invalid("Choose a part to customize".into()))?;
+        document
+            .parts
+            .get_mut(&part)
+            .ok_or_else(|| CadError::Invalid("The part no longer exists".into()))?
+            .finish = id.clone();
+    }
+    document.validate()?;
+    let expected = document.fingerprint();
+    w.dispatch(Command::ReplaceDocument { document });
+    if w.session.visible().fingerprint() != expected {
+        return Err(CadError::Invalid(w.status.clone()));
+    }
+    load(w, &id);
+    w.fields.insert(EDIT_MODE.into(), "custom".into());
+    w.fields.insert(CUSTOM_TARGET.into(), key);
+    w.fields.insert(CUSTOM_FINISH.into(), id);
+    Ok(())
+}
 pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bool {
     if matches!(command, "appearance" | "appearances" | "lighting") {
         begin(w, command == "lighting");
@@ -180,6 +337,14 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
     }
     if !command.starts_with("appearance.") {
         return false;
+    }
+    if let Some(section) = command.strip_prefix(SECTION_TOGGLE) {
+        if SECTIONS.iter().any(|(id, _, _)| *id == section) {
+            let open = section_open(w, section);
+            w.fields
+                .insert(format!("appearance-section:{section}"), (!open).to_string());
+        }
+        return true;
     }
     if !available(w) {
         w.status = "Apply or cancel the current operation before editing visual finishes".into();
@@ -207,7 +372,48 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                 if let Some(id) = &finish {
                     load(w, id);
                 }
+                w.fields.insert(EDIT_MODE.into(), "shared".into());
                 w.open_editor("appearances");
+            }
+            "appearance.customize-target" => customize_target(w)?,
+            "appearance.use-assigned" => reset_target_editor(w),
+            "appearance.assign-target" => {
+                let finish = finish
+                    .ok_or_else(|| CadError::Invalid("Choose a named finish to assign".into()))?;
+                if instance_scope(w) {
+                    let (assembly, instance) = target_instance(w)
+                        .ok_or_else(|| CadError::Invalid("Choose a component instance".into()))?;
+                    w.dispatch(Command::SetInstanceFinish {
+                        assembly: assembly.clone(),
+                        instance: instance.clone(),
+                        finish: Some(finish.clone()),
+                    });
+                    if w.session
+                        .visible()
+                        .assemblies
+                        .get(&assembly)
+                        .and_then(|assembly| assembly.instances.get(&instance))
+                        .is_none_or(|instance| instance.finish.as_ref() != Some(&finish))
+                    {
+                        return Err(CadError::Invalid(w.status.clone()));
+                    }
+                } else {
+                    let definition =
+                        target_part(w).ok_or_else(|| CadError::Invalid("Choose a part".into()))?;
+                    w.dispatch(Command::SetPartFinish {
+                        definition: definition.clone(),
+                        finish: finish.clone(),
+                    });
+                    if w.session
+                        .visible()
+                        .parts
+                        .get(&definition)
+                        .is_none_or(|part| part.finish != finish)
+                    {
+                        return Err(CadError::Invalid(w.status.clone()));
+                    }
+                }
+                reset_target_editor(w);
             }
             "appearance.new" | "appearance.duplicate" => {
                 let source = finish
@@ -226,12 +432,16 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                 } else {
                     "Custom finish".into()
                 };
+                while new.name.len() > 256 {
+                    new.name.pop();
+                }
                 if command == "appearance.new" {
                     new.textures = Default::default();
                 }
                 let id = new.id.clone();
                 put(w, new)?;
                 load(w, &id);
+                w.fields.insert(EDIT_MODE.into(), "shared".into());
             }
             "appearance.delete" => {
                 let id = finish
@@ -253,12 +463,23 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                     .and_then(|v| v.get("definition"))
                     .and_then(Value::as_str)
                     .map(str::to_owned)
-                    .or_else(|| w.view.active_part.clone())
+                    .or_else(|| target_part(w))
                     .ok_or_else(|| {
                         CadError::Invalid("Select a part to assign its visual finish".into())
                     })?;
                 let finish = finish.ok_or_else(|| CadError::Invalid("Choose a finish".into()))?;
-                w.dispatch(Command::SetPartFinish { definition, finish });
+                w.dispatch(Command::SetPartFinish {
+                    definition: definition.clone(),
+                    finish: finish.clone(),
+                });
+                if w.session
+                    .visible()
+                    .parts
+                    .get(&definition)
+                    .is_none_or(|part| part.finish != finish)
+                {
+                    return Err(CadError::Invalid(w.status.clone()));
+                }
             }
             "appearance.assign-instance" | "appearance.inherit-instance" => {
                 let target = arguments
@@ -275,14 +496,31 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                         )
                     })?;
                 w.dispatch(Command::SetInstanceFinish {
-                    assembly: target.0,
-                    instance: target.1,
+                    assembly: target.0.clone(),
+                    instance: target.1.clone(),
                     finish: if command == "appearance.inherit-instance" {
                         None
                     } else {
-                        finish
+                        finish.clone()
                     },
                 });
+                let expected = if command == "appearance.inherit-instance" {
+                    None
+                } else {
+                    finish
+                };
+                if w.session
+                    .visible()
+                    .assemblies
+                    .get(&target.0)
+                    .and_then(|assembly| assembly.instances.get(&target.1))
+                    .is_none_or(|instance| instance.finish != expected)
+                {
+                    return Err(CadError::Invalid(w.status.clone()));
+                }
+                if command == "appearance.inherit-instance" {
+                    reset_target_editor(w);
+                }
             }
             "appearance.texture.import" | "appearance.texture.clear" => {
                 let id =
@@ -340,7 +578,11 @@ fn texture(w: &mut Workspace, finish_id: &str, slot: &str, import: bool) -> Resu
     let mut document = w.session.visible().clone();
     let resource = if import {
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Import a visual texture map")
+            .set_title(if slot == "height" {
+                "Import a grayscale bump / height map"
+            } else {
+                "Import a visual texture map"
+            })
             .add_filter(
                 "Texture images",
                 &["png", "jpg", "jpeg", "tif", "tiff", "webp"],
@@ -349,11 +591,12 @@ fn texture(w: &mut Workspace, finish_id: &str, slot: &str, import: bool) -> Resu
         else {
             return Ok(());
         };
-        crate::texture_assets::validate_texture_file(&path)?;
-        Some(cad_core::persistence::import_resource(
+        let bytes = crate::texture_assets::validate_texture_file(&path)?;
+        Some(cad_core::persistence::import_resource_bytes(
             &mut document,
             &w.root(),
             &path,
+            &bytes,
         )?)
     } else {
         None
@@ -370,6 +613,17 @@ fn texture(w: &mut Workspace, finish_id: &str, slot: &str, import: bool) -> Resu
     }
     load(w, finish_id);
     Ok(())
+}
+fn texture_label(slot: &str) -> &str {
+    match slot {
+        "height" => "Grayscale bump / height",
+        "base_color" => "Color",
+        "normal" => "Normal",
+        "roughness" => "Roughness",
+        "metallic" => "Metallic",
+        "occlusion" => "Occlusion",
+        _ => "Texture",
+    }
 }
 
 fn finish_source(finish: &Finish) -> Value {
@@ -392,6 +646,21 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
     match element.data.get("setter")?.as_str()? {
         "appearance-ui" => match element.data.get("field")?.as_str()? {
             "library" => Some(json!(selected(w).or_else(|| initial(w)))),
+            "target-part" => Some(json!(target_part(w))),
+            "target-scope" => Some(json!(if instance_scope(w) {
+                "instance"
+            } else {
+                "part"
+            })),
+            "target-instance" => {
+                Some(json!(target_instance(w).map(|(assembly, instance)| {
+                    instance_key(&assembly, &instance)
+                })))
+            }
+            "section" => Some(json!(section_open(
+                w,
+                element.data.get("section")?.as_str()?
+            ))),
             "source" => Some(json!(
                 w.fields
                     .get(SOURCE)
@@ -447,15 +716,81 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
         .get("setter")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if setter == "appearance-ui"
-        && element.data.get("field").and_then(Value::as_str) == Some("library")
-    {
-        let id = value
-            .as_str()
-            .filter(|id| w.session.visible().finishes.contains_key(*id))
-            .ok_or_else(|| CadError::Invalid("Choose a visual finish from the library".into()))?;
-        load(w, id);
-        return Ok(());
+    if setter == "appearance-ui" {
+        match element.data.get("field").and_then(Value::as_str) {
+            Some("library") => {
+                let id = value
+                    .as_str()
+                    .filter(|id| w.session.visible().finishes.contains_key(*id))
+                    .ok_or_else(|| {
+                        CadError::Invalid("Choose a visual finish from the library".into())
+                    })?;
+                load(w, id);
+                w.fields.insert(EDIT_MODE.into(), "assignment".into());
+                return Ok(());
+            }
+            Some("target-part") => {
+                let id = value
+                    .as_str()
+                    .filter(|id| w.session.visible().parts.contains_key(*id))
+                    .ok_or_else(|| CadError::Invalid("Choose a part".into()))?;
+                w.fields.insert(TARGET_PART.into(), id.into());
+                w.fields.remove(TARGET_INSTANCE);
+                w.fields.insert(TARGET_SCOPE.into(), "part".into());
+                reset_target_editor(w);
+                return Ok(());
+            }
+            Some("target-scope") => {
+                let scope = value
+                    .as_str()
+                    .filter(|scope| matches!(*scope, "part" | "instance"))
+                    .ok_or_else(|| {
+                        CadError::Invalid("Choose part or component instance scope".into())
+                    })?;
+                if scope == "instance" && target_instance(w).is_none() {
+                    let (assembly, instance, _) =
+                        instance_choices(w).into_iter().next().ok_or_else(|| {
+                            CadError::Invalid("This part has no component instances".into())
+                        })?;
+                    w.fields
+                        .insert(TARGET_INSTANCE.into(), instance_key(&assembly, &instance));
+                }
+                w.fields.insert(TARGET_SCOPE.into(), scope.into());
+                reset_target_editor(w);
+                return Ok(());
+            }
+            Some("target-instance") => {
+                let key = value
+                    .as_str()
+                    .filter(|key| {
+                        instance_choices(w)
+                            .iter()
+                            .any(|(assembly, instance, _)| instance_key(assembly, instance) == *key)
+                    })
+                    .ok_or_else(|| {
+                        CadError::Invalid("Choose one of this part's component instances".into())
+                    })?;
+                w.fields.insert(TARGET_INSTANCE.into(), key.into());
+                w.fields.insert(TARGET_SCOPE.into(), "instance".into());
+                reset_target_editor(w);
+                return Ok(());
+            }
+            Some("section") => {
+                let section = element
+                    .data
+                    .get("section")
+                    .and_then(Value::as_str)
+                    .filter(|section| SECTIONS.iter().any(|(id, _, _)| id == section))
+                    .ok_or_else(|| CadError::Invalid("Unknown appearance section".into()))?;
+                let open = value.as_bool().ok_or_else(|| {
+                    CadError::Invalid("Section visibility must be true or false".into())
+                })?;
+                w.fields
+                    .insert(format!("appearance-section:{section}"), open.to_string());
+                return Ok(());
+            }
+            _ => {}
+        }
     }
     if !w.fields.contains_key(TOOL) {
         begin(w, false);
@@ -689,7 +1024,205 @@ fn field(
     }
     crate::ui::semantic_field(ui, w, &element);
 }
+fn panel_open(w: &Workspace) -> bool {
+    w.dialog.as_deref() == Some("appearances") || w.fields.contains_key(TOOL)
+}
+fn description(ui: &mut egui::Ui, id: &str, text: &str) {
+    controls::label(ui, id, "appearance-description", &[], text, "ready");
+}
+fn section_open(w: &Workspace, section: &str) -> bool {
+    w.fields
+        .get(&format!("appearance-section:{section}"))
+        .map(|open| open == "true")
+        .unwrap_or_else(|| SECTIONS.iter().any(|(id, _, open)| *id == section && *open))
+}
+fn section(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    section: &str,
+    content: impl FnOnce(&mut egui::Ui, &mut Workspace),
+) {
+    let Some((_, label, _)) = SECTIONS.iter().find(|(id, _, _)| *id == section) else {
+        return;
+    };
+    let id = format!("appearance:section:{section}");
+    let open = section_open(w, section);
+    if controls::button(
+        ui,
+        &id,
+        "appearance-section",
+        &["semantic-control"],
+        &format!("{} {label}", if open { "▾" } else { "▸" }),
+        true,
+        open,
+    )
+    .clicked()
+    {
+        action(w, &format!("{SECTION_TOGGLE}{section}"), None);
+    }
+    let props = controls::properties(
+        &id,
+        "appearance-section",
+        &[],
+        if open { "expanded" } else { "collapsed" },
+    );
+    if !section_open(w, section)
+        || props.get("display").is_some_and(|value| value == "none")
+        || props
+            .get("visibility")
+            .is_some_and(|value| value == "hidden")
+    {
+        return;
+    }
+    if let Some(parent) = controls::current_target() {
+        let target = parent.child(&id, "appearance-section", &[], "expanded");
+        controls::with_target(target, ui, |ui| content(ui, w));
+    } else {
+        content(ui, w);
+    }
+}
+fn target_elements(w: &Workspace) -> Vec<SemanticElement> {
+    let instances = instance_choices(w);
+    let mut scopes = vec![json!({"value":"part","label":"Part definition · base finish"})];
+    if !instances.is_empty() {
+        scopes.push(json!({"value":"instance","label":"Component instance · override"}));
+    }
+    [
+        (
+            "target-part",
+            "Part",
+            json!(target_part(w)),
+            json!(w.session.visible().parts.values().map(|part| json!({"value":part.id,"label":part.name})).collect::<Vec<_>>()),
+        ),
+        (
+            "target-scope",
+            "Apply to",
+            json!(if instance_scope(w) { "instance" } else { "part" }),
+            json!(scopes),
+        ),
+        (
+            "target-instance",
+            "Component instance",
+            json!(target_instance(w).map(|(assembly, instance)| instance_key(&assembly, &instance))),
+            json!(instances.into_iter().map(|(assembly,instance,label)| json!({"value":instance_key(&assembly,&instance),"label":label})).collect::<Vec<_>>()),
+        ),
+    ]
+    .into_iter()
+    .map(|(field, label, value, choices)| SemanticElement {
+        id: format!("appearance:{field}"),
+        role: "appearance-target".into(),
+        label: label.into(),
+        value: value.as_str().map(str::to_owned),
+        state: if available(w) { "ready" } else { "disabled" }.into(),
+        commands: vec![],
+        relationships: vec!["workspace.appearance-panel".into()],
+        data: json!({"setter":"appearance-ui","field":field,"json":value,"editable":available(w),"choices":choices,"value_type":"choice","transient":true,"accessibility_label":label}),
+    })
+    .collect()
+}
+fn assignment_element(w: &Workspace) -> SemanticElement {
+    let finish = assigned_finish(w);
+    let name = finish
+        .as_ref()
+        .and_then(|id| w.session.visible().finishes.get(id))
+        .map(|finish| finish.name.as_str())
+        .unwrap_or("None");
+    let label = format!("Assigned finish · {name}");
+    SemanticElement {
+        id: "appearance:assignment-info".into(),
+        role: "appearance-target".into(),
+        label,
+        value: finish.clone(),
+        state: "ready".into(),
+        commands: vec![
+            "appearance.customize-target".into(),
+            "appearance.use-assigned".into(),
+        ],
+        relationships: target_part(w)
+            .into_iter()
+            .chain(finish.into_iter().map(|id| format!("finish:{id}")))
+            .collect(),
+        data: json!({"definition":target_part(w),"instance":target_instance(w),"scope":if instance_scope(w){"instance"}else{"part"},"editing_mode":w.fields.get(EDIT_MODE),"custom_finish":custom_is_current(w),"engineering_material_independent":true}),
+    }
+}
+fn target_warning(w: &Workspace) -> Option<String> {
+    let placed = w.session.visible().placed_parts().ok()?;
+    if instance_scope(w) {
+        let (_, instance) = target_instance(w)?;
+        if placed
+            .iter()
+            .filter(|part| part.path.last() == Some(&instance))
+            .count()
+            > 1
+        {
+            return Some("This assembly is repeated. Its component instance finish applies wherever that instance appears.".into());
+        }
+    } else {
+        let part = target_part(w)?;
+        let base = assigned_finish(w)?;
+        if placed
+            .iter()
+            .filter(|placed| placed.definition == part)
+            .any(|placed| {
+                cad_core::appearance::resolve_finish(w.session.visible(), placed)
+                    .is_ok_and(|finish| finish.id != base)
+            })
+        {
+            return Some("Some visible configurations or component instances override this part's base finish. Base changes preserve those overrides.".into());
+        }
+    }
+    None
+}
+fn target_controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    for element in target_elements(w) {
+        if element.data.get("field").and_then(Value::as_str) != Some("target-instance")
+            || instance_scope(w)
+        {
+            crate::ui::semantic_field(ui, w, &element);
+        }
+    }
+    let assignment = assignment_element(w);
+    controls::label(
+        ui,
+        &assignment.id,
+        &assignment.role,
+        &[],
+        &assignment.label,
+        &assignment.state,
+    );
+    if let Some(warning) = target_warning(w) {
+        description(ui, "appearance:target-warning", &warning);
+    }
+}
+pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
+    controls::label(
+        ui,
+        "appearance:heading",
+        "appearance-heading",
+        &[],
+        "Appearance",
+        "ready",
+    );
+    if w.fields.contains_key(TOOL) {
+        cad_ui::confirmation(ui, w);
+    }
+    if !panel_open(w) {
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("appearance-panel-scroll")
+        .show(ui, |ui| show_content(ui, w));
+}
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
+    if w.fields.contains_key(TOOL) {
+        cad_ui::confirmation(ui, w);
+    }
+    if !panel_open(w) {
+        return;
+    }
+    show_content(ui, w);
+}
+fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
     if !available(w) {
         ui.weak("Apply or cancel the active operation before editing visual finishes");
         return;
@@ -703,9 +1236,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             ui.weak("Finish the active operation first");
             return;
         }
-    }
-    if w.fields.contains_key(TOOL) {
-        cad_ui::confirmation(ui, w);
     }
     if w.dialog.is_none() && !w.fields.contains_key(EDITOR) {
         return;
@@ -731,49 +1261,98 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         lighting_controls(ui, w);
         return;
     }
+    target_controls(ui, w);
     let selected_id = selected(w);
     crate::ui::semantic_field(ui, w, &library_element(w));
     ui.horizontal_wrapped(|ui| {
-        button(ui, w, "appearance.new", "New", true);
         button(
             ui,
             w,
-            "appearance.duplicate",
-            "Duplicate",
-            selected_id.is_some(),
+            "appearance.assign-target",
+            "Assign finish",
+            target_key(w).is_some() && selected_id.is_some(),
         );
         button(
             ui,
             w,
-            "appearance.delete",
-            "Delete",
-            selected_id.as_ref().is_some_and(|id| can_delete(w, id)),
+            "appearance.customize-target",
+            if instance_scope(w) {
+                "Customize this instance"
+            } else {
+                "Customize this part"
+            },
+            target_key(w).is_some(),
         );
     });
-    ui.horizontal_wrapped(|ui| {
-        button(
-            ui,
-            w,
-            "appearance.assign-part",
-            "Assign to part (base)",
-            w.view.active_part.is_some(),
-        );
-        button(
-            ui,
-            w,
-            "appearance.assign-instance",
-            "Assign to occurrence",
-            target_instance(w).is_some(),
-        );
+    if instance_scope(w) {
         button(
             ui,
             w,
             "appearance.inherit-instance",
-            "Use part finish",
-            target_instance(w).is_some(),
+            "Use inherited finish",
+            true,
         );
+    }
+    section(ui, w, "shared-library", |ui, w| {
+        description(
+            ui,
+            "appearance:shared-library-help",
+            "Shared finishes can be assigned to many parts. Editing a shared finish updates every assignment that uses it.",
+        );
+        ui.horizontal_wrapped(|ui| {
+            button(
+                ui,
+                w,
+                "appearance.edit",
+                "Edit shared finish",
+                selected_id.is_some(),
+            );
+            button(ui, w, "appearance.new", "New", true);
+            button(
+                ui,
+                w,
+                "appearance.duplicate",
+                "Duplicate",
+                selected_id.is_some(),
+            );
+            button(
+                ui,
+                w,
+                "appearance.delete",
+                "Delete",
+                selected_id.as_ref().is_some_and(|id| can_delete(w, id)),
+            );
+        });
     });
-    ui.small("Visual finishes affect appearance. Engineering materials control mass and manufacturing data.");
+    description(
+        ui,
+        "appearance:material-help",
+        "Colors and textures are independent of engineering material, mass and manufacturing data.",
+    );
+    let shared = w.fields.get(EDIT_MODE).map(String::as_str) == Some("shared");
+    if !shared && !custom_is_current(w) {
+        description(
+            ui,
+            "appearance:customize-help",
+            "Customize creates a separate finish for this target, so its color and textures can change independently.",
+        );
+        diagnostics(ui, w);
+        return;
+    }
+    controls::label(
+        ui,
+        "appearance:edit-scope",
+        "appearance-target",
+        &[],
+        if shared {
+            "Editing shared finish · all assignments"
+        } else if instance_scope(w) {
+            "Editing this component instance's finish"
+        } else {
+            "Editing this part's finish"
+        },
+        if shared { "shared" } else { "custom" },
+    );
     let Some(id) = selected(w) else {
         return;
     };
@@ -782,8 +1361,31 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     if let Some(finish) = w.session.visible().finishes.get(&id) {
         let mut color = finish.base_color.map(|value| value as f32);
         ui.horizontal(|ui| {
-            ui.label("Base color");
-            if ui.color_edit_button_rgb(&mut color).changed() {
+            controls::label(
+                ui,
+                "appearance:color-label",
+                "appearance-description",
+                &[],
+                "Color",
+                "ready",
+            );
+            let props = controls::properties(
+                &format!("finish:{id}::swatch"),
+                "appearance-swatch",
+                &[],
+                "draft",
+            );
+            let changed = !props.get("display").is_some_and(|value| value == "none")
+                && !props
+                    .get("visibility")
+                    .is_some_and(|value| value == "hidden")
+                && ui
+                    .scope(|ui| {
+                        controls::apply_properties(ui, &props);
+                        ui.color_edit_button_rgb(&mut color).changed()
+                    })
+                    .inner;
+            if changed {
                 let element = field_element(
                     &id,
                     "/base_color",
@@ -798,45 +1400,153 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                 }
             }
         });
-    }
-    egui::CollapsingHeader::new("Surface response")
-        .id_salt("appearance:surface")
-        .default_open(true)
-        .show(ui, |ui| {
+        section(ui, w, "color-values", |ui, w| {
             for (pointer, label) in [
-                ("/metallic", "Metallic"),
-                ("/roughness", "Roughness"),
-                ("/clearcoat", "Clear coat"),
-                ("/clearcoat_roughness", "Coat roughness"),
-                ("/normal_strength", "Normal strength"),
-                ("/height_mm", "Bump depth (mm)"),
+                ("/base_color/0", "Red"),
+                ("/base_color/1", "Green"),
+                ("/base_color/2", "Blue"),
             ] {
                 field(ui, w, &fields, pointer, label, json!([]));
             }
         });
-    egui::CollapsingHeader::new("Texture maps").id_salt("appearance:textures").default_open(true).show(ui,|ui| {
-        for (slot,label) in [("base_color","Color"),("normal","Normal"),("height","Height / bump"),("roughness","Roughness"),("metallic","Metallic"),("occlusion","Occlusion")] {
-            let map=serde_json::to_value(w.session.visible().finishes.get(&id)).ok().and_then(|source|source.get("textures")?.get(slot)?.as_str().map(str::to_owned));
-            let path=map.as_ref().and_then(|map|w.session.visible().resources.get(map)).map(|resource|resource.path.clone());
-            ui.horizontal_wrapped(|ui| {
-                ui.label(label);
-                button(ui,w,&format!("{IMPORT}{id}/{slot}"),if map.is_some(){"Replace…"}else{"Import…"},true);
-                button(ui,w,&format!("{CLEAR}{id}/{slot}"),"Clear",map.is_some());
-            });
-            if let Some(path)=path {ui.small(&path).on_hover_text(&path);} else if map.is_some(){ui.colored_label(ui.visuals().error_fg_color,"Missing pinned image; import a replacement.");}
-            field(ui,w,&fields,&format!("/textures/{slot}"),"Pinned image",resource_choices(w));
+    }
+    section(ui, w, "surface", |ui, w| {
+        for (pointer, label) in [
+            ("/metallic", "Metallic"),
+            ("/roughness", "Roughness"),
+            ("/clearcoat", "Clear coat"),
+            ("/clearcoat_roughness", "Coat roughness"),
+        ] {
+            field(ui, w, &fields, pointer, label, json!([]));
         }
-        ui.small("Grayscale height maps add lit surface relief. Bump depth is in mm. Color maps use sRGB; all other maps use linear data.");
     });
-    egui::CollapsingHeader::new("Texture mapping").id_salt("appearance:mapping").default_open(false).show(ui,|ui| {
-        field(ui,w,&fields,"/mapping/mode","Projection",json!([{"value":"triplanar","label":"Box / triplanar"},{"value":"planar","label":"Planar"}]));
-        for (pointer,label,unit) in [("/mapping/scale_mm/0","Width","mm"),("/mapping/scale_mm/1","Height","mm"),("/mapping/rotation_deg","Direction","deg"),("/mapping/offset_mm/0","Offset U","mm"),("/mapping/offset_mm/1","Offset V","mm")] {field(ui,w,&fields,pointer,&format!("{label} ({unit})"),json!([]));}
+    section(ui, w, "textures", |ui, w| {
+        description(
+            ui,
+            "appearance:texture-help",
+            "Import grayscale bump maps or color, normal and surface response images. PNG, JPEG, TIFF and WebP are supported.",
+        );
+        for (slot, label) in [
+            ("height", "Grayscale bump / height"),
+            ("base_color", "Color"),
+            ("normal", "Normal"),
+            ("roughness", "Roughness"),
+            ("metallic", "Metallic"),
+            ("occlusion", "Occlusion"),
+        ] {
+            let map = serde_json::to_value(w.session.visible().finishes.get(&id))
+                .ok()
+                .and_then(|source| {
+                    source
+                        .get("textures")?
+                        .get(slot)?
+                        .as_str()
+                        .map(str::to_owned)
+                });
+            let path = map
+                .as_ref()
+                .and_then(|map| w.session.visible().resources.get(map))
+                .map(|resource| resource.path.clone());
+            ui.horizontal_wrapped(|ui| {
+                controls::label(
+                    ui,
+                    &format!("finish:{id}::texture:{slot}"),
+                    "appearance-texture-row",
+                    &[],
+                    label,
+                    "ready",
+                );
+                button(
+                    ui,
+                    w,
+                    &format!("{IMPORT}{id}/{slot}"),
+                    if map.is_some() {
+                        "Replace…"
+                    } else {
+                        "Import…"
+                    },
+                    true,
+                );
+                button(
+                    ui,
+                    w,
+                    &format!("{CLEAR}{id}/{slot}"),
+                    "Clear",
+                    map.is_some(),
+                );
+            });
+            if let Some(path) = path {
+                controls::label(
+                    ui,
+                    &format!("finish:{id}::texture:{slot}:path"),
+                    "appearance-description",
+                    &[],
+                    &path,
+                    "ready",
+                )
+                .on_hover_text(&path);
+            } else if map.is_some() {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    "Missing pinned image; import a replacement.",
+                );
+            }
+            if slot == "height" {
+                field(ui, w, &fields, "/height_mm", "Bump depth (mm)", json!([]));
+            } else if slot == "normal" {
+                field(
+                    ui,
+                    w,
+                    &fields,
+                    "/normal_strength",
+                    "Normal strength",
+                    json!([]),
+                );
+            }
+            field(
+                ui,
+                w,
+                &fields,
+                &format!("/textures/{slot}"),
+                "Pinned image",
+                resource_choices(w),
+            );
+        }
+        description(
+            ui,
+            "appearance:bump-help",
+            "Grayscale height adds lighting relief: white is high, black is low. Depth and tile size use mm; CAD geometry stays unchanged. Color maps multiply the color tint. Normal maps use OpenGL (+Y).",
+        );
     });
-    egui::CollapsingHeader::new("Advanced source")
-        .id_salt("appearance:source")
-        .show(ui, |ui| {
-            crate::ui::semantic_field(ui, w, &source_element(w));
-        });
+    section(ui, w, "mapping", |ui, w| {
+        field(
+            ui,
+            w,
+            &fields,
+            "/mapping/mode",
+            "Projection",
+            json!([{"value":"triplanar","label":"Box / triplanar"},{"value":"planar","label":"Planar"}]),
+        );
+        for (pointer, label, unit) in [
+            ("/mapping/scale_mm/0", "Tile width", "mm"),
+            ("/mapping/scale_mm/1", "Tile height", "mm"),
+            ("/mapping/rotation_deg", "Direction", "deg"),
+            ("/mapping/offset_mm/0", "Offset U", "mm"),
+            ("/mapping/offset_mm/1", "Offset V", "mm"),
+        ] {
+            field(
+                ui,
+                w,
+                &fields,
+                pointer,
+                &format!("{label} ({unit})"),
+                json!([]),
+            );
+        }
+    });
+    section(ui, w, "source", |ui, w| {
+        crate::ui::semantic_field(ui, w, &source_element(w));
+    });
     if let Some(error) = w.fields.get(INVALID) {
         ui.colored_label(ui.visuals().error_fg_color, error);
     }
@@ -914,8 +1624,129 @@ fn diagnostics(ui: &mut egui::Ui, w: &Workspace) {
     }
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
-    let mut elements = vec![library_element(w), source_element(w)];
+    let mut elements = vec![library_element(w), source_element(w), assignment_element(w)];
+    elements.extend(target_elements(w));
+    for (section, label, _) in SECTIONS {
+        let open = section_open(w, section);
+        elements.push(SemanticElement {
+            id: format!("appearance:section:{section}"),
+            role: "appearance-section".into(),
+            label: (*label).into(),
+            value: Some(open.to_string()),
+            state: if open { "expanded" } else { "collapsed" }.into(),
+            commands: vec![format!("{SECTION_TOGGLE}{section}")],
+            relationships: vec!["workspace.appearance-panel".into()],
+            data: json!({"setter":"appearance-ui","field":"section","section":section,"json":open,"value_type":"boolean","editable":true,"transient":true,"accessibility_label":label}),
+        });
+    }
+    elements.push(SemanticElement {
+        id: "workspace.appearance-panel".into(),
+        role: "appearance-panel".into(),
+        label: "Appearance · Colors and Textures".into(),
+        value: selected(w),
+        state: if panel_open(w) { "open" } else { "closed" }.into(),
+        commands: vec!["appearances".into()],
+        relationships: vec!["workspace.appearances".into(), "workspace.lighting".into()],
+        data: json!({"renderer":"appearance-panel","definition":target_part(w),"instance":target_instance(w),"scope":if instance_scope(w){"instance"}else{"part"},"transaction":"shared-document-draft","confirmation":"current-validated-evaluation","independent_engineering_material":true}),
+    });
+    for (id, role, label) in [
+        ("appearance:heading", "appearance-heading", "Appearance"),
+        (
+            "appearance:material-help",
+            "appearance-description",
+            "Colors and textures are independent of engineering material, mass and manufacturing data.",
+        ),
+        (
+            "appearance:customize-help",
+            "appearance-description",
+            "Customize creates a separate finish for this target, so its color and textures can change independently.",
+        ),
+        (
+            "appearance:shared-library-help",
+            "appearance-description",
+            "Shared finishes can be assigned to many parts. Editing a shared finish updates every assignment that uses it.",
+        ),
+        (
+            "appearance:texture-help",
+            "appearance-description",
+            "Import grayscale bump maps or color, normal and surface response images. PNG, JPEG, TIFF and WebP are supported.",
+        ),
+        (
+            "appearance:bump-help",
+            "appearance-description",
+            "Grayscale height adds lighting relief: white is high, black is low. Depth and tile size use mm; CAD geometry stays unchanged. Color maps multiply the color tint. Normal maps use OpenGL (+Y).",
+        ),
+        ("appearance:color-label", "appearance-description", "Color"),
+    ] {
+        elements.push(SemanticElement {
+            id: id.into(),
+            role: role.into(),
+            label: label.into(),
+            value: None,
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec!["workspace.appearance-panel".into()],
+            data: json!({"accessibility_label":label}),
+        });
+    }
+    if let Some(warning) = target_warning(w) {
+        elements.push(SemanticElement {
+            id: "appearance:target-warning".into(),
+            role: "appearance-description".into(),
+            label: warning,
+            value: None,
+            state: "warning".into(),
+            commands: vec![],
+            relationships: target_part(w).into_iter().collect(),
+            data: json!({"scope":if instance_scope(w){"instance"}else{"part"}}),
+        });
+    }
+    let shared = w.fields.get(EDIT_MODE).map(String::as_str) == Some("shared");
+    elements.push(SemanticElement {
+        id: "appearance:edit-scope".into(),
+        role: "appearance-target".into(),
+        label: if shared {
+            "Editing shared finish · all assignments"
+        } else if instance_scope(w) {
+            "Editing this component instance's finish"
+        } else {
+            "Editing this part's finish"
+        }
+        .into(),
+        value: selected(w),
+        state: if shared {
+            "shared"
+        } else if custom_is_current(w) {
+            "custom"
+        } else {
+            "assignment"
+        }
+        .into(),
+        commands: vec![],
+        relationships: vec!["workspace.appearance-panel".into()],
+        data: json!({"custom_finish":custom_is_current(w),"shared_finish":shared}),
+    });
     for (command, label, enabled) in [
+        (
+            "appearance.customize-target",
+            "Customize target color and textures independently",
+            available(w) && target_key(w).is_some(),
+        ),
+        (
+            "appearance.assign-target",
+            "Assign selected finish to target",
+            available(w) && target_key(w).is_some() && selected(w).is_some(),
+        ),
+        (
+            "appearance.use-assigned",
+            "Show assigned target finish",
+            available(w) && assigned_finish(w).is_some(),
+        ),
+        (
+            "appearance.edit",
+            "Edit shared finish for all assignments",
+            available(w) && selected(w).is_some(),
+        ),
         ("appearance.new", "New visual finish", available(w)),
         (
             "appearance.duplicate",
@@ -930,7 +1761,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         (
             "appearance.assign-part",
             "Assign finish to base part",
-            available(w) && w.view.active_part.is_some(),
+            available(w) && target_part(w).is_some(),
         ),
         (
             "appearance.assign-instance",
@@ -939,7 +1770,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ),
         (
             "appearance.inherit-instance",
-            "Use part finish",
+            "Use inherited finish",
             available(w) && target_instance(w).is_some(),
         ),
     ] {
@@ -982,6 +1813,19 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         });
     }
     for finish in w.session.visible().finishes.values() {
+        let mut swatch = field_element(
+            &finish.id,
+            "/base_color",
+            "Color tint",
+            json!(finish.base_color),
+            false,
+            json!([]),
+            None,
+        );
+        swatch.id = format!("finish:{}::swatch", finish.id);
+        swatch.role = "appearance-swatch".into();
+        swatch.data["value_type"] = "color-srgb".into();
+        elements.push(swatch);
         for slot in [
             "base_color",
             "normal",
@@ -990,14 +1834,46 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "occlusion",
             "height",
         ] {
+            let resource = finish_source(finish)["textures"][slot].clone();
+            if let Some(path) = resource
+                .as_str()
+                .and_then(|id| w.session.visible().resources.get(id))
+                .map(|resource| &resource.path)
+            {
+                elements.push(SemanticElement {
+                    id: format!("finish:{}::texture:{slot}:path", finish.id),
+                    role: "appearance-description".into(),
+                    label: path.clone(),
+                    value: Some(path.clone()),
+                    state: "ready".into(),
+                    commands: vec![],
+                    relationships: resource.as_str().map(str::to_owned).into_iter().collect(),
+                    data: json!({"finish":finish.id,"slot":slot,"path":path,"resource":resource}),
+                });
+            }
+            elements.push(SemanticElement {
+                id: format!("finish:{}::texture:{slot}", finish.id),
+                role: "appearance-texture-row".into(),
+                label: texture_label(slot).into(),
+                value: resource.as_str().map(str::to_owned),
+                state: if resource.is_null() { "empty" } else { "assigned" }.into(),
+                commands: vec![format!("{IMPORT}{}/{slot}",finish.id),format!("{CLEAR}{}/{slot}",finish.id)],
+                relationships: vec![format!("finish:{}",finish.id)],
+                data: json!({"finish":finish.id,"slot":slot,"resource":resource,"data_space":if slot=="base_color"{"srgb"}else{"linear"},"depth_unit":(slot=="height").then_some("mm")}),
+            });
             for (prefix, label) in [(IMPORT, "Import texture"), (CLEAR, "Clear texture")] {
                 let command = format!("{prefix}{}/{slot}", finish.id);
                 elements.push(SemanticElement {
                     id: format!("command:{command}"),
                     role: "appearance-action".into(),
-                    label: format!("{label} · {slot}"),
+                    label: format!("{label} · {}", texture_label(slot)),
                     value: None,
-                    state: if available(w) { "ready" } else { "disabled" }.into(),
+                    state: if available(w) && (prefix == IMPORT || !resource.is_null()) {
+                        "ready"
+                    } else {
+                        "disabled"
+                    }
+                    .into(),
                     commands: vec![command],
                     relationships: vec![finish.id.clone()],
                     data: json!({"finish":finish.id,"slot":slot}),
@@ -1034,7 +1910,7 @@ fn library_element(w: &Workspace) -> SemanticElement {
     SemanticElement {
         id: "appearance:library".into(),
         role: "appearance-library-selection".into(),
-        label: "Visual finish".into(),
+        label: "Named finish".into(),
         value: selected(w).or_else(|| initial(w)),
         state: "ready".into(),
         commands: vec![],

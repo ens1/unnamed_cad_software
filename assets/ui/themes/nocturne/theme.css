@@ -530,3 +530,82 @@
 [role=settings-action]:focus, [role=settings-category]:focus {
   border: 2px solid var(--valid);
 }
+
+/* Appearance is independent of the feature inspector and the engineering material. */
+[role=appearance-panel] {
+  display: none;
+  background: var(--panel);
+  padding: 10px;
+  border: 1px solid var(--stroke);
+  border-radius: 18px;
+  gap: 6px;
+  font-size: 11px;
+}
+
+[role=appearance-panel][state=open] {
+  display: block;
+}
+
+[role=appearance-panel][state=closed] {
+  display: none;
+}
+
+[role=appearance-heading] {
+  color: var(--active);
+  font-size: 13px;
+  font-weight: bold;
+}
+
+[role=appearance-description] {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+[role=appearance-panel] .semantic-control, [role=appearance-action], [role=appearance-tab], [role=appearance-target] {
+  height: 30px;
+  min-target-size: 30px;
+  padding: 5px 10px;
+  border-radius: 15px;
+  font-size: 11px;
+}
+
+[role=appearance-action], [role=appearance-tab], [role=appearance-target] {
+  background: #302340;
+  border: 1px solid var(--stroke);
+  color: var(--ink);
+}
+
+[role=appearance-action]:hover, [role=appearance-tab]:hover, [role=appearance-target]:hover {
+  background: #493363;
+  border-color: var(--active);
+}
+
+[role=appearance-tab][state=selected], [role=appearance-target][state=selected] {
+  background: #3A2A52;
+  color: var(--active);
+  border: 1px solid #6D5590;
+}
+
+[role=appearance-field], [role=appearance-library-selection], [role=appearance-source] {
+  background: #261D39;
+  font-size: 11px;
+  gap: 6px;
+  padding: 5px 7px;
+  border-radius: 8px;
+  min-target-size: 30px;
+}
+
+[role=appearance-texture-row] {
+  background: #261D39;
+  padding: 7px;
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  gap: 6px;
+}
+
+[role=appearance-swatch] {
+  height: 30px;
+  width: 30px;
+  border: 1px solid var(--stroke);
+  border-radius: 15px;
+}

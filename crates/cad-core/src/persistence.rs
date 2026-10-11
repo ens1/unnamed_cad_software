@@ -160,16 +160,27 @@ impl ProjectStore for FileStore {
     }
 }
 pub fn import_resource(doc: &mut Document, root: &Path, source: &Path) -> Result<Id> {
-    use sha2::{Digest, Sha256};
     let data = fs::read(source)?;
-    let hash = format!("{:x}", Sha256::digest(&data));
+    import_resource_bytes(doc, root, source, &data)
+}
+/// Pin the exact bytes supplied by a caller, without reopening the source file.
+/// The source path supplies only the portable resource kind; bounded readers and
+/// format validators can retain the same buffer throughout validation and import.
+pub fn import_resource_bytes(
+    doc: &mut Document,
+    root: &Path,
+    source: &Path,
+    data: &[u8],
+) -> Result<Id> {
+    use sha2::{Digest, Sha256};
+    let hash = format!("{:x}", Sha256::digest(data));
     let extension = source
         .extension()
         .and_then(|s| s.to_str())
         .unwrap_or("bin")
         .to_ascii_lowercase();
     let path = format!("imports/{hash}.{extension}");
-    atomic_write(&root.join(&path), &data)?;
+    atomic_write(&root.join(&path), data)?;
     let id = crate::id();
     doc.resources.insert(
         id.clone(),

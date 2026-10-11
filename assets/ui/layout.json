@@ -38,6 +38,10 @@
     },
     "status": {
       "role": "status-bar"
+    },
+    "appearance-panel": {
+      "role": "appearance-panel",
+      "bind": "workspace.appearance-panel"
     }
   },
   "layouts": {
@@ -97,6 +101,14 @@
               "use": "viewport",
               "grow": 1,
               "id": "instrument-rail/viewport/root/2/1"
+            },
+            {
+              "id": "instrument-rail/appearance-panel",
+              "use": "appearance-panel",
+              "width_logical_px": 290,
+              "min_width_logical_px": 230,
+              "max_width_logical_px": 540,
+              "resizable": true
             }
           ]
         },
@@ -140,9 +152,24 @@
           "height_logical_px": 92
         },
         {
-          "use": "viewport",
+          "id": "top-workspace/appearance-model-row",
+          "layout": "row",
           "grow": 1,
-          "id": "top-workspace/viewport/root/1"
+          "children": [
+            {
+              "use": "viewport",
+              "grow": 1,
+              "id": "top-workspace/viewport/root/1"
+            },
+            {
+              "id": "top-workspace/appearance-panel",
+              "use": "appearance-panel",
+              "width_logical_px": 290,
+              "min_width_logical_px": 230,
+              "max_width_logical_px": 540,
+              "resizable": true
+            }
+          ]
         },
         {
           "id": "bottom-editors",
@@ -191,9 +218,24 @@
           "grow": 1,
           "children": [
             {
-              "use": "viewport",
+              "id": "graph-workspace/appearance-model-row",
+              "layout": "row",
               "grow": 1,
-              "id": "graph-workspace/viewport/root/2/0"
+              "children": [
+                {
+                  "use": "viewport",
+                  "grow": 1,
+                  "id": "graph-workspace/viewport/root/2/0"
+                },
+                {
+                  "id": "graph-workspace/appearance-panel",
+                  "use": "appearance-panel",
+                  "width_logical_px": 290,
+                  "min_width_logical_px": 230,
+                  "max_width_logical_px": 540,
+                  "resizable": true
+                }
+              ]
             },
             {
               "layout": "row",
@@ -318,6 +360,14 @@
               "id": "semantic-viewport",
               "use": "viewport",
               "grow": 1
+            },
+            {
+              "id": "semantic-workspace/appearance-panel",
+              "use": "appearance-panel",
+              "width_logical_px": 290,
+              "min_width_logical_px": 230,
+              "max_width_logical_px": 540,
+              "resizable": true
             }
           ]
         },

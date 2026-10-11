@@ -645,6 +645,9 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     registry.register("appearances-editor", |ui, w, _| {
         crate::appearances_ui::show(ui, w)
     });
+    registry.register("appearance-panel", |ui, w, _| {
+        crate::appearances_ui::panel(ui, w)
+    });
     registry.register("lighting-editor", |ui, w, _| {
         crate::appearances_ui::lighting_view(ui, w)
     });
@@ -1651,18 +1654,44 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
                 .pick_file()
             {
                 let result = (|| -> cad_core::Result<(Document, Option<Document>)> {
-                    let v: Value = serde_json::from_slice(&std::fs::read(path)?)?;
-                    let document = serde_json::from_value(
+                    let v: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+                    let document: Document = serde_json::from_value(
                         v.get("committed")
                             .cloned()
                             .ok_or_else(|| CadError::Invalid("Invalid recovery file".into()))?,
                     )?;
-                    let draft = v
+                    let draft: Option<Document> = v
                         .get("draft")
                         .filter(|v| !v.is_null())
                         .cloned()
                         .map(serde_json::from_value)
                         .transpose()?;
+                    document.validate()?;
+                    if let Some(draft) = &draft {
+                        draft.validate()?;
+                        if draft.id != document.id {
+                            return Err(CadError::Invalid(
+                                "Recovery draft belongs to a different document".into(),
+                            ));
+                        }
+                    }
+                    let destination = crate::recovery_directory()
+                        .join("unsaved")
+                        .join(&document.id);
+                    let mut sources = vec![destination.clone()];
+                    if let Some(root) = v.get("resource_root").and_then(Value::as_str) {
+                        sources.insert(0, PathBuf::from(root));
+                    }
+                    if document.id == w.session.committed.id {
+                        sources.push(w.root());
+                    }
+                    if let Some(parent) = path.parent() {
+                        sources.push(parent.to_path_buf());
+                    }
+                    cad_core::persistence::copy_resources(&document, &sources, &destination)?;
+                    if let Some(draft) = &draft {
+                        cad_core::persistence::copy_resources(draft, &sources, &destination)?;
+                    }
                     Ok((document, draft))
                 })();
                 match result {
@@ -1871,12 +1900,13 @@ fn new_part(w: &mut Workspace) {
     crate::sketch::begin(w, None);
 }
 pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
-    if w.fields.contains_key("configuration-editor")
+    if w.fields.contains_key("appearance-tool")
+        || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
         || w.fields.contains_key("assembly-inspection-editor")
     {
-        w.status = "Confirm or cancel the current configuration or component pattern first".into();
+        w.status = "Confirm or cancel the current operation before editing another feature".into();
         return;
     }
     crate::history::latest(w);
@@ -1920,12 +1950,13 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
     w.open_editor("feature");
 }
 pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
-    if w.fields.contains_key("configuration-editor")
+    if w.fields.contains_key("appearance-tool")
+        || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
         || w.fields.contains_key("assembly-inspection-editor")
     {
-        w.status = "Confirm or cancel the current configuration or component pattern first".into();
+        w.status = "Confirm or cancel the current operation before editing another feature".into();
         return;
     }
     if crate::rib_ui::is_preset(name) {
@@ -2439,7 +2470,10 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         });
         ui.separator();
     }
-    if w.dialog.is_none() {
+    if w.dialog.is_none()
+        || w.dialog.as_deref() == Some("appearances")
+            && crate::presentation_composition::appearance_panel_hosted(w)
+    {
         crate::cad_ui::properties(ui, w);
         return;
     }
@@ -2465,7 +2499,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "configurations" => "Configurations and Equations",
             "versions" => "Design versions",
             "materials" => "Engineering Materials",
-            "appearances" => "Visual Finishes",
+            "appearances" => "Appearance · Colors and Textures",
             "drawings" => "Drawings",
             "manufacturing" => "Manufacturing",
             "libraries" => "Component libraries",

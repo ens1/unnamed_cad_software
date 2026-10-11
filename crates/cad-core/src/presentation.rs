@@ -1115,7 +1115,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("inspection.properties", "Mass Properties"),
     ("comments", "Review comments"),
     ("materials", "Engineering Materials"),
-    ("appearances", "Visual Finishes"),
+    ("appearances", "Appearance · Colors and Textures"),
     ("lighting", "Studio Lighting"),
     ("libraries", "Component libraries"),
     ("drawings", "Drawings"),

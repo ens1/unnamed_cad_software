@@ -204,3 +204,30 @@ Final source integration passed `cargo fmt --all -- --check`,
 worker and CLI executable names. No tests, probes or manual/UI smoke checks were
 written or run; interactive acceptance remains with the user. The existing
 `proc-macro-error2` 2.0.1 future-incompatibility notice remains.
+
+## Appearance panel and user texture imports — 2026-10-11
+
+The bundled standard and Nocturne compositions now dock a separate resizable
+Appearance panel beside the existing viewport. Explicit part/base and component
+instance selectors drive assignment. Customize clones the assigned finish and
+assigns it in one shared draft; shared-library editing is an explicit action.
+Colors, grayscale bump/height and other texture maps, physical bump depth and
+tile mapping have semantic controls and styled sections. The panel's stable
+`workspace.appearance-panel` view publishes open/closed state; user layouts can
+move or replace it. Legacy layouts retain the property-manager adapter. Source
+finishes remain independent of engineering material and retain contract 1.
+
+Texture import pins the exact bounded image buffer validated by the desktop,
+without an unbounded second read of the external file. PNG/JPEG/TIFF/WebP and
+existing asynchronous resource validation remain supported. Recovery snapshots
+now record the original asset root, and manual recovery validates and copies
+committed/draft pinned resources before replacing the active model. Direct
+feature editing is blocked during an appearance transaction, preserving its
+checkpoint and shared Apply/Cancel semantics.
+
+Final `cargo fmt --all -- --check`,
+`cargo clippy --workspace --locked -- -D warnings`, `git diff --check` and
+`scripts/package-macos.sh` passed. The refreshed `dist/TCAD.app` retains distinct
+`TCAD`, `tcad-worker` and `tcad-cli` executable names. No tests, probes or manual
+UI smoke checks were performed; interactive acceptance remains with the user.
+The existing `proc-macro-error2` 2.0.1 future-incompatibility notice remains.

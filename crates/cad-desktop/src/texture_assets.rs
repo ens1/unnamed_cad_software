@@ -90,15 +90,16 @@ fn decode(bytes: &[u8], kind: &str) -> Result<DynamicImage, String> {
     Ok(decoded)
 }
 
-/// Check format and bounded dimensions before pinning a draft resource. Full decoding runs
-/// in the asset worker, and the current readiness stamp gates Apply on its result.
-pub(crate) fn validate_texture_file(path: &Path) -> cad_core::Result<()> {
+/// Read and validate the exact bounded bytes to pin in a draft resource. The
+/// source is not reopened after validation. Full decoding runs in the asset
+/// worker, and the current readiness stamp gates Apply on its result.
+pub(crate) fn validate_texture_file(path: &Path) -> cad_core::Result<Vec<u8>> {
     let kind = path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("");
     read(path)
-        .and_then(|bytes| dimensions(&bytes, kind).map(|_| ()))
+        .and_then(|bytes| dimensions(&bytes, kind).map(|_| bytes))
         .map_err(|message| CadError::Invalid(format!("Texture: {message}")))
 }
 

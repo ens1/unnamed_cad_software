@@ -17,6 +17,79 @@ pub struct RenderContext<'a> {
 
 pub type Renderer = fn(&mut egui::Ui, &mut Workspace, &RenderContext<'_>);
 
+/// A user composition may host the dedicated view anywhere. Older layouts
+/// keep the property-manager adapter instead of losing the appearance editor.
+pub fn appearance_panel_hosted(w: &Workspace) -> bool {
+    fn contains(
+        node: &cad_core::presentation::LayoutNode,
+        components: &BTreeMap<String, cad_core::presentation::Component>,
+    ) -> bool {
+        if node.hidden || node.visibility.as_deref() == Some("hidden") {
+            return false;
+        }
+        let component = node.component.as_ref().and_then(|id| components.get(id));
+        let binding = node
+            .bind
+            .as_ref()
+            .or(node.semantic.as_ref())
+            .or_else(|| component.and_then(|component| component.bind.as_ref()));
+        let role = node
+            .role
+            .as_deref()
+            .or_else(|| component.map(|component| component.role.as_str()));
+        let command = node
+            .command
+            .as_ref()
+            .or_else(|| component.and_then(|component| component.command.as_ref()));
+        let leaf = node.children.is_empty() && node.repeat.is_none();
+        (leaf
+            && command.is_none()
+            && (binding.is_some_and(|binding| binding == "workspace.appearance-panel")
+                || binding.is_none() && role == Some("appearance-panel")))
+            || node
+                .children
+                .iter()
+                .any(|child| contains(child, components))
+            || node.repeat.as_ref().is_some_and(|repeat| {
+                repeat.limit != Some(0)
+                    && (repeat.states.is_empty()
+                        || repeat.states.iter().any(|state| state == "open"))
+                    && repeat
+                        .role
+                        .as_deref()
+                        .is_none_or(|role| role == "appearance-panel")
+                    && repeat
+                        .id_prefix
+                        .as_deref()
+                        .is_none_or(|prefix| "workspace.appearance-panel".starts_with(prefix))
+                    && (repeat.ids.is_empty()
+                        || repeat
+                            .ids
+                            .iter()
+                            .any(|id| id == "workspace.appearance-panel"))
+                    && node.template.as_ref().is_some_and(|template| {
+                        contains(template, components)
+                            || (template.bind.is_none()
+                                && template.semantic.is_none()
+                                && template.command.is_none()
+                                && !template.hidden
+                                && template.visibility.as_deref() != Some("hidden")
+                                && template
+                                    .component
+                                    .as_ref()
+                                    .and_then(|id| components.get(id))
+                                    .is_none_or(|component| {
+                                        component.command.is_none() && component.bind.is_none()
+                                    }))
+                    })
+            })
+    }
+    w.layout
+        .layouts
+        .get(&w.view.active_layout)
+        .is_some_and(|root| contains(root, &w.layout.components))
+}
+
 /// Render the declared hierarchy, rather than giving every leaf an unrelated
 /// window. Parent clipping and scroll offsets therefore apply to all descendants.
 pub fn render(
