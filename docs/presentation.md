@@ -130,7 +130,7 @@ A command component invokes a catalog identity independently of its appearance. 
 
 Default native widgets use `--panel`, `--ink` and `--active`; `--reference` colors pinned callouts. Optional `--warning` and `--error` override native diagnostic text colors, including assembly inspection results. The panel color selects the native light/dark widget palette, independent of engineering materials. Viewport styles accept `background`, `selection-color`, `preview-color`, `comparison-color`, `ghost-opacity`, `inspection-first-color` and `inspection-second-color`. Hex colors may include an alpha byte, such as `#26D98561`. These are presentation colors; engineering material definitions remain authoritative.
 
-Native CAD editors remain available as registered composite views. Their document fields can be replaced or duplicated through stable bindings. Toolbar actions, command tabs, individual menus and entries, feature/history rows, selection actions and confirmation controls now use the shared styled-control adapter. Smart Dimension value/reference fields, resource source/watch fields, sketch block source/placement, configured feature dimensions, and drawing symbol fields publish transient setters. Viewport context, start hint, view cube, selection candidates, isolation controls and navigation hint have stable styling identities and parent-relative sizing/anchors. Some specialized transient editors and geometry-attached overlay internals still use composite adapters; their full migration remains presentation work, rather than a limitation of the contracts. Native file pickers remain operating-system dialogs. Duplicate model viewports currently share one camera and render texture.
+Native CAD editors remain available as registered composite views. Their document fields can be replaced or duplicated through stable bindings. Toolbar actions, command tabs, individual menus and entries, feature/history rows, selection actions and confirmation controls now use the shared styled-control adapter. Smart Dimension value/reference fields, resource source/watch fields, sketch block source/placement, configured feature dimensions, and drawing symbol fields publish transient setters. Viewport context, start hint, view cube, selection candidates, isolation controls and navigation hint have stable styling identities and parent-relative sizing/anchors. Surface, direct-face, sheet-metal, structural-member and mold feature editors now render their individual fields, reference choices, source lists and actions through shared semantic controls. Drawing sheet/format and non-symbol annotation controls, remaining feature families, and some geometry-attached overlay internals still use composite adapters; their full migration remains presentation work. Native file pickers remain operating-system dialogs. Duplicate model viewports currently share one camera and render texture.
 
 
 Sketch editing publishes stable commands `sketch.convert-entities`, `sketch.offset-entities`, `sketch.fillet`, `sketch.toggle-construction`, and `sketch.detach-conversion`. The default Sketch tab groups these under Edit Entities, and selection actions expose applicability/disabled reasons. Model edges and face boundaries expose Convert Entities while a sketch is active. `sketch-modifier` semantic elements expose saved source relationships, output member IDs, expression values and edit/delete/detach commands. Transient `sketch-edit` elements expose operation expression, direction, construction, source-link state, selected topology references, errors and `sketch.accept-edit` / `sketch.cancel-edit`. The default property manager renders live controls; the same command handlers serve custom layouts. Construction state is uniform for a selected member set and available for every member type. Driven controls carry disabled reasons instead of changing source relations through dragging.
@@ -232,7 +232,7 @@ use `workspace-action` identity and styling. An Actions command is unavailable
 while an active editor owns the shared checkpoint.
 
 The default toolbar uses 28 px ready and 56 px selected/editing/inspection heights;
-selected history/tree rows retain their 26 px height. Users can override all of
+selected history rows retain their 26 px height and feature-tree rows use 24 px. Users can override all of
 these values. Viewport overlay positioning now resolves the current state as well
 as its role/ID. Compact row text can use the portable `text-overflow: ellipsis`
 property while preserving complete semantic/accessibility and hover labels.
@@ -246,3 +246,74 @@ property, including Classic Orange and presentation recovery. Button `max-width`
 constraints, fields, failures, upstream stages and replacement choices can also
 be composed using ordinary semantic bindings. No alternate document, solver or
 undo state belongs to these renderers.
+
+
+## Semantic modeling editor families (2026-10-11)
+
+Surface, direct-face editing, sheet-metal, structural/weldment and mold feature
+editors publish contract-v1 `tcad.presentation.operation-editor` descriptors. The
+native property manager renders these descriptors; it no longer owns a separate
+set of field values or privileged source-selection buttons for these families.
+
+`operation-editor-field` provides exact expression or f64 entry, Boolean options,
+and labeled choices for sketches, bodies, surface inputs, datum/origin references,
+selected geometry, section points and manufacturing members. Ruled-surface
+directions expose their explicit, axis, plane-normal and two-point definitions;
+associated references retain their source intent. `operation-editor-action`
+provides add/remove/reorder for loft/knit/ruled inputs and explicit sweep stations,
+face/edge selection, structural member sets and analyzed parting edges. Stable
+source/segment/topology identities resolve against the latest staged feature
+before collection mutations. Explicit sweep station coordinates remain ordered
+position slots, matching the saved feature contract.
+
+`operation-editor-group` and `operation-editor-help` expose native grouping and
+assessment text independently of the fields. Groups include `sources`,
+`selection`, `extent`, `correspondence`, `placement`, `members`, `bend`, `pull` and
+`assessment`; each group name is also a CSS class. Consecutive list actions use
+compact wrapping rows. Group `overflow: auto | scroll` and `max-height` create a
+bounded scrolling list in the native view; the containing dock's ordinary layout
+still controls its size.
+
+A custom composition can move or duplicate all active modeling fields without
+adding a native widget:
+
+```json
+{
+  "id": "my-modeling-fields",
+  "role": "semantic-field-collection",
+  "layout": "column",
+  "overflow": "auto",
+  "repeat": { "role": "operation-editor-field" },
+  "template": { "role": "field-control", "widget": "field", "height_logical_px": 44 }
+}
+```
+
+Use a second collection with `repeat.role: operation-editor-action` and
+`template.widget: action` to place the source-selection and list actions. Fields
+use stable identities such as
+`operation-editor:<feature-id>/operation/operation/distance`; arrays with authored
+segment IDs or referenced source IDs expose those identities in their collection
+bindings instead of depending on a stale widget index.
+
+```css
+[role=operation-editor-field] { font-size: 11px; }
+[role=operation-editor-action] { height: 22px; padding: 3px 6px; }
+[role=operation-editor-group].assessment { overflow: auto; max-height: 160px; }
+[role=operation-editor-help] { font-size: 10px; }
+```
+
+Each setter/action carries the current document, part, feature and editor-session
+identity. Readers fetch current source for every placement, and setters invoke
+the same `PutFeature` transaction and asynchronous evaluation as the native
+property manager. A stale editor cannot modify a later session. Changing a source
+body or path reconciles its dependent face/edge/member selection rather than
+retaining references to the previous source. Optional bend radius and K-factor
+overrides preserve their entered expression until disabled.
+
+Invalid partially typed numeric input and rejected typed edits retain their field
+text and diagnostic after focus moves. They prevent Apply/OK even while a previous
+geometry evaluation remains valid; correcting the field restores normal current
+validation. Removing the relevant field or canceling the editing session discards
+its local invalid input. Advanced Source retains its separate JSON validity path.
+These presentation changes extend control composition and editing safety; they
+do not broaden the native geometry support of the underlying operations.

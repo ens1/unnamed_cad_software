@@ -210,6 +210,18 @@ pub struct EvaluatedCircle {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum WorkerRequest {
+    AnalyzeSketch {
+        identity: RequestIdentity,
+        document: Document,
+        owner: Id,
+        sketch: Box<crate::Sketch>,
+    },
+    ManipulateAssembly {
+        identity: RequestIdentity,
+        document: Document,
+        assemblies: BTreeMap<Id, crate::assembly_geometry::EvaluatedAssembly>,
+        intent: crate::assembly_motion::Intent,
+    },
     Evaluate {
         identity: RequestIdentity,
         document: Document,
@@ -244,6 +256,16 @@ pub enum WorkerRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkerResponse {
+    SketchAnalyzed {
+        identity: RequestIdentity,
+        owner: Id,
+        sketch: Id,
+        analysis: Box<crate::sketch_diagnostics::Analysis>,
+    },
+    AssemblyManipulated {
+        identity: RequestIdentity,
+        outcome: Box<crate::assembly_motion::Outcome>,
+    },
     Evaluation {
         result: Evaluation,
     },

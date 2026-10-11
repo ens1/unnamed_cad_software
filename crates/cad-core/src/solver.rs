@@ -30,6 +30,16 @@ pub trait ConstraintSolver {
             "This solver does not support sketch dragging".into(),
         ))
     }
+    fn analyze_sketch(
+        &self,
+        _doc: &Document,
+        _part: &str,
+        _sketch: &Sketch,
+    ) -> Result<crate::sketch_diagnostics::Analysis> {
+        Err(CadError::Unsupported(
+            "This solver does not expose sketch motion analysis".into(),
+        ))
+    }
     fn solve_assembly(&self, doc: &Document, assembly: &mut Assembly) -> Result<SolveReport>;
     fn solve_assembly_frames(
         &self,
@@ -59,11 +69,23 @@ pub trait ConstraintSolver {
             component_motion: BTreeMap::new(),
         })
     }
+    fn manipulate_assembly(
+        &self,
+        _doc: &Document,
+        _assembly: &mut Assembly,
+        _frames: &BTreeMap<Id, [crate::assembly_geometry::Frame; 2]>,
+        _auxiliary: &BTreeMap<Id, Vec<crate::assembly_geometry::ResolvedEndpoint>>,
+        _goal: &crate::assembly_motion::Goal,
+    ) -> Result<crate::assembly_geometry::AssemblySolution> {
+        Err(CadError::Unsupported(
+            "This solver does not support constraint-respecting assembly movement".into(),
+        ))
+    }
 }
 pub struct NativeSolver;
 const RESIDUAL_TOLERANCE: f64 = 1e-6;
 
-fn contact_variables(sketch: &Sketch) -> Vec<(Id, usize)> {
+pub(crate) fn contact_variables(sketch: &Sketch) -> Vec<(Id, usize)> {
     let inactive = crate::sketch_transform::inactive_entities(sketch);
     sketch
         .constraints
@@ -78,7 +100,7 @@ fn contact_variables(sketch: &Sketch) -> Vec<(Id, usize)> {
         })
         .collect()
 }
-fn put_contact_variables(
+pub(crate) fn put_contact_variables(
     sketch: &mut Sketch,
     variables: &[(Id, usize)],
     offset: usize,
@@ -108,7 +130,7 @@ fn finite_residual(r: &DVector<f64>, count: Option<usize>) -> Result<()> {
     Ok(())
 }
 
-fn jacobian(
+pub(crate) fn jacobian(
     x: &DVector<f64>,
     r: &DVector<f64>,
     f: &impl Fn(&DVector<f64>) -> Result<DVector<f64>>,
@@ -175,7 +197,7 @@ fn jacobian(
     Ok(j)
 }
 
-fn scaled_jacobian(j: &DMatrix<f64>) -> (DMatrix<f64>, DVector<f64>) {
+pub(crate) fn scaled_jacobian(j: &DMatrix<f64>) -> (DMatrix<f64>, DVector<f64>) {
     let scale = DVector::from_iterator(j.ncols(), j.column_iter().map(|c| c.norm().max(1e-12)));
     let mut scaled = j.clone();
     for col in 0..j.ncols() {
@@ -311,7 +333,7 @@ fn axis_residual(a: Vector3<f64>, b: Vector3<f64>) -> Vector3<f64> {
 }
 impl ConstraintSolver for NativeSolver {
     fn fingerprint(&self) -> &str {
-        "tcad-native-lm/12"
+        "tcad-native-lm/13"
     }
     fn solve_sketch(&self, doc: &Document, part: &str, sketch: &mut Sketch) -> Result<SolveReport> {
         if sketch.points.keys().chain(sketch.members.keys()).any(|id| {
@@ -326,68 +348,9 @@ impl ConstraintSolver for NativeSolver {
                 "Sketch identities cannot use reserved origin/axis references".into(),
             ));
         }
-        let base = sketch.clone();
-        let prepared = crate::sketch_blocks::prepare(doc, part, &base)?;
-        let driven = crate::sketch_edit::driven_points(&base);
-        let suppressed = crate::sketch_transform::suppressed_points(&base);
-        let keys = base
-            .points
-            .keys()
-            .filter(|key| !driven.contains(*key) && !suppressed.contains(*key))
-            .cloned()
-            .collect::<Vec<_>>();
-        let rotations = crate::sketch_blocks::rotation_variables(&base);
-        let angles = crate::sketch_blocks::rotation_values(doc, part, &base, &rotations)?;
-        let start = {
-            let contacts = contact_variables(&base);
-            DVector::from_iterator(
-                keys.len() * 2 + contacts.len() + rotations.len(),
-                keys.iter()
-                    .flat_map(|k| base.points[k])
-                    .chain(contacts.iter().map(|(id, i)| {
-                        base.constraints
-                            .iter()
-                            .find(|c| &c.id == id)
-                            .unwrap()
-                            .contact
-                            .as_ref()
-                            .unwrap()
-                            .parameters[*i]
-                    }))
-                    .chain(angles),
-            )
-        };
-        let contacts = contact_variables(&base);
-        let derive = |x: &DVector<f64>| -> Result<Sketch> {
-            let mut candidate = base.clone();
-            for (i, key) in keys.iter().enumerate() {
-                candidate
-                    .points
-                    .insert(key.clone(), [x[2 * i], x[2 * i + 1]]);
-            }
-            put_contact_variables(&mut candidate, &contacts, keys.len() * 2, x)?;
-            crate::sketch_blocks::put_rotations(
-                &mut candidate,
-                &rotations,
-                &x.as_slice()[keys.len() * 2 + contacts.len()..],
-            )?;
-            crate::sketch_actions::apply_curve_dimensions(doc, part, &mut candidate)?;
-            crate::sketch_edit::derive_prepared(doc, part, &mut candidate, &prepared)?;
-            Ok(candidate)
-        };
-        let equations = |x: &DVector<f64>| -> Result<DVector<f64>> {
-            let candidate = derive(x)?;
-            crate::sketch_actions::residuals(doc, part, &candidate, |key| {
-                candidate
-                    .points
-                    .get(key)
-                    .copied()
-                    .ok_or_else(|| CadError::Invalid(format!("Missing sketch point {key}")))
-            })
-            .map(DVector::from_vec)
-        };
-        let (x, report) = minimize(start, equations, 120)?;
-        let mut candidate = derive(&x)?;
+        let system = crate::sketch_diagnostics::System::new(doc, part, sketch)?;
+        let (x, report) = minimize(system.start.clone(), |x| system.residuals(x), 120)?;
+        let mut candidate = system.derive(&x)?;
         if !report.converged {
             let mut blocks =
                 crate::sketch_actions::residual_blocks(doc, part, &candidate, |key| {
@@ -423,6 +386,14 @@ impl ConstraintSolver for NativeSolver {
         crate::sketch_geometry::polylines(doc, part, &candidate)?;
         *sketch = candidate;
         Ok(report)
+    }
+    fn analyze_sketch(
+        &self,
+        doc: &Document,
+        part: &str,
+        sketch: &Sketch,
+    ) -> Result<crate::sketch_diagnostics::Analysis> {
+        crate::sketch_diagnostics::analyze(doc, part, sketch)
     }
     fn drag_sketch(
         &self,
@@ -563,7 +534,18 @@ impl ConstraintSolver for NativeSolver {
         frames: &BTreeMap<Id, [crate::assembly_geometry::Frame; 2]>,
         auxiliary: &BTreeMap<Id, Vec<crate::assembly_geometry::ResolvedEndpoint>>,
     ) -> Result<crate::assembly_geometry::AssemblySolution> {
-        solve_assembly_geometry(doc, assembly, frames, auxiliary)
+        solve_assembly_geometry(doc, assembly, frames, auxiliary, None)
+    }
+    fn manipulate_assembly(
+        &self,
+        doc: &Document,
+        assembly: &mut Assembly,
+        frames: &BTreeMap<Id, [crate::assembly_geometry::Frame; 2]>,
+        auxiliary: &BTreeMap<Id, Vec<crate::assembly_geometry::ResolvedEndpoint>>,
+        goal: &crate::assembly_motion::Goal,
+    ) -> Result<crate::assembly_geometry::AssemblySolution> {
+        goal.validate()?;
+        solve_assembly_geometry(doc, assembly, frames, auxiliary, Some(goal))
     }
 }
 
@@ -572,7 +554,7 @@ fn solve_assembly_frames(
     assembly: &mut Assembly,
     frames: &BTreeMap<Id, [crate::assembly_geometry::Frame; 2]>,
 ) -> Result<SolveReport> {
-    Ok(solve_assembly_geometry(doc, assembly, frames, &BTreeMap::new())?.report)
+    Ok(solve_assembly_geometry(doc, assembly, frames, &BTreeMap::new(), None)?.report)
 }
 fn matrix_rank(j: &DMatrix<f64>) -> usize {
     if j.nrows() == 0 || j.ncols() == 0 || j.amax() < 1e-9 {
@@ -597,6 +579,7 @@ fn solve_assembly_geometry(
     assembly: &mut Assembly,
     frames: &BTreeMap<Id, [crate::assembly_geometry::Frame; 2]>,
     auxiliary: &BTreeMap<Id, Vec<crate::assembly_geometry::ResolvedEndpoint>>,
+    goal: Option<&crate::assembly_motion::Goal>,
 ) -> Result<crate::assembly_geometry::AssemblySolution> {
     use crate::assembly_geometry::{
         AssemblySolution, ComponentMotion, CurvePosition, MateDiagnostic, Relationship,
@@ -714,6 +697,25 @@ fn solve_assembly_geometry(
             .map_err(|e| CadError::Invalid(format!("{} mate {}: {e}", mate.kind, mate.id)))?;
             groups.push((mate.id.clone(), residual));
         }
+        for instance in base.instances.values() {
+            if let Some(expressions) = &instance.translation_expressions {
+                let matrix = assembly_matrix(&base, &index, x, &instance.id)?;
+                let values = expressions
+                    .iter()
+                    .enumerate()
+                    .map(|(axis, expression)| {
+                        crate::expression::value(
+                            doc,
+                            &base.id,
+                            expression,
+                            crate::Dimension::Length,
+                        )
+                        .map(|target| matrix[(axis, 3)] - target)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                groups.push((format!("placement:{}", instance.id), values));
+            }
+        }
         Ok(groups)
     };
     let equations = |x: &DVector<f64>| -> Result<DVector<f64>> {
@@ -721,7 +723,61 @@ fn solve_assembly_geometry(
             grouped(x)?.into_iter().flat_map(|(_, r)| r).collect(),
         ))
     };
-    let (x, mut report) = minimize(DVector::from_vec(start), equations, 160)?;
+    let start = DVector::from_vec(start);
+    let mut seed = start.clone();
+    let mut drive_iterations = 0;
+    if let Some(goal) = goal {
+        if !index.contains_key(&goal.instance) {
+            return Err(CadError::Invalid(
+                "The selected component is grounded".into(),
+            ));
+        }
+        // Start at the requested pure translation/rotation, with the selected
+        // anchor retained. For an unconstrained component this is already the
+        // exact goal, so Move cannot turn into an accidental rotation about a
+        // distant picked point. Remaining freedom prefers this requested pose.
+        let i = index[&goal.instance];
+        let baseline = &base.instances[&goal.instance].placement;
+        let preferred = goal.preference(baseline);
+        for axis in 0..3 {
+            seed[i * 6 + axis] = preferred.translation[axis];
+        }
+        let baseline_matrix = baseline.matrix();
+        let preferred_matrix = preferred.matrix();
+        let relative = preferred_matrix.fixed_view::<3, 3>(0, 0)
+            * baseline_matrix.fixed_view::<3, 3>(0, 0).transpose();
+        let increment = Rotation3::from_matrix_unchecked(relative).scaled_axis();
+        for axis in 0..3 {
+            seed[i * 6 + 3 + axis] = increment[axis];
+        }
+        let preference = seed.clone();
+        // Engineering mates and travel bounds dominate transient cursor/dial
+        // goals. A final strict projection checks every original equation before
+        // returning a pose; impossible goals never relax or remove mates.
+        let driven = |x: &DVector<f64>| -> Result<DVector<f64>> {
+            let mut residual = equations(x)?.as_slice().to_vec();
+            for value in &mut residual {
+                *value *= 10_000.;
+            }
+            residual.extend(goal.residual(&assembly_matrix(&base, &index, x, &goal.instance)?));
+            residual.extend(
+                x.iter()
+                    .zip(preference.iter())
+                    .map(|(a, b)| (a - b) * 0.0001),
+            );
+            Ok(DVector::from_vec(residual))
+        };
+        let initial = if driven(&seed).is_ok() {
+            seed
+        } else {
+            start.clone()
+        };
+        let (driven, report) = minimize(initial, driven, 100)?;
+        seed = driven;
+        drive_iterations = report.iterations;
+    }
+    let (x, mut report) = minimize(seed, equations, 160)?;
+    report.iterations += drive_iterations;
     let groups = grouped(&x)?;
     if !report.converged {
         let conflicts = groups
@@ -732,7 +788,12 @@ fn solve_assembly_geometry(
                     .iter()
                     .find(|m| &m.id == id)
                     .map(|m| format!("{} ({id})", m.kind))
-                    .unwrap_or_else(|| id.clone())
+                    .unwrap_or_else(|| {
+                        id.strip_prefix("placement:")
+                            .and_then(|id| base.instances.get(id))
+                            .map(|instance| format!("{} placement expressions", instance.name))
+                            .unwrap_or_else(|| id.clone())
+                    })
             })
             .collect::<Vec<_>>();
         return Err(CadError::Invalid(format!(
@@ -763,17 +824,19 @@ fn solve_assembly_geometry(
         inequalities += bounds.len();
         let block = j.rows(row, r.len()).into_owned();
         let rank = matrix_rank(&block);
-        diagnostics.insert(
-            id.clone(),
-            MateDiagnostic {
-                maximum_residual: r.iter().map(|v| v.abs()).fold(0., f64::max),
-                equation_count: r.len(),
-                independent_equations: rank,
-                redundant_equations: r.len().saturating_sub(bounds.len()).saturating_sub(rank),
-                inequality_equations: bounds.len(),
-                curve_parameter: parameters.get(&id).map(|i| x[*i]),
-            },
-        );
+        if base.mates.iter().any(|mate| mate.id == id) {
+            diagnostics.insert(
+                id.clone(),
+                MateDiagnostic {
+                    maximum_residual: r.iter().map(|v| v.abs()).fold(0., f64::max),
+                    equation_count: r.len(),
+                    independent_equations: rank,
+                    redundant_equations: r.len().saturating_sub(bounds.len()).saturating_sub(rank),
+                    inequality_equations: bounds.len(),
+                    curve_parameter: parameters.get(&id).map(|i| x[*i]),
+                },
+            );
+        }
         row += r.len();
     }
     let equality_rank = matrix_rank(&j);

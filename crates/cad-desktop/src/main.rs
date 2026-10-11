@@ -1,5 +1,6 @@
 mod appearances_ui;
 mod assembly_inspection_ui;
+mod assembly_motion_ui;
 mod background;
 mod body_filter_ui;
 mod cad_ui;
@@ -20,6 +21,7 @@ mod inspection_ui;
 mod mate_ui;
 mod mold_ui;
 mod navigation;
+mod operation_editor_ui;
 mod operation_preview;
 mod placement_pattern_ui;
 mod presentation_composition;
@@ -36,6 +38,7 @@ mod settings;
 mod settings_preferences;
 mod settings_ui;
 mod sketch;
+mod sketch_analysis_ui;
 mod sketch_blocks_ui;
 mod sketch_dimensions_ui;
 mod sketch_edit_ui;
@@ -68,7 +71,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/28;solver/tcad-native-lm/12";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/29;solver/tcad-native-lm/13";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -80,6 +83,8 @@ pub struct Workspace {
     pub application_preferences: settings_preferences::Preferences,
     pub settings: Option<settings::State>,
     pub reference_repair: Option<reference_repair_ui::State>,
+    pub assembly_motion: Option<assembly_motion_ui::State>,
+    pub sketch_analysis: sketch_analysis_ui::State,
     pub jobs: background::Jobs,
     pub worker: worker::WorkerClient,
     pub exporter: worker::WorkerClient,
@@ -213,6 +218,8 @@ impl Workspace {
             application_preferences,
             settings: None,
             reference_repair: None,
+            assembly_motion: None,
+            sketch_analysis: sketch_analysis_ui::State::default(),
             jobs: background::Jobs::new(),
             worker: worker::WorkerClient::new(),
             exporter: worker::WorkerClient::new(),
@@ -305,6 +312,14 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !assembly_motion_ui::ready_to_confirm(self) {
+            return;
+        }
+        if !operation_editor_ui::current_source_is_valid(self) {
+            self.status = "Correct the current operation fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !reference_repair_ui::current_source_is_valid(self) {
             self.status = "Preview the current explicit reference repair before applying".into();
             self.confirm_requested = false;
@@ -371,6 +386,7 @@ impl Workspace {
         let editing_edges = selection_ui::edge_feature(self).is_some();
         match self.session.apply() {
             Ok(()) => {
+                assembly_motion_ui::cancel(self);
                 if editing_edges {
                     self.selected = None;
                     self.geometry_selection.clear();
@@ -393,6 +409,7 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        assembly_motion_ui::cancel(self);
         reference_repair_ui::reset(self);
         navigation::stop(self);
         assembly_inspection_ui::cancel(self);
@@ -409,7 +426,7 @@ impl Workspace {
         self.sketch = None;
         if matches!(
             self.dialog.as_deref(),
-            Some("sketch" | "feature" | "reference-repair")
+            Some("sketch" | "feature" | "reference-repair" | "feature-order" | "assembly-motion")
         ) {
             self.dialog = None;
         }
@@ -500,6 +517,7 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        assembly_motion_ui::cancel(self);
         reference_repair_ui::reset(self);
         navigation::stop(self);
         assembly_inspection_ui::cancel(self);
@@ -540,6 +558,9 @@ impl Workspace {
         self.fields.remove("feature-source-invalid");
         self.fields.remove("feature-source-error");
         self.fields.remove("feature-editor-id");
+        self.fields.remove("feature-editor-generation");
+        self.fields.remove("feature-order-owner");
+        self.fields.remove("feature-order-feature");
         if self.view.active_node.as_ref().is_some_and(|id| {
             !self
                 .session
@@ -554,6 +575,14 @@ impl Workspace {
         self.status = "Operation cancelled".into();
     }
     pub fn confirm_tool(&mut self) {
+        if !assembly_motion_ui::ready_to_confirm(self) {
+            return;
+        }
+        if !operation_editor_ui::current_source_is_valid(self) {
+            self.status = "Correct the current operation fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !reference_repair_ui::current_source_is_valid(self) {
             self.status = "Preview the current explicit reference repair before applying".into();
             self.confirm_requested = false;
@@ -626,11 +655,13 @@ impl Workspace {
             return;
         }
 
-        if (self.fields.contains_key("exploded-view-editor")
+        if (self.assembly_motion.is_some()
+            || self.fields.contains_key("exploded-view-editor")
             || self.fields.contains_key("assembly-inspection-editor")
             || self.fields.contains_key("appearance-tool"))
             && self.session.draft.is_none()
         {
+            assembly_motion_ui::cancel(self);
             self.tool_checkpoint = None;
             self.dialog = None;
             self.manager_tree = true;
@@ -782,6 +813,8 @@ fn setup(
     render_appearance::setup(&mut commands, &mut images, &mut appearance);
 }
 fn poll_workers(mut w: ResMut<Workspace>) {
+    sketch_analysis_ui::poll(&mut w);
+    assembly_motion_ui::poll(&mut w);
     for (ok, message) in w.jobs.drain() {
         if ok {
             w.git_text = message;

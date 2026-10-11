@@ -95,7 +95,7 @@ fn expression(ui: &mut egui::Ui, label: &str, value: &mut Expr) -> bool {
     });
     changed
 }
-fn members(w: &Workspace, stock: &Stock) -> Vec<(String, String)> {
+pub(crate) fn members(w: &Workspace, stock: &Stock) -> Vec<(String, String)> {
     let source = source_sketch(w, &stock.profile);
     path_members(w, &stock.profile)
         .into_iter()
@@ -439,7 +439,7 @@ fn weldment_choices(doc: &Document, current: &str) -> Vec<(NodeRef, String)> {
         .collect()
 }
 
-fn source_sketch(w: &Workspace, profile: &NodeRef) -> Option<cad_core::Sketch> {
+pub(crate) fn source_sketch(w: &Workspace, profile: &NodeRef) -> Option<cad_core::Sketch> {
     let mut sketch = viewport::display_evaluation(w)
         .and_then(|evaluation| {
             evaluation
@@ -588,7 +588,7 @@ fn closed_profile(w: &Workspace, profile: &NodeRef) -> bool {
     !degree.is_empty() && degree.values().all(|degree| *degree == 2)
 }
 
-fn path_members(w: &Workspace, profile: &NodeRef) -> Vec<(String, String)> {
+pub(crate) fn path_members(w: &Workspace, profile: &NodeRef) -> Vec<(String, String)> {
     source_sketch(w, profile)
         .map(|sketch| {
             sketch
@@ -612,7 +612,7 @@ fn path_members(w: &Workspace, profile: &NodeRef) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
-fn member_choices(
+pub(crate) fn member_choices(
     w: &Workspace,
     stock: &cad_core::weldment::Stock,
 ) -> Vec<(cad_core::weldment::MemberRef, String)> {

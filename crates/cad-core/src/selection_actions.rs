@@ -625,6 +625,18 @@ pub fn project(
             None,
         );
         add("selection.mate", "Mate…", "Component", component_reason);
+        add(
+            "assembly.move",
+            "Move Component",
+            "Component",
+            component_reason,
+        );
+        add(
+            "assembly.rotate",
+            "Rotate Component",
+            "Component",
+            component_reason,
+        );
     }
     out
 }

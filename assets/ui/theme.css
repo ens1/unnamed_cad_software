@@ -166,10 +166,31 @@
   padding: 2px 4px;
   border: none;
   background: transparent;
-  height: 26px;
+  height: 24px;
   icon-size: 8px;
   text-overflow: ellipsis;
 }
+
+[role=feature-drop-marker] { color: var(--active); stroke-width: 2px; }
+[role=feature-drop-marker][state=disabled] { color: var(--error); }
+[role=feature-drop-hint], [role=operation-editor-help], [role=sketch-motion-note] {
+  font-size: 10px;
+}
+[role=feature-reorder-target], [role=operation-editor-action], [role=sketch-repair-action], [role=assembly-motion-action] {
+  height: 22px;
+  min-target-size: 24px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+[role=operation-editor-group] { font-size: 10px; padding: 3px 0px; gap: 3px; }
+[role=operation-editor-field], [role=assembly-motion-field], [role=assembly-motion-mode] {
+  font-size: 11px;
+  gap: 2px;
+  padding: 2px;
+}
+[role=sketch-point-motion] { color: var(--reference); size: 24px; stroke-width: 1.25px; }
+[role=sketch-point-motion][state=constrained] { color: var(--valid); size: 4px; }
+[role=sketch-constraint][state=dependent] { color: var(--warning); }
 
 .feature-tree-row[state=selected], [role=history-station][state=selected] {
   color: var(--active);
@@ -390,4 +411,12 @@
 }
 [role=sketch-feedback-error][state=invalid], [role=sketch-solve-summary][state=invalid] {
   color: var(--error);
+}
+
+[role=field-unit] {
+  font-size: 10px;
+}
+[role=field-diagnostic][state=error] {
+  color: var(--error);
+  font-size: 10px;
 }

@@ -765,6 +765,13 @@ pub(crate) fn semantic_element(
         crate::settings_ui::semantic_control(ui, w, element);
         return;
     }
+    if matches!(
+        element.role.as_str(),
+        "assembly-motion-field" | "assembly-motion-mode" | "assembly-motion-pivot"
+    ) {
+        crate::assembly_motion_ui::semantic_control(ui, w, element);
+        return;
+    }
     if element.role == "parameter-field"
         && let Some((owner, key)) = element.id.rsplit_once("::")
     {
@@ -814,7 +821,7 @@ pub(crate) fn semantic_element(
             .into_iter()
             .find(|(id, _)| *id == command)
             .map(|(_, label)| label)
-            .unwrap_or(command);
+            .unwrap_or(&descriptor.label);
         let label = if widget == "action" || element.role == "selection-action" {
             binding.label.as_deref().unwrap_or(&element.label)
         } else {
@@ -848,8 +855,22 @@ fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) 
         w.status = "Apply or cancel Settings before using another command".into();
         return;
     }
+    if element.role == "selection-action" && matches!(command, "assembly.move" | "assembly.rotate")
+    {
+        if let Some(target) = element
+            .data
+            .get("target")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+        {
+            crate::selection_ui::execute(w, &target, command);
+        }
+        return;
+    }
     if crate::reference_repair_ui::action(w, command, Some(&element.data))
         || crate::sketch_relations_ui::semantic_action(w, element, command)
+        || crate::feature_order_ui::action(w, command, Some(&element.data))
+        || crate::operation_editor_ui::action(w, command, Some(&element.data))
+        || crate::assembly_motion_ui::action(w, command, Some(&element.data))
     {
         return;
     }
@@ -993,20 +1014,29 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     let descriptor = element.value_descriptor();
     let value = crate::presentation_composition::current_value(w, element);
     let editable = descriptor.editable;
+    let editor_generation = element
+        .data
+        .get("editor")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let role = if element
         .data
         .get("setter")
         .and_then(Value::as_str)
-        .is_some_and(|setter| setter.starts_with("appearance-"))
+        .is_some_and(|setter| setter.starts_with("appearance-") || setter == "operation-editor")
     {
         element.role.as_str()
     } else {
         "field-control"
     };
+    let mut field_classes = vec!["semantic-control", "field-control"];
+    if let Some(classes) = element.data.get("classes").and_then(Value::as_array) {
+        field_classes.extend(classes.iter().filter_map(Value::as_str));
+    }
     let props = crate::presentation_controls::properties(
         &element.id,
         role,
-        &["semantic-control", "field-control"],
+        &field_classes,
         if editable { "editable" } else { "readonly" },
     );
     if props.get("display").is_some_and(|value| value == "none") {
@@ -1016,8 +1046,27 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     let next = ui
         .scope(|ui| {
             crate::presentation_controls::apply_properties(ui, &props);
-            ui.label(&element.label)
+            ui.horizontal(|ui| {
+                crate::presentation_controls::label(
+                    ui,
+                    &format!("{}:label", element.id),
+                    "field-label",
+                    &field_classes,
+                    &element.label,
+                    if editable { "editable" } else { "readonly" },
+                )
                 .on_hover_text(&descriptor.accessibility_label);
+                if let Some(unit) = descriptor.unit.as_deref().filter(|unit| !unit.is_empty()) {
+                    crate::presentation_controls::label(
+                        ui,
+                        &format!("{}:unit", element.id),
+                        "field-unit",
+                        &field_classes,
+                        unit,
+                        "ready",
+                    );
+                }
+            });
             if !descriptor.choices.is_empty() {
                 let mut next = value.clone();
                 let selected_label = descriptor
@@ -1033,7 +1082,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                             .map(str::to_owned)
                             .unwrap_or_else(|| value.to_string())
                     });
-                egui::ComboBox::from_id_salt(&element.id)
+                egui::ComboBox::from_id_salt((&element.id, editor_generation))
                     .selected_text(selected_label)
                     .show_ui(ui, |ui| {
                         ui.add_enabled_ui(editable, |ui| {
@@ -1061,7 +1110,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 .as_str()
                 .map(str::to_string)
                 .unwrap_or_else(|| value.to_string());
-            let key = format!("presentation-field:{}", element.id);
+            let key = format!("presentation-field:{}:{editor_generation}", element.id);
+            let keep_invalid_text = crate::operation_editor_ui::field_is_invalid(w, element);
             let text = w.fields.entry(key).or_insert(current.clone());
             let editor = if element.data.get("multiline").and_then(Value::as_bool) == Some(true) {
                 egui::TextEdit::multiline(text)
@@ -1072,9 +1122,11 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
             };
             let response = ui.add_enabled(
                 editable,
-                editor.id_salt(&element.id).desired_width(f32::INFINITY),
+                editor
+                    .id_salt((&element.id, editor_generation))
+                    .desired_width(f32::INFINITY),
             );
-            if !response.has_focus() && !response.changed() {
+            if !response.has_focus() && !response.changed() && !keep_invalid_text {
                 *text = current;
                 appearance_error = Some(None);
             }
@@ -1097,16 +1149,31 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         })
         .inner;
     if let Some(error) = appearance_error {
+        crate::operation_editor_ui::field_error(w, element, error.clone());
         crate::appearances_ui::field_error(w, element, error);
     }
     if let Some(next) = next {
         match crate::presentation_composition::set_value(w, element, next) {
-            Ok(()) => crate::appearances_ui::field_error(w, element, None),
+            Ok(()) => {
+                crate::appearances_ui::field_error(w, element, None);
+                crate::operation_editor_ui::field_error(w, element, None);
+            }
             Err(error) => {
                 w.status = error.to_string();
                 crate::appearances_ui::field_error(w, element, Some(error.to_string()));
+                crate::operation_editor_ui::field_error(w, element, Some(error.to_string()));
             }
         }
+    }
+    for (index, message) in descriptor.diagnostics.iter().enumerate() {
+        crate::presentation_controls::label(
+            ui,
+            &format!("{}:diagnostic:{index}", element.id),
+            "field-diagnostic",
+            &field_classes,
+            message,
+            "error",
+        );
     }
 }
 pub(crate) fn pin_selected(w: &mut Workspace) {
@@ -1396,6 +1463,9 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || crate::reference_repair_ui::action(w, cmd, None)
         || crate::sketch_relations_ui::action(w, cmd)
         || crate::selection_ui::set_action(w, cmd)
+        || crate::feature_order_ui::action(w, cmd, None)
+        || crate::operation_editor_ui::action(w, cmd, None)
+        || crate::assembly_motion_ui::action(w, cmd, None)
     {
         return;
     }
@@ -1420,7 +1490,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
     if crate::navigation::action(w, cmd, None) {
         return;
     }
-    if (w.fields.contains_key("appearance-tool")
+    if (w.assembly_motion.is_some()
+        || w.fields.contains_key("appearance-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -1841,7 +1912,8 @@ fn new_part(w: &mut Workspace) {
     crate::sketch::begin(w, None);
 }
 pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
-    if w.fields.contains_key("appearance-tool")
+    if w.assembly_motion.is_some()
+        || w.fields.contains_key("appearance-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -1884,6 +1956,8 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
         w.edge_selection_path = edge_path;
     }
     w.fields.insert("feature-editor-id".into(), f.id.clone());
+    w.fields
+        .insert("feature-editor-generation".into(), cad_core::id());
     w.fields.remove("feature-source-invalid");
     w.fields.remove("feature-source-error");
     w.dialog_title = f.name.clone();
@@ -2438,7 +2512,10 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         crate::cad_ui::properties(ui, w);
         return;
     }
-    if matches!(dialog.as_str(), "feature" | "sketch" | "reference-repair") {
+    if matches!(
+        dialog.as_str(),
+        "feature" | "sketch" | "reference-repair" | "feature-order"
+    ) {
         crate::cad_ui::confirmation(ui, w);
         if w.dialog.is_none() {
             return;
@@ -2448,6 +2525,8 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
     ui.horizontal(|ui| {
         ui.strong(match dialog.as_str() {
             "reference-repair" => "Repair References",
+            "feature-order" => "Feature Order",
+            "assembly-motion" => "Move / Rotate Component",
             "selection" => "Selection Actions",
             "feature" => "Feature",
             "sketch" => "Sketch on model",
@@ -2470,7 +2549,13 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         });
         if !matches!(
             dialog.as_str(),
-            "feature" | "sketch" | "configurations" | "appearances" | "reference-repair"
+            "feature"
+                | "sketch"
+                | "configurations"
+                | "appearances"
+                | "reference-repair"
+                | "feature-order"
+                | "assembly-motion"
         ) && !w.fields.contains_key("mate-editor")
             && !w.fields.contains_key("component-pattern-editor")
             && ui.small_button("Close").clicked()
@@ -2484,6 +2569,8 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         .id_salt("workspace-editor")
         .show(ui, |ui| match dialog.as_str() {
             "reference-repair" => crate::reference_repair_ui::show(ui, w),
+            "feature-order" => crate::feature_order_ui::show(ui, w),
+            "assembly-motion" => crate::assembly_motion_ui::show(ui, w),
             "selection" => {
                 if let Some(target) = crate::selection_ui::current(w) {
                     crate::selection_ui::contents(ui, w, &target);
@@ -2613,7 +2700,11 @@ fn feature_editor(ui: &mut egui::Ui, w: &mut Workspace) {
     ui.separator();
     let changed = ui
         .add_enabled_ui(!w.fields.contains_key("feature-source-invalid"), |ui| {
-            crate::cad_ui::feature_fields(ui, w, &mut feature)
+            if crate::operation_editor_ui::show(ui, w) {
+                false
+            } else {
+                crate::cad_ui::feature_fields(ui, w, &mut feature)
+            }
         })
         .inner;
     if changed {
@@ -2854,6 +2945,10 @@ fn presentation_editor(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::presentation_resources::show(ui, w);
 }
 fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
+    if w.assembly_motion.is_some() {
+        crate::assembly_motion_ui::show(ui, w);
+        return;
+    }
     let doc = w.session.visible().clone();
     let mut assembly_id = w
         .fields
@@ -3042,6 +3137,17 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                 .show(ui, |ui| {
                     if generated.contains(&i.id){ui.weak("Placement and shared definition are driven by the component pattern. Use configuration overrides to suppress this occurrence or select another configuration.");return;}
                     let mut instance = i.clone();
+                    ui.horizontal(|ui| {
+                        for (rotate, label) in [(false, "Move"), (true, "Rotate")] {
+                            if crate::presentation_controls::button(ui,
+                                &format!("assembly-motion:{}:{}:{rotate}", assembly_id, i.id),
+                                "assembly-motion-action", &["semantic-control"], label,
+                                !i.fixed && w.tool_checkpoint.is_none(), false)
+                                .on_disabled_hover_text("Select a movable component and finish the current operation first").clicked() {
+                                crate::assembly_motion_ui::begin_instance(w, &assembly_id, &i.id, rotate);
+                            }
+                        }
+                    });
                     let mut changed = false;
                     changed |= ui.text_edit_singleline(&mut instance.name).changed();
                     changed |= ui

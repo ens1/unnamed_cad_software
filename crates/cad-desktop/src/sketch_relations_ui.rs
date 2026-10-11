@@ -9,6 +9,7 @@ use cad_core::{
 use std::collections::{BTreeMap, BTreeSet};
 
 const FILTER: &str = "sketch-relations-filter";
+const MOTION: &str = "sketch-motion-display";
 
 #[derive(Clone, Default)]
 pub struct Feedback {
@@ -17,6 +18,11 @@ pub struct Feedback {
     pub maximum_residual: Option<f64>,
     pub unsatisfied: BTreeMap<Id, f64>,
     pub error: Option<String>,
+    pub motion: Option<sketch_diagnostics::Analysis>,
+    pub motion_error: Option<String>,
+    pub duplicates: BTreeMap<Id, Id>,
+    pub analysis_token: Id,
+    pub motion_pending: bool,
     source: Option<Sketch>,
     edit: Option<(Id, String, usize)>,
 }
@@ -27,6 +33,7 @@ pub struct Feedback {
 pub fn refresh(w: &mut Workspace, report: Option<solver::SolveReport>) {
     let Some(s) = &w.sketch else { return };
     let source = sketch::sketch_definition(s);
+    let duplicates = sketch_diagnostics::exact_duplicates(&source);
     let residuals = equation_feedback(w.session.visible(), &s.definition, &source);
     let (residuals, unsatisfied, maximum_residual, error) = match residuals {
         Ok(values) => {
@@ -61,6 +68,11 @@ pub fn refresh(w: &mut Workspace, report: Option<solver::SolveReport>) {
             maximum_residual,
             unsatisfied,
             error,
+            motion: None,
+            motion_error: None,
+            motion_pending: s.error.is_none(),
+            analysis_token: id(),
+            duplicates,
             source: Some(source),
             edit,
         };
@@ -99,9 +111,53 @@ fn equation_feedback(
 }
 
 pub fn retain_report(s: &sketch::EditingSketch) -> Option<solver::SolveReport> {
-    (s.feedback.source.as_ref() == Some(&sketch::sketch_definition(s)))
+    current_source(s)
         .then(|| s.feedback.report.clone())
         .flatten()
+}
+
+fn current_source(s: &sketch::EditingSketch) -> bool {
+    s.feedback.source.as_ref().is_some_and(|source| {
+        source.id == s.sketch_id
+            && source.name == s.name
+            && source.points.len() == s.keys.len()
+            && s.keys.len() == s.points.len()
+            && s.keys
+                .iter()
+                .zip(&s.points)
+                .all(|(key, point)| source.points.get(key) == Some(point))
+            && source.constraints == s.constraints
+            && source.members == s.members
+            && source.conversions == s.conversions
+            && source.offsets == s.offsets
+            && source.fillets == s.fillets
+            && source.chamfers == s.chamfers
+            && source.transforms == s.transforms
+            && source.splines == s.splines
+            && source.conics == s.conics
+            && source.texts == s.texts
+            && source.equations == s.equations
+            && source.blocks == s.blocks
+            && source.block_instances == s.block_instances
+            && source.dimension_groups == s.dimension_groups
+    })
+}
+
+pub fn motion(s: &sketch::EditingSketch) -> Option<&sketch_diagnostics::Analysis> {
+    (s.error.is_none() && current_source(s))
+        .then_some(s.feedback.motion.as_ref())
+        .flatten()
+}
+
+pub(crate) fn analysis_source(s: &sketch::EditingSketch) -> Option<&Sketch> {
+    (!s.choosing_plane && s.error.is_none() && current_source(s))
+        .then_some(s.feedback.source.as_ref())
+        .flatten()
+}
+
+/// View preference only; dimensions and source definitions are untouched.
+pub fn motion_display(w: &Workspace) -> bool {
+    w.fields.get(MOTION).is_some_and(|value| value == "true")
 }
 
 fn filter(w: &Workspace) -> &str {
@@ -130,7 +186,7 @@ fn geometry_keys(relation: &SketchConstraint) -> Vec<&str> {
 
 /// Relate one level of member/point ownership to the selected geometry without
 /// expanding through neighboring members into the entire sketch.
-fn selection_keys(source: &Sketch, selection: &[SketchEntity]) -> BTreeSet<Id> {
+pub(crate) fn selection_keys(source: &Sketch, selection: &[SketchEntity]) -> BTreeSet<Id> {
     let mut keys = BTreeSet::new();
     for entity in selection {
         match entity {
@@ -231,6 +287,12 @@ fn visible(w: &Workspace, keys: &BTreeSet<Id>, relation: &SketchConstraint) -> b
     match filter(w) {
         "unsatisfied" => s.feedback.unsatisfied.contains_key(&relation.id),
         "all" => true,
+        "dependent" => {
+            s.feedback.duplicates.contains_key(&relation.id)
+                || motion(s)
+                    .and_then(|analysis| analysis.constraints.get(&relation.id))
+                    .is_some_and(|analysis| analysis.dependent_equations > 0)
+        }
         _ if s.selection.is_empty() => true,
         _ => {
             keys.contains(&relation.id)
@@ -269,6 +331,11 @@ fn relation_state(s: &sketch::EditingSketch, relation: &SketchConstraint) -> &'s
         "unsatisfied"
     } else if relation.driven {
         "reference"
+    } else if s.feedback.duplicates.contains_key(&relation.id)
+        || motion(s).and_then(|analysis| analysis.constraints.get(&relation.id))
+            .is_some_and(|analysis| analysis.dependent_equations > 0)
+    {
+        "dependent"
     } else {
         "ready"
     }
@@ -280,10 +347,24 @@ fn text(ui: &mut egui::Ui, id: &str, role: &str, value: &str, state: &str) {
 
 fn summary(s: &sketch::EditingSketch) -> String {
     if let Some(report) = retain_report(s) {
-        format!(
-            "{} DOF · {} redundant equations · residual {:.3e}",
-            report.degrees_of_freedom, report.redundant_equations, report.residual
-        )
+        let dependencies = motion(s).map(|analysis| {
+            analysis
+                .constraints
+                .values()
+                .map(|constraint| constraint.dependent_equations)
+                .sum::<usize>()
+        });
+        if let Some(dependencies) = dependencies {
+            format!(
+                "{} local DOF · {dependencies} positional dependencies · residual {:.3e}",
+                report.degrees_of_freedom, report.residual
+            )
+        } else {
+            format!(
+                "{} local DOF · residual {:.3e}",
+                report.degrees_of_freedom, report.residual
+            )
+        }
     } else {
         s.feedback
             .maximum_residual
@@ -328,6 +409,46 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
             "invalid",
         );
     }
+    if let Some(error) = &s.feedback.motion_error {
+        text(
+            ui,
+            &format!("{prefix}.motion-error"),
+            "sketch-motion-note",
+            &format!("Motion display unavailable: {error}"),
+            "unavailable",
+        );
+        if controls::button(
+            ui,
+            &format!("{prefix}.retry-analysis"),
+            "sketch-repair-action",
+            &["compact"],
+            "Retry analysis",
+            true,
+            false,
+        )
+        .clicked()
+        {
+            crate::sketch_analysis_ui::retry(w);
+            return;
+        }
+    } else if s.feedback.motion_pending && (motion_display(w) || filter(w) == "dependent") {
+        text(
+            ui,
+            &format!("{prefix}.motion-pending"),
+            "sketch-motion-note",
+            "Updating sketch freedom…",
+            "pending",
+        );
+    }
+    if motion_display(w) && motion(s).is_some() {
+        text(
+            ui,
+            &format!("{prefix}.motion-note"),
+            "sketch-motion-note",
+            "Marker: constrained position · arrows: local movement directions",
+            "ready",
+        );
+    }
     let selected_filter = filter(w).to_string();
     let mut command = None;
     ui.horizontal_wrapped(|ui| {
@@ -335,6 +456,7 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
             ("selected", "Selection"),
             ("all", "All"),
             ("unsatisfied", "Unsatisfied"),
+            ("dependent", "Dependent"),
         ] {
             if controls::button(
                 ui,
@@ -369,6 +491,19 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
             {
                 command = Some(format!("sketch.feedback-toggle-{key}"));
             }
+        }
+        if controls::button(ui, &format!("{prefix}.motion-toggle"), "sketch-motion-toggle", &["compact"], "Freedom", true, motion_display(w)).on_hover_text("Show local movement directions on selected sketch points. With no selection, show all points.").clicked() {
+            command = Some("sketch.feedback-toggle-motion".into());
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        let duplicates = w.sketch.as_ref().map(|s| s.feedback.duplicates.len()).unwrap_or(0);
+        let can_repair = editable(w).is_ok() && w.sketch.as_ref().is_some_and(|s| s.dimension.is_none() && s.dimension_pick.is_none());
+        if controls::button(ui, &format!("{prefix}.remove-duplicates"), "sketch-repair-action", &["compact"], &format!("Remove duplicates ({duplicates})"), duplicates > 0 && can_repair, false).on_hover_text("Remove only authored equations with identical kind, ordered geometry, expression, contact and side. Dimension-group IDs are retained.").clicked() {
+            command = Some("sketch.feedback-remove-duplicates".into());
+        }
+        if controls::button(ui, &format!("{prefix}.selected-reference"), "sketch-repair-action", &["compact"], "Selected → Reference", !selected_dimensions(w).is_empty() && can_repair, false).on_hover_text("Make the selected driving dimensions reference dimensions in one pending sketch edit; their expressions are retained.").clicked() {
+            command = Some("sketch.feedback-selected-reference".into());
         }
     });
     if let Some(command) = command {
@@ -414,6 +549,14 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
             let selected = relation_state(s, &relation) == "selected";
             let state = if suppressed { "suppressed" } else { relation_state(s, &relation) };
             let unsatisfied = s.feedback.unsatisfied.get(&relation.id).copied();
+            let equation = motion(s).and_then(|analysis| analysis.constraints.get(&relation.id));
+            let dependency = if let Some(other) = s.feedback.duplicates.get(&relation.id) {
+                source.constraints.iter().position(|constraint| &constraint.id == other)
+                    .map(|index| format!(" · exact duplicate of {} {}", actions::label(&source.constraints[index].kind), index + 1))
+                    .unwrap_or_else(|| " · exact duplicate equation".into())
+            } else if let Some(equation) = equation {
+                format!(" · equations: {} independent, {} locally dependent, {} with no current positional derivative", equation.independent_equations, equation.dependent_equations, equation.nonpositional_equations)
+            } else { String::new() };
             let dimension = actions::is_dimension(&relation.kind);
             let value = if dimension && relation.driven {
                 actions::measured_dimension(w.session.visible(), &s.definition, &source, &relation)
@@ -421,7 +564,7 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
                     .unwrap_or_else(|error| error.to_string())
             } else if dimension { relation.value.0.clone() } else { String::new() };
             let label = format!("{}{}{}{}", if unsatisfied.is_some() { "! " } else { "" }, actions::label(&relation.kind), if dimension { if relation.driven { " · Ref " } else { " · " } } else { "" }, value);
-            let description = format!("{}{}{}", relation.entities.iter().map(|key| entity_name(&source, key)).collect::<Vec<_>>().join(" · "), unsatisfied.map(|value| format!(" · maximum scaled equation residual {value:.6e} (mm; angles ×100 mm/rad)")).unwrap_or_default(), if suppressed { " · inactive geometry" } else { "" });
+            let description = format!("{}{}{}{}", relation.entities.iter().map(|key| entity_name(&source, key)).collect::<Vec<_>>().join(" · "), unsatisfied.map(|value| format!(" · maximum scaled equation residual {value:.6e} (mm; angles ×100 mm/rad)")).unwrap_or_default(), dependency, if suppressed { " · inactive geometry" } else { "" });
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     // Reserve the independently styled delete target before the
@@ -429,7 +572,7 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
                     // semantic snapshot, accessibility label and hover text.
                     if controls::button(ui, &format!("{}.delete", relation.id), "sketch-constraint-delete", &["compact"], "×", editable(w).is_ok(), false).on_hover_text("Remove this dimension or relation").clicked() { deleted = Some(relation.id.clone()); }
                     let response = controls::button(ui, &relation.id, "sketch-constraint", &["compact", if dimension { "dimension" } else { "relation" }, state], &label, true, selected).on_hover_text(format!("{label}\n{description}"));
-                    if response.clicked() { clicked = Some((relation.id.clone(), dimension && response.double_clicked())); }
+                    if response.clicked() { clicked = Some((relation.id.clone(), dimension && response.double_clicked(), ui.input(|input| input.modifiers.command || input.modifiers.shift))); }
                 });
             });
             if selected {
@@ -439,14 +582,20 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         }
         if count == 0 {
-            let empty = if selected_filter == "unsatisfied" {
+            let empty = if selected_filter == "dependent" {
+                "No exact duplicates or local positional dependencies are available for this geometry. Local dependence is not proof of a global conflict."
+            } else if selected_filter == "unsatisfied" {
                 if w.sketch.as_ref().is_some_and(|s| s.feedback.error.is_some()) { "Equation feedback is unavailable; correct the reported expression or reference." } else { "No equations exceed the solver's 1e-6 scaled residual threshold at this geometry." }
             } else { "No dimensions or relations refer to the selected geometry." };
             text(ui, &format!("{prefix}.empty"), "sketch-feedback-empty", empty, "ready");
         }
     });
-    if let Some((key, edit)) = clicked {
-        sketch_ui::select(w, Some(SketchEntity::Constraint { constraint: key }), false);
+    if let Some((key, edit, additive)) = clicked {
+        sketch_ui::select(
+            w,
+            Some(SketchEntity::Constraint { constraint: key }),
+            additive,
+        );
         if w.fields.contains_key("smart-dimension-mode") {
             sketch_ui::selection_changed(w);
         } else if edit {
@@ -752,6 +901,80 @@ fn remove(w: &mut Workspace, key: &str) {
     sketch::solve(w);
 }
 
+fn selected_dimensions(w: &Workspace) -> BTreeSet<Id> {
+    let Some(s) = &w.sketch else {
+        return BTreeSet::new();
+    };
+    s.selection
+        .iter()
+        .filter_map(|entity| match entity {
+            SketchEntity::Constraint { constraint }
+                if s.constraints.iter().any(|relation| {
+                    relation.id == *constraint
+                        && !relation.driven
+                        && actions::is_dimension(&relation.kind)
+                }) =>
+            {
+                Some(constraint.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn repair(w: &mut Workspace, command: &str) -> Result<()> {
+    editable(w)?;
+    let selected = selected_dimensions(w);
+    let s = w.sketch.as_mut().unwrap();
+    if s.dimension.is_some() || s.dimension_pick.is_some() {
+        return Err(CadError::Invalid(
+            "Accept or cancel Smart Dimension before repairing relations".into(),
+        ));
+    }
+    let before = sketch::sketch_definition(s);
+    match command {
+        "sketch.feedback-remove-duplicates" => {
+            // Recompute from the current source rather than trusting cached selection.
+            let duplicates = sketch_diagnostics::exact_duplicates(&before);
+            if duplicates.is_empty() {
+                return Ok(());
+            }
+            s.constraints
+                .retain(|relation| !duplicates.contains_key(&relation.id));
+            for entity in &mut s.selection {
+                if let SketchEntity::Constraint { constraint } = entity
+                    && let Some(retained) = duplicates.get(constraint)
+                {
+                    *constraint = retained.clone();
+                }
+            }
+            let mut deduplicated = vec![];
+            s.selection.retain(|entity| {
+                if deduplicated.contains(entity) {
+                    false
+                } else {
+                    deduplicated.push(entity.clone());
+                    true
+                }
+            });
+        }
+        "sketch.feedback-selected-reference" => {
+            if selected.is_empty() {
+                return Ok(());
+            }
+            for relation in &mut s.constraints {
+                if selected.contains(&relation.id) {
+                    relation.driven = true;
+                }
+            }
+        }
+        _ => return Err(CadError::Invalid("Unknown sketch repair action".into())),
+    }
+    s.history.push(before);
+    sketch::solve(w);
+    Ok(())
+}
+
 pub fn action(w: &mut Workspace, command: &str) -> bool {
     if !command.starts_with("sketch.feedback-") {
         return false;
@@ -760,7 +983,8 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
     match command {
         "sketch.feedback-filter-selected"
         | "sketch.feedback-filter-all"
-        | "sketch.feedback-filter-unsatisfied" => {
+        | "sketch.feedback-filter-unsatisfied"
+        | "sketch.feedback-filter-dependent" => {
             w.fields
                 .insert(FILTER.into(), command.rsplit('-').next().unwrap().into());
         }
@@ -770,18 +994,61 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
         "sketch.feedback-toggle-relations" => {
             w.view.sketch_annotation_visibility[1] = !w.view.sketch_annotation_visibility[1];
         }
+        "sketch.feedback-toggle-motion" => {
+            let enabled = !motion_display(w);
+            w.fields.insert(MOTION.into(), enabled.to_string());
+        }
+        "sketch.feedback-retry-analysis" => crate::sketch_analysis_ui::retry(w),
+        "sketch.feedback-remove-duplicates" | "sketch.feedback-selected-reference" => {
+            if let Err(error) = repair(w, command) {
+                w.status = error.to_string();
+            }
+        }
         _ => return false,
     }
     true
 }
 
 pub fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) -> bool {
+    if element.role == "sketch-point-motion" && command == "sketch.select-entity" {
+        if let Some(point) = element
+            .data
+            .get("point")
+            .and_then(serde_json::Value::as_str)
+            && w.sketch.as_ref().is_some_and(|s| {
+                element
+                    .data
+                    .get("sketch")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(&s.sketch_id)
+                    && s.keys.iter().any(|key| key == point)
+            })
+        {
+            sketch_ui::select(
+                w,
+                Some(SketchEntity::Point {
+                    point: point.into(),
+                }),
+                false,
+            );
+        }
+        return true;
+    }
     if command.starts_with("sketch.feedback-")
         && !matches!(
             command,
             "sketch.feedback-driving" | "sketch.feedback-reference"
         )
     {
+        if w.sketch.as_ref().is_none_or(|s| {
+            element
+                .data
+                .get("sketch")
+                .and_then(serde_json::Value::as_str)
+                != Some(&s.sketch_id)
+        }) {
+            return true;
+        }
         return action(w, command);
     }
     if !matches!(
@@ -849,8 +1116,10 @@ pub fn set_field(
         "filter" => {
             let value = value
                 .as_str()
-                .filter(|value| matches!(*value, "selected" | "all" | "unsatisfied"))
-                .ok_or_else(|| CadError::Invalid("Choose Selection, All or Unsatisfied".into()))?;
+                .filter(|value| matches!(*value, "selected" | "all" | "unsatisfied" | "dependent"))
+                .ok_or_else(|| {
+                    CadError::Invalid("Choose Selection, All, Unsatisfied or Dependent".into())
+                })?;
             w.fields.insert(FILTER.into(), value.into());
             end_edit(w);
             Ok(())
@@ -860,6 +1129,13 @@ pub fn set_field(
                 .as_bool()
                 .ok_or_else(|| CadError::Invalid("Expected an annotation toggle".into()))?;
             end_edit(w);
+            Ok(())
+        }
+        "show-motion" => {
+            let enabled = value
+                .as_bool()
+                .ok_or_else(|| CadError::Invalid("Expected a motion display toggle".into()))?;
+            w.fields.insert(MOTION.into(), enabled.to_string());
             Ok(())
         }
         _ => change(
@@ -885,6 +1161,7 @@ pub fn field_value(w: &Workspace, element: &SemanticElement) -> Option<serde_jso
         "filter" => Some(serde_json::json!(filter(w))),
         "show-dimensions" => Some(serde_json::json!(w.view.sketch_annotation_visibility[0])),
         "show-relations" => Some(serde_json::json!(w.view.sketch_annotation_visibility[1])),
+        "show-motion" => Some(serde_json::json!(motion_display(w))),
         _ => {
             let key = element.data.get("constraint")?.as_str()?;
             let relation = s.constraints.iter().find(|relation| relation.id == key)?;
@@ -964,7 +1241,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         .into(),
         commands: vec![],
         relationships: vec![s.sketch_id.clone()],
-        data: serde_json::json!({"renderer":"sketch-feedback","definition":s.definition,"sketch":s.sketch_id,"filter":filter(w),"solve_report":retain_report(s),"equation_residuals":s.feedback.residuals,"maximum_equation_residual":s.feedback.maximum_residual,"unsatisfied":s.feedback.unsatisfied,"residual_error":s.feedback.error,"residual_geometry":"current-authored-geometry","residual_length_unit":"mm","residual_angle_scale_mm_per_rad":100.0,"residual_threshold":1e-6,"minimal_conflicts":false,"current_error":s.error,"shared_draft":true}),
+        data: serde_json::json!({"renderer":"sketch-feedback","definition":s.definition,"sketch":s.sketch_id,"filter":filter(w),"solve_report":retain_report(s),"equation_residuals":s.feedback.residuals,"maximum_equation_residual":s.feedback.maximum_residual,"unsatisfied":s.feedback.unsatisfied,"residual_error":s.feedback.error,"residual_geometry":"current-authored-geometry","residual_length_unit":"mm","residual_angle_scale_mm_per_rad":100.0,"residual_threshold":1e-6,"minimal_conflicts":false,"current_error":s.error,"shared_draft":true,"motion_analysis":motion(s),"motion_error":s.feedback.motion_error,"motion_pending":s.feedback.motion_pending,"analysis_token":s.feedback.analysis_token,"show_motion":motion_display(w),"exact_duplicates":s.feedback.duplicates,"dependency_geometry":"local-linearized-authoritative-equations"}),
     }];
     let shown = source
         .constraints
@@ -1022,6 +1299,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ("selected", "Selection"),
         ("all", "All"),
         ("unsatisfied", "Unsatisfied"),
+        ("dependent", "Dependent"),
     ] {
         out.push(SemanticElement {
             id: format!("{prefix}.filter.{key}"),
@@ -1063,6 +1341,94 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             true,
         ));
     }
+    out.push(SemanticElement {
+        id: format!("{prefix}.motion-toggle"), role: "sketch-motion-toggle".into(),
+        label: "Show sketch freedom".into(), value: None,
+        state: if motion_display(w) { "selected" } else { "ready" }.into(),
+        commands: vec!["sketch.feedback-toggle-motion".into()],
+        relationships: vec![s.sketch_id.clone()],
+        data: serde_json::json!({"sketch":s.sketch_id,"visible":motion_display(w),"meaning":"infinitesimal-point-movement","finite-travel":false}),
+    });
+    out.push(field(
+        s,
+        format!("{prefix}.show-motion"),
+        "Show sketch freedom",
+        "show-motion",
+        serde_json::json!(motion_display(w)),
+        None,
+        true,
+    ));
+    out.push(SemanticElement {
+        id: format!("{prefix}.motion-note"), role: "sketch-motion-note".into(),
+        label: "Sketch freedom legend".into(), value: Some("Marker: constrained position · arrows: local movement directions".into()),
+        state: if motion(s).is_some() { "ready" } else if s.feedback.motion_pending { "pending" } else { "unavailable" }.into(), commands: vec![],
+        relationships: vec![s.sketch_id.clone()],
+        data: serde_json::json!({"sketch":s.sketch_id,"visible":motion_display(w),"motion_error":s.feedback.motion_error,"finite_travel":false}),
+    });
+    out.push(SemanticElement {
+        id: format!("{prefix}.retry-analysis"),
+        role: "sketch-repair-action".into(),
+        label: "Retry sketch analysis".into(),
+        value: None,
+        state: if s.feedback.motion_error.is_some() {
+            "ready"
+        } else {
+            "disabled"
+        }
+        .into(),
+        commands: vec!["sketch.feedback-retry-analysis".into()],
+        relationships: vec![s.sketch_id.clone()],
+        data: serde_json::json!({"sketch":s.sketch_id,"view_only":true,"retry":true}),
+    });
+    for (key, label, enabled, command) in [
+        (
+            "remove-duplicates",
+            "Remove exact duplicate relations",
+            !s.feedback.duplicates.is_empty(),
+            "sketch.feedback-remove-duplicates",
+        ),
+        (
+            "selected-reference",
+            "Make selected dimensions reference",
+            !selected_dimensions(w).is_empty(),
+            "sketch.feedback-selected-reference",
+        ),
+    ] {
+        out.push(SemanticElement {
+            id: format!("{prefix}.{key}"),
+            role: "sketch-repair-action".into(),
+            label: label.into(),
+            value: None,
+            state: if enabled && can_edit && s.dimension.is_none() && s.dimension_pick.is_none() {
+                "ready"
+            } else {
+                "disabled"
+            }
+            .into(),
+            commands: vec![command.into()],
+            relationships: vec![s.sketch_id.clone()],
+            data: serde_json::json!({"sketch":s.sketch_id,"shared_draft":true,"undoable":true}),
+        });
+    }
+    if let Some(analysis) = motion(s) {
+        for (key, point) in &analysis.points {
+            let state = if point.directions.is_empty() {
+                "constrained"
+            } else if point.directions.len() == 1 {
+                "one-direction"
+            } else {
+                "two-directions"
+            };
+            out.push(SemanticElement {
+                id: format!("{}::motion.{key}", s.sketch_id), role: "sketch-point-motion".into(),
+                label: format!("{} local movement", entity_name(&source, key)),
+                value: Some(format!("{} directions{}", point.directions.len(), if point.generated { " · follows sources" } else { "" })),
+                state: state.into(), commands: vec!["sketch.select-entity".into()],
+                relationships: vec![s.sketch_id.clone(), key.clone()],
+                data: serde_json::json!({"version":analysis.version,"sketch":s.sketch_id,"point":key,"local_directions":point.directions,"generated":point.generated,"position_mm":source.points.get(key),"frame":"sketch-XY","meaning":"infinitesimal-point-movement","finite_travel":false,"visible":motion_display(w) && (s.selection.is_empty() || selected_keys.contains(key))}),
+            });
+        }
+    }
     for mut element in presentation::sketch_elements(w.session.visible(), &s.definition, &source)
         .into_iter()
         .filter(|element| element.role == "sketch-constraint")
@@ -1091,6 +1457,16 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data.insert(
                 "related_geometry".into(),
                 serde_json::json!(geometry_keys(relation)),
+            );
+            data.insert(
+                "local_equation_diagnostic".into(),
+                serde_json::json!(
+                    motion(s).and_then(|analysis| analysis.constraints.get(&relation.id))
+                ),
+            );
+            data.insert(
+                "exact_duplicate_of".into(),
+                serde_json::json!(s.feedback.duplicates.get(&relation.id)),
             );
         }
         out.push(element);

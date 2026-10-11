@@ -75,6 +75,12 @@ pub enum Command {
         feature: Id,
         position: usize,
     },
+    ReorderFeatureRelative {
+        definition: Id,
+        feature: Id,
+        anchor: Id,
+        before: bool,
+    },
     SuppressFeature {
         definition: Id,
         feature: Id,
@@ -308,6 +314,17 @@ impl Command {
                 feature,
                 position,
             } => {
+                crate::feature_order::move_feature(document, &definition, &feature, position)?;
+            }
+            Self::ReorderFeatureRelative {
+                definition,
+                feature,
+                anchor,
+                before,
+            } => {
+                let part = document.parts.get(&definition).ok_or_else(missing)?;
+                let position =
+                    crate::feature_order::relative_destination(part, &feature, &anchor, before)?;
                 crate::feature_order::move_feature(document, &definition, &feature, position)?;
             }
             Self::SuppressFeature {

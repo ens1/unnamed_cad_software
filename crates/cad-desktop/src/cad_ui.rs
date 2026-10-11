@@ -255,6 +255,8 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "settings",
             "reference.repair",
             "assembly.edit",
+            "assembly.move",
+            "assembly.rotate",
             "assembly.pattern",
             "assembly.exploded-new",
             "assembly.inspection-new",
@@ -873,6 +875,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::operation_editor_ui::current_source_is_valid(w) {
+        return Some("Correct the current operation fields before applying");
+    }
     if !crate::reference_repair_ui::current_source_is_valid(w) {
         return Some("Preview the current explicit reference repair before applying");
     }
@@ -1020,6 +1025,8 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Settings…  ⌘,", "settings"),
                 ("Repair References…", "reference.repair"),
                 ("Assembly and Mates…", "assembly.edit"),
+                ("Move Component", "assembly.move"),
+                ("Rotate Component", "assembly.rotate"),
                 ("Component Pattern…", "assembly.pattern"),
                 ("Exploded View…", "assembly.exploded-new"),
                 ("Interference / Clearance…", "assembly.inspection-new"),
@@ -1579,6 +1586,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
     egui::ScrollArea::vertical()
         .id_salt("cad-feature-tree")
         .show(ui, |ui| {
+            crate::feature_order_ui::scroll(ui);
             let response = ui.add(
                 egui::Label::new(RichText::new(&part.name).strong()).sense(egui::Sense::click()),
             );
@@ -1949,6 +1957,7 @@ fn feature_row(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, feature: &Feat
         true,
         w.view.active_node.as_ref() == Some(&feature.id),
     );
+    let response = crate::feature_order_ui::row(ui, w, part, &feature.id, response);
     if response.clicked() {
         crate::selection_ui::feature_selected(w, &part.id, feature, &response);
     }

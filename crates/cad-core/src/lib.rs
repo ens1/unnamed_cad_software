@@ -1,6 +1,7 @@
 pub mod appearance;
 pub mod assembly_geometry;
 pub mod assembly_inspection;
+pub mod assembly_motion;
 pub mod body_editing;
 pub mod body_filter;
 pub mod component_pattern;
@@ -30,6 +31,7 @@ pub mod reference_geometry;
 pub mod reference_repair;
 pub mod revolution;
 pub mod rib;
+pub mod sketch_diagnostics;
 pub mod sketch_dimensions;
 pub mod sketch_equation;
 pub mod sketch_geometry;

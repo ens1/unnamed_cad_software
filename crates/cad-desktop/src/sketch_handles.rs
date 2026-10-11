@@ -232,10 +232,103 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
     let selection = s.selection.clone();
     let related = crate::sketch_relations_ui::related_entities(s);
     let problems = crate::sketch_relations_ui::problem_entities(w);
+    let point_motion = crate::sketch_relations_ui::motion(s)
+        .map(|analysis| analysis.points.clone())
+        .unwrap_or_default();
+    let motion_keys = crate::sketch_relations_ui::selection_keys(&source, &selection);
     let fully_constrained = s.degrees_of_freedom == Some(0);
     let active_id = s.drag.as_ref().map(|g| g.handle.id.clone());
     let mut consumed = active_id.is_some();
     let painter = ui.painter().with_clip_rect(rect);
+    if crate::sketch_relations_ui::motion_display(w) && active_id.is_none() {
+        for (key, motion) in &point_motion {
+            if !selection.is_empty() && !motion_keys.contains(key) {
+                continue;
+            }
+            let Some(point) = display.points.get(key) else {
+                continue;
+            };
+            let Some(pos) = viewport::project(w, rect, sketch::world(&plane, &matrix, *point))
+            else {
+                continue;
+            };
+            if !rect.contains(pos) {
+                continue;
+            }
+            let state = if motion.directions.is_empty() {
+                "constrained"
+            } else if motion.directions.len() == 1 {
+                "one-direction"
+            } else {
+                "two-directions"
+            };
+            let region = presentation::Region {
+                id: format!("{}::motion.{key}", s.sketch_id),
+                role: "sketch-point-motion".into(),
+                component: None,
+                rect: [pos.x, pos.y, 0., 0.],
+                classes: vec![
+                    if motion.generated {
+                        "generated"
+                    } else {
+                        "source"
+                    }
+                    .into(),
+                ],
+                resizable: false,
+            };
+            let props = w.theme.properties(&region, &w.view.active_layout, state);
+            if props.get("display").is_some_and(|value| value == "none")
+                || props
+                    .get("visibility")
+                    .is_some_and(|value| value == "hidden")
+            {
+                continue;
+            }
+            let number = |key: &str, default: f32| {
+                props
+                    .get(key)
+                    .and_then(|value| value.trim_end_matches("px").parse::<f32>().ok())
+                    .filter(|value| value.is_finite())
+                    .unwrap_or(default)
+            };
+            let length = number("size", 17.).clamp(6., 64.);
+            let color = props
+                .get("color")
+                .and_then(|value| crate::ui::color(value))
+                .unwrap_or(accent);
+            let stroke = Stroke::new(number("stroke-width", 1.3).clamp(0.5, 6.), color);
+            if motion.directions.is_empty() {
+                let mark = pos + egui::vec2(6., -6.);
+                painter.rect_stroke(
+                    egui::Rect::from_center_size(mark, egui::vec2(4., 4.)),
+                    0.,
+                    stroke,
+                    egui::StrokeKind::Middle,
+                );
+            }
+            for direction in &motion.directions {
+                let endpoint = [point[0] + direction[0], point[1] + direction[1]];
+                if let Some(projected) =
+                    viewport::project(w, rect, sketch::world(&plane, &matrix, endpoint))
+                {
+                    let delta = projected - pos;
+                    if delta.length_sq() < 1e-10 {
+                        continue;
+                    }
+                    let delta = delta.normalized() * length;
+                    painter.line_segment([pos - delta, pos + delta], stroke);
+                    for sign in [-1., 1.] {
+                        let tip = pos + delta * sign;
+                        let along = delta.normalized() * sign;
+                        let side = egui::vec2(-along.y, along.x);
+                        painter.line_segment([tip, tip - along * 4. + side * 2.5], stroke);
+                        painter.line_segment([tip, tip - along * 4. - side * 2.5], stroke);
+                    }
+                }
+            }
+        }
+    }
     // A selected spline exposes its actual control polygon, not tessellation vertices.
     for (key, member) in &display.members {
         if let SketchCurve::Bezier { points } | SketchCurve::Nurbs { points, .. } = &member.curve
@@ -280,6 +373,19 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
     }
     for mut handle in list {
         let entity = handle.target.entity();
+        let motion = match &entity {
+            SketchEntity::Point { point } => point_motion.get(point),
+            _ => None,
+        };
+        let movement = motion.map(|motion| {
+            if motion.directions.is_empty() {
+                "constrained"
+            } else if motion.directions.len() == 1 {
+                "one-direction"
+            } else {
+                "two-directions"
+            }
+        });
         let selected = selection.contains(&entity) || related.contains(entity.key());
         let unsatisfied = problems.contains(entity.key());
         let visible = matches!(handle.target, HandleTarget::Point { .. } | HandleTarget::BlockControl{..}) || selected
@@ -310,7 +416,9 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
             role: "sketch-handle".into(),
             component: None,
             rect: [pos.x, pos.y, 0., 0.],
-            classes: vec![handle.role.clone()],
+            classes: std::iter::once(handle.role.clone())
+                .chain(movement.map(str::to_string))
+                .collect(),
             resizable: false,
         };
         let props = w.theme.properties(
@@ -330,7 +438,7 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
             {
                 "hovered"
             } else {
-                "ready"
+                movement.unwrap_or("ready")
             },
         );
         if props.get("display").is_some_and(|v| v == "none") && !dragging {
@@ -353,7 +461,7 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
                     accent
                 } else if unsatisfied {
                     ui.visuals().error_fg_color
-                } else if locked {
+                } else if locked || movement == Some("constrained") {
                     ui.visuals().weak_text_color()
                 } else {
                     w.theme
@@ -410,6 +518,9 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
         if locked {
             painter.circle_filled(pos, 1.5, color);
         }
+        if movement == Some("constrained") && !locked {
+            painter.circle_filled(pos, 1., color);
+        }
         if hit.hovered() {
             ui.ctx()
                 .set_cursor_icon(if w.fields.contains_key("smart-dimension-mode") {
@@ -419,8 +530,25 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
                 } else {
                     egui::CursorIcon::Grab
                 });
-            hit.clone()
-                .on_hover_text(handle.disabled_reason.as_deref().unwrap_or(&handle.label));
+            let label = handle.disabled_reason.as_deref().unwrap_or(&handle.label);
+            let detail = motion
+                .map(|motion| {
+                    format!(
+                        "\nLocal position: {}{}",
+                        match motion.directions.len() {
+                            0 => "constrained",
+                            1 => "one direction of freedom",
+                            _ => "two directions of freedom",
+                        },
+                        if motion.generated {
+                            " · follows source geometry"
+                        } else {
+                            ""
+                        }
+                    )
+                })
+                .unwrap_or_default();
+            hit.clone().on_hover_text(format!("{label}{detail}"));
         }
         if hit.clicked() || hit.secondary_clicked() {
             consumed = true;

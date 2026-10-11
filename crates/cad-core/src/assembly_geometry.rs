@@ -703,7 +703,7 @@ pub struct ComponentMotion {
     pub rotation_directions: Vec<[f64; 3]>,
     pub degrees_of_freedom: usize,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AssemblySolution {
     pub report: crate::solver::SolveReport,
     pub diagnostics: BTreeMap<Id, MateDiagnostic>,

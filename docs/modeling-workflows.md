@@ -71,6 +71,45 @@ and binds to the `sketch-feedback` panel renderer. `sketch-feedback-filter`,
 use the `sketch-feedback` setter with a current sketch and constraint identity.
 Duplicate custom controls edit the same source and transaction.
 
+## Sketch freedom and repair
+
+**Freedom** in the sketch relation panel displays one or two local movement
+arrows, or a constrained marker, on selected points and the points of selected
+members/relations. With no selection it displays every analyzed point. Point
+handles also distinguish locally constrained positions while retaining existing
+constraint-aware drag behavior. Derived points display the movement inherited
+from their exact source constructions; the overlay does not make them directly
+editable. Arrow lengths, line widths, colors and visibility use the
+`sketch-point-motion` style role.
+
+The new **Dependent** filter exposes exact authored duplicates and equations
+whose positional derivatives add no independent directions in authored relation
+order. Zero positional derivatives, including direct curve-size expressions,
+are identified separately. Local dependence can be intentional and is not proof
+of conflicting design intent. **Remove duplicates** removes only exact equivalent
+source equations, preserving grouped-dimension IDs. Command/Shift-click relation
+rows to select several dimensions; **Selected → Reference** makes their values
+measurements while retaining their driving expressions. Both actions preview as
+one sketch history edit and remain inside Apply Sketch / Cancel Sketch.
+
+Graphical motion/dependency analysis runs in a separate persistent worker after
+a 90 ms debounce. Exact source, sketch/editor token, document generation,
+revision/draft edit and backend guards reject stale replies. New in-flight work
+is cancelled when edited or closed; idle workers persist across edits. Pending,
+unavailable and retry controls are presentation state. Immediate equation
+residual and exact-duplicate feedback remains available while motion updates.
+
+The application-owned diagnostics contract v1 uses the same variable layout,
+curve-size derivation, saved construction pipeline and residual blocks as native
+solving. A numerical nullspace maps to f64 point derivative frames. Analysis is
+limited to 512 free coordinates, 2048 equations and two million point derivative
+entries. Exceeding these limits only removes graphical motion feedback, with an
+explicit reason. Current source identity and valid-solve guards prevent stale
+arrows after failed edits. This is local infinitesimal positional feedback;
+finite travel, singularity certification and minimal nonlinear conflict sets
+remain unimplemented. Solver fingerprint advances to `tcad-native-lm/13`.
+See [diagnostics contract](sketch-diagnostics.md).
+
 ## Explicit reference repair
 
 **Tools → Repair References…** opens a docked manager. It can continue an

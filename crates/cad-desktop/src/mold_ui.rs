@@ -21,7 +21,7 @@ fn current_evaluation(w: &Workspace) -> Option<&cad_core::protocol::Evaluation> 
         .map_or(w.session.evaluation.as_ref(), |d| d.evaluation.as_ref())
         .filter(|e| e.valid && e.identity == w.session.identity())
 }
-fn report_for_feature<'a>(
+pub(crate) fn report_for_feature<'a>(
     w: &'a Workspace,
     definition: &str,
     feature: &str,
@@ -44,7 +44,7 @@ fn report_for_feature<'a>(
                 .get(&format!("{definition}::{feature}"))
         })
 }
-fn source_assessment<'a>(
+pub(crate) fn source_assessment<'a>(
     w: &'a Workspace,
     body: &NodeRef,
 ) -> Option<(&'a cad_core::mold::DraftReport, &'a AxisSource)> {
@@ -70,7 +70,7 @@ fn source_assessment<'a>(
             .map(|r| (r, pull))
     })
 }
-fn perpendicular(pull: [f64; 3]) -> [f64; 3] {
+pub(crate) fn perpendicular(pull: [f64; 3]) -> [f64; 3] {
     if pull[0].abs() < 0.8 {
         [0., pull[2], -pull[1]]
     } else {

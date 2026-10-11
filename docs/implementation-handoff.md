@@ -55,14 +55,14 @@ Native schema remains 1; additive defaults omit empty/None values so existing so
 | Body editing / surface intent | 2 / 3 |
 | Configuration / component pattern / drilled holes | 3 / 1 / 2 |
 | Sheet metal / weldment / mold / drawing tables / inspection | 1 / 1 / 1 / 2 / 1 |
-| Feature order / contour selection / sketch blocks / sketch handles | 1 / 2 / 2 / 2 |
+| Feature order / contour selection / sketch blocks / sketch handles | 2 / 2 / 2 / 2 |
 | Derived sketch section topology | 1 |
 | Rib / direct edit / body filter / reference curves | 1 / 1 / 1 / 1 |
 | Dimension groups / equation curves / curve pattern / placement pattern | 1 / 1 / 1 / 1 |
 | Split / assembly inspection / exploded views / drawing sheet formats | 1 / 1 / 1 / 1 |
 | Portable block resources / configured dimension fields / drawing symbols | 1 / 2 / 1 |
 
-Core solver source reports `tcad-native-lm/12`. Adapter and desktop source constants use `monstertruck/0.4.1;adapter/22;solver/tcad-native-lm/12`. Internal boxing retains native JSON shapes. The kernel directly declares the existing workspace `serde` dependency for bounded report serialization; the desktop now directly declares the already-pinned `winit` 0.30.13 for primary-window gesture phases. No new third-party package or dependency version is introduced, and existing dependency notices cover both.
+Core solver source reports `tcad-native-lm/13`. Adapter and desktop source constants use `monstertruck/0.4.1+fc2306852a46;adapter/29;solver/tcad-native-lm/13`. Transient sketch diagnostics and assembly movement each use version 1. Internal boxing retains native JSON shapes. The kernel directly declares the existing workspace `serde` dependency for bounded report serialization; the desktop now directly declares the already-pinned `winit` 0.30.13 for primary-window gesture phases. No new third-party package or dependency version is introduced, and existing dependency notices cover both.
 
 The preceding interaction correction adds [exact face-attached boss joins](boss-joins.md), [two-pick Smart Dimension](sketch-smart-dimension.md), and saved [navigation preference contract version 1](navigation.md). Contact joins remove native opposing caps and retain real shared edge/face ancestry for supported inset and matching-outline contacts, including separated repeated bosses. Smart Dimension supports tool-first picking or Command/Shift preselection, signed-side center-to-line gaps, current owned straight model-edge construction conversions, live values and a local dimension checkpoint including promoted parameters. New conversions retain construction parameter orientation; legacy incident-face ordering remains explicitly readable. The trackpad adapter reverses the default scroll-orbit directions and adds cursor-anchor pinch, native roll/smart zoom, saved sensitivities/direction switches, precision modifiers and gesture ownership/cancellation. Geometry and hardware limits remain recorded in the capability documentation.
 
@@ -661,3 +661,50 @@ Workspace formatting, locked library/binary compilation and strict Clippy
 `dist/TCAD.app`, validated its plist and verified nested/app signatures. The
 existing `proc-macro-error2 2.0.1` future-compatibility notice remains. No tests,
 modeling probes, app launches or manual UI checks were run.
+
+## Sketching, semantic editors and assembly manipulation — 2026-10-11
+
+Sketch diagnostics v1 maps the native current f64 Jacobian/nullspace into each
+actual source/generated point's local positional directions and publishes ordered
+per-relation dependencies separately from nonpositional size equations. A dedicated
+persistent worker debounces analysis and rejects outdated editor/source/document
+results. Freedom markers, Dependent filtering, exact duplicate cleanup preserving
+group-owned IDs and selected dimensions → reference share pending sketch edits.
+Uncertain derivatives, rank, singular/current invalid geometry and explicit work
+limits leave normal solver editing active with unavailable feedback; this does not
+add global minimal conflicts or finite-motion certification. See
+[sketch diagnostics](sketch-diagnostics.md).
+
+All current Surface, Direct Edit, Sheet Metal, Weldment and Mold variants now
+publish independently bindable typed fields, labeled source/reference choices,
+ordered collections, selection/reconciliation actions, group frames and help.
+Native controls render the same descriptors as custom layouts. Session/source
+guards reject stale controls; generation-scoped text retains invalid input and
+blocks Apply until corrected or removed. Classic rows/actions/groups and field
+diagnostics have compact CSS/JSON defaults. Drawing sheet/format/non-symbol
+controls and other families still have composite-editor migration work. See
+[presentation](presentation.md).
+
+Assembly manipulation v1 adds docked Move/Rotate/combined goals with explicit
+unit-aware expressions, draggable numeric dials and origin/picked pivots. A
+dedicated worker optimizes the transient goal and strictly validates the existing
+mates/travel bounds. Translation expressions now participate as hard equations.
+Accepted placements and free contact/path seeds become one shared source draft;
+Apply also checks that its normal current evaluation preserves the accepted pose.
+Settings defers write adoption, newer goal/source identities reject stale replies,
+and Cancel restores the shared checkpoint. Root rigid participants move, including
+a complete nested clicked path. Fixed/grounded, patterned, expression-driven and
+fully constrained occurrences are unavailable explicitly. Free viewport dragging,
+flexible subassemblies, configuration-specific pose overrides, collision avoidance
+and continuous multi-turn mechanisms remain work. See
+[assembly mates](assembly-mates.md).
+
+Feature order v2 adds stable relative destination commands, dependency-safe tree
+drag/drop, styled insertion markers, edge scrolling and docked semantic destination
+actions. One worker draft previews the source order; Apply/Cancel/undo preserve
+identities and share the original checkpoint. Editable rollback/freeze and
+automatic retargeting remain work. See [feature order](feature-order.md).
+
+Backend fingerprint is
+`monstertruck/0.4.1+fc2306852a46;adapter/29;solver/tcad-native-lm/13`.
+The Monstertruck dependency revision and native source schema are unchanged.

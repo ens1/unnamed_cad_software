@@ -18,13 +18,64 @@ fn run() -> Result<()> {
             Err(e) => return Err(e),
         };
         let identity = match &request {
-            WorkerRequest::Evaluate { identity, .. }
+            WorkerRequest::AnalyzeSketch { identity, .. }
+            | WorkerRequest::ManipulateAssembly { identity, .. }
+            | WorkerRequest::Evaluate { identity, .. }
             | WorkerRequest::Export { identity, .. }
             | WorkerRequest::Release { identity, .. }
             | WorkerRequest::Import { identity, .. } => Some(identity.clone()),
             WorkerRequest::Shutdown => break,
         };
         let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match request {
+            WorkerRequest::AnalyzeSketch {
+                identity,
+                document,
+                owner,
+                sketch,
+            } => {
+                use cad_core::solver::ConstraintSolver;
+                if identity.protocol != PROTOCOL_VERSION
+                    || identity.backend != evaluator.fingerprint()
+                    || identity.source != document.fingerprint()
+                    || document
+                        .parts
+                        .get(&owner)
+                        .is_none_or(|part| !part.sketches.contains_key(&sketch.id))
+                {
+                    return Err(cad_core::CadError::Invalid(
+                        "Sketch analysis source identity mismatch".into(),
+                    ));
+                }
+                cad_core::solver::NativeSolver
+                    .analyze_sketch(&document, &owner, &sketch)
+                    .map(|analysis| WorkerResponse::SketchAnalyzed {
+                        identity,
+                        owner,
+                        sketch: sketch.id,
+                        analysis: Box::new(analysis),
+                    })
+            }
+            WorkerRequest::ManipulateAssembly {
+                identity,
+                document,
+                assemblies,
+                intent,
+            } => {
+                if identity.protocol != PROTOCOL_VERSION
+                    || identity.backend != evaluator.fingerprint()
+                    || identity.source != document.fingerprint()
+                {
+                    return Err(cad_core::CadError::Invalid(
+                        "Assembly movement source identity mismatch".into(),
+                    ));
+                }
+                cad_core::assembly_motion::solve(&document, &assemblies, &intent).map(|outcome| {
+                    WorkerResponse::AssemblyManipulated {
+                        identity,
+                        outcome: Box::new(outcome),
+                    }
+                })
+            }
             WorkerRequest::Evaluate {
                 identity,
                 document,

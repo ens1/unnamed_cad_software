@@ -613,7 +613,10 @@ pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> 
             .iter()
             .find(|t| t.command == command);
         let disabled = match command {
-            "assembly.exploded-new" | "assembly.inspection-new"
+            "assembly.exploded-new"
+            | "assembly.inspection-new"
+            | "assembly.move"
+            | "assembly.rotate"
                 if !doc.assemblies.contains_key(&doc.root) =>
             {
                 Some("Open an assembly first")
@@ -1078,6 +1081,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("feature.loft", "Loft"),
     ("feature.sweep", "Sweep"),
     ("assembly.edit", "Assembly and mates"),
+    ("assembly.move", "Move Component"),
+    ("assembly.rotate", "Rotate Component"),
     ("assembly.pattern", "Component Pattern"),
     ("configurations", "Configurations and design tables"),
     ("equations", "Equations and named dimensions"),

@@ -95,7 +95,9 @@ fn spawn() -> cad_core::Result<Process> {
 }
 fn request_id(r: &WorkerRequest) -> Option<RequestIdentity> {
     match r {
-        WorkerRequest::Evaluate { identity, .. }
+        WorkerRequest::AnalyzeSketch { identity, .. }
+        | WorkerRequest::ManipulateAssembly { identity, .. }
+        | WorkerRequest::Evaluate { identity, .. }
         | WorkerRequest::Export { identity, .. }
         | WorkerRequest::Release { identity, .. }
         | WorkerRequest::Import { identity, .. } => Some(identity.clone()),
@@ -120,8 +122,20 @@ fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerRes
                             queue.clear();
                         }
                         Some(r) => {
-                            if matches!(r, WorkerRequest::Evaluate { .. }) {
-                                queue.retain(|q| !matches!(q, WorkerRequest::Evaluate { .. }));
+                            if matches!(
+                                r,
+                                WorkerRequest::Evaluate { .. }
+                                    | WorkerRequest::ManipulateAssembly { .. }
+                                    | WorkerRequest::AnalyzeSketch { .. }
+                            ) {
+                                queue.retain(|q| {
+                                    !matches!(
+                                        q,
+                                        WorkerRequest::Evaluate { .. }
+                                            | WorkerRequest::ManipulateAssembly { .. }
+                                            | WorkerRequest::AnalyzeSketch { .. }
+                                    )
+                                });
                                 if active.is_some() {
                                     process = None;
                                     active = None;

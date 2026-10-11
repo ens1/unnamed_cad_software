@@ -343,7 +343,7 @@ fn insert(w: &mut Workspace, mut part: cad_core::Part, name: &str, operation: Su
     w.view.active_node = Some(feature.id.clone());
     ui::feature_dialog(w, Some(feature));
 }
-fn selected_face(w: &Workspace, current: &str) -> Option<FaceSource> {
+pub(crate) fn selected_face(w: &Workspace, current: &str) -> Option<FaceSource> {
     let selected = w.selected.as_ref()?;
     if selected.reference.topology != "face"
         || selected.definition != *w.view.active_part.as_ref()?
@@ -359,7 +359,7 @@ fn selected_face(w: &Workspace, current: &str) -> Option<FaceSource> {
         reference: selected.reference.clone(),
     })
 }
-fn face_choices(w: &Workspace, current: &str) -> Vec<(String, FaceSource)> {
+pub(crate) fn face_choices(w: &Workspace, current: &str) -> Vec<(String, FaceSource)> {
     let doc = w.session.visible();
     let mut result = Vec::new();
     let Some(part) = w.view.active_part.as_ref().and_then(|id| doc.parts.get(id)) else {

@@ -2,7 +2,95 @@
 use crate::{CadError, Document, Id, Part, Result};
 use std::collections::BTreeMap;
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
+
+/// All legal final positions for a moving feature, computed once for a
+/// destination catalog rather than rewalking the graph for every row.
+pub fn destination_range(part: &Part, feature: &str) -> Result<std::ops::RangeInclusive<usize>> {
+    let moving = part
+        .features
+        .iter()
+        .find(|f| f.id == feature)
+        .ok_or_else(|| CadError::Invalid("The feature to reorder no longer exists".into()))?;
+    let remaining = part
+        .features
+        .iter()
+        .filter(|f| f.id != feature)
+        .collect::<Vec<_>>();
+    let positions = remaining
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (&f.id, i))
+        .collect::<BTreeMap<_, _>>();
+    let mut first = 0;
+    let mut last = remaining.len();
+    for source in part
+        .feature_dependencies(moving)
+        .into_iter()
+        .filter(|r| r.definition == part.id)
+    {
+        if let Some(index) = positions.get(&source.node) {
+            first = first.max(index + 1);
+        }
+    }
+    for (index, consumer) in remaining.iter().enumerate() {
+        for source in part
+            .feature_dependencies(consumer)
+            .into_iter()
+            .filter(|r| r.definition == part.id)
+        {
+            if source.node == feature {
+                last = last.min(index);
+            } else if positions
+                .get(&source.node)
+                .is_some_and(|source_index| *source_index >= index)
+            {
+                return Err(CadError::Invalid(
+                    "Repair the existing feature dependency order before reordering".into(),
+                ));
+            }
+        }
+    }
+    if first > last {
+        return Err(CadError::Invalid(
+            "The feature's dependencies leave no valid destination".into(),
+        ));
+    }
+    Ok(first..=last)
+}
+
+/// Resolve an insertion relative to a stable authored feature identity. The
+/// destination is in the list after removing the moving feature.
+pub fn relative_destination(
+    part: &Part,
+    feature: &str,
+    anchor: &str,
+    before: bool,
+) -> Result<usize> {
+    if feature == anchor {
+        return Err(CadError::Invalid(
+            "Choose a different destination feature".into(),
+        ));
+    }
+    let from = part
+        .features
+        .iter()
+        .position(|f| f.id == feature)
+        .ok_or_else(|| CadError::Invalid("The feature to reorder no longer exists".into()))?;
+    let target = part
+        .features
+        .iter()
+        .position(|f| f.id == anchor)
+        .ok_or_else(|| CadError::Invalid("The destination feature no longer exists".into()))?;
+    let position = target - usize::from(from < target) + usize::from(!before);
+    if position == from {
+        return Err(CadError::Invalid(
+            "The feature is already in that position".into(),
+        ));
+    }
+    validate_move(part, feature, position)?;
+    Ok(position)
+}
 
 pub fn destination(part: &Part, feature: &str, earlier: bool) -> Result<usize> {
     let index = part
