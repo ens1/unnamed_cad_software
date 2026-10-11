@@ -438,11 +438,17 @@ pub(crate) fn combine(
                 if separated(body, &tool) {
                     continue;
                 }
-                if let Some(common) = crate::boolean_ops::binary(
+                if let Some(common) = crate::boolean_ops::binary_with_history(
                     body,
                     &tool,
                     crate::boolean_ops::Mode::Intersection,
                     tolerance,
+                    &scope_refs,
+                    Combination {
+                        adapter: context.adapter,
+                        owner: context.owner,
+                        generated: context.generated,
+                    },
                 )? {
                     intersections.push(common);
                 }
@@ -499,7 +505,7 @@ pub(crate) fn combine(
                 }
                 continue;
             }
-            if let Some(combined) = crate::boolean_ops::binary(
+            if let Some(combined) = crate::boolean_ops::binary_with_history(
                 &body,
                 &tool,
                 if mode == "cut" {
@@ -508,6 +514,12 @@ pub(crate) fn combine(
                     crate::boolean_ops::Mode::Intersection
                 },
                 tolerance,
+                &scope_refs,
+                Combination {
+                    adapter: context.adapter,
+                    owner: context.owner,
+                    generated: context.generated,
+                },
             )? {
                 next.push(combined);
             }

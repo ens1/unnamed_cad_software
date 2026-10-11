@@ -47,10 +47,14 @@ containing one open or one closed material contour. All sections must agree on
 open versus closed topology. Construction members are excluded. Surface Loft
 requires distinct source sketches; repeating the same source section and closed
 periodic lofts need additional occurrence and seam intent and fail explicitly.
-Surface Loft
-retains the specified section order, including reversals in plane height; it
-does not silently reorder sections to satisfy a solid-volume assumption. Its
-default interpolation between sections is ruled and position-continuous.
+Surface Loft retains the specified section order and never silently reorders
+sections. A two-section loft can run in either direction and can use angled
+section planes when its complete native proof succeeds. Three or more sections
+currently require exact, consistently ordered native planes parallel to Front,
+Top or Right. This explicit limit excludes cross-pair intersections until a
+general inter-skin proof is available; height reversals and angled multi-pair
+lofts return an unsupported diagnostic. Default interpolation between sections
+is ruled and position-continuous.
 Guide curves, surface end-tangency controls and smooth interpolation through
 multiple intermediate sections remain separate unsupported modes.
 
@@ -58,15 +62,18 @@ For parallel closed profiles, a positive angular-derivative certificate across
 the complete rational section blend, together with nonzero signed plane
 separation, proves each interpolated contour simple and each strip regular.
 Either separation direction is permitted. This covers circle/polygon and
-certified star-shaped concave profiles. Parallel nonradial surface sections
-additionally support bounded native chart refinement. All section wires split
-the same correspondence columns, retaining shared topology and directed authored
-member intervals. Every accepted native chart has one fixed contour/height
-projection whose actual rational Jacobian has positive principal minors;
-off-axis derivatives are bounded rather than assumed zero by a parallelism
-tolerance. This permits substantial shear and concavity without the former
-positive-definite symmetric-Jacobian restriction. The certificate proves each
-actual native face injective, not global separation between those faces.
+certified star-shaped concave profiles. Ruled sections, including nonparallel source planes, additionally support bounded
+native chart refinement. All section wires split the same correspondence columns,
+retaining shared topology and directed authored member intervals. Every accepted
+native chart has one fixed projected rational Jacobian with positive principal
+minors. Parallel planes suggest a contour/height frame; other charts use dual
+frames from native tangent and ruling directions. Candidate frames never establish
+a proof by themselves: the complete common-denominator derivative coefficient
+hulls must establish the three strict minor bounds. Off-axis derivatives remain
+bounded rather than being assumed zero by a parallelism tolerance. This permits
+substantial shear, concavity and angled section planes without the former
+single-midpoint-frame restriction. The certificate proves each actual native
+face injective; a separate native separation proof covers the rest of its skin.
 
 Other surface skins use a bounded Bernstein certificate of an injective fixed
 rational projection. Differentiable carriers use positive principal minors,
@@ -85,13 +92,44 @@ uncertain certificate remains an unsupported case; it is not proof that the
 authored section is folded. Fallback diagnostics identify the section pair and
 native strip.
 
+Nonradial ruled skins now require separation of all distinct native faces within
+one section pair. A broad phase uses positive rational control hulls; remaining
+pairs use directed-rounding interval arithmetic for every homogeneous de
+Casteljau subdivision and projected hull comparison. Candidate axes only choose
+separating directions. The complete native control enclosures prove the result.
+Adjacent strips must establish opposite strict half-spaces about their shared
+straight connector; the native endpoint row supplies a symbolic Bernstein
+boundary factor. Omitting that row from the strict half-space comparison
+requires exact projective equality of both actual native endpoint rows, checked
+with product residuals. A shared edge identity or tolerance-only curve/surface
+membership cannot establish that equality and cannot authorize the omission.
+Away from that shared boundary, subdivision must prove disjointness. Intersections,
+extra contacts and uncertain exhausted certificates return a diagnostic naming
+the involved native strips, without substituting triangles or calling uncertainty
+a demonstrated fold.
+
+Uninfluenced solid lofts use the same native chart and skin separation proofs to
+admit nonradial concave sections beyond the previous affine, convex and
+nested-circle families. The proof includes all outer/hole contour skins, so hole
+collisions and material passage closures cannot bypass separation. Source sections
+must still be parallel, ordered strictly by height, and valid closed material
+regions. This preserves nesting throughout each certified morph. If any pair uses
+the new nonradial separation certificate, a loft with three or more sections
+also requires exact, consistently ordered Front/Top/Right native planes across
+every pair, including its neighboring family-proven skins. Cubic
+endpoint-influenced solids retain their
+existing radial/affine/convex/nested-circle family and axial monotonicity guards.
+
 Native manifold orientation, curve endpoints and curve-on-surface membership
-are validated for the complete result. Patch regularity does not certify all
-cross-patch or cross-section-pair self-intersections. In particular, a surface
-that doubles back through previously used section heights can intersect itself
-globally even when its individual strips are regular. Surface Loft is not a
-claim of a watertight or globally embedded solid. Solid lofts retain their
-additional section ordering, cap, contour-family and volume guards.
+are validated for the complete result. Per-pair injectivity and separation alone
+do not certify separation between section pairs. The multi-pair guard therefore
+checks exact projective station equality on the actual constructed rational
+control rows of both adjoining skins, and uses outward-rounded station bounds
+to establish disjoint, strictly ordered slabs. Checking only source sketch planes
+or allowing an EPS-thick station band would leave an unproved overlap near the
+shared section. Angled, tolerance-planar or reversing multi-pair skins remain
+unsupported. Surface Loft creates an open sheet; solid lofts retain their
+additional cap and volume guards.
 
 The exact adapter bounds each source curve to 4096 controls, each refined
 contour to 4096 pieces, and all prepared section pieces to 32768. Complete
@@ -105,7 +143,10 @@ and 4096 visited cells per polynomial. Native weights must remain finite, positi
 recorded conditioning bound; near-coincident distinct partitions fail rather
 than silently merging authored corners. Proof and
 carrier limits are reported as unsupported geometry rather than substituting
-rendering triangles. Surface wall identities include their two authored
+rendering triangles. Native skin separation is bounded to 4096 charts per skin,
+131072 overlapping broad-phase face pairs, 65536 refinement cells per candidate
+pair, 24 subdivision levels and 24 million operation-wide proof work units.
+The multi-pair slab proof admits at most 262144 native section controls. Surface wall identities include their two authored
 section/member sources and refined parameter intervals. Section boundaries and
 connectors likewise carry construction ancestry. Existing downstream references
 to location-named faces or edges from older adapters can require explicit
@@ -124,3 +165,15 @@ user.
 Final workspace formatting, strict linting and macOS build/package integration
 passed on 2026-10-11 for adapter 18 / solver 11. The packaged app is
 `dist/TCAD.app`; the saved complex loft has not been run as an acceptance check.
+
+The current kernel pass adds nonparallel ruled-chart frames and complete
+section-pair skin separation, and reuses both for concave uninfluenced solid
+lofts. Source schemas remain unchanged; derived native chart partitions can
+change, so downstream selections on former unsplit faces can require explicit
+reference repair. Compilation, formatting and strict linting are the available
+implementation evidence; no saved loft or runtime geometry probe was executed.
+
+Adapter 26 final integration passed workspace compilation, formatting, strict
+library/binary linting and the macOS package/signature checks on 2026-10-11.
+This remains source and package evidence; no interactive or saved-model
+acceptance exercise was performed.

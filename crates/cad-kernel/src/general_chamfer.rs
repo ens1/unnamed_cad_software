@@ -1865,7 +1865,7 @@ fn circular(
         history.construct_face(face.id(), &[history.edge(rim.edge.id())?, history.face(rim.cap.id())?, history.face(rim.wall)?], serde_json::json!({"operation":treatment.name(),"constructor":match treatment { Treatment::Chamfer => "exact_conical_rim", Treatment::Fillet => "exact_toroidal_rim" },"column":rim.column}))?;
         bevels.entry(rim.cap.id()).or_default().push(face);
     }
-    output_faces.extend(terminals.rebuild(&radial_edges, &seam_edges, &connectors, history)?);
+    output_faces.extend(terminals.rebuild(&cap_edges, &seam_edges, &connectors, history)?);
     let mut shells = Vec::new();
     for shell in solid.boundaries() {
         let mut out = Shell::new();

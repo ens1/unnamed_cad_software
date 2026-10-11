@@ -378,11 +378,30 @@ pub(crate) fn shell(
         }
         return crate::turned_shell::shell(solid, thickness, removed, outward, overrides, history);
     };
-    if removed
+    let open_contours = removed
         .iter()
-        .any(|id| *id != turned.bottom.id() && *id != turned.top.id())
+        .filter_map(|id| turned.walls.get(id).map(|wall| wall.contour))
+        .collect::<HashSet<_>>();
+    if removed.iter().any(|id| {
+        *id != turned.bottom.id() && *id != turned.top.id() && !turned.walls.contains_key(id)
+    }) {
+        return Err(invalid(
+            "An opening face does not belong to the current shell body",
+        ));
+    }
+    if turned
+        .walls
+        .iter()
+        .any(|(id, wall)| open_contours.contains(&wall.contour) && !removed.contains(id))
     {
-        return Ok(None);
+        return Err(unsupported(
+            "A lateral opening requires every patch of that cylindrical or conical wall; partial angular openings need additional corner intersections",
+        ));
+    }
+    if solid.face_iter().all(|face| removed.contains(&face.id())) {
+        return Err(invalid(
+            "At least one wall must remain after removing faces",
+        ));
     }
     let open_bottom = removed.contains(&turned.bottom.id());
     let open_top = removed.contains(&turned.top.id());
@@ -424,7 +443,14 @@ pub(crate) fn shell(
                 lower,
                 upper,
                 carrier: wall.carrier,
-                distance: direction * wall.distance * analytic_offset::side(source, wall.carrier)?,
+                // A removed lateral wall is an opening boundary. Keep its
+                // exact source carrier while intersecting the remaining cap
+                // offsets, just as an open cap keeps its original end plane.
+                distance: if open_contours.contains(&wall.contour) {
+                    0.
+                } else {
+                    direction * wall.distance * analytic_offset::side(source, wall.carrier)?
+                },
             },
         );
     }
@@ -558,7 +584,121 @@ pub(crate) fn shell(
             .filter(|face| !inner_open.contains(&face.id()))
             .map(Face::inverse),
     );
+    // Lateral openings can meet removed end caps. The retained native shell
+    // supplies the union boundary, so shared edges between two removed faces
+    // never acquire a spurious wall or a zero-width ring.
+    if !open_contours.is_empty() {
+        let mut source_vertices: HashMap<VertexId, Vec<(cad_core::TopologyRef, bool)>> =
+            HashMap::new();
+        let mut named_sources = HashSet::new();
+        for edge in original
+            .edge_iter()
+            .filter(|edge| named_sources.insert(edge.id()))
+        {
+            let reference = history.edge(edge.id())?;
+            source_vertices
+                .entry(edge.absolute_front().id())
+                .or_default()
+                .push((reference.clone(), false));
+            source_vertices
+                .entry(edge.absolute_back().id())
+                .or_default()
+                .push((reference, true));
+        }
+        let mut named_connectors = HashSet::new();
+        let retained = original
+            .iter()
+            .filter(|face| !original_open.contains(&face.id()))
+            .cloned()
+            .collect::<Shell>();
+        for wire in retained.extract_boundaries() {
+            let mapped = wire
+                .iter()
+                .map(|edge| {
+                    if edge.orientation() {
+                        edges[&edge.id()].clone()
+                    } else {
+                        edges[&edge.id()].inverse()
+                    }
+                })
+                .collect::<Wire>();
+            // Both rails are bounded coaxial circles. Their exact rational
+            // skin is either a planar annulus sector or a conical/cylindrical
+            // opening strip; affine radius/height bounds above cover it.
+            let rim = crate::loft_correspondence::skin(&wire, &mapped, None, None)?;
+            let layer_edges = wire
+                .iter()
+                .chain(&mapped)
+                .map(Edge::id)
+                .collect::<HashSet<_>>();
+            for ((source_edge, mapped_edge), face) in wire.iter().zip(&mapped).zip(rim.iter()) {
+                let opening = original
+                    .iter()
+                    .find(|source| {
+                        original_open.contains(&source.id())
+                            && source.edge_iter().any(|edge| edge.id() == source_edge.id())
+                    })
+                    .ok_or_else(|| {
+                        invalid("A lateral opening boundary lost its removed-face ancestry")
+                    })?;
+                let face = if outward {
+                    face.clone()
+                } else {
+                    face.inverse()
+                };
+                let sources = [history.face(opening.id())?, history.edge(source_edge.id())?];
+                history.rim(
+                    face.id(),
+                    opening.id(),
+                    &sources,
+                    serde_json::json!({
+                        "operation":"shell","constructor":"intersected_lateral_opening_strip"
+                    }),
+                )?;
+                for connector in face.edge_iter().filter(|edge| {
+                    !layer_edges.contains(&edge.id()) && named_connectors.insert(edge.id())
+                }) {
+                    let connects = |a: &Vertex, b: &Vertex| {
+                        connector.front().id() == a.id() && connector.back().id() == b.id()
+                            || connector.front().id() == b.id() && connector.back().id() == a.id()
+                    };
+                    let source_vertex = if connects(source_edge.front(), mapped_edge.front()) {
+                        source_edge.front()
+                    } else if connects(source_edge.back(), mapped_edge.back()) {
+                        source_edge.back()
+                    } else {
+                        return Err(invalid(
+                            "An opening connector lost its source endpoint incidence",
+                        ));
+                    };
+                    let incidence = &source_vertices[&source_vertex.id()];
+                    let mut station = incidence
+                        .iter()
+                        .map(|(reference, back)| {
+                            Ok(serde_json::json!({
+                                "edge":crate::adapter::construction_reference(reference)?,
+                                "endpoint":if *back {"end"}else{"start"},
+                            }))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    station.sort_by_key(serde_json::Value::to_string);
+                    station.dedup();
+                    let sources = incidence
+                        .iter()
+                        .map(|(reference, _)| reference.clone())
+                        .collect::<Vec<_>>();
+                    history.construct_edge(connector.id(),&sources,serde_json::json!({
+                        "operation":"shell","constructor":"intersected_opening_connector","station":station,
+                    }))?;
+                }
+                boundary.push(face);
+            }
+        }
+    }
     for original_cap in [&turned.bottom, &turned.top] {
+        if !open_contours.is_empty() {
+            break;
+        }
         if !original_open.contains(&original_cap.id()) {
             continue;
         }

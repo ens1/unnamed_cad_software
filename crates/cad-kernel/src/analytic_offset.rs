@@ -522,6 +522,12 @@ fn ruled(surface: &BsplineSurface<Vector4>) -> Result<Option<(Carrier, bool)>> {
     if !ratio.is_finite() || ratio <= 0. || !scale.is_finite() || scale <= 0. {
         return Ok(None);
     }
+    // Recognize the complete translational control net directly. Recovering
+    // two circular radii independently can introduce a last-bit difference;
+    // turning that difference into a nonzero cone slope loses the cylindrical
+    // affine normal map even though every native generator is parallel.
+    let translation = point(net.control_points()[0][1])? - point(net.control_points()[0][0])?;
+    let mut translated = translation.magnitude() > EPS;
     for row in net.control_points() {
         let p = point(row[0])?;
         let q = point(row[1])?;
@@ -529,6 +535,21 @@ fn ruled(surface: &BsplineSurface<Vector4>) -> Result<Option<(Carrier, bool)>> {
             || ((q - b) - (p - a) * scale).magnitude() > EPS
         {
             return Ok(None);
+        }
+        translated &= ((q - p) - translation).magnitude() <= EPS;
+    }
+    if translated {
+        let axis = unit(translation)?;
+        if na.dot(axis).abs() > 1. - REL && nb.dot(axis).abs() > 1. - REL {
+            return Ok(Some((
+                Carrier::Cone {
+                    origin: a,
+                    axis,
+                    radius: ra,
+                    slope: 0.,
+                },
+                transposed,
+            )));
         }
     }
     Ok(Some((
@@ -757,6 +778,9 @@ pub(crate) fn offset(shell: &Shell, distance: f64) -> Result<Offset> {
     if let Some(offset) = crate::smooth_shell::offset(shell, distance)? {
         return Ok(offset);
     }
+    if let Some(offset) = crate::parallel_offset::offset(shell, distance)? {
+        return Ok(offset);
+    }
     let carrier = recognize(&shell[0])?.ok_or_else(|| {
         unsupported(
             "This surface has no proven exact plane, cylinder, cone or sphere normal offset",
@@ -876,6 +900,7 @@ pub(crate) fn thicken(
     } else {
         thickness
     };
+    crate::parallel_offset::certify_thickness(shell, lower * direction, upper * direction)?;
     let a = offset(shell, lower * direction)?;
     let b = offset(shell, upper * direction)?;
     let mut result = if reverse {

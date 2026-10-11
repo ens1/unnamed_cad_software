@@ -191,9 +191,7 @@ fn loft(
         .map(|(wire, _)| wire.clone())
         .collect::<Vec<_>>();
     let mut prepared = crate::loft_correspondence::prepare(&wires, &vec![None; wires.len()])?;
-    if !prepared.radial {
-        crate::loft_correspondence::refine_ruled_charts(&mut prepared)?;
-    }
+    crate::loft_correspondence::refine_ruled_charts(&mut prepared)?;
     let mut named_sections = Vec::new();
     for (index, wire) in prepared.wires.iter().enumerate() {
         let mut names = HashMap::new();
@@ -212,6 +210,9 @@ fn loft(
     }
     let mut shell: Shell = Vec::new().into();
     let mut proof_work = 0;
+    let mut separation_work = 0;
+    let mut native_sections = vec![Vec::new(); prepared.wires.len()];
+    let mut section_controls = 0usize;
     for index in 0..prepared.wires.len() - 1 {
         let lower = &prepared.wires[index];
         let upper = &prepared.wires[index + 1];
@@ -233,6 +234,25 @@ fn loft(
                 };
                 loft_patch(&carrier, &prepared, index, &mut proof_work)
                     .map_err(|error| loft_diagnostic(error, index, Some(patch)))?;
+            }
+        }
+        if !radial {
+            crate::loft_correspondence::prove_skin_separation(&skin, &mut separation_work)
+                .map_err(|error| loft_diagnostic(error, index, None))?;
+        }
+        if native_sections.len() > 2 {
+            for face in &skin {
+                let Surface::NurbsSurface(carrier) = face.surface() else {
+                    return Err(invalid("Loft lost its exact rational supporting carrier"));
+                };
+                for row in carrier.control_points() {
+                    section_controls = section_controls.saturating_add(2);
+                    if row.len() != 2 || section_controls > 262_144 {
+                        return Err(CadError::Unsupported("Multi-pair Surface Loft exceeds its ruled native separation-control bound".into()));
+                    }
+                    native_sections[index].push(row[0]);
+                    native_sections[index + 1].push(row[1]);
+                }
             }
         }
         let mut connectors = HashMap::new();
@@ -298,6 +318,7 @@ fn loft(
         }
         shell.extend(skin);
     }
+    crate::loft_correspondence::ordered_ruled_sections(&native_sections)?;
     Ok(shell)
 }
 

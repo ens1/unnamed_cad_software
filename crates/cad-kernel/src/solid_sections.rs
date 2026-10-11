@@ -343,7 +343,7 @@ pub(crate) fn loft(
     if alignments.iter().any(|points| points.len() > contours) {
         return Err(invalid("A loft connector names a missing native contour"));
     }
-    let prepared = (0..contours)
+    let mut prepared = (0..contours)
         .map(|contour| {
             let wires = source_wires
                 .iter()
@@ -356,6 +356,11 @@ pub(crate) fn loft(
             crate::loft_correspondence::prepare(&wires, &anchors)
         })
         .collect::<Result<Vec<_>>>()?;
+    if start.is_none() && end.is_none() {
+        for contour in &mut prepared {
+            crate::loft_correspondence::refine_ruled_charts(contour)?;
+        }
+    }
     let wires = (0..sections.len())
         .map(|index| {
             prepared
@@ -388,6 +393,9 @@ pub(crate) fn loft(
         .flat_map(|member| member.sources.clone())
         .collect::<Vec<_>>();
     history.face(&shell[0], &sources, serde_json::json!({"end":"start"}))?;
+    let mut separation_work = 0;
+    let mut pair_ranges = Vec::new();
+    let mut needs_global_separation = false;
     for index in 0..sections.len() - 1 {
         let lower = &wires[index];
         let upper = &wires[index + 1];
@@ -410,14 +418,24 @@ pub(crate) fn loft(
             .collect::<Result<Vec<_>>>()?;
         let radial =
             contours == 1 && crate::loft_correspondence::prove_radial_pair(&prepared[0], index)?;
-        if !radial
-            && !affine_family(&pairs, normal)?
-            && !convex_family(lower, upper, normal)?
-            && !concentric_family(lower, upper, normal)?
-        {
+        let known_family = radial
+            || affine_family(&pairs, normal)?
+            || convex_family(lower, upper, normal)?
+            || concentric_family(lower, upper, normal)?;
+        let prove_separation = !known_family && start.is_none() && end.is_none();
+        if !known_family && !prove_separation {
             return Err(unsupported(
-                "section correspondence lacks an exact radial/affine/convex/nested-circle proof against folds and intersections",
+                "endpoint-influenced section correspondence needs a radial/affine/convex/nested-circle proof against folds and intersections",
             ));
+        }
+        if prove_separation {
+            for contour in &prepared {
+                if !crate::loft_correspondence::prove_ruled_pair(contour, index)? {
+                    return Err(unsupported(
+                        "a concave loft strip has no bounded complete native injectivity certificate",
+                    ));
+                }
+            }
         }
         let tangent_start = if index == 0 { start } else { None };
         let tangent_end = if index + 2 == sections.len() {
@@ -436,6 +454,7 @@ pub(crate) fn loft(
                 "endpoint influences must keep every axial cubic control interval strictly positive",
             ));
         }
+        let mut pair_skin = Shell::new();
         for (a, b) in lower.iter().zip(upper) {
             let skin = crate::loft_correspondence::skin(a, b, tangent_start, tangent_end)?;
             for ((a, b), wall) in a.iter().zip(b).zip(&skin) {
@@ -453,8 +472,40 @@ pub(crate) fn loft(
                     serde_json::json!({"wall":{"lower":lower.purpose,"upper":upper.purpose}}),
                 )?;
             }
-            shell.extend(skin);
+            pair_skin.extend(skin);
         }
+        if prove_separation {
+            crate::loft_correspondence::prove_skin_separation(&pair_skin, &mut separation_work)?;
+            needs_global_separation = true;
+        }
+        pair_ranges.push(shell.len()..shell.len() + pair_skin.len());
+        shell.extend(pair_skin);
+    }
+    if needs_global_separation && sections.len() > 2 {
+        // The general nonradial proof covers one pair at a time. Establish
+        // exact shared separating planes from the actual constructed skins,
+        // including neighboring pairs that used one of the family proofs.
+        // Tolerance-flat source wires alone cannot exclude cross-pair overlap.
+        let mut native_sections = vec![Vec::new(); sections.len()];
+        let mut section_controls = 0usize;
+        for (index, range) in pair_ranges.iter().enumerate() {
+            for face in &shell[range.clone()] {
+                let Surface::NurbsSurface(carrier) = face.surface() else {
+                    return Err(invalid("Loft lost its exact rational supporting carrier"));
+                };
+                for row in carrier.control_points() {
+                    section_controls = section_controls.saturating_add(2);
+                    if row.len() != 2 || section_controls > 262_144 {
+                        return Err(unsupported(
+                            "multi-pair concave loft exceeds its ruled native separation-control bound",
+                        ));
+                    }
+                    native_sections[index].push(row[0]);
+                    native_sections[index + 1].push(row[1]);
+                }
+            }
+        }
+        crate::loft_correspondence::ordered_ruled_sections(&native_sections)?;
     }
     shell.push(sections.last().unwrap().clone());
     let sources = origins

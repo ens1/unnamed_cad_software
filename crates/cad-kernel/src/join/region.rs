@@ -2,6 +2,9 @@
 //! Intersections determine split parameters; all output edges retain the
 //! original native line or rational circular carrier.
 use super::*;
+#[path = "checked.rs"]
+mod checked;
+pub(crate) use checked::checked_intersections;
 
 #[derive(Clone)]
 enum Kind {
@@ -13,13 +16,13 @@ enum Kind {
     },
 }
 #[derive(Clone)]
-struct Segment {
+pub(crate) struct Segment {
     a: Point2,
     b: Point2,
     kind: Kind,
 }
 impl Segment {
-    fn at(&self, t: f64) -> Point2 {
+    pub(crate) fn at(&self, t: f64) -> Point2 {
         match self.kind {
             Kind::Line => self.a + (self.b - self.a) * t,
             Kind::Arc { center, sweep, .. } => {
@@ -141,20 +144,20 @@ fn cross(a: Vector2, b: Vector2) -> f64 {
     a.x * b.y - a.y * b.x
 }
 
-struct Frame {
-    origin: Point3,
-    axes: [Vector3; 2],
-    normal: Vector3,
+pub(crate) struct Frame {
+    pub(crate) origin: Point3,
+    pub(crate) axes: [Vector3; 2],
+    pub(crate) normal: Vector3,
 }
 impl Frame {
-    fn project(&self, p: Point3) -> Point2 {
+    pub(crate) fn project(&self, p: Point3) -> Point2 {
         let d = p - self.origin;
         Point2::new(d.dot(self.axes[0]), d.dot(self.axes[1]))
     }
-    fn lift(&self, p: Point2) -> Point3 {
+    pub(crate) fn lift(&self, p: Point2) -> Point3 {
         self.origin + self.axes[0] * p.x + self.axes[1] * p.y
     }
-    fn segment(&self, edge: &Edge) -> Result<Option<Segment>> {
+    pub(crate) fn segment(&self, edge: &Edge) -> Result<Option<Segment>> {
         let curve = edge.oriented_curve();
         let a = self.project(edge.front().point());
         let b = self.project(edge.back().point());
@@ -179,7 +182,7 @@ impl Frame {
     }
 }
 
-fn intersections(a: &Segment, b: &Segment) -> Vec<Point2> {
+pub(crate) fn intersections(a: &Segment, b: &Segment) -> Vec<Point2> {
     let mut result = Vec::new();
     // Endpoints also split coincident lines and circular carriers into a
     // common partition, without assuming equal edge counts in both wires.
@@ -253,12 +256,12 @@ fn line_circle(line: &Segment, center: Point2, radius: f64, result: &mut Vec<Poi
 }
 
 #[derive(PartialEq)]
-enum Location {
+pub(crate) enum Location {
     Inside,
     Outside,
     Boundary,
 }
-fn locate(p: Point2, region: &[Segment]) -> Location {
+pub(crate) fn locate(p: Point2, region: &[Segment]) -> Location {
     if region.iter().any(|segment| segment.fraction(p).is_some()) {
         Location::Boundary
     } else if region
@@ -338,7 +341,11 @@ fn native_parameter(source: &Source, p: Point3) -> Result<f64> {
     Ok(t)
 }
 
-fn wire_from_parts(selected: Vec<Edge>, frame: &Frame, normal_sign: f64) -> Result<Vec<Vec<Wire>>> {
+pub(crate) fn wire_from_parts(
+    selected: Vec<Edge>,
+    frame: &Frame,
+    normal_sign: f64,
+) -> Result<Vec<Vec<Wire>>> {
     let mut outgoing: HashMap<VertexId, usize> = HashMap::new();
     let mut incoming = HashSet::new();
     for (index, edge) in selected.iter().enumerate() {

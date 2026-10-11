@@ -849,7 +849,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+e52aab067761;adapter/25;solver/tcad-native-lm/12"
+        "monstertruck/0.4.1+e52aab067761;adapter/26;solver/tcad-native-lm/12"
     }
     fn sheet_metadata(
         &self,
@@ -1203,7 +1203,18 @@ impl KernelAdapter for MonstertruckAdapter {
                         },
                     )?
                 } else {
-                    crate::boolean_ops::sets(left_bodies, right_bodies, mode, tolerance)?
+                    crate::boolean_ops::sets_with_history(
+                        left_bodies,
+                        right_bodies,
+                        mode,
+                        tolerance,
+                        &std::collections::BTreeSet::from([left.clone(), right.clone()]),
+                        crate::revolution::Combination {
+                            adapter: self,
+                            owner,
+                            generated: &mut generated_history,
+                        },
+                    )?
                 })
             }
             Operation::Hole {

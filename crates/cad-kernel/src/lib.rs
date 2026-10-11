@@ -1,6 +1,8 @@
 pub mod adapter;
 pub mod evaluate;
+mod parallel_offset;
 mod planar;
+mod prismatic_boolean;
 
 pub mod exchange;
 mod step_import;

@@ -260,7 +260,7 @@ pub(crate) fn operation(
     }
     let mut result = Vec::new();
     let mut cut_positions = BTreeSet::new();
-    for source in body {
+    'stocks: for source in body {
         let body_source = adapter.body_construction_origin(&definition.body, source)?;
         if let Some((solid, tools)) = crate::drilled_pockets::cut(source, &drills)? {
             for (point, cutter) in tools {
@@ -286,8 +286,25 @@ pub(crate) fn operation(
                     .face_iter()
                     .map(|face| serde_json::to_string(&face.surface()))
                     .collect::<std::result::Result<BTreeSet<_>, _>>()?;
-                solid =
-                    monstertruck::solid::difference(&solid, &cutter, tolerance).map_err(invalid)?;
+                let Some(next) = crate::boolean_ops::binary_with_history(
+                    &solid,
+                    &cutter,
+                    crate::boolean_ops::Mode::Difference,
+                    tolerance,
+                    &BTreeSet::from([definition.body.clone()]),
+                    crate::revolution::Combination {
+                        adapter,
+                        owner,
+                        generated,
+                    },
+                )?
+                else {
+                    // A consumed scoped body contributes no remaining hole
+                    // boundary. Other scoped bodies may still carry it; the
+                    // feature-level position check below decides that intent.
+                    continue 'stocks;
+                };
+                solid = next;
                 for face in solid
                     .face_iter()
                     .filter(|face| !previous.contains(&face.id()))

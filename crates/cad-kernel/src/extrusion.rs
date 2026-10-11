@@ -2257,21 +2257,33 @@ pub(crate) fn operation(
                         scope_identity,
                         generated,
                     )?;
-                    if let Some(cut) = crate::boolean_ops::binary(
+                    if let Some(cut) = crate::boolean_ops::binary_with_history(
                         &solid,
                         &cutter,
                         crate::boolean_ops::Mode::Difference,
                         tolerance,
+                        &scope_refs,
+                        crate::revolution::Combination {
+                            adapter,
+                            owner,
+                            generated,
+                        },
                     )? {
                         next.push(cut);
                     }
                 }
                 "intersect" | "intersection" => {
-                    if let Some(common) = crate::boolean_ops::binary(
+                    if let Some(common) = crate::boolean_ops::binary_with_history(
                         &solid,
                         &tool,
                         crate::boolean_ops::Mode::Intersection,
                         tolerance,
+                        &scope_refs,
+                        crate::revolution::Combination {
+                            adapter,
+                            owner,
+                            generated,
+                        },
                     )? {
                         next.push(common);
                     }

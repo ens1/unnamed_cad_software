@@ -48,6 +48,53 @@ pub(crate) fn disjoint(a: &Solid, b: &Solid) -> bool {
 }
 
 pub(crate) fn binary(a: &Solid, b: &Solid, mode: Mode, tolerance: f64) -> Result<Option<Solid>> {
+    binary_impl(a, b, mode, tolerance, None)
+}
+
+pub(crate) fn binary_with_history(
+    a: &Solid,
+    b: &Solid,
+    mode: Mode,
+    tolerance: f64,
+    scope: &std::collections::BTreeSet<cad_core::NodeRef>,
+    context: crate::revolution::Combination<'_>,
+) -> Result<Option<Solid>> {
+    let output = binary_impl(
+        a,
+        b,
+        mode,
+        tolerance,
+        Some((
+            scope,
+            crate::revolution::Combination {
+                adapter: context.adapter,
+                owner: context.owner,
+                generated: context.generated,
+            },
+        )),
+    )?;
+    if let Some(solid) = &output {
+        context.adapter.carry_boolean_history(
+            context.owner,
+            scope,
+            [a, b],
+            solid,
+            context.generated,
+        )?;
+    }
+    Ok(output)
+}
+
+fn binary_impl(
+    a: &Solid,
+    b: &Solid,
+    mode: Mode,
+    tolerance: f64,
+    context: Option<(
+        &std::collections::BTreeSet<cad_core::NodeRef>,
+        crate::revolution::Combination<'_>,
+    )>,
+) -> Result<Option<Solid>> {
     if !tolerance.is_finite() || tolerance <= 0. {
         return Err(invalid("Tolerance must be finite and positive"));
     }
@@ -86,6 +133,14 @@ pub(crate) fn binary(a: &Solid, b: &Solid, mode: Mode, tolerance: f64) -> Result
             }
         }
     }
+    // Layered reconstruction creates explicit partitions. Only feature paths
+    // carrying their construction history may publish those descendants.
+    if let Some((scope, context)) = context
+        && let Some(output) = crate::prismatic_boolean::binary(a, b, mode)?
+    {
+        crate::prismatic_boolean::record_history(&output, scope, context)?;
+        return Ok(output.solid);
+    }
     let output = match mode {
         Mode::Union => monstertruck::solid::or(a, b, tolerance),
         Mode::Difference => monstertruck::solid::difference(a, b, tolerance),
@@ -111,15 +166,90 @@ pub(crate) fn union_with_history(
     scope: &std::collections::BTreeSet<cad_core::NodeRef>,
     context: crate::revolution::Combination<'_>,
 ) -> Result<Solid> {
-    let output = union(a, b, tolerance)?;
-    context.adapter.carry_boolean_history(
-        context.owner,
-        scope,
-        [a, b],
-        &output,
-        context.generated,
-    )?;
-    Ok(output)
+    binary_with_history(a, b, Mode::Union, tolerance, scope, context)?
+        .ok_or_else(|| invalid("Union of nonempty material regions returned no material"))
+}
+
+pub(crate) fn sets_with_history(
+    left: &[Solid],
+    right: &[Solid],
+    mode: Mode,
+    tolerance: f64,
+    scope: &std::collections::BTreeSet<cad_core::NodeRef>,
+    context: crate::revolution::Combination<'_>,
+) -> Result<Vec<Solid>> {
+    if !tolerance.is_finite() || tolerance <= 0. {
+        return Err(invalid("Tolerance must be finite and positive"));
+    }
+    if matches!(mode, Mode::Union) {
+        return union_with_contact(left, right, tolerance, scope, context);
+    }
+    if left.len().saturating_add(right.len()).saturating_pow(2) > 65_536 {
+        return Err(CadError::Unsupported(
+            "Boolean body collection exceeds its bounded operation work".into(),
+        ));
+    }
+    let mut result = Vec::new();
+    for body in left {
+        let mut remaining = Some(body.clone());
+        for tool in right {
+            let stock = if matches!(mode, Mode::Difference) {
+                let Some(stock) = remaining.as_ref() else {
+                    break;
+                };
+                stock
+            } else {
+                body
+            };
+            let output = binary_with_history(
+                stock,
+                tool,
+                mode,
+                tolerance,
+                scope,
+                crate::revolution::Combination {
+                    adapter: context.adapter,
+                    owner: context.owner,
+                    generated: context.generated,
+                },
+            )?;
+            if matches!(mode, Mode::Difference) {
+                remaining = output;
+            } else if let Some(output) = output {
+                insert_union(&mut result, output, &mut |a, b| {
+                    union_with_history(
+                        a,
+                        b,
+                        tolerance,
+                        scope,
+                        crate::revolution::Combination {
+                            adapter: context.adapter,
+                            owner: context.owner,
+                            generated: context.generated,
+                        },
+                    )
+                })?;
+            }
+        }
+        if matches!(mode, Mode::Difference)
+            && let Some(output) = remaining
+        {
+            insert_union(&mut result, output, &mut |a, b| {
+                union_with_history(
+                    a,
+                    b,
+                    tolerance,
+                    scope,
+                    crate::revolution::Combination {
+                        adapter: context.adapter,
+                        owner: context.owner,
+                        generated: context.generated,
+                    },
+                )
+            })?;
+        }
+    }
+    Ok(result)
 }
 
 fn insert_union(

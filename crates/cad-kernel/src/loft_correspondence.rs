@@ -8,6 +8,10 @@ use monstertruck::modeling::*;
 use std::cell::Cell;
 use std::collections::HashMap;
 
+#[path = "loft_separation.rs"]
+mod separation;
+pub(crate) use separation::prove_skin_separation;
+
 const EPS: f64 = 1e-7;
 const MAX_PIECES: usize = 4096;
 const MAX_TOTAL: usize = 32768;
@@ -1423,7 +1427,7 @@ fn contour_coordinate(derivatives: &[Vector3], normal: Vector3) -> Option<Vector
 /// entries, including small native deviations from parallel planes. The
 /// determinant minorant a_min*d_min-|b|_max*|c|_max accounts for those deviations;
 /// no tolerance comparison is used to assume an entry exactly zero.
-fn ruled_chart(a: &Curve, b: &Curve, normal: Vector3, work: &mut usize) -> Result<bool> {
+fn ruled_chart(a: &Curve, b: &Curve, normal: Option<Vector3>, work: &mut usize) -> Result<bool> {
     let (a, b) = compatible(a, b)?;
     let aa = a.bezier_decomposition();
     let bb = b.bezier_decomposition();
@@ -1435,13 +1439,69 @@ fn ruled_chart(a: &Curve, b: &Curve, normal: Vector3, work: &mut usize) -> Resul
     let derivative_error = da.uncertainty.max(db.uncertainty) * 3.;
     let mut derivatives = da.coefficients;
     derivatives.extend(db.coefficients);
-    let Some(contour) = contour_coordinate(&derivatives, normal) else {
-        return Ok(false);
-    };
+    let mut frames = Vec::new();
+    if let Some(normal) = normal
+        && let Some(contour) = contour_coordinate(&derivatives, normal)
+    {
+        frames.push((contour, normal));
+    }
+    // A chart does not need parallel section planes. With a common positive
+    // denominator its two derivative numerators are convex combinations of
+    // these native coefficient vectors. Candidate dual frames come from
+    // actual rational derivatives; every candidate is checked against the
+    // complete coefficient hull, not just the points choosing the frame.
+    for parameter in [0.5, 0.25, 0.75] {
+        let ca = NurbsCurve::new(a.clone());
+        let cb = NurbsCurve::new(b.clone());
+        let tangent = (ca.der(parameter) + cb.der(parameter)) * 0.5;
+        let ruling = cb.subs(parameter) - ca.subs(parameter);
+        let ta = tangent.magnitude();
+        let tb = ruling.magnitude();
+        if !ta.is_finite() || !tb.is_finite() || ta <= 1e-12 || tb <= 1e-12 {
+            continue;
+        }
+        let x = tangent / ta;
+        let y = ruling / tb;
+        let cosine = x.dot(y);
+        let determinant = 1. - cosine * cosine;
+        if determinant.is_finite() && determinant > 1e-10 {
+            frames.push((
+                (x - y * cosine) / determinant,
+                (y - x * cosine) / determinant,
+            ));
+        }
+    }
+    for (contour, normal) in frames {
+        charge(
+            work,
+            (derivatives.len() + aa[0].control_points().len()) * 32,
+        )?;
+        if ruled_minors(
+            &aa[0],
+            &bb[0],
+            &derivatives,
+            derivative_error,
+            contour,
+            normal,
+        )? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn ruled_minors(
+    a: &BsplineCurve<Vector4>,
+    b: &BsplineCurve<Vector4>,
+    derivatives: &[Vector3],
+    derivative_error: f64,
+    contour: Vector3,
+    normal: Vector3,
+) -> Result<bool> {
     let mut amin = f64::INFINITY;
     let mut amax = 0f64;
     let mut cmax = 0f64;
-    for d in &derivatives {
+    for d in derivatives {
         let a = d.dot(contour);
         let c = d.dot(normal);
         amin = amin.min(a);
@@ -1451,7 +1511,7 @@ fn ruled_chart(a: &Curve, b: &Curve, normal: Vector3, work: &mut usize) -> Resul
     let mut dmin = f64::INFINITY;
     let mut dmax = 0f64;
     let mut bmax = 0f64;
-    for (a, b) in aa[0].control_points().iter().zip(bb[0].control_points()) {
+    for (a, b) in a.control_points().iter().zip(b.control_points()) {
         let difference = Vector3::new(b.x - a.x, b.y - a.y, b.z - a.z);
         let d = difference.dot(normal);
         let b = difference.dot(contour);
@@ -1459,10 +1519,10 @@ fn ruled_chart(a: &Curve, b: &Curve, normal: Vector3, work: &mut usize) -> Resul
         dmax = dmax.max(d.abs());
         bmax = bmax.max(b.abs());
     }
-    let difference_error = aa[0]
+    let difference_error = a
         .control_points()
         .iter()
-        .chain(bb[0].control_points())
+        .chain(b.control_points())
         .map(|h| {
             [h.x.abs(), h.y.abs(), h.z.abs()]
                 .into_iter()
@@ -1513,9 +1573,6 @@ pub(crate) fn refine_ruled_charts(prepared: &mut Prepared) -> Result<()> {
     let normals = (0..prepared.wires.len() - 1)
         .map(|i| ruled_normal(prepared, i))
         .collect::<Vec<_>>();
-    if normals.iter().all(Option::is_none) {
-        return Ok(());
-    }
     let mut columns = Vec::new();
     for column in 0..prepared.wires[0].len() {
         let row = prepared
@@ -1539,12 +1596,11 @@ pub(crate) fn refine_ruled_charts(prepared: &mut Prepared) -> Result<()> {
     columns.reverse();
     let mut accepted = Vec::new();
     let mut work = prepared.proof_work.get();
-    let mut certified = normals.iter().map(Option::is_some).collect::<Vec<_>>();
+    let mut certified = vec![true; normals.len()];
     while let Some((column, depth)) = columns.pop() {
         let mut regular = true;
         let mut failures = Vec::new();
         for (index, normal) in normals.iter().enumerate() {
-            let Some(normal) = normal else { continue };
             let a = Curve::NurbsCurve(NurbsCurve::new(column[index].curve.clone()));
             let b = Curve::NurbsCurve(NurbsCurve::new(column[index + 1].curve.clone()));
             if !ruled_chart(&a, &b, *normal, &mut work)? {
@@ -1618,9 +1674,7 @@ pub(crate) fn prove_ruled_pair(prepared: &Prepared, index: usize) -> Result<bool
     if prepared.ruled.get(index) == Some(&true) {
         return Ok(true);
     }
-    let Some(normal) = ruled_normal(prepared, index) else {
-        return Ok(false);
-    };
+    let normal = ruled_normal(prepared, index);
     let mut work = prepared.proof_work.get();
     for (a, b) in prepared.wires[index].iter().zip(&prepared.wires[index + 1]) {
         let regular = ruled_chart(&a.oriented_curve(), &b.oriented_curve(), normal, &mut work)?;
@@ -1630,4 +1684,44 @@ pub(crate) fn prove_ruled_pair(prepared: &Prepared, index: usize) -> Result<bool
         }
     }
     Ok(true)
+}
+
+/// Until general inter-skin intersection is available, multiple ruled pairs
+/// require genuinely disjoint slabs. A tolerance-flat control net is not an
+/// exact separating plane: its two neighboring skins can overlap in that band.
+/// Here exact projective coordinate equality proves a common native coordinate
+/// plane, and outward station intervals establish strict consistent ordering.
+pub(crate) fn ordered_ruled_sections(sections: &[Vec<Vector4>]) -> Result<()> {
+    use crate::native_bounds::Interval;
+    if sections.len() <= 2 {
+        return Ok(());
+    }
+    for axis in 0..3 {
+        if sections.iter().any(|controls| {
+            controls.is_empty()
+                || controls
+                    .iter()
+                    .any(|h| !separation::same_projective_coordinate(*h, controls[0], axis))
+        }) {
+            continue;
+        }
+        let levels = sections
+            .iter()
+            .map(|controls| {
+                Interval::exact(controls[0][axis])?.div(Interval::exact(controls[0].w)?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let increasing = levels
+            .windows(2)
+            .all(|pair| pair[0].high + EPS < pair[1].low);
+        let decreasing = levels
+            .windows(2)
+            .all(|pair| pair[1].high + EPS < pair[0].low);
+        if increasing || decreasing {
+            return Ok(());
+        }
+    }
+    Err(unsupported(
+        "the multi-pair native loft certificate requires exact ordered Front/Top/Right section planes; angled, tolerance-planar, overlapping or reversing skins need a complete inter-skin intersection proof",
+    ))
 }

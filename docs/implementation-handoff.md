@@ -472,3 +472,75 @@ private origin. Repository visibility was verified as private. The public
 Monstertruck fork received no changes during this pass. The refreshed bundle is
 ready for the user's interactive acceptance, with the geometric limitations
 documented above still in force.
+
+## Astra native geometry extension — 2026-10-11
+
+This pass continues the focused kernel scope after the Sol workflow pass.
+Monstertruck remains the kernel, with no Open CASCADE. The public fork remains
+pinned at `e52aab0677610f65c647e7f8dc0829efe2cb1318`; this pass's specialized
+constructors and history integration live in the private TCAD native adapter.
+No additional repository or public source publication was needed.
+
+Adapter 26 adds common-axis layered line/arc extrusion Booleans with one exact
+planar arrangement shared across heights. Different extents, holes, nonconvex
+profiles and repeated layered results use native curves and surfaces, shared
+edges, explicit source-interval/plane/endpoint ancestry, fixed native tolerance
+and bounded predicate work. History-aware feature combinations, drilled-hole Boolean fallbacks and explicit
+Boolean operations use this path; legacy geometry-only calls retain the existing
+backend. `robust` 1.2.0 is now a direct dependency for adaptive exact orientation;
+it was already locked transitively and its licenses were already bundled.
+
+The fillet/chamfer extension treats circular chains terminating at actual radial
+planes, including circular/annular sectors and half-round stock. Selected
+collinear planar chains can coalesce source seams before the existing complete
+corner constructor runs. Terminal and other cap edits are composed before any
+face replacement. The first cohesive checkpoint is commit `43e9431`, pushed to
+the private origin; its final terminal-composition correction is in the combined
+integration checkpoint.
+
+Surface Offset and Thicken now handle native tangent plane/cylinder extrusion
+sheets with multiple bend radii. Their complete cross-section collars receive
+interval-bounded intersection and containment checks; mid-plane thickness checks
+the combined two-sided interval. Coaxial cylindrical/conical shells allow whole
+lateral-contour openings and combined side/end openings, with source endpoint
+ancestry on their connectors. Partial angular removal, arbitrary trims and
+sharp/freeform offset joins remain unsupported.
+
+Ruled loft charts now admit nonparallel section pairs through fixed dual-frame
+certificates and actual shared-wire subdivision. Complete per-pair strip
+separation uses outward rational control hulls and native shared connectors.
+This also admits additional uninfluenced concave solid lofts. Multi-pair Surface
+Loft requires exact ordered native coordinate-plane section slabs until complete cross-pair
+intersection handling exists. Uncertain separation is distinguished from a
+proof of an actual fold.
+
+Independent source reviews caught and corrected near-parallel support equality,
+uncertain intersection roots, shared-connector proof assumptions, cap ancestry,
+layered split-face identities and lateral-opening connector identities. Native
+allocation IDs and mesh indices do not enter the new saved construction roles.
+Remaining broad limitations include general curved tangent/coplanar SSI,
+freeform intersection completeness, arbitrary connected blend junctions,
+variable-radius blends, topology-changing offsets and unrestricted multi-pair
+loft skins. Those remain engineering work; this pass does not claim a complete
+or interactively accepted production kernel.
+
+Detailed contracts and limits:
+- [Native prismatic Booleans](native-prismatic-booleans.md)
+- [Edge treatments](edge-treatments.md)
+- [Native offsets](native-offsets.md)
+- [Loft geometry](loft-geometry.md)
+
+### Final verification and package
+
+After the review corrections, `cargo fmt --all -- --check`,
+`cargo check --workspace --lib --bins --locked`,
+`cargo clippy --workspace --lib --bins --locked -- -D warnings` and
+`git diff --check` passed. `scripts/package-macos.sh` completed the locked
+workspace build, plist validation, ad-hoc signing and strict nested/full bundle
+signature verification. The refreshed application is `dist/TCAD.app`, with
+separate `TCAD`, `tcad-worker` and `tcad-cli` executables. Both desktop and kernel
+use `monstertruck/0.4.1+e52aab067761;adapter/26;solver/tcad-native-lm/12`.
+The existing dependency future-incompatibility notice is `proc-macro-error2`
+2.0.1. No tests, assertion probes, CLI modeling exercises, app launches or manual
+UI smoke checks were performed. Interactive modeling acceptance remains with
+the user. The repository was verified private before publication.

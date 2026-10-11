@@ -246,7 +246,7 @@ impl Terminations {
 
     pub(super) fn rebuild(
         &self,
-        radial_edges: &HashMap<EdgeId, Edge>,
+        cap_edges: &HashMap<EdgeId, Edge>,
         seam_edges: &HashMap<EdgeId, Edge>,
         connectors: &HashMap<VertexId, Edge>,
         history: &mut ShellHistory,
@@ -264,7 +264,10 @@ impl Terminations {
                 let segments = wire
                     .iter()
                     .map(|edge| {
-                        radial_edges
+                        // This terminal plane can also support a disjoint
+                        // selected rim on another axis. Preserve that cap's
+                        // new circular rail in the same face reconstruction.
+                        cap_edges
                             .get(&edge.id())
                             .or_else(|| seam_edges.get(&edge.id()))
                             .map_or_else(|| edge.clone(), |new| oriented(edge, new))

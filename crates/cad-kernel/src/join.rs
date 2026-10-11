@@ -4,7 +4,7 @@ use crate::adapter::MonstertruckAdapter;
 use cad_core::{CadError, NodeRef, Result};
 use monstertruck::modeling::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
-mod region;
+pub(crate) mod region;
 
 const EPS: f64 = 1e-7;
 const MAX_FACES: usize = 4096;
@@ -292,7 +292,7 @@ fn strict_inset(stock: &PlaneFace, cap: &Face, work: &mut usize) -> Result<bool>
     }
     Ok(true)
 }
-fn matching_edge(stock: &Edge, contact: &Edge) -> Result<bool> {
+pub(crate) fn matching_edge(stock: &Edge, contact: &Edge) -> Result<bool> {
     if stock.front().point().distance(contact.front().point()) > EPS
         || stock.back().point().distance(contact.back().point()) > EPS
     {
