@@ -43,6 +43,7 @@ mod sketch_ui;
 mod split_ui;
 mod surface_ui;
 mod texture_assets;
+mod theme_library;
 mod ui;
 mod viewport;
 mod worker;

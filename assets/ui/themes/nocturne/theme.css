@@ -1,0 +1,529 @@
+/* Nocturne: a portable composition and skin, independent of CAD definitions.
+   Midnight surfaces, a right inspector, bottom command dock and circular tools.
+   Edit these variables or selectors; no Rust changes are needed. */
+:root {
+  --panel: #191426;
+  --panel-raised: #261D39;
+  --workspace: #12101D;
+  --ink: #EAE7FF;
+  --muted: #A49CBF;
+  --active: #75F9DD;
+  --valid: #CDFA6D;
+  --reference: #AC9DFF;
+  --warning: #FFD580;
+  --error: #FF91B4;
+  --stroke: #4E3E6B;
+  --spacing: 7px;
+  --font-size: 12px;
+  --control-height: 36px;
+  --target-size: 32px;
+}
+
+* {
+  color: var(--ink);
+  font-family: monospace;
+  font-size: var(--font-size);
+  gap: var(--spacing);
+  accent-color: var(--active);
+}
+
+.semantic-control, .toolbar-control, [role=command-action], [role=view-control] {
+  height: 40px;
+  min-target-size: 36px;
+  padding: 8px 14px;
+  border-radius: 20px;
+  background: #382A4D;
+  border: 1px solid #6A548B;
+  color: var(--ink);
+  font-size: 12px;
+  icon-size: 22px;
+  gap: 8px;
+}
+
+.toolbar-control:hover, [role=command-action]:hover, [role=view-control]:hover {
+  background: #4C3868;
+  border-color: var(--active);
+}
+
+.toolbar-control[state=selected], [role=command-action][state=selected] {
+  color: #162322;
+  background: var(--active);
+  border-color: #B7FFF0;
+}
+
+.toolbar-control[state=disabled], [role=command-action][state=disabled] {
+  color: #93859E;
+  background: #261D32;
+  border-color: #41304F;
+}
+
+.nocturne-workspace {
+  background: #0D0B16;
+  padding: 8px 10px;
+  gap: 10px;
+}
+
+[role=document-context] {
+  background: #191426;
+  padding: 6px 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  gap: 5px;
+  font-size: 11px;
+}
+
+[role=document-context] .toolbar-control {
+  height: 28px;
+  min-target-size: 28px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  background: var(--panel-raised);
+  font-size: 10px;
+  border: 1px solid var(--stroke);
+}
+
+[role=menu] {
+  height: 28px;
+  min-target-size: 28px;
+  padding: 4px 9px;
+  border-radius: 14px;
+  background: transparent;
+  border: none;
+  font-size: 11px;
+}
+
+[role=menu]:hover {
+  color: var(--active);
+  background: var(--panel-raised);
+}
+
+.nocturne-quick-rail {
+  background: #1C1630;
+  border: 1px solid var(--stroke);
+  border-radius: 30px;
+  padding: 8px;
+  gap: 8px;
+}
+
+.nocturne-zoom-collection {
+  background: transparent;
+  padding: 0px;
+  gap: 8px;
+}
+
+[role=quick-action] {
+  padding: 0px;
+}
+
+.round-action [role=command] {
+  width: 60px;
+  height: 60px;
+  min-target-size: 60px;
+  padding: 0px;
+  border-radius: 50%;
+  border: 1px solid #6A548B;
+  background: #332748;
+  color: var(--active);
+  font-size: 9px;
+  text-align: center;
+}
+
+.square-action [role=command] {
+  width: 54px;
+  height: 54px;
+  min-target-size: 54px;
+  padding: 0px;
+  border-radius: 10px;
+  border: 1px solid var(--stroke);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.nocturne-quick-rail [role=command]:hover {
+  background: #493363;
+  color: var(--ink);
+  border-color: var(--active);
+}
+
+.nocturne-quick-rail [role=command][state=disabled] {
+  background: #191426;
+  color: #726586;
+  border-color: #30263F;
+}
+
+.nocturne-inspector {
+  background: var(--panel);
+  border: 1px solid var(--stroke);
+  border-radius: 18px;
+  padding: 0px;
+  gap: 0px;
+}
+
+[role=view-navigation] {
+  background: #261D39;
+  padding: 4px 6px;
+  border-radius: 18px;
+  gap: 4px;
+}
+
+[role=navigation-action] {
+  height: 30px;
+  min-target-size: 30px;
+  padding: 4px 11px;
+  border-radius: 15px;
+  border: none;
+  background: #261D39;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+[role=navigation-action][state=selected] {
+  background: #46315F;
+  color: var(--active);
+}
+
+[role=dependency-view], [role=property-manager], [role=parameter-instrument] {
+  background: var(--panel);
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  gap: 7px;
+}
+
+.feature-tree-row, [role=history-station] {
+  width: 100%;
+  height: 30px;
+  min-target-size: 30px;
+  padding: 5px 8px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-size: 11px;
+  text-align: left;
+  icon-size: 10px;
+}
+
+.feature-tree-row:hover, [role=history-station]:hover {
+  background: #302340;
+}
+
+.feature-tree-row[state=selected], [role=history-station][state=selected] {
+  background: #3A2A52;
+  color: var(--active);
+  border: 1px solid #6D5590;
+  height: 40px;
+}
+
+[role=history-path] {
+  color: #A188C4;
+  stroke-width: 2px;
+}
+
+[role=preview-status] {
+  background: #201A2F;
+  padding: 7px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+[role=preview-status][state=valid] {
+  color: var(--valid);
+}
+
+[role=preview-status][state=invalid] {
+  color: var(--error);
+}
+
+[role=confirmation-group] {
+  background: #201A2F;
+  padding: 8px 10px;
+  gap: 12px;
+  border-radius: 18px;
+}
+
+[role=apply-action] {
+  width: 62px;
+  height: 62px;
+  min-target-size: 62px;
+  border-radius: 50%;
+  background: var(--valid);
+  color: #161C12;
+  border: 2px solid #E4FFAE;
+  padding: 0px;
+  font-size: 11px;
+}
+
+[role=apply-action]:hover {
+  background: #E4FFAE;
+  border-color: var(--active);
+}
+
+[role=apply-action][state=disabled] {
+  background: #302A3A;
+  color: #7E728F;
+  border-color: #4C405C;
+}
+
+[role=cancel-action] {
+  width: 122px;
+  height: 40px;
+  min-target-size: 40px;
+  padding: 0px;
+  border-radius: 20px;
+  border: 1px solid #795B97;
+  background: #302340;
+  color: #F5C7DF;
+  font-size: 12px;
+}
+
+[role=cancel-action]:hover {
+  background: #50334E;
+  border-color: #FF91B4;
+}
+
+[role=command-manager] {
+  background: var(--panel-raised);
+  padding: 8px 12px;
+  border: 1px solid #6A548B;
+  border-radius: 22px;
+  gap: 8px;
+  font-size: 11px;
+}
+
+[role=command-tab] {
+  height: 32px;
+  min-target-size: 32px;
+  padding: 5px 16px;
+  border-radius: 16px;
+  border: none;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+}
+
+[role=command-tab][state=selected] {
+  background: #493363;
+  color: var(--active);
+  border: 1px solid #8060A5;
+}
+
+[role=menu-action], [role=selection-action] {
+  width: 100%;
+  height: 32px;
+  min-target-size: 32px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 8px;
+  background: #261D39;
+  color: var(--ink);
+  text-align: left;
+  font-size: 11px;
+}
+
+[role=menu-action]:hover, [role=selection-action]:hover {
+  color: var(--active);
+  background: #493363;
+}
+
+[role=selection-actions], [role=selection-candidates] {
+  background: #20182F;
+  padding: 12px;
+  border: 2px solid #AC9DFF;
+  border-radius: 18px;
+  gap: 6px;
+}
+
+[role=model-viewport] {
+  background: var(--workspace);
+  padding: 0px;
+  selection-color: var(--active);
+  preview-color: #75F9DD66;
+  comparison-color: #FF91B4;
+  reference-curve-color: #AC9DFF;
+  explode-line-color: #CDFA6D;
+  inspection-first-color: #75F9DD;
+  inspection-second-color: #FF91B4;
+  construction-opacity: 0.45;
+  environment-intensity: 1.15;
+  key-light-intensity: 1.2;
+  fill-light-intensity: 0.85;
+  environment-rotation: 55;
+  exposure: 0.15;
+}
+
+[role=viewport-toolbar] {
+  left: 18px;
+  top: 16px;
+  width: 92%;
+  height: 110px;
+  padding: 0px;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+[role=view-cube] {
+  left: 18px;
+  bottom: 54px;
+  width: 96px;
+  height: 96px;
+  font-size: 10px;
+}
+
+[role=navigation-hint] {
+  left: 132px;
+  bottom: 16px;
+  height: 25px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+[role=isolation-controls] {
+  right: 18px;
+  bottom: 54px;
+  height: 42px;
+  color: var(--active);
+}
+
+[role=status-bar] {
+  background: #191426;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 15px;
+  color: var(--muted);
+  font-size: 10px;
+  gap: 8px;
+}
+
+.nocturne-graph-dock {
+  background: #1B142B;
+  border: 1px solid var(--stroke);
+  border-radius: 18px;
+  padding: 10px;
+}
+
+[role=settings-dialog] {
+  background: #1F182E;
+  border: 2px solid #8060A5;
+  border-radius: 24px;
+  padding: 18px;
+  width: 82%;
+  height: 78%;
+  gap: 8px;
+}
+
+[role=settings-title] {
+  color: var(--active);
+  font-size: 20px;
+  font-weight: bold;
+}
+
+[role=settings-search] {
+  background: #100D1C;
+  border: 1px solid #6A548B;
+  border-radius: 12px;
+  padding: 7px 10px;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+[role=settings-categories] {
+  width: 194px;
+  padding: 0px;
+  gap: 6px;
+  color: var(--ink);
+}
+
+[role=settings-category] {
+  width: 100%;
+  height: 36px;
+  min-target-size: 36px;
+  padding: 7px 12px;
+  border: none;
+  border-radius: 18px;
+  background: #2F2240;
+  color: var(--muted);
+  text-align: left;
+  font-size: 11px;
+}
+
+[role=settings-category][state=selected] {
+  background: #493363;
+  color: var(--active);
+  border: 1px solid #8060A5;
+}
+
+[role=settings-category]:hover {
+  background: #3B2A50;
+  color: var(--ink);
+}
+
+[role=settings-scope], [role=settings-heading] {
+  color: var(--valid);
+  font-size: 12px;
+  font-weight: bold;
+}
+
+[role=settings-description], [role=settings-status] {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+[role=settings-content] {
+  gap: 9px;
+  font-size: 12px;
+}
+
+[role=settings-field] {
+  background: #302340;
+  border: 1px solid #6A548B;
+  border-radius: 9px;
+  padding: 6px 9px;
+  color: var(--ink);
+  font-size: 12px;
+  gap: 8px;
+}
+
+[role=settings-field-label] {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+[role=settings-action] {
+  height: 38px;
+  min-target-size: 38px;
+  padding: 7px 16px;
+  border-radius: 19px;
+  border: 1px solid #6A548B;
+  background: #332748;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+[role=settings-action].primary {
+  background: var(--valid);
+  color: #161C12;
+  border-color: #E4FFAE;
+}
+
+[role=settings-action]:hover {
+  background: #4C3868;
+  border-color: var(--active);
+}
+
+[role=settings-action].primary:hover {
+  background: #E4FFAE;
+}
+
+[role=settings-diagnostic][state=invalid] {
+  color: var(--error);
+  font-size: 12px;
+}
+
+.semantic-control:focus, .toolbar-control:focus, [role=command]:focus,
+[role=settings-action]:focus, [role=settings-category]:focus {
+  border: 2px solid var(--valid);
+}

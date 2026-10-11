@@ -13,6 +13,8 @@ pub struct State {
     applied_application: settings_preferences::Preferences,
     close_after_apply: bool,
     open_presentation_after_apply: bool,
+    theme_checkpoint: crate::theme_library::Snapshot,
+    theme_changed: bool,
 }
 
 pub fn open(w: &mut Workspace, category: Option<&str>) {
@@ -48,6 +50,8 @@ pub fn open(w: &mut Workspace, category: Option<&str>) {
         checkpoint: model_editable.then(|| w.session.clone()),
         close_after_apply: false,
         open_presentation_after_apply: false,
+        theme_checkpoint: crate::theme_library::capture(w),
+        theme_changed: false,
     });
 }
 
@@ -116,6 +120,66 @@ fn preview_application(w: &mut Workspace, preferences: &settings_preferences::Pr
     w.presentation_resources.watch = preferences.watch_presentation_files;
 }
 
+pub fn set_theme(w: &mut Workspace, identity: &str) -> Result<()> {
+    if w.settings.is_none() {
+        open(w, Some("application.themes"));
+    }
+    if w.settings.as_ref().is_some_and(|state| state.pending) {
+        return Err(CadError::Invalid(
+            "Wait for settings validation before changing themes".into(),
+        ));
+    }
+    crate::theme_library::select(w, identity)?;
+    mark_theme_changed(w);
+    Ok(())
+}
+
+/// Recover visible controls without committing or discarding a model settings draft.
+pub fn recover_presentation(w: &mut Workspace) {
+    if let Some(state) = &mut w.settings {
+        state.pending = false;
+        state.category = "application.themes".into();
+        state.search.clear();
+    }
+    match set_theme(w, "classic") {
+        Ok(()) => {
+            navigation::action(w, "navigation.reset", None);
+            w.view.roll = 0.;
+            w.status = "Classic presentation restored as a Settings preview".into();
+        }
+        Err(error) => fail(
+            w,
+            format!("Could not restore Classic presentation: {error}"),
+        ),
+    }
+}
+
+fn mark_theme_changed(w: &mut Workspace) {
+    if let Some(state) = &mut w.settings {
+        state.theme_changed = true;
+        state.diagnostic = Some(
+            "Theme preview active. Apply remembers it; Cancel restores the previous presentation."
+                .into(),
+        );
+        // Loading a presentation never takes ownership of the personal reload preference.
+        w.presentation_resources.watch = state.application.watch_presentation_files;
+    }
+}
+
+pub fn load_theme(w: &mut Workspace, path: std::path::PathBuf) -> Result<()> {
+    if w.settings.is_none() {
+        open(w, Some("application.themes"));
+    }
+    if w.settings.as_ref().is_some_and(|state| state.pending) {
+        return Err(CadError::Invalid(
+            "Wait for settings validation before loading a theme".into(),
+        ));
+    }
+    crate::theme_library::load(w, path)?;
+    mark_theme_changed(w);
+    Ok(())
+}
+
 pub fn apply(w: &mut Workspace, close: bool) {
     let Some(state) = w.settings.as_ref() else {
         return;
@@ -144,6 +208,17 @@ pub fn apply(w: &mut Workspace, close: bool) {
             return;
         }
     }
+    let theme_save = if w.settings.as_ref().is_some_and(|state| state.theme_changed) {
+        match crate::theme_library::prepare_selected(w) {
+            Ok(save) => Some(save),
+            Err(error) => {
+                fail(w, format!("Could not prepare the selected theme: {error}"));
+                return;
+            }
+        }
+    } else {
+        None
+    };
     // Persist before committing model source. A filesystem failure keeps both settings drafts open.
     if let Err(error) = settings_preferences::save(&preferences) {
         fail(
@@ -152,8 +227,27 @@ pub fn apply(w: &mut Workspace, close: bool) {
         );
         return;
     }
+    if let Some(save) = &theme_save
+        && let Err(error) = crate::theme_library::commit_selected(save)
+    {
+        let theme_rollback = crate::theme_library::rollback_selected(save);
+        let preference_rollback = settings_preferences::save(&w.application_preferences);
+        fail(
+            w,
+            format!(
+                "Could not save the selected theme: {error}{}{}",
+                rollback_message(theme_rollback),
+                rollback_message(preference_rollback)
+            ),
+        );
+        return;
+    }
     if model_changed && let Err(error) = w.session.apply() {
         let rollback = settings_preferences::save(&w.application_preferences);
+        let theme_rollback = theme_save
+            .as_ref()
+            .map(crate::theme_library::rollback_selected)
+            .transpose();
         fail(
             w,
             format!(
@@ -164,7 +258,13 @@ pub fn apply(w: &mut Workspace, close: bool) {
                     .unwrap_or_default()
             ),
         );
+        if let Err(error) = theme_rollback {
+            fail(w, format!("{}; theme rollback failed: {error}", w.status));
+        }
         return;
+    }
+    if let Some(save) = &theme_save {
+        crate::theme_library::finish_selected(w, save);
     }
     w.application_preferences = preferences.clone();
     preview_application(w, &preferences);
@@ -172,8 +272,11 @@ pub fn apply(w: &mut Workspace, close: bool) {
         w.requested = Some(w.session.identity());
         w.changed = std::time::Instant::now();
     }
+    let theme_checkpoint = crate::theme_library::capture(w);
     let state = w.settings.as_mut().unwrap();
     state.applied_application = preferences;
+    state.theme_changed = false;
+    state.theme_checkpoint = theme_checkpoint;
     if state.model_editable {
         state.checkpoint = Some(w.session.clone());
     }
@@ -204,6 +307,13 @@ fn fail(w: &mut Workspace, message: String) {
     }
 }
 
+fn rollback_message(result: Result<()>) -> String {
+    result
+        .err()
+        .map(|error| format!("; rollback failed: {error}"))
+        .unwrap_or_default()
+}
+
 pub fn poll(w: &mut Workspace) {
     if let Some(state) = &w.settings
         && state.pending
@@ -215,6 +325,9 @@ pub fn poll(w: &mut Workspace) {
 
 pub fn cancel(w: &mut Workspace) {
     if let Some(state) = w.settings.take() {
+        if state.theme_changed {
+            crate::theme_library::restore(w, state.theme_checkpoint);
+        }
         preview_application(w, &state.applied_application);
         if let Some(checkpoint) = state.checkpoint
             && w.session.draft.is_some()
@@ -274,6 +387,22 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
         "settings.apply" => apply(w, false),
         "settings.ok" => apply(w, true),
         "settings.cancel" => cancel(w),
+        "settings.theme-load" => {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_title("Load theme or presentation package")
+                .add_filter("Theme or package", &["css", "json"])
+                .pick_file()
+                && let Err(error) = load_theme(w, path)
+            {
+                fail(w, format!("Could not load theme: {error}"));
+            }
+        }
+        "settings.theme-export" => {
+            crate::presentation_resources::action(w, "presentation.export-package");
+            if let Some(message) = w.presentation_resources.diagnostic.clone() {
+                fail(w, message);
+            }
+        }
         "settings.presentation" => {
             if let Some(state) = &mut w.settings {
                 state.open_presentation_after_apply = true;

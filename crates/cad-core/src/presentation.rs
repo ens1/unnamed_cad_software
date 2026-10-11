@@ -1088,6 +1088,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("settings.ok", "Save Settings and Close"),
     ("settings.cancel", "Cancel Settings"),
     ("settings.presentation", "Customize Layout and Theme…"),
+    ("settings.theme-load", "Load Theme or Presentation Package…"),
+    ("settings.theme-export", "Export Current Theme…"),
     ("controls", "Navigation controls"),
     ("navigation.preferences", "Trackpad Navigation Preferences"),
     ("navigation.reset", "Reset Navigation Preferences"),

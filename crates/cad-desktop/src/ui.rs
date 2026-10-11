@@ -19,6 +19,8 @@ pub fn workspace_ui(
 ) -> bevy::prelude::Result {
     let ctx = contexts.ctx_mut()?;
     ctx.set_zoom_factor(w.view.ui_scale.clamp(0.75, 1.5));
+    let logical_size = ctx.content_rect().size();
+    w.presentation_resources.logical_size = [logical_size.x, logical_size.y];
     crate::navigation::begin_ui(&mut w, ctx);
     shortcuts(ctx, &mut w);
     crate::presentation_resources::poll(&mut w);
@@ -88,9 +90,24 @@ pub fn workspace_ui(
         image.texture,
     );
     let resize_regions = regions.clone();
-    for region in resize_regions.into_iter().filter(|r| r.resizable) {
+    let settings_open = w.settings.is_some();
+    let viewport_center = regions
+        .iter()
+        .find(|region| region.role == "model-viewport")
+        .map(|region| region.rect[0] + region.rect[2] * 0.5)
+        .unwrap_or(size.x * 0.5);
+    for region in resize_regions
+        .into_iter()
+        .filter(|r| r.resizable && !settings_open)
+    {
+        let right_dock = region.rect[0] + region.rect[2] * 0.5 > viewport_center;
+        let edge = if right_dock {
+            region.rect[0]
+        } else {
+            region.rect[0] + region.rect[2]
+        };
         let r = egui::Rect::from_min_size(
-            egui::pos2(region.rect[0] + region.rect[2] - 4., region.rect[1]),
+            egui::pos2(edge - 4., region.rect[1]),
             egui::vec2(8., region.rect[3]),
         );
         egui::Area::new(egui::Id::new(format!("resize/{}", region.id)))
@@ -102,22 +119,34 @@ pub fn workspace_ui(
                     .clone()
                     .on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
                 if response.dragged() {
-                    let delta = ui.input(|i| i.pointer.delta().x);
+                    let delta =
+                        ui.input(|i| i.pointer.delta().x) * if right_dock { -1. } else { 1. };
                     fn resize(
                         node: &mut cad_core::presentation::LayoutNode,
                         id: &str,
                         delta: f32,
+                        current_width: f32,
+                        editing: bool,
                     ) -> bool {
                         if node.id.as_deref() == Some(id) {
-                            node.width_logical_px =
-                                Some((node.width_logical_px.unwrap_or(360.) + delta).max(100.));
+                            let min = node.min_width_logical_px.unwrap_or(100.);
+                            let max = node.max_width_logical_px.unwrap_or(f32::MAX).max(min);
+                            let width = Some((current_width + delta).clamp(min, max));
+                            if editing && let Some(sizing) = &mut node.editing {
+                                sizing.width_logical_px = width;
+                            } else {
+                                node.width_logical_px = width;
+                            }
                             return true;
                         }
-                        node.children.iter_mut().any(|n| resize(n, id, delta))
+                        node.children
+                            .iter_mut()
+                            .any(|n| resize(n, id, delta, current_width, editing))
                     }
                     let active_layout = w.view.active_layout.clone();
+                    let editing = w.editing_manager();
                     if let Some(root) = w.layout.layouts.get_mut(&active_layout) {
-                        resize(root, &region.id, delta);
+                        resize(root, &region.id, delta, region.rect[2], editing);
                     }
                 }
             });
@@ -172,6 +201,18 @@ pub(crate) fn color(s: &str) -> Option<Color32> {
     }
 }
 fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
+    // Recovery stays reachable even when a user theme hides the Settings overlay.
+    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F9)) {
+        if w.settings.is_some() {
+            crate::settings::recover_presentation(w);
+        } else {
+            crate::presentation_resources::reset(w);
+            crate::navigation::action(w, "navigation.reset", None);
+            w.view.roll = 0.;
+            w.status = "Restored default presentation and navigation".into();
+        }
+        return;
+    }
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
         crate::settings::open(w, None);
     }
@@ -188,7 +229,6 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
     }
     let shortcuts = ctx.input(|i| {
         (
-            i.key_pressed(egui::Key::F9),
             i.key_pressed(egui::Key::Escape),
             i.key_pressed(egui::Key::Enter) && i.modifiers.command,
             i.key_pressed(egui::Key::S) && i.modifiers.command,
@@ -200,12 +240,6 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
         )
     });
     if shortcuts.0 {
-        crate::presentation_resources::reset(w);
-        crate::navigation::action(w, "navigation.reset", None);
-        w.view.roll = 0.;
-        w.status = "Restored default presentation and navigation".into();
-    }
-    if shortcuts.1 {
         crate::navigation::stop(w);
         let canceling_drag = w
             .sketch
@@ -233,19 +267,19 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
             w.cancel();
         }
     }
-    if shortcuts.2 {
+    if shortcuts.1 {
         w.confirm_tool();
     }
-    if shortcuts.3 {
+    if shortcuts.2 {
         save(w, false);
     }
-    if shortcuts.4 && !ctx.egui_wants_keyboard_input() {
+    if shortcuts.3 && !ctx.egui_wants_keyboard_input() {
         w.selection_popup = None;
         if w.sketch.is_some() {
             crate::sketch::undo_point(w);
         } else if w.tool_checkpoint.is_some() {
             w.cancel_tool();
-        } else if shortcuts.5 {
+        } else if shortcuts.4 {
             w.session.redo();
         } else {
             w.session.undo();
@@ -271,13 +305,13 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
             action(w, "sketch.delete-selection");
         }
     }
-    if shortcuts.6 {
+    if shortcuts.5 {
         w.open_editor("commands");
     }
-    if shortcuts.7 && !ctx.egui_wants_keyboard_input() {
-        viewport::fit(w, shortcuts.5);
+    if shortcuts.6 && !ctx.egui_wants_keyboard_input() {
+        viewport::fit(w, shortcuts.4);
     }
-    w.peek = shortcuts.8;
+    w.peek = shortcuts.7;
 }
 fn context(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::cad_ui::menu(ui, w);

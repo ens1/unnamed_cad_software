@@ -39,7 +39,12 @@ struct Stamp {
     modified: Option<SystemTime>,
 }
 
+#[derive(Clone)]
 pub struct State {
+    pub library: crate::theme_library::State,
+    /// Current complete workspace in logical UI pixels; the render target is
+    /// only one region and may use a different pixel density.
+    pub logical_size: [f32; 2],
     pub watch: bool,
     pub diagnostic: Option<String>,
     pub layout_path: Option<PathBuf>,
@@ -57,6 +62,8 @@ pub struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
+            library: crate::theme_library::State::default(),
+            logical_size: [1440., 900.],
             watch: true,
             diagnostic: None,
             layout_path: None,
@@ -78,8 +85,14 @@ impl Default for State {
 #[serde(deny_unknown_fields)]
 struct Package {
     schema_version: u32,
+    /// Legacy manifests are patches over the bundled presentation. Complete
+    /// exported packages opt out so reload preserves their exact cascade.
+    #[serde(default = "default_inherit_defaults")]
+    inherit_defaults: bool,
     #[serde(default)]
     name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    theme_library_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     extends: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,14 +103,20 @@ struct Package {
     active_layout: Option<String>,
 }
 
-struct Candidate {
-    layout: LayoutDocument,
-    theme: Theme,
-    layout_text: String,
-    theme_text: String,
-    active_layout: Option<String>,
-    layout_path: Option<PathBuf>,
-    theme_path: Option<PathBuf>,
+fn default_inherit_defaults() -> bool {
+    true
+}
+
+#[derive(Clone)]
+pub(crate) struct Candidate {
+    pub layout: LayoutDocument,
+    pub theme: Theme,
+    pub layout_text: String,
+    pub theme_text: String,
+    pub active_layout: Option<String>,
+    pub layout_path: Option<PathBuf>,
+    pub theme_path: Option<PathBuf>,
+    pub library_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -326,8 +345,16 @@ impl Reader {
                 "Unsupported presentation package version; expected 1",
             ));
         }
-        let mut layout = serde_json::to_value(default_layout())?;
-        let mut theme = default_theme();
+        let mut layout = if package.inherit_defaults {
+            serde_json::to_value(default_layout())?
+        } else {
+            serde_json::json!({"schema_version":1,"components":{},"layouts":{}})
+        };
+        let mut theme = if package.inherit_defaults {
+            default_theme()
+        } else {
+            Theme::default()
+        };
         let mut active_layout = None;
         for parent in &package.extends {
             let next = self.file(&relative_package_path(base, parent)?, Self::package)?;
@@ -367,6 +394,7 @@ impl Reader {
             active_layout,
             layout_path,
             theme_path,
+            library_id: package.theme_library_id,
         })
     }
 }
@@ -384,7 +412,7 @@ fn leading_comments(mut source: &str) -> Result<&str> {
     }
 }
 
-fn validate(w: &Workspace, candidate: &Candidate) -> Result<()> {
+pub(crate) fn validate(w: &Workspace, candidate: &Candidate) -> Result<()> {
     candidate.layout.validate()?;
     candidate.theme.validate()?;
     candidate.theme.validate_renderer_extensions(&[])?;
@@ -401,6 +429,15 @@ fn validate(w: &Workspace, candidate: &Candidate) -> Result<()> {
     let semantics = crate::presentation_composition::semantics(w);
     let expanded = candidate.layout.expand_semantics(&semantics)?;
     let mut controls = crate::cad_ui::semantics(w);
+    let mut settings_controls = crate::settings_ui::semantics(w);
+    for element in &mut settings_controls {
+        if element.role == "settings-field" {
+            element.data["classes"] = serde_json::json!(["semantic-control"]);
+        } else if element.id == "command:settings.ok" {
+            element.data["classes"] = serde_json::json!(["primary"]);
+        }
+    }
+    controls.extend(settings_controls.iter().cloned());
     controls.extend(
         self::semantics(w)
             .into_iter()
@@ -414,8 +451,8 @@ fn validate(w: &Workspace, candidate: &Candidate) -> Result<()> {
         .into_iter()
         .map(|element| (element.id.clone(), element))
         .collect();
-    let width = (w.viewport_size[0] as f32).max(1.);
-    let height = (w.viewport_size[1] as f32).max(1.);
+    let width = w.presentation_resources.logical_size[0].max(1.);
+    let height = w.presentation_resources.logical_size[1].max(1.);
     let mut checked = 0_usize;
     let mut check = |target: &cad_core::presentation::StyleTarget| -> Result<()> {
         checked += 1;
@@ -428,6 +465,31 @@ fn validate(w: &Workspace, candidate: &Candidate) -> Result<()> {
         Ok(())
     };
     for name in expanded.layouts.keys() {
+        // Native settings is an overlay over the workspace rather than a
+        // viewport region. Check its actual ancestor chain independently of
+        // whether a custom layout additionally binds the same fields.
+        let workspace_target = cad_core::presentation::Region {
+            id: "workspace".into(),
+            role: "workspace".into(),
+            component: None,
+            rect: [0.; 4],
+            classes: vec![],
+            resizable: false,
+        }
+        .style_target(name, "ready");
+        let dialog_target = workspace_target.child(
+            "settings:dialog",
+            "settings-dialog",
+            &["settings-surface".into()],
+            "open",
+        );
+        check(&dialog_target)?;
+        for element in settings_controls
+            .iter()
+            .filter(|element| element.role != "settings-dialog")
+        {
+            check_control(&dialog_target, element, &controls, 0, &mut check)?;
+        }
         for editing in [false, true] {
             let regions = expanded
                 .regions_presented(name, width, height, editing, &candidate.theme)
@@ -549,7 +611,7 @@ fn project_target(w: &Workspace) -> Option<PathBuf> {
     w.project.as_ref().map(|_| w.root())
 }
 
-fn personal_directory() -> PathBuf {
+pub(crate) fn personal_directory() -> PathBuf {
     crate::recovery_directory()
         .parent()
         .unwrap_or(Path::new("."))
@@ -589,6 +651,15 @@ fn source_candidate(w: &Workspace, reader: &mut Reader) -> Result<Candidate> {
         active_layout: None,
         layout_path,
         theme_path,
+        library_id: Some(
+            if w.layout_text == w.presentation_resources.applied_layout
+                && w.theme_text == w.presentation_resources.applied_theme
+            {
+                w.presentation_resources.library.selected.clone()
+            } else {
+                "custom".into()
+            },
+        ),
     })
 }
 
@@ -652,8 +723,12 @@ fn load_files(
             active_layout: None,
             layout_path: None,
             theme_path: None,
+            library_id: None,
         }
     };
+    if layout_path.is_some() || theme_path.is_some() {
+        candidate.library_id = None;
+    }
     if let Some(path) = &layout_path {
         candidate.layout = serde_json::from_value(reader.file(path, Reader::layout)?)?;
         candidate.layout_text = reader
@@ -702,6 +777,15 @@ fn install(w: &mut Workspace, candidate: Candidate, paths: BTreeSet<PathBuf>) {
     w.layout_text = candidate.layout_text;
     w.theme_text = candidate.theme_text;
     let resources = &mut w.presentation_resources;
+    resources.library.selected = candidate.library_id.unwrap_or_else(|| {
+        if serde_json::to_value(&w.layout).ok() == serde_json::to_value(default_layout()).ok()
+            && serde_json::to_value(&w.theme).ok() == serde_json::to_value(default_theme()).ok()
+        {
+            "classic".into()
+        } else {
+            "custom".into()
+        }
+    });
     resources.layout_path = candidate.layout_path;
     resources.theme_path = candidate.theme_path;
     resources.applied_layout.clone_from(&w.layout_text);
@@ -757,6 +841,7 @@ fn reload(w: &mut Workspace, target: Target) {
 }
 
 pub fn initialize(w: &mut Workspace, recovery: bool) {
+    crate::theme_library::refresh(w);
     w.presentation_resources.project_root = project_target(w);
     w.presentation_resources
         .applied_layout
@@ -789,7 +874,7 @@ pub fn poll(w: &mut Workspace) {
     }
     w.presentation_resources.polled = now;
     let project = project_target(w);
-    if project != w.presentation_resources.project_root {
+    if project != w.presentation_resources.project_root && w.settings.is_none() {
         w.presentation_resources.project_root = project.clone();
         reload(w, project.map(Target::Project).unwrap_or(Target::Personal));
         return;
@@ -834,6 +919,7 @@ pub fn reset(w: &mut Workspace) {
         active_layout: Some("instrument-rail".into()),
         layout_path: None,
         theme_path: None,
+        library_id: Some("classic".into()),
     };
     install(w, candidate, BTreeSet::new());
     w.presentation_resources.target = None;
@@ -904,12 +990,19 @@ pub fn save_project(w: &mut Workspace) {
 }
 
 fn export_candidate(candidate: &Candidate, directory: &Path, name: &str) -> Result<()> {
+    let manifest = prepare_export(candidate, directory, name)?;
+    atomic_write(&directory.join("presentation.json"), &manifest)
+}
+
+fn prepare_export(candidate: &Candidate, directory: &Path, name: &str) -> Result<Vec<u8>> {
     let revision = cad_core::id();
     let layout_name = format!("layout-{revision}.json");
     let theme_name = format!("theme-{revision}.json");
     let package = Package {
         schema_version: 1,
+        inherit_defaults: false,
         name: name.into(),
+        theme_library_id: candidate.library_id.clone(),
         layout: Some(layout_name.clone()),
         theme: Some(theme_name.clone()),
         active_layout: candidate.active_layout.clone(),
@@ -925,10 +1018,163 @@ fn export_candidate(candidate: &Candidate, directory: &Path, name: &str) -> Resu
         &directory.join(theme_name),
         &serde_json::to_vec_pretty(&candidate.theme)?,
     )?;
-    atomic_write(
-        &directory.join("presentation.json"),
-        &serde_json::to_vec_pretty(&package)?,
-    )
+    Ok(serde_json::to_vec_pretty(&package)?)
+}
+
+/// Read a package or a standalone CSS/JSON theme using the same bounded,
+/// inheritance-aware loader as the presentation source editor.
+pub(crate) fn read_library_source(w: &Workspace, path: &Path) -> Result<(Candidate, String)> {
+    let mut reader = Reader::default();
+    let mut name = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("Imported theme")
+        .to_owned();
+    let candidate = reader.file(path, |reader, source, base| {
+        let is_json = source.trim_start().starts_with('{');
+        let package = if is_json {
+            let value: Value = serde_json::from_str(source)?;
+            if value.get("layouts").is_some() {
+                return Err(invalid("Load a presentation manifest that references this layout, or a CSS/JSON theme file"));
+            }
+            value.get("rules").is_none()
+                && value.get("variables").is_none()
+                && [
+                    "layout",
+                    "theme",
+                    "active_layout",
+                    "name",
+                    "inherit_defaults",
+                    "theme_library_id",
+                ]
+                .iter()
+                .any(|key| value.get(*key).is_some())
+        } else {
+            false
+        };
+        if package {
+            let metadata: Package = serde_json::from_str(source)?;
+            if !metadata.name.trim().is_empty() {
+                name = metadata.name;
+            }
+            reader.package(source, base)
+        } else {
+            let theme = reader.theme(source, base)?;
+            Ok(Candidate {
+                layout: w.layout.clone(),
+                layout_text: serde_json::to_string_pretty(&w.layout)?,
+                theme_text: serde_json::to_string_pretty(&theme)?,
+                theme,
+                active_layout: Some(w.view.active_layout.clone()),
+                layout_path: None,
+                theme_path: Some(path.to_owned()),
+                library_id: None,
+            })
+        }
+    })?;
+    validate(w, &candidate)?;
+    reader.verify_stable()?;
+    Ok((candidate, name.chars().take(160).collect()))
+}
+
+pub(crate) fn export_library(candidate: &Candidate, directory: &Path, name: &str) -> Result<()> {
+    export_candidate(candidate, directory, name)
+}
+
+pub(crate) fn install_library(w: &mut Workspace, candidate: Candidate, package: Option<PathBuf>) {
+    let watch = w.presentation_resources.watch;
+    let paths = package
+        .iter()
+        .cloned()
+        .chain(candidate.layout_path.iter().cloned())
+        .chain(candidate.theme_path.iter().cloned())
+        .collect();
+    install(w, candidate, paths);
+    w.presentation_resources.target = package.clone().map(Target::Package);
+    w.presentation_resources.package_path = package;
+    w.presentation_resources.watch = watch;
+}
+
+#[derive(Clone)]
+pub(crate) struct PendingPersonal {
+    manifest: PathBuf,
+    previous: Option<Vec<u8>>,
+    next: Vec<u8>,
+    candidate: Candidate,
+    paths: BTreeSet<PathBuf>,
+}
+
+fn installed_candidate(w: &Workspace) -> Result<Candidate> {
+    Ok(Candidate {
+        layout: w.layout.clone(),
+        theme: w.theme.clone(),
+        layout_text: serde_json::to_string_pretty(&w.layout)?,
+        theme_text: serde_json::to_string_pretty(&w.theme)?,
+        active_layout: Some(w.view.active_layout.clone()),
+        layout_path: None,
+        theme_path: None,
+        library_id: Some(w.presentation_resources.library.selected.clone()),
+    })
+}
+
+pub(crate) fn prepare_personal(w: &Workspace) -> Result<PendingPersonal> {
+    let mut candidate = installed_candidate(w)?;
+    validate(w, &candidate)?;
+    let directory = personal_directory();
+    let manifest = directory.join("presentation.json");
+    let previous = match std::fs::File::open(&manifest) {
+        Ok(file) => {
+            let mut bytes = Vec::new();
+            file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes)?;
+            if bytes.len() as u64 > MAX_FILE_BYTES {
+                return Err(invalid(
+                    "Existing personal presentation manifest exceeds 4 MiB",
+                ));
+            }
+            Some(bytes)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let next = prepare_export(&candidate, &directory, "Personal TCAD presentation")?;
+    let package: Package = serde_json::from_slice(&next)?;
+    candidate.layout_path = package.layout.map(|name| directory.join(name));
+    candidate.theme_path = package.theme.map(|name| directory.join(name));
+    let paths = std::iter::once(manifest.clone())
+        .chain(candidate.layout_path.iter().cloned())
+        .chain(candidate.theme_path.iter().cloned())
+        .collect();
+    Ok(PendingPersonal {
+        manifest,
+        previous,
+        next,
+        candidate,
+        paths,
+    })
+}
+
+pub(crate) fn commit_personal(pending: &PendingPersonal) -> Result<()> {
+    atomic_write(&pending.manifest, &pending.next)
+}
+
+pub(crate) fn rollback_personal(pending: &PendingPersonal) -> Result<()> {
+    if let Some(previous) = &pending.previous {
+        atomic_write(&pending.manifest, previous)
+    } else {
+        match std::fs::remove_file(&pending.manifest) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+pub(crate) fn finish_personal(w: &mut Workspace, pending: &PendingPersonal) {
+    let watch = w.presentation_resources.watch;
+    install(w, pending.candidate.clone(), pending.paths.clone());
+    w.presentation_resources.target = Some(Target::Personal);
+    w.presentation_resources.package_path = Some(pending.manifest.clone());
+    w.presentation_resources.watch = watch;
 }
 
 fn import_source(w: &mut Workspace, path: PathBuf, theme: bool) {
@@ -985,6 +1231,7 @@ fn import_source(w: &mut Workspace, path: PathBuf, theme: bool) {
             active_layout: None,
             layout_path,
             theme_path,
+            library_id: None,
         };
         validate(w, &candidate)?;
         reader.verify_stable()?;
@@ -1015,6 +1262,20 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
         "presentation.reset" => reset(w),
         "presentation.save-project" => save_project(w),
         "presentation.save-personal" => {
+            if w.layout_text == w.presentation_resources.applied_layout
+                && w.theme_text == w.presentation_resources.applied_theme
+            {
+                match crate::theme_library::persist_selected(w) {
+                    Ok(()) => {
+                        w.presentation_resources.watch = true;
+                        w.status =
+                            "Saved personal presentation default; CAD project source unchanged"
+                                .into();
+                    }
+                    Err(error) => report(w, error),
+                }
+                return true;
+            }
             let mut reader = Reader::default();
             let result = source_candidate(w, &mut reader).and_then(|mut candidate| {
                 validate(w, &candidate)?;
@@ -1089,7 +1350,12 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
                 .pick_folder()
             {
                 let mut reader = Reader::default();
-                let result = source_candidate(w, &mut reader).and_then(|mut candidate| {
+                let candidate = if w.settings.is_some() {
+                    installed_candidate(w)
+                } else {
+                    source_candidate(w, &mut reader)
+                };
+                let result = candidate.and_then(|mut candidate| {
                     validate(w, &candidate)?;
                     reader.verify_stable()?;
                     candidate.active_layout = Some(w.view.active_layout.clone());
@@ -1101,6 +1367,7 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
                 });
                 match result {
                     Ok(()) => {
+                        w.presentation_resources.diagnostic = None;
                         w.status = format!(
                             "Exported portable presentation package to {}",
                             directory.join("tcad-presentation").display()

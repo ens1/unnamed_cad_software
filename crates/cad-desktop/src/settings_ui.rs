@@ -11,6 +11,7 @@ const CATEGORIES: &[(&str, &str, &str)] = &[
     ("model.geometry", "Geometry and parts", "Model"),
     ("model.lighting", "Lighting", "Model"),
     ("application.interface", "Interface", "Application"),
+    ("application.themes", "Themes", "Application"),
     (
         "application.navigation",
         "Trackpad and navigation",
@@ -30,6 +31,7 @@ fn source(w: &Workspace, scope: &str) -> Result<Value> {
                 .map(|state| &state.application)
                 .unwrap_or(&w.application_preferences),
         )?),
+        "presentation" => Ok(json!({"theme":crate::theme_library::selected(w)})),
         "dialog" => Ok(json!({
             "search":w.settings.as_ref().map(|state|state.search.as_str()).unwrap_or("")
         })),
@@ -62,7 +64,8 @@ fn field(w: &Workspace, spec: FieldSpec<'_>) -> SemanticElement {
         .and_then(|source| source.pointer(spec.pointer).cloned())
         .unwrap_or_default();
     let pending = w.settings.as_ref().is_some_and(|state| state.pending);
-    let editable = !pending && (spec.scope == "application" || model_editable(w));
+    let editable =
+        !pending && (matches!(spec.scope, "application" | "presentation") || model_editable(w));
     SemanticElement {
         id: format!(
             "settings:field:{}:{}",
@@ -94,8 +97,8 @@ fn field(w: &Workspace, spec: FieldSpec<'_>) -> SemanticElement {
             "minimum":spec.range.map(|range|range[0]), "maximum":spec.range.map(|range|range[1]),
             "kind":if spec.choices.as_array().is_some_and(|choices|!choices.is_empty()) {"choice"} else if value.is_boolean() {"boolean"} else if value.is_number() {"number"} else {"text"},
             "accessibility_label":spec.label,
-            "model_mutation":spec.scope != "application",
-            "contract":match spec.scope {"application"=>"tcad.application-preferences", "lighting"=>"tcad.appearance", _=>"tcad.model-settings"},
+            "model_mutation":!matches!(spec.scope,"application"|"presentation"),
+            "contract":match spec.scope {"application"=>"tcad.application-preferences", "lighting"=>"tcad.appearance", "presentation"=>"tcad.presentation.theme-library", _=>"tcad.model-settings"},
             "version":1
         }),
     }
@@ -204,6 +207,22 @@ fn model_fields(w: &Workspace, application_defaults: bool) -> Vec<SemanticElemen
 
 fn fields(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = model_fields(w, false);
+    let choices = crate::theme_library::choices(w)
+        .into_iter()
+        .map(|choice| json!({"value":choice.id,"label":choice.name}))
+        .collect::<Vec<_>>();
+    elements.push(field(
+        w,
+        FieldSpec {
+            category: "application.themes",
+            scope: "presentation",
+            pointer: "/theme",
+            label: "Theme and layout",
+            range: None,
+            choices: json!(choices),
+            unit: None,
+        },
+    ));
     elements.extend(model_fields(w, true));
     for (pointer, label, range, unit) in [
         (
@@ -371,7 +390,7 @@ pub fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
             "Wait for the current settings validation".into(),
         ));
     }
-    if scope != "application" && !model_editable(w) {
+    if !matches!(scope, "application" | "presentation") && !model_editable(w) {
         return Err(CadError::Invalid(
             "Apply or cancel the active modeling operation before changing model settings".into(),
         ));
@@ -384,6 +403,13 @@ pub fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
         "model" => settings::set_model(w, serde_json::from_value::<ModelSettings>(candidate)?),
         "lighting" => settings::set_lighting(w, serde_json::from_value(candidate)?),
         "application" => settings::set_application(w, serde_json::from_value(candidate)?),
+        "presentation" => settings::set_theme(
+            w,
+            candidate
+                .get("theme")
+                .and_then(Value::as_str)
+                .ok_or_else(|| CadError::Invalid("Expected a theme identity".into()))?,
+        ),
         _ => Err(CadError::Invalid("Unknown settings scope".into())),
     }
 }
@@ -548,7 +574,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "settings.cancel".into(),
         ],
         relationships: vec![],
-        data: json!({"contract":"tcad.settings-presentation","version":1,"modal":true,"model_editable":model_editable(w),"pending":pending,"category":w.settings.as_ref().map(|state|&state.category),"search":w.settings.as_ref().map(|state|&state.search),"diagnostic":w.settings.as_ref().and_then(|state|state.diagnostic.as_ref()),"scopes":["model","application"]}),
+        data: json!({"contract":"tcad.settings-presentation","version":1,"modal":true,"model_editable":model_editable(w),"pending":pending,"category":w.settings.as_ref().map(|state|&state.category),"search":w.settings.as_ref().map(|state|&state.search),"diagnostic":w.settings.as_ref().and_then(|state|state.diagnostic.as_ref()),"scopes":["model","application","presentation"]}),
     }];
     let search = w
         .settings
@@ -583,6 +609,8 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ("settings.ok", "OK"),
         ("settings.cancel", "Cancel"),
         ("settings.presentation", "Layout and theme…"),
+        ("settings.theme-load", "Load theme…"),
+        ("settings.theme-export", "Export theme…"),
     ] {
         let available = w.settings.is_some() && (command == "settings.cancel" || !pending);
         elements.push(SemanticElement {
@@ -608,6 +636,9 @@ fn category_description(category: &str) -> &'static str {
         }
         "application.interface" => {
             "Saved for this user across projects. Layout and theme files give independent control over composition, density, and styling."
+        }
+        "application.themes" => {
+            "Choose a complete layout and theme, or load a CSS / JSON style or presentation package. Changes preview immediately. Apply saves your default; Cancel restores the previous presentation."
         }
         "application.navigation" => {
             "Saved for this user across projects. Sensitivity and gesture directions preview immediately. Cancel restores the starting preferences."
@@ -781,6 +812,17 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                     }
                                     if *id == "application.interface" && controls::button(ui,"command:settings.presentation","settings-action",&[],"Layout and theme…",!pending,false).clicked() {
                                         settings::action(w,"settings.presentation");
+                                    }
+                                    if *id == "application.themes" {
+                                        let selected = crate::theme_library::selected(w);
+                                        if let Some(choice) = crate::theme_library::choices(w).into_iter().find(|choice|choice.id == selected) {
+                                            controls::label(ui,"settings:theme-description","settings-description",&[],&choice.description,"ready");
+                                        }
+                                        ui.horizontal_wrapped(|ui| {
+                                            for (command,label) in [("settings.theme-load","Load theme…"),("settings.theme-export","Export theme…"),("settings.presentation","Edit layout and style…")] {
+                                                if controls::button(ui,&format!("command:{command}"),"settings-action",&[],label,!pending,false).clicked() {settings::action(w,command);}
+                                            }
+                                        });
                                     }
                                     ui.add_space(8.);
                                 }

@@ -8,7 +8,7 @@ Open **Settings…** from **Edit** or **Tools**, or press **Cmd+,** on macOS
 (**Ctrl+,** on other platforms). The compact, resizable dialog groups searchable
 preferences under **Model** and **Application**. Model categories are **Units and
 precision**, **Geometry and parts**, and **Lighting**. Application categories are
-**Interface**, **Trackpad and navigation**, **Recovery**, and **New model defaults**.
+**Interface**, **Themes**, **Trackpad and navigation**, **Recovery**, and **New model defaults**.
 
 Current-model settings include the displayed length unit, length and angle
 decimal places, evaluation tolerance in millimetres, and the default visual finish
@@ -24,6 +24,24 @@ files, recovery snapshot enablement and interval, and defaults for new models.
 Application defaults use built-in finishes so they do not create unresolved
 references to another project's texture resources. Layout and CSS-like theme
 resources remain independent presentation files.
+
+**Application → Themes** provides a picker for **Classic · Orange**,
+**Nocturne · Violet**, and imported packages. Picking a theme previews its whole
+layout and styling immediately. **Load theme…** accepts a presentation manifest,
+CSS stylesheet, or JSON theme; a stylesheet keeps the current layout. Imported
+themes are copied into the personal library with their local dependencies so
+they remain available after their source files move. **Export theme…** writes a
+portable package of the current layout and styling. **Edit layout/style…** applies
+Settings before opening the presentation source editor.
+
+**Apply** remembers the selected presentation as the personal default, with
+project-specific presentation resources still taking precedence. **Cancel**
+restores the previous layout, stylesheet, active composition, and reload sources;
+imported library entries remain available. Theme changes preserve the document,
+modeling draft, selection, camera, and undo history. **F9** recovers Classic even
+inside a hidden or heavily customized Settings dialog; there it remains an
+unapplied preview. [Nocturne](theme-example.md) demonstrates a right inspector,
+bottom tool dock, circular and pill buttons, larger targets, and a dark palette.
 
 Interface scale, navigation and external reload changes preview immediately.
 **Apply** saves personal preferences and commits model changes together only
@@ -44,6 +62,9 @@ setters available to user-defined compositions. Theme selectors for
 and `settings-action` control the presentation; dialog `width` and `height` and
 category-panel `width` are also user-styleable. Model values and personal
 preferences contain no colors, positioning or widget implementation details.
+The theme picker uses `settings:field:presentation:theme`; its choices and
+`settings.theme-load` / `settings.theme-export` actions share the same contract
+with custom compositions.
 
 The desktop application preference adapter writes version 1 JSON to
 `settings.json` beside the existing personal `recovery/` directory. On macOS this
