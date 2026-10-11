@@ -708,3 +708,19 @@ automatic retargeting remain work. See [feature order](feature-order.md).
 Backend fingerprint is
 `monstertruck/0.4.1+fc2306852a46;adapter/29;solver/tcad-native-lm/13`.
 The Monstertruck dependency revision and native source schema are unchanged.
+
+Final source review canonicalized persisted free Path/Slot/Cam seeds into the
+existing 0..1 source domain: closed curves use modulo 1 and open curves use the
+same clamped contact domain as mate equations. Nonfinite parameters or missing
+native carriers remain errors. This preserves evaluated contact at curve seams
+and travel ends while keeping accepted definitions valid.
+
+After that correction, workspace formatting checks, locked library/binary
+compilation and strict workspace Clippy (`-D warnings`) passed, as did diff
+checks. `scripts/package-macos.sh` rebuilt `dist/TCAD.app`, validated its plist
+and verified its nested and whole-bundle signatures. Executables remain distinct
+as `TCAD`, `tcad-worker` and `tcad-cli`. The existing `proc-macro-error2 2.0.1`
+future-compatibility notice remains. No tests, probes, app/CLI modeling launches
+or manual/UI acceptance checks were run. Interactive acceptance remains with
+the user. The implementation checkpoint and follow-up correction are committed
+and pushed to the private canonical origin.

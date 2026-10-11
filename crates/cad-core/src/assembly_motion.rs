@@ -130,6 +130,29 @@ pub struct Outcome {
     pub rotation_error_deg: Option<f64>,
 }
 
+fn source_parameter(
+    parameter: f64,
+    pair: Option<&[crate::assembly_geometry::Frame; 2]>,
+) -> Result<f64> {
+    if !parameter.is_finite() {
+        return Err(CadError::Invalid(
+            "The solved movement path parameter is non-finite".into(),
+        ));
+    }
+    let curve = pair
+        .and_then(|pair| pair[0].curve.as_deref())
+        .ok_or_else(|| {
+            CadError::Invalid("The solved movement path carrier is unavailable".into())
+        })?;
+    // These are the same carrier-domain mappings used by mate equations.
+    // The source seed stays within its schema without changing evaluated contact.
+    Ok(if curve.closed() {
+        parameter.rem_euclid(1.)
+    } else {
+        parameter.clamp(0., 1.)
+    })
+}
+
 pub fn solve(
     doc: &Document,
     evaluated: &BTreeMap<Id, EvaluatedAssembly>,
@@ -218,7 +241,7 @@ pub fn solve(
                     _ => None,
                 })
         {
-            *seed = parameter;
+            *seed = source_parameter(parameter, current.frames.get(&mate.id))?;
         }
     }
     let solution = NativeSolver.manipulate_assembly(
@@ -248,8 +271,12 @@ pub fn solve(
     let curve_parameters = solution
         .diagnostics
         .iter()
-        .filter_map(|(id, d)| d.curve_parameter.map(|value| (id.clone(), value)))
-        .collect();
+        .filter_map(|(id, d)| {
+            d.curve_parameter.map(|value| {
+                source_parameter(value, current.frames.get(id)).map(|value| (id.clone(), value))
+            })
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
     Ok(Outcome {
         version: CONTRACT_VERSION,
         assembly: intent.assembly.clone(),
