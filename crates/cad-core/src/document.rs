@@ -1160,6 +1160,8 @@ pub struct Document {
         skip_serializing_if = "crate::appearance::is_default_lighting"
     )]
     pub lighting: crate::appearance::Lighting,
+    #[serde(default, skip_serializing_if = "crate::settings::is_default_settings")]
+    pub settings: crate::settings::ModelSettings,
     #[serde(default)]
     pub resources: BTreeMap<Id, Resource>,
     #[serde(default)]
@@ -1197,6 +1199,7 @@ impl Document {
         )
     }
     pub fn validate(&self) -> Result<()> {
+        self.settings.validate(self)?;
         crate::appearance::validate(self)?;
         crate::exploded_views::validate(self)?;
         crate::assembly_inspection::validate(self)?;
@@ -1626,6 +1629,7 @@ impl Document {
             materials,
             finishes: crate::appearance::default_finishes(),
             lighting: crate::appearance::Lighting::default(),
+            settings: crate::settings::ModelSettings::default(),
             resources: BTreeMap::new(),
             drawings: vec![],
             comments: vec![],
@@ -1634,13 +1638,25 @@ impl Document {
             active_configurations: BTreeMap::new(),
         }
     }
+    /// Create a part with this model's finish preference, without inserting an occurrence.
+    pub fn new_part(&self, name: &str) -> Part {
+        let mut part = Part::new(name);
+        if self
+            .finishes
+            .contains_key(&self.settings.default_new_part_finish)
+        {
+            part.finish = self.settings.default_new_part_finish.clone();
+        }
+        part
+    }
+
     /// A new part document has only an empty definition at the origin.
     pub fn blank_part(name: &str) -> Self {
         let mut document = Self::empty(name);
         document
             .properties
             .insert("document_kind".into(), "part".into());
-        let part = Part::new(name);
+        let part = document.new_part(name);
         let instance = Instance {
             id: id(),
             name: name.into(),

@@ -238,6 +238,57 @@
       "properties": {
         "font-size": "9px"
       }
+    },
+    {
+      "selector": "[role=settings-dialog]",
+      "properties": {
+        "background": "var(--panel)",
+        "padding": "10px",
+        "border": "1px solid #A9ACAF",
+        "border-radius": "6px",
+        "gap": "6px"
+      }
+    },
+    {
+      "selector": "[role=settings-title]",
+      "properties": {
+        "font-size": "14px",
+        "font-weight": "bold"
+      }
+    },
+    {
+      "selector": "[role=settings-scope], [role=settings-heading]",
+      "properties": {
+        "font-weight": "bold",
+        "font-size": "11px"
+      }
+    },
+    {
+      "selector": "[role=settings-category]",
+      "properties": {
+        "height": "24px",
+        "padding": "3px 6px",
+        "border-radius": "3px"
+      }
+    },
+    {
+      "selector": "[role=settings-category][state=selected], [role=settings-action].primary",
+      "properties": {
+        "background": "var(--active)",
+        "color": "#191919"
+      }
+    },
+    {
+      "selector": "[role=settings-description]",
+      "properties": {
+        "font-size": "10px"
+      }
+    },
+    {
+      "selector": "[role=settings-diagnostic][state=invalid]",
+      "properties": {
+        "color": "var(--error)"
+      }
     }
   ]
 }

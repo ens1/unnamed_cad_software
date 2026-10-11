@@ -382,6 +382,9 @@ pub fn delete_reason(doc: &Document, id: &str) -> Option<&'static str> {
     if id == DEFAULT_FINISH {
         return Some("The default clear anodized aluminum finish is required for new parts");
     }
+    if id == doc.settings.default_new_part_finish {
+        return Some("Choose another default new-part finish in model settings before deleting it");
+    }
     if doc.parts.values().any(|p| p.finish == id)
         || doc.assemblies.values().any(|a| {
             a.instances

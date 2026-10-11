@@ -480,6 +480,10 @@ fn acquire(w: &mut Workspace, response: &egui::Response, mode: Mode, pointer_dra
     });
 }
 pub fn navigate(w: &mut Workspace, ctx: &egui::Context, response: &egui::Response) -> bool {
+    if w.settings.is_some() {
+        stop(w);
+        return false;
+    }
     if w.navigation_input.handled {
         return false;
     }
@@ -635,44 +639,7 @@ pub fn navigate(w: &mut Workspace, ctx: &egui::Context, response: &egui::Respons
     }
     changed
 }
-fn preferences_path() -> PathBuf {
-    recovery_directory()
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("navigation.json")
-}
-pub fn load_preferences(view: &mut PresentationState, status: &mut String, reset: bool) {
-    if reset {
-        view.navigation = Preferences::default();
-        view.roll = 0.;
-    } else {
-        match std::fs::read(preferences_path()) {
-            Ok(bytes) if bytes.len() <= 32768 => {
-                match serde_json::from_slice::<Preferences>(&bytes)
-                    .map_err(|e| e.to_string())
-                    .and_then(|p| p.validate().map(|()| p).map_err(|e| e.to_string()))
-                {
-                    Ok(p) => view.navigation = p,
-                    Err(e) => {
-                        view.navigation = Preferences::default();
-                        *status = format!("Navigation preferences reset: {e}");
-                    }
-                }
-            }
-            Ok(_) => {
-                view.navigation = Preferences::default();
-                *status = "Navigation preferences exceeded 32 KiB; defaults restored".into();
-            }
-            Err(_) => {
-                if view.navigation.validate().is_err() {
-                    view.navigation = Preferences::default();
-                }
-            }
-        }
-    }
-    sanitize(view);
-}
-fn sanitize(view: &mut PresentationState) {
+pub fn sanitize(view: &mut PresentationState) {
     if !view.roll.is_finite() {
         view.roll = 0.;
     }
@@ -701,16 +668,7 @@ fn sanitize(view: &mut PresentationState) {
     }
 }
 fn save(w: &mut Workspace) {
-    let result = (|| -> cad_core::Result<()> {
-        w.view.navigation.validate()?;
-        cad_core::persistence::atomic_write(
-            &preferences_path(),
-            &serde_json::to_vec_pretty(&w.view.navigation)?,
-        )
-    })();
-    if let Err(e) = result {
-        w.status = format!("Could not save navigation preferences: {e}");
-    }
+    crate::settings::save_live_application(w);
 }
 pub fn set(w: &mut Workspace, pointer: &str, value: serde_json::Value) {
     match w.view.navigation.set(pointer, value) {
@@ -735,7 +693,7 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>
         return false;
     }
     if command == "navigation.preferences" {
-        w.open_editor("controls");
+        crate::settings::open(w, Some("application.navigation"));
         return true;
     }
     if command == "navigation.set" {
@@ -794,62 +752,6 @@ pub fn hint(w: &Workspace) -> String {
     format!(
         "{profile} · Pinch / Ctrl or ⌘ scroll: zoom · F: fit · Shift+F: fit selection · Controls: navigation preferences"
     )
-}
-pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
-    ui.strong("Trackpad Navigation");
-    ui.label(hint(w));
-    ui.label("Orbit crosses both poles. Pinch zooms at the gesture's starting cursor. A gesture keeps its initial action and viewport until it ends. Click, Esc, a sketch gesture, or lost focus stops navigation.");
-    ui.small("macOS supplies native pinch, rotation, and smart zoom. Other platforms depend on the events supplied by the device. Touchscreen camera gestures are currently unsupported. TCAD adds no inertia; scroll tails and finger phases can be merged by the operating system.");
-    for (field, label) in cad_core::navigation::FIELDS {
-        let descriptor = cad_core::navigation::semantic_fields(&w.view.navigation)
-            .into_iter()
-            .find(|e| e.id == format!("view:navigation:{field}"));
-        if let Some(element) = descriptor {
-            semantic_control(ui, w, &element);
-        } else {
-            ui.label(*label);
-        }
-    }
-    ui.horizontal_wrapped(|ui| {
-        for (name, command) in [
-            ("Upright", "navigation.upright"),
-            ("Fit all", "navigation.fit-all"),
-            ("Fit selection", "navigation.fit-selection"),
-            ("Stop", "navigation.stop"),
-            ("Reset preferences", "navigation.reset"),
-        ] {
-            if ui.button(name).clicked() {
-                action(w, command, None);
-            }
-        }
-    });
-    ui.horizontal_wrapped(|ui| {
-        for (name, command) in [
-            ("Orbit ←", "navigation.orbit-left"),
-            ("Orbit →", "navigation.orbit-right"),
-            ("Orbit ↑", "navigation.orbit-up"),
-            ("Orbit ↓", "navigation.orbit-down"),
-            ("Zoom +", "navigation.zoom-in"),
-            ("Zoom −", "navigation.zoom-out"),
-        ] {
-            if ui.button(name).clicked() {
-                action(w, command, None);
-            }
-        }
-    });
-    ui.horizontal_wrapped(|ui| {
-        for (name, command) in [
-            ("Pan ←", "navigation.pan-left"),
-            ("Pan →", "navigation.pan-right"),
-            ("Pan ↑", "navigation.pan-up"),
-            ("Pan ↓", "navigation.pan-down"),
-        ] {
-            if ui.button(name).clicked() {
-                action(w, command, None);
-            }
-        }
-    });
-    ui.small("Preferences are saved for this user and in saved workspace presentation. They do not change CAD definitions or undo history. Alt precision also retains the existing assembly peek behavior.");
 }
 pub fn semantic_control(
     ui: &mut egui::Ui,

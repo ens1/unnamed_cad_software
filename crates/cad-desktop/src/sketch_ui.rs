@@ -1681,9 +1681,9 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, r: egui::Rect) -> bool 
             .ok()
             .map(|value| {
                 if a::dimension_unit(&c.kind) == Dimension::Angle {
-                    format!("{:.2}°", value.to_degrees())
+                    w.session.visible().settings.format_angle_radians(value)
                 } else {
-                    format!("{value:.3} mm")
+                    w.session.visible().settings.format_length(value)
                 }
             });
             let prefix = match c.kind.as_str() {
@@ -1708,17 +1708,17 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, r: egui::Rect) -> bool 
                     resolved.unwrap_or_else(|| "Awaiting current measurement".into())
                 )
             } else {
-                format!(
-                    "{prefix}{}{}",
-                    c.value.0,
-                    if parameterized {
+                if parameterized {
+                    format!(
+                        "{prefix}{}{}",
+                        c.value.0,
                         resolved
                             .map(|value| format!(" = {value}"))
                             .unwrap_or_default()
-                    } else {
-                        String::new()
-                    }
-                )
+                    )
+                } else {
+                    format!("{prefix}{}", resolved.unwrap_or_else(|| c.value.0.clone()))
+                }
             };
             if c.driven {
                 format!("({value})")

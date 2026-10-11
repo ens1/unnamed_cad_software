@@ -124,6 +124,7 @@ pub fn workspace_ui(
     }
 
     crate::selection_ui::show(ctx, &mut w);
+    crate::settings_ui::show(ctx, &mut w);
     crate::navigation::finish_ui(&mut w);
     ctx.request_repaint_after(std::time::Duration::from_millis(16));
     Ok(())
@@ -171,6 +172,17 @@ pub(crate) fn color(s: &str) -> Option<Color32> {
     }
 }
 fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
+    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
+        crate::settings::open(w, None);
+    }
+    if w.settings.is_some() {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            crate::settings::cancel(w);
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)) {
+            crate::settings::apply(w, true);
+        }
+        return;
+    }
     if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
         action(w, "document.rebuild");
     }
@@ -673,6 +685,10 @@ pub(crate) fn semantic_element(
         crate::navigation::semantic_control(ui, w, element);
         return;
     }
+    if element.role == "settings-field" {
+        crate::settings_ui::semantic_control(ui, w, element);
+        return;
+    }
     if element.role == "parameter-field"
         && let Some((owner, key)) = element.id.rsplit_once("::")
     {
@@ -749,6 +765,13 @@ pub(crate) fn semantic_element(
     }
 }
 fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
+    if crate::settings::action(w, command) {
+        return;
+    }
+    if w.settings.is_some() {
+        w.status = "Apply or cancel Settings before using another command".into();
+        return;
+    }
     if crate::appearances_ui::action(w, command, Some(&element.data)) {
         return;
     }
@@ -1383,6 +1406,13 @@ fn model_view(
     }
 }
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if crate::settings::action(w, cmd) {
+        return;
+    }
+    if w.settings.is_some() {
+        w.status = "Apply or cancel Settings before using another command".into();
+        return;
+    }
     if crate::appearances_ui::action(w, cmd, None) {
         return;
     }
@@ -1542,8 +1572,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         "equations" => crate::configuration_ui::begin(w, "equations"),
         "parameter.new" => w.open_editor("parameter"),
         "libraries" => w.open_editor("libraries"),
-        "file.new-part" => w.replace(Document::blank_part("Part1"), None),
-        "file.new" => w.replace(Document::empty("Assembly1"), None),
+        "file.new-part" => w.replace(crate::settings::new_document(w, false), None),
+        "file.new" => w.replace(crate::settings::new_document(w, true), None),
         "file.example" => {
             w.replace(Document::sample(), None);
             w.status = "Drive unit example — sample geometry".into();
@@ -1725,7 +1755,7 @@ fn export(w: &mut Workspace, release: bool) {
                 document: doc,
                 project_root: root,
                 path: path.to_string_lossy().into(),
-                tolerance: w.tolerance,
+                tolerance: w.tolerance(),
             });
             w.status = "Building release from committed revision".into();
         }
@@ -1750,7 +1780,7 @@ fn export(w: &mut Workspace, release: bool) {
             project_root: root,
             path: path.to_string_lossy().into(),
             format,
-            tolerance: w.tolerance,
+            tolerance: w.tolerance(),
         });
         w.status = "Exporting committed geometry".into();
     }
@@ -1778,7 +1808,10 @@ fn import_step(w: &mut Workspace) {
 }
 
 fn new_part(w: &mut Workspace) {
-    let part = Part::new(&format!("Part{}", w.session.visible().parts.len() + 1));
+    let part = w
+        .session
+        .visible()
+        .new_part(&format!("Part{}", w.session.visible().parts.len() + 1));
     let def = part.id.clone();
     let root = w.session.visible().root.clone();
     w.dispatch(Command::PutPart {
@@ -2443,22 +2476,8 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "manufacturing" => manufacturing(ui, w),
             "comments" => comments(ui, w),
             "controls" => {
-                crate::navigation::controls(ui, w);
-                ui.separator();
-                let mut tolerance = w.tolerance;
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut tolerance)
-                            .range(0.001..=1.)
-                            .speed(0.01)
-                            .prefix("Display / Boolean tolerance ")
-                            .suffix(" mm"),
-                    )
-                    .changed()
-                {
-                    w.tolerance = tolerance;
-                    w.requested = None;
-                    w.rendered_key.clear();
+                if ui.button("Open Settings…").clicked() {
+                    crate::settings::open(w, Some("application.navigation"));
                 }
             }
             "parameter" => {
@@ -3217,7 +3236,7 @@ pub(crate) fn export_format(w: &mut Workspace, format: &str, name: &str) {
             project_root: w.root().to_string_lossy().into(),
             path: path.to_string_lossy().into(),
             format: format.into(),
-            tolerance: w.tolerance,
+            tolerance: w.tolerance(),
         });
         w.status = "Exporting committed revision".into();
     }
@@ -3559,7 +3578,7 @@ fn compare(w: &mut Workspace, d: Document, root: PathBuf) {
         identity,
         document: d,
         project_root: root.to_string_lossy().into(),
-        tolerance: w.tolerance,
+        tolerance: w.tolerance(),
     });
     w.status = "Evaluating comparison revision".into();
 }

@@ -29,8 +29,8 @@ enum Action {
     },
     Validate {
         project: PathBuf,
-        #[arg(long, default_value_t = 0.1)]
-        tolerance: f64,
+        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        tolerance: Option<f64>,
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -39,14 +39,14 @@ enum Action {
         output: PathBuf,
         #[arg(long)]
         format: Option<String>,
-        #[arg(long, default_value_t = 0.1)]
-        tolerance: f64,
+        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        tolerance: Option<f64>,
     },
     Edit {
         project: PathBuf,
         command: PathBuf,
-        #[arg(long, default_value_t = 0.1)]
-        tolerance: f64,
+        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        tolerance: Option<f64>,
     },
     Bom {
         project: PathBuf,
@@ -62,20 +62,20 @@ enum Action {
         ours: PathBuf,
         theirs: PathBuf,
         output: PathBuf,
-        #[arg(long, default_value_t = 0.1)]
-        tolerance: f64,
+        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        tolerance: Option<f64>,
     },
     Release {
         project: PathBuf,
         destination: PathBuf,
-        #[arg(long, default_value_t = 0.1)]
-        tolerance: f64,
+        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        tolerance: Option<f64>,
     },
     Import {
         project: PathBuf,
         step: PathBuf,
-        #[arg(long, default_value_t = 0.1)]
-        tolerance: f64,
+        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        tolerance: Option<f64>,
     },
     Describe {
         project: PathBuf,
@@ -87,8 +87,8 @@ enum Action {
         definition: Option<String>,
         #[arg(long)]
         update: Option<String>,
-        #[arg(long, default_value_t = 0.1)]
-        tolerance: f64,
+        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        tolerance: Option<f64>,
     },
     Git {
         project: PathBuf,
@@ -111,9 +111,14 @@ fn checked(
     e: &mut Evaluator,
     d: &Document,
     root: &std::path::Path,
-    t: f64,
+    tolerance: Option<f64>,
 ) -> Result<cad_core::protocol::Evaluation> {
-    e.evaluate(identity(d, e), d, root, t)
+    e.evaluate(
+        identity(d, e),
+        d,
+        root,
+        tolerance.unwrap_or(d.settings.evaluation_tolerance_mm),
+    )
 }
 fn run() -> Result<()> {
     let args = Args::parse();
@@ -168,7 +173,13 @@ fn run() -> Result<()> {
                 .ok_or_else(|| {
                     CadError::Invalid("Choose an output extension or --format".into())
                 })?;
-            evaluator.export(&d, &project_root(&project), &output, &format, tolerance)?;
+            evaluator.export(
+                &d,
+                &project_root(&project),
+                &output,
+                &format,
+                tolerance.unwrap_or(d.settings.evaluation_tolerance_mm),
+            )?;
             println!("Exported {}", output.display());
         }
         Action::Edit {
@@ -231,12 +242,13 @@ fn run() -> Result<()> {
             destination,
             tolerance,
         } => {
+            let d = FileStore.load(&project)?;
             let m = cad_core::release::create(
                 &mut evaluator,
-                &FileStore.load(&project)?,
+                &d,
                 &project_root(&project),
                 &destination,
-                tolerance,
+                tolerance.unwrap_or(d.settings.evaluation_tolerance_mm),
             )?;
             println!(
                 "Released {} from {}",

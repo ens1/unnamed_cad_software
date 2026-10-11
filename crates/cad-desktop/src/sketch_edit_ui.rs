@@ -1436,8 +1436,13 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
         if let Some(editor) = &mut e.dimension_group
             && let Some(source) = &block_source
         {
-            changed |=
-                crate::sketch_dimensions_ui::controls(ui, editor, source, &dimensions_selection);
+            changed |= crate::sketch_dimensions_ui::controls(
+                ui,
+                editor,
+                source,
+                &dimensions_selection,
+                &block_doc.settings,
+            );
         }
         if let Some(block) = &mut e.block
             && let (Some(source), Some(owner)) = (&block_source, &block_owner)

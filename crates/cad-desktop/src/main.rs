@@ -30,6 +30,9 @@ mod render_appearance;
 mod rib_ui;
 mod sections_ui;
 mod selection_ui;
+mod settings;
+mod settings_preferences;
+mod settings_ui;
 mod sketch;
 mod sketch_blocks_ui;
 mod sketch_dimensions_ui;
@@ -69,6 +72,8 @@ pub struct Workspace {
     pub layout: LayoutDocument,
     pub theme: Theme,
     pub presentation_resources: crate::presentation_resources::State,
+    pub application_preferences: settings_preferences::Preferences,
+    pub settings: Option<settings::State>,
     pub jobs: background::Jobs,
     pub worker: worker::WorkerClient,
     pub exporter: worker::WorkerClient,
@@ -96,7 +101,6 @@ pub struct Workspace {
     pub candidate_index: usize,
     pub rendered_key: String,
     pub viewport_size: [u32; 2],
-    pub tolerance: f64,
     pub git_text: String,
     pub commit_message: String,
     pub branch_name: String,
@@ -110,6 +114,7 @@ pub struct Workspace {
     pub after_confirm: Option<String>,
     pub recovery_path: PathBuf,
     pub last_recovery: String,
+    pub last_recovery_write: Instant,
     pub recovery_draft: Option<Document>,
     pub saved_source: String,
     pub gesture: Option<navigation::Capture>,
@@ -125,6 +130,18 @@ impl Workspace {
         let mut project = None;
         let mut status = "Select a plane, then Sketch to begin".to_string();
         let mut doc = Document::blank_part("Part1");
+        let reset = std::env::args().any(|a| a == "--reset-ui");
+        let loaded_preferences = settings_preferences::load(reset);
+        if let Some(diagnostic) = loaded_preferences.diagnostic {
+            status = diagnostic;
+        } else if loaded_preferences.migrated_navigation {
+            status = "Existing navigation preferences imported into application settings".into();
+        }
+        let application_preferences = loaded_preferences.preferences;
+        doc.settings = application_preferences.default_model.clone();
+        for part in doc.parts.values_mut() {
+            part.finish = doc.settings.default_new_part_finish.clone();
+        }
         for arg in std::env::args().skip(1).filter(|a| !a.starts_with("--")) {
             let path = PathBuf::from(arg);
             match FileStore.load(&path) {
@@ -142,7 +159,6 @@ impl Workspace {
         let root = project
             .as_ref()
             .map(|p| cad_core::persistence::project_root(p));
-        let reset = std::env::args().any(|a| a == "--reset-ui");
         if !reset
             && let Some(saved) = root
                 .as_ref()
@@ -151,7 +167,12 @@ impl Workspace {
         {
             view = saved;
         }
-        navigation::load_preferences(&mut view, &mut status, reset);
+        view.navigation = application_preferences.navigation.clone();
+        view.ui_scale = application_preferences.ui_scale;
+        if reset {
+            view.roll = 0.;
+        }
+        navigation::sanitize(&mut view);
         let layout = default_layout();
         let theme = default_theme();
         let saved_source = doc.fingerprint();
@@ -164,7 +185,13 @@ impl Workspace {
                 if saved != doc.fingerprint() {
                     return None;
                 }
-                serde_json::from_value(v.get("draft")?.clone()).ok()
+                let source = v
+                    .get("draft")
+                    .filter(|source| !source.is_null())
+                    .or_else(|| v.get("committed"))?;
+                let recovered: Document = serde_json::from_value(source.clone()).ok()?;
+                recovered.validate().ok()?;
+                (recovered.fingerprint() != doc.fingerprint()).then_some(recovered)
             });
         let layout_text = serde_json::to_string_pretty(&layout).unwrap_or_default();
         let theme_text = serde_json::to_string_pretty(&theme).unwrap_or_default();
@@ -175,6 +202,8 @@ impl Workspace {
             layout,
             theme,
             presentation_resources: crate::presentation_resources::State::default(),
+            application_preferences,
+            settings: None,
             jobs: background::Jobs::new(),
             worker: worker::WorkerClient::new(),
             exporter: worker::WorkerClient::new(),
@@ -200,7 +229,6 @@ impl Workspace {
             candidate_index: 0,
             rendered_key: String::new(),
             viewport_size: [1000, 800],
-            tolerance: 0.15,
             git_text: String::new(),
             commit_message: String::new(),
             branch_name: String::new(),
@@ -214,6 +242,7 @@ impl Workspace {
             after_confirm: None,
             recovery_path,
             last_recovery: String::new(),
+            last_recovery_write: Instant::now(),
             recovery_draft,
             saved_source,
             gesture: None,
@@ -225,6 +254,10 @@ impl Workspace {
             compare_worker: worker::WorkerClient::new(),
         };
         crate::presentation_resources::initialize(&mut workspace, reset);
+        if !reset {
+            workspace.presentation_resources.watch =
+                workspace.application_preferences.watch_presentation_files;
+        }
         workspace
     }
     pub fn root(&self) -> PathBuf {
@@ -237,7 +270,14 @@ impl Workspace {
                     .join(&self.session.committed.id)
             })
     }
+    pub fn tolerance(&self) -> f64 {
+        self.session.visible().settings.evaluation_tolerance_mm
+    }
     pub fn dispatch(&mut self, c: cad_core::commands::Command) {
+        if self.settings.is_some() {
+            self.status = "Close Settings before editing the model".into();
+            return;
+        }
         history::latest(self);
         self.selection_popup = None;
         self.confirm_requested = false;
@@ -359,12 +399,14 @@ impl Workspace {
         self.status = "Draft discarded".into();
     }
     pub fn replace(&mut self, d: Document, path: Option<PathBuf>) {
+        settings::cancel(self);
         self.cancel();
         self.session = Session::new(d, BACKEND);
         self.project = path;
         let navigation = self.view.navigation.clone();
         self.view = PresentationState {
             navigation,
+            ui_scale: self.application_preferences.ui_scale,
             ..Default::default()
         };
         self.view.active_part = self.session.committed.parts.keys().next().cloned();
@@ -385,14 +427,18 @@ impl Workspace {
         self.saved_source = self.session.committed.fingerprint();
         self.recovery_path =
             recovery_directory().join(format!("{}.json", self.session.committed.id));
+        self.last_recovery.clear();
+        self.last_recovery_write = Instant::now();
     }
     pub fn isolate(&mut self) {
         navigation::stop(self);
         if self.view.isolation {
             if let Some(v) = self.before_isolation.take() {
                 let navigation = self.view.navigation.clone();
+                let ui_scale = self.view.ui_scale;
                 self.view = v;
                 self.view.navigation = navigation;
+                self.view.ui_scale = ui_scale;
             }
         } else {
             self.before_isolation = Some(self.view.clone());
@@ -755,7 +801,13 @@ fn poll_workers(mut w: ResMut<Workspace>) {
             _ => {}
         }
     }
-    for response in w.exporter.drain() {
+    // Keep completed imports queued while Settings owns a checkpoint; never merge unrelated source into it.
+    let exporter_replies = if w.settings.is_none() {
+        w.exporter.drain()
+    } else {
+        vec![]
+    };
+    for response in exporter_replies {
         match response {
             WorkerResponse::Exported { path, .. } => w.status = format!("Wrote {path}"),
             WorkerResponse::Imported { identity, document } => {
@@ -794,17 +846,25 @@ fn poll_workers(mut w: ResMut<Workspace>) {
             identity: identity.clone(),
             document: w.session.visible().clone(),
             project_root: w.root().to_string_lossy().into(),
-            tolerance: w.tolerance,
+            tolerance: w.tolerance(),
         });
         w.requested = Some(identity);
     }
-    let recovery = serde_json::json!({"source":w.saved_source,"committed":w.session.committed,"draft":w.session.draft.as_ref().map(|d|&d.document)});
-    let data = serde_json::to_string(&recovery).unwrap_or_default();
-    if data != w.last_recovery && w.changed.elapsed().as_secs() > 1 {
-        let path = w.recovery_path.clone();
-        let bytes = data.as_bytes().to_vec();
-        w.jobs
-            .submit(background::Job::Recovery { path, data: bytes });
-        w.last_recovery = data;
+    settings::poll(&mut w);
+    if w.application_preferences.recovery_enabled
+        && w.changed.elapsed().as_millis() > 250
+        && w.last_recovery_write.elapsed().as_secs()
+            >= w.application_preferences.recovery_interval_seconds
+    {
+        w.last_recovery_write = Instant::now();
+        let recovery = serde_json::json!({"source":w.saved_source,"committed":w.session.committed,"draft":w.session.draft.as_ref().map(|d|&d.document)});
+        let data = serde_json::to_string(&recovery).unwrap_or_default();
+        if data != w.last_recovery {
+            let path = w.recovery_path.clone();
+            let bytes = data.as_bytes().to_vec();
+            w.jobs
+                .submit(background::Job::Recovery { path, data: bytes });
+            w.last_recovery = data;
+        }
     }
 }

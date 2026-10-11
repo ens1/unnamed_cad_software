@@ -227,7 +227,12 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "file.export-flat-pattern",
             "file.export-cutlist",
         ],
-        "Edit" => vec!["document.undo", "document.redo", "parameter.new"],
+        "Edit" => vec![
+            "document.undo",
+            "document.redo",
+            "parameter.new",
+            "settings",
+        ],
         "Insert" => {
             return feature_groups()
                 .into_iter()
@@ -247,6 +252,7 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "lighting",
         ],
         "Tools" => vec![
+            "settings",
             "assembly.edit",
             "assembly.pattern",
             "assembly.exploded-new",
@@ -540,6 +546,7 @@ pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
             w.view.ui_scale = if compact { 1. } else { 1.15 };
             w.view.toolbar_height = if compact { 68. } else { 80. };
             resize_toolbar(w);
+            crate::settings::save_live_application(w);
         }
         "graph.arrange" => {
             w.view.graph_positions.clear();
@@ -976,6 +983,11 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 w.open_editor("parameter");
                 ui.close();
             }
+            ui.separator();
+            if menu_action(ui, "settings", "Settings…  ⌘,", true).clicked() {
+                crate::settings::open(w, None);
+                ui.close();
+            }
         });
         menu_button(ui, "Insert", |ui| {
             for group in feature_groups() {
@@ -997,6 +1009,7 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
         });
         menu_button(ui, "Tools", |ui| {
             for (label, command) in [
+                ("Settings…  ⌘,", "settings"),
                 ("Assembly and Mates…", "assembly.edit"),
                 ("Component Pattern…", "assembly.pattern"),
                 ("Exploded View…", "assembly.exploded-new"),
@@ -1080,15 +1093,22 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                     w.view.ui_scale = 1.;
                     w.view.toolbar_height = 68.;
                     resize_toolbar(w);
+                    crate::settings::save_live_application(w);
                     ui.close();
                 }
                 if menu_action(ui, "presentation.comfortable", "Comfortable", true).clicked() {
                     w.view.ui_scale = 1.15;
                     w.view.toolbar_height = 80.;
                     resize_toolbar(w);
+                    crate::settings::save_live_application(w);
                     ui.close();
                 }
-                ui.add(egui::Slider::new(&mut w.view.ui_scale, 0.75..=1.5).text("UI scale"));
+                if ui
+                    .add(egui::Slider::new(&mut w.view.ui_scale, 0.75..=1.5).text("UI scale"))
+                    .changed()
+                {
+                    crate::settings::save_live_application(w);
+                }
                 if ui
                     .add(
                         egui::Slider::new(&mut w.view.toolbar_height, 60.0..=130.0)
@@ -3521,13 +3541,17 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
 }
 pub fn measure(w: &mut Workspace) {
     if let Some(selected) = &w.selected {
+        let settings = &w.session.visible().settings;
         if matches!(
             selected.reference.topology.as_str(),
             "plane" | "axis" | "point"
         ) {
             w.status = format!(
-                "{} · Origin / Position: {:.4}, {:.4}, {:.4} mm (assembly coordinates)",
-                selected.name, selected.point[0], selected.point[1], selected.point[2]
+                "{} · Origin / Position: {}, {}, {} (assembly coordinates)",
+                selected.name,
+                settings.format_length(selected.point[0]),
+                settings.format_length(selected.point[1]),
+                settings.format_length(selected.point[2])
             );
             return;
         }
@@ -3536,18 +3560,23 @@ pub fn measure(w: &mut Workspace) {
             .signature
             .as_ref()
             .map(|sig| {
+                let measure = if selected.reference.topology == "edge" {
+                    settings.format_length(sig.measure)
+                } else {
+                    format!(
+                        "{:.precision$} {}²",
+                        sig.measure / settings.display_length_unit.millimeters_per_unit().powi(2),
+                        settings.display_length_unit.symbol(),
+                        precision = usize::from(settings.length_decimal_places)
+                    )
+                };
                 format!(
-                    "{}: {:.4} {} · Center: {:.3}, {:.3}, {:.3} mm",
+                    "{}: {} · Center: {}, {}, {}",
                     selected.reference.topology,
-                    sig.measure,
-                    if selected.reference.topology == "edge" {
-                        "mm"
-                    } else {
-                        "mm²"
-                    },
-                    sig.center[0],
-                    sig.center[1],
-                    sig.center[2]
+                    measure,
+                    settings.format_length(sig.center[0]),
+                    settings.format_length(sig.center[1]),
+                    settings.format_length(sig.center[2])
                 )
             })
             .unwrap_or_else(|| "Measurement unavailable".into());

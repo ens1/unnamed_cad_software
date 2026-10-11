@@ -791,7 +791,6 @@ pub fn poll(w: &mut Workspace) {
     let project = project_target(w);
     if project != w.presentation_resources.project_root {
         w.presentation_resources.project_root = project.clone();
-        w.presentation_resources.watch = true;
         reload(w, project.map(Target::Project).unwrap_or(Target::Personal));
         return;
     }
@@ -1041,7 +1040,8 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
             }
         }
         "presentation.toggle-watch" => {
-            w.presentation_resources.watch = !w.presentation_resources.watch
+            w.presentation_resources.watch = !w.presentation_resources.watch;
+            crate::settings::save_live_application(w);
         }
         "presentation.reload-files" => {
             if let Some(target) = w.presentation_resources.target.clone() {
@@ -1194,7 +1194,8 @@ pub fn set_value(w: &mut Workspace, field: &str, value: Value) -> Result<()> {
         "watch" => {
             w.presentation_resources.watch = value
                 .as_bool()
-                .ok_or_else(|| invalid("Expected an automatic reload toggle"))?
+                .ok_or_else(|| invalid("Expected an automatic reload toggle"))?;
+            crate::settings::save_live_application(w);
         }
         _ => {
             return Err(invalid(format!(
@@ -1223,7 +1224,9 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         if props.get("display").is_none_or(|value| value != "none") {
             ui.scope(|ui| {
                 crate::presentation_controls::apply_properties(ui, &props);
-                ui.checkbox(&mut w.presentation_resources.watch, "Reload external edits automatically");
+                if ui.checkbox(&mut w.presentation_resources.watch, "Reload external edits automatically").changed() {
+                    crate::settings::save_live_application(w);
+                }
             });
         }
         for (label, path) in [

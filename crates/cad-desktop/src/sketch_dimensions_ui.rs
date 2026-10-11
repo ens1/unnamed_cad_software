@@ -137,6 +137,7 @@ pub fn controls(
     editor: &mut Editor,
     source: &Sketch,
     selection: &[SketchEntity],
+    settings: &cad_core::settings::ModelSettings,
 ) -> bool {
     let inactive = cad_core::sketch_transform::inactive_entities(source);
     let mut changed = false;
@@ -268,7 +269,7 @@ pub fn controls(
                             });
                         ui.label(
                             measured
-                                .map(|value| format!("({value:.6} mm)"))
+                                .map(|value| format!("({})", settings.format_length(value)))
                                 .unwrap_or_else(|error| error.to_string()),
                         );
                         ui.small(format!("Saved driving expression: {}", value.value.0));
@@ -536,17 +537,33 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bo
                 )
             } else if let Some(constraint) = constraint {
                 if constraint.driven {
-                    format!("({:.3} mm)", annotation.measured)
+                    format!(
+                        "({})",
+                        w.session
+                            .visible()
+                            .settings
+                            .format_length(annotation.measured)
+                    )
                 } else {
                     let mut text = constraint.value.0.clone();
+                    let measured = w
+                        .session
+                        .visible()
+                        .settings
+                        .format_length(annotation.measured);
                     if expression::references(&text).is_ok_and(|references| !references.is_empty())
                     {
-                        text.push_str(&format!(" = {:.3} mm", annotation.measured));
+                        text.push_str(&format!(" = {measured}"));
+                        text
+                    } else {
+                        measured
                     }
-                    text
                 }
             } else {
-                format!("{:.3} mm", annotation.measured)
+                w.session
+                    .visible()
+                    .settings
+                    .format_length(annotation.measured)
             };
             let font = egui::FontId::new(
                 number("font-size", 12.).clamp(8., 40.),

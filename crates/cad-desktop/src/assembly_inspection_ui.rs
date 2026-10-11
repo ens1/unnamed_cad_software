@@ -150,7 +150,7 @@ pub fn new(w: &mut Workspace) {
         .unwrap();
     let mut source = Definition::new(name);
     source.configuration = doc.active_configurations.get(&doc.root).cloned();
-    source.boolean_tolerance = cad_core::Expr(format!("{} mm", w.tolerance));
+    source.boolean_tolerance = cad_core::Expr(format!("{} mm", w.tolerance()));
     source.targets = evaluation
         .instances
         .iter()

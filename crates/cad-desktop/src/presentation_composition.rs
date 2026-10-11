@@ -306,6 +306,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(cad_core::navigation::semantic_fields(&w.view.navigation));
     elements.extend(crate::presentation_resources::semantics(w));
     elements.extend(crate::appearances_ui::semantics(w));
+    elements.extend(crate::settings_ui::semantics(w));
     for element in crate::cad_ui::semantics(w) {
         if let Some(existing) = elements
             .iter_mut()
@@ -535,6 +536,13 @@ impl ValueAdapters {
         element: &SemanticElement,
         value: serde_json::Value,
     ) -> cad_core::Result<()> {
+        if w.settings.is_some()
+            && element.data.get("setter").and_then(|value| value.as_str()) != Some("settings")
+        {
+            return Err(cad_core::CadError::Invalid(
+                "Close Settings before editing another field".into(),
+            ));
+        }
         let descriptor = element.value_descriptor();
         if !descriptor.editable {
             return Err(cad_core::CadError::Invalid(
@@ -579,6 +587,11 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "settings",
+        crate::settings_ui::set_field,
+        crate::settings_ui::field_value,
+    );
     for identity in [
         "appearance-finish",
         "appearance-lighting",

@@ -123,6 +123,9 @@ pub enum Command {
     SetLighting {
         lighting: crate::appearance::Lighting,
     },
+    SetModelSettings {
+        settings: crate::settings::ModelSettings,
+    },
     DeleteDrawing {
         drawing: Id,
     },
@@ -468,6 +471,10 @@ impl Command {
             Self::SetLighting { lighting } => {
                 crate::appearance::validate_lighting(&lighting)?;
                 document.lighting = lighting;
+            }
+            Self::SetModelSettings { settings } => {
+                settings.validate(document)?;
+                document.settings = settings;
             }
             Self::PutDrawing { drawing } => crate::drawing::put_sheet(document, drawing)?,
             Self::DeleteDrawing { drawing } => crate::drawing::delete_sheet(document, &drawing)?,

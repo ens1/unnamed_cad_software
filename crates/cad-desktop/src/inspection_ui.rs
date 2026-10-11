@@ -31,7 +31,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         return;
     };
     ui.small("Assembly coordinates · boundary tessellation");
-    ui.small(format!("Rebuild tolerance: {} mm", w.tolerance));
+    ui.small(format!("Rebuild tolerance: {} mm", w.tolerance()));
     if w.session
         .draft
         .as_ref()
@@ -76,20 +76,37 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         inspection::combine(&values)
     })();
     match result {
-        Ok(metrics) => display(ui, &metrics),
+        Ok(metrics) => display(ui, &metrics, &w.session.visible().settings),
         Err(error) => {
             ui.label(error.to_string());
         }
     }
 }
-fn display(ui: &mut egui::Ui, value: &Metrics) {
+fn display(ui: &mut egui::Ui, value: &Metrics, settings: &cad_core::settings::ModelSettings) {
+    let unit = settings.display_length_unit;
+    let scale = unit.millimeters_per_unit();
+    let precision = usize::from(settings.length_decimal_places);
     egui::Grid::new("engineering-properties")
         .num_columns(2)
         .spacing([8., 6.])
         .show(ui, |ui| {
             for (label, text) in [
-                ("Surface Area", format!("{:.6} mm²", value.area_mm2)),
-                ("Solid Volume", format!("{:.6} mm³", value.volume_mm3)),
+                (
+                    "Surface Area",
+                    format!(
+                        "{:.precision$} {}²",
+                        value.area_mm2 / scale.powi(2),
+                        unit.symbol()
+                    ),
+                ),
+                (
+                    "Solid Volume",
+                    format!(
+                        "{:.precision$} {}³",
+                        value.volume_mm3 / scale.powi(3),
+                        unit.symbol()
+                    ),
+                ),
                 (
                     "Mass",
                     value
@@ -100,10 +117,10 @@ fn display(ui: &mut egui::Ui, value: &Metrics) {
                 (
                     "Bounding Size",
                     format!(
-                        "{:.6} × {:.6} × {:.6} mm",
-                        value.bounds_mm[1][0] - value.bounds_mm[0][0],
-                        value.bounds_mm[1][1] - value.bounds_mm[0][1],
-                        value.bounds_mm[1][2] - value.bounds_mm[0][2]
+                        "{} × {} × {}",
+                        settings.format_length(value.bounds_mm[1][0] - value.bounds_mm[0][0]),
+                        settings.format_length(value.bounds_mm[1][1] - value.bounds_mm[0][1]),
+                        settings.format_length(value.bounds_mm[1][2] - value.bounds_mm[0][2])
                     ),
                 ),
             ] {
@@ -120,7 +137,12 @@ fn display(ui: &mut egui::Ui, value: &Metrics) {
         if let Some(c) = center {
             ui.separator();
             ui.strong(label);
-            ui.label(format!("X {:.6} · Y {:.6} · Z {:.6} mm", c[0], c[1], c[2]));
+            ui.label(format!(
+                "X {} · Y {} · Z {}",
+                settings.format_length(c[0]),
+                settings.format_length(c[1]),
+                settings.format_length(c[2])
+            ));
         }
     }
     if let Some(inertia) = value.inertia_kg_m2 {

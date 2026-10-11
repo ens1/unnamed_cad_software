@@ -59,6 +59,7 @@ pub mod commands;
 pub mod library;
 pub mod release;
 pub mod selection_actions;
+pub mod settings;
 pub mod sketch_actions;
 
 pub mod modeling_tools;
