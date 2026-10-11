@@ -1,3 +1,4 @@
+pub mod appearance;
 pub mod assembly_geometry;
 pub mod assembly_inspection;
 pub mod body_editing;

@@ -757,6 +757,11 @@ pub struct Part {
     pub features: Vec<Feature>,
     pub outputs: Vec<Id>,
     pub material: Id,
+    #[serde(
+        default = "crate::appearance::default_finish",
+        skip_serializing_if = "crate::appearance::is_default_finish"
+    )]
+    pub finish: Id,
     #[serde(default)]
     pub properties: BTreeMap<String, String>,
     #[serde(default)]
@@ -789,6 +794,7 @@ impl Part {
             features: vec![],
             outputs: vec![],
             material: "aluminum".into(),
+            finish: crate::appearance::default_finish(),
             properties: BTreeMap::new(),
             sketches: BTreeMap::new(),
             configurations: BTreeMap::new(),
@@ -821,6 +827,8 @@ pub struct Instance {
     pub name: String,
     pub definition: Id,
     pub placement: Placement,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish: Option<Id>,
     #[serde(default)]
     pub configuration: Option<Id>,
     #[serde(default)]
@@ -1142,6 +1150,16 @@ pub struct Document {
     pub parts: BTreeMap<Id, Part>,
     pub assemblies: BTreeMap<Id, Assembly>,
     pub materials: BTreeMap<Id, Material>,
+    #[serde(
+        default = "crate::appearance::default_finishes",
+        skip_serializing_if = "crate::appearance::is_default_finishes"
+    )]
+    pub finishes: BTreeMap<Id, crate::appearance::Finish>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::appearance::is_default_lighting"
+    )]
+    pub lighting: crate::appearance::Lighting,
     #[serde(default)]
     pub resources: BTreeMap<Id, Resource>,
     #[serde(default)]
@@ -1166,6 +1184,9 @@ pub struct PlacedPart {
     pub mesh_key: Id,
     #[serde(default)]
     pub bom_excluded: bool,
+    /// Effective part/configuration/occurrence surface finish, independent of its mass material.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish: Option<Id>,
 }
 impl Document {
     pub fn fingerprint(&self) -> String {
@@ -1176,6 +1197,7 @@ impl Document {
         )
     }
     pub fn validate(&self) -> Result<()> {
+        crate::appearance::validate(self)?;
         crate::exploded_views::validate(self)?;
         crate::assembly_inspection::validate(self)?;
         crate::drawing::validate_document(self)?;
@@ -1602,6 +1624,8 @@ impl Document {
             parts: BTreeMap::new(),
             assemblies,
             materials,
+            finishes: crate::appearance::default_finishes(),
+            lighting: crate::appearance::Lighting::default(),
             resources: BTreeMap::new(),
             drawings: vec![],
             comments: vec![],
@@ -1622,6 +1646,7 @@ impl Document {
             name: name.into(),
             definition: part.id.clone(),
             placement: Placement::default(),
+            finish: None,
             configuration: None,
             fixed: true,
             translation_expressions: None,
@@ -1790,6 +1815,7 @@ impl Document {
                         translation: pos,
                         rotation_deg: rot,
                     },
+                    finish: None,
                     configuration: None,
                     fixed: true,
                     translation_expressions: None,

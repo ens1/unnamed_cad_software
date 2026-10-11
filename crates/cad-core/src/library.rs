@@ -121,6 +121,7 @@ pub fn link(
         .keys()
         .chain(src.assemblies.keys())
         .chain(src.materials.keys())
+        .chain(src.finishes.keys())
         .chain(src.resources.keys())
     {
         mapping.insert(key.clone(), mapped(&link_id, key));
@@ -214,6 +215,12 @@ pub fn link(
         }
     }
     let mut json = serde_json::to_value(&src)?;
+    // Default finishes are omitted from ordinary source to preserve legacy hashes.
+    // A linked snapshot must still namespace them and every default assignment.
+    json["finishes"] = serde_json::to_value(&src.finishes)?;
+    for part in src.parts.values() {
+        json["parts"][&part.id]["finish"] = serde_json::Value::String(part.finish.clone());
+    }
     // Drawings and review state are not part of the component dependency closure.
     json["drawings"] = serde_json::json!([]);
     json["comments"] = serde_json::json!([]);
@@ -267,6 +274,7 @@ pub fn link(
         doc.assemblies.insert(key, assembly);
     }
     doc.materials.extend(imported.materials);
+    doc.finishes.extend(imported.finishes);
     doc.resources.extend(imported.resources);
     let bytes = serde_json::to_vec_pretty(&src)?;
     let sha = hash(&bytes);
@@ -312,6 +320,7 @@ pub fn link(
                     name,
                     definition,
                     placement: Default::default(),
+                    finish: None,
                     configuration: None,
                     fixed: false,
                     translation_expressions: None,
@@ -387,6 +396,7 @@ fn remap_source_inner(
             "parts"
                 | "assemblies"
                 | "materials"
+                | "finishes"
                 | "resources"
                 | "instances"
                 | "sketches"
@@ -423,6 +433,7 @@ fn remap_source_inner(
     fn reference_text(
         key: &str,
         object: &serde_json::Map<String, serde_json::Value>,
+        field: &str,
         owned_features: bool,
     ) -> bool {
         if owned_features {
@@ -433,10 +444,15 @@ fn remap_source_inner(
         }
         match key {
             "id" | "definition" | "root" | "configuration" | "parent" | "node" | "material"
-            | "resource" | "instance" | "relative_to" | "sketch" | "outputs" | "profile_order"
-            | "path" | "instance_path" | "seed" | "seeds" | "mate" | "source" | "sources"
-            | "segments" | "entities" | "point" | "member" | "members" | "points" | "through"
-            | "controls" | "lines" | "trim" | "arc" | "arcs" | "anchor" | "support" => true,
+            | "finish" | "resource" | "instance" | "relative_to" | "sketch" | "outputs"
+            | "profile_order" | "path" | "instance_path" | "seed" | "seeds" | "mate" | "source"
+            | "sources" | "segments" | "entities" | "point" | "member" | "members" | "points"
+            | "through" | "controls" | "lines" | "trim" | "arc" | "arcs" | "anchor" | "support" => {
+                true
+            }
+            "base_color" | "normal" | "roughness" | "metallic" | "occlusion" | "height" => {
+                field == "textures" && object.get(key).is_some_and(serde_json::Value::is_string)
+            }
             "datum" | "constraint" | "source_record" => true,
             "placement" => {
                 object.get("operation").and_then(serde_json::Value::as_str)
@@ -530,7 +546,7 @@ fn remap_source_inner(
                 }
                 let source = std::mem::take(object);
                 for (key, mut value) in source.iter().map(|(k, v)| (k.clone(), v.clone())) {
-                    let refs = reference_text(&key, &source, owned_features)
+                    let refs = reference_text(&key, &source, field, owned_features)
                         || !owned_features
                             && (matches!(
                                 field,

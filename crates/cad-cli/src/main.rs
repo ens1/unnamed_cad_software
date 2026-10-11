@@ -267,6 +267,7 @@ fn run() -> Result<()> {
                         definition: imported,
                         placement: Default::default(),
                         configuration: None,
+                        finish: None,
                         fixed: true,
                         translation_expressions: None,
                     },

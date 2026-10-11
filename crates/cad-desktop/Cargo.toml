@@ -15,4 +15,7 @@ serde_json.workspace = true
 bevy = { version = "=0.20.0", default-features = false, features = ["3d", "default_platform", "default_font", "png", "multi_threaded"] }
 bevy_egui = { version = "=0.43.1", features = ["accesskit"] }
 winit = { version = "=0.30.13", default-features = false }
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }
+sha2.workspace = true
+half = "=2.7.1"
 rfd = "0.17"

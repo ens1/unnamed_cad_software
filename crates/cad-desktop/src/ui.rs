@@ -585,6 +585,12 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     });
     registry.register("assembly-editor", |ui, w, _| assembly_editor(ui, w));
     registry.register("materials-editor", |ui, w, _| materials(ui, w));
+    registry.register("appearances-editor", |ui, w, _| {
+        crate::appearances_ui::show(ui, w)
+    });
+    registry.register("lighting-editor", |ui, w, _| {
+        crate::appearances_ui::lighting_view(ui, w)
+    });
     registry.register("drawings-editor", |ui, w, _| drawings(ui, w));
     registry.register("manufacturing-editor", |ui, w, _| manufacturing(ui, w));
     registry.register("versions-editor", |ui, w, _| versions(ui, w));
@@ -743,6 +749,9 @@ pub(crate) fn semantic_element(
     }
 }
 fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
+    if crate::appearances_ui::action(w, command, Some(&element.data)) {
+        return;
+    }
     if crate::navigation::action(w, command, Some(&element.data)) {
         return;
     }
@@ -873,19 +882,30 @@ fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) 
         action(w, command);
     }
 }
-fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement) {
+pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement) {
     let descriptor = element.value_descriptor();
     let value = crate::presentation_composition::current_value(w, element);
     let editable = descriptor.editable;
+    let role = if element
+        .data
+        .get("setter")
+        .and_then(Value::as_str)
+        .is_some_and(|setter| setter.starts_with("appearance-"))
+    {
+        element.role.as_str()
+    } else {
+        "field-control"
+    };
     let props = crate::presentation_controls::properties(
         &element.id,
-        "field-control",
-        &["semantic-control"],
+        role,
+        &["semantic-control", "field-control"],
         if editable { "editable" } else { "readonly" },
     );
     if props.get("display").is_some_and(|value| value == "none") {
         return;
     }
+    let mut appearance_error = None;
     let next = ui
         .scope(|ui| {
             crate::presentation_controls::apply_properties(ui, &props);
@@ -893,13 +913,21 @@ fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElemen
                 .on_hover_text(&descriptor.accessibility_label);
             if !descriptor.choices.is_empty() {
                 let mut next = value.clone();
-                egui::ComboBox::from_id_salt(&element.id)
-                    .selected_text(
+                let selected_label = descriptor
+                    .choices
+                    .iter()
+                    .find(|choice| choice.get("value").unwrap_or(choice) == &value)
+                    .and_then(|choice| choice.get("label"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
                         value
                             .as_str()
-                            .map(str::to_string)
-                            .unwrap_or_else(|| value.to_string()),
-                    )
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| value.to_string())
+                    });
+                egui::ComboBox::from_id_salt(&element.id)
+                    .selected_text(selected_label)
                     .show_ui(ui, |ui| {
                         ui.add_enabled_ui(editable, |ui| {
                             for choice in &descriptor.choices {
@@ -941,6 +969,7 @@ fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElemen
             );
             if !response.has_focus() && !response.changed() {
                 *text = current;
+                appearance_error = Some(None);
             }
             if response.changed() {
                 if value.is_string() {
@@ -950,6 +979,7 @@ fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElemen
                         Ok(value) => Some(value),
                         Err(error) => {
                             w.status = format!("{}: {error}", element.label);
+                            appearance_error = Some(Some(error.to_string()));
                             None
                         }
                     }
@@ -959,10 +989,17 @@ fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElemen
             }
         })
         .inner;
-    if let Some(next) = next
-        && let Err(error) = crate::presentation_composition::set_value(w, element, next)
-    {
-        w.status = error.to_string();
+    if let Some(error) = appearance_error {
+        crate::appearances_ui::field_error(w, element, error);
+    }
+    if let Some(next) = next {
+        match crate::presentation_composition::set_value(w, element, next) {
+            Ok(()) => crate::appearances_ui::field_error(w, element, None),
+            Err(error) => {
+                w.status = error.to_string();
+                crate::appearances_ui::field_error(w, element, Some(error.to_string()));
+            }
+        }
     }
 }
 pub(crate) fn pin_selected(w: &mut Workspace) {
@@ -1346,6 +1383,9 @@ fn model_view(
     }
 }
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if crate::appearances_ui::action(w, cmd, None) {
+        return;
+    }
     if crate::selection_ui::edge_action(w, cmd) {
         return;
     }
@@ -1361,7 +1401,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
     if crate::navigation::action(w, cmd, None) {
         return;
     }
-    if (w.fields.contains_key("configuration-editor")
+    if (w.fields.contains_key("appearance-tool")
+        || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
         || w.fields.contains_key("assembly-inspection-editor"))
@@ -1376,6 +1417,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
                     | "assembly.pattern"
                     | "assembly.exploded-new"
                     | "assembly.inspection-new"
+                    | "materials"
             ))
     {
         w.status =
@@ -1634,12 +1676,18 @@ fn save(w: &mut Workspace, choose: bool) -> bool {
         let old_root = w.root();
         let new_root = cad_core::persistence::project_root(&path);
         let result = (|| {
-            cad_core::persistence::copy_resources(&w.session.committed, &[old_root], &new_root)?;
+            let sources = [old_root];
+            cad_core::persistence::copy_resources(&w.session.committed, &sources, &new_root)?;
+            cad_core::persistence::copy_resources(w.session.visible(), &sources, &new_root)?;
+            if let Some(checkpoint) = &w.tool_checkpoint {
+                cad_core::persistence::copy_resources(checkpoint.visible(), &sources, &new_root)?;
+            }
             FileStore.save(&path, &w.session.committed)
         })();
         match result {
             Ok(()) => {
                 w.project = Some(path);
+                w.rendered_key.clear();
                 w.saved_source = w.session.committed.fingerprint();
                 w.status = if w.session.draft.is_some() {
                     "Saved committed revision. The draft still needs Apply.".into()
@@ -2338,7 +2386,8 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "assembly" => "Assembly",
             "configurations" => "Configurations and Equations",
             "versions" => "Design versions",
-            "materials" => "Materials",
+            "materials" => "Engineering Materials",
+            "appearances" => "Visual Finishes",
             "drawings" => "Drawings",
             "manufacturing" => "Manufacturing",
             "libraries" => "Component libraries",
@@ -2349,8 +2398,10 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "inspection" => "Mass Properties",
             _ => "Command search",
         });
-        if !matches!(dialog.as_str(), "feature" | "sketch" | "configurations")
-            && !w.fields.contains_key("mate-editor")
+        if !matches!(
+            dialog.as_str(),
+            "feature" | "sketch" | "configurations" | "appearances"
+        ) && !w.fields.contains_key("mate-editor")
             && !w.fields.contains_key("component-pattern-editor")
             && ui.small_button("Close").clicked()
         {
@@ -2386,6 +2437,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "versions" => versions(ui, w),
             "bom" => bom(ui, w),
             "materials" => materials(ui, w),
+            "appearances" => crate::appearances_ui::show(ui, w),
             "libraries" => library_editor(ui, w),
             "drawings" => drawings(ui, w),
             "manufacturing" => manufacturing(ui, w),
@@ -2794,6 +2846,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                     definition,
                     placement: Default::default(),
                     configuration: None,
+                    finish: None,
                     fixed: false,
                     translation_expressions: None,
                 },
@@ -2831,6 +2884,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                         definition: key,
                         placement: Default::default(),
                         configuration: None,
+                        finish: None,
                         fixed: false,
                         translation_expressions: None,
                     },
@@ -3088,6 +3142,11 @@ fn bom(ui: &mut egui::Ui, w: &mut Workspace) {
 }
 fn materials(ui: &mut egui::Ui, w: &mut Workspace) {
     let doc = w.session.visible().clone();
+    ui.small("Engineering materials control density and manufacturing data. Edit visual finishes separately.");
+    if ui.button("Visual finishes…").clicked() {
+        crate::appearances_ui::begin(w, false);
+        return;
+    }
     egui::ScrollArea::vertical().show(ui, |ui| {
         for m in doc.materials.values() {
             egui::CollapsingHeader::new(&m.name)
@@ -3103,13 +3162,6 @@ fn materials(ui: &mut egui::Ui, w: &mut Workspace) {
                                 .prefix("Density ")
                                 .suffix(" kg/m³"),
                         )
-                        .changed();
-                    changed |= ui.color_edit_button_rgb(&mut m.color).changed();
-                    changed |= ui
-                        .add(egui::Slider::new(&mut m.metallic, 0.0..=1.0).text("Metallic"))
-                        .changed();
-                    changed |= ui
-                        .add(egui::Slider::new(&mut m.roughness, 0.04..=1.0).text("Roughness"))
                         .changed();
                     if changed {
                         w.dispatch(Command::PutMaterial {

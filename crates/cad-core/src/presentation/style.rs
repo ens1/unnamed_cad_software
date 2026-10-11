@@ -78,6 +78,13 @@ pub const SUPPORTED_STYLE_PROPERTIES: &[&str] = &[
     "shape",
     "anchor",
     "z-index",
+    "environment-intensity",
+    "environment-rotation",
+    "key-light-intensity",
+    "fill-light-intensity",
+    "exposure",
+    "shadows",
+    "ambient-occlusion-radius",
 ];
 const INHERITED: &[&str] = &[
     "color",
@@ -748,7 +755,25 @@ fn validate_property(name: &str, value: &str) -> Result<()> {
     {
         return Err(invalid("flex-grow requires a nonnegative number"));
     }
+    let lighting_bounds = match name {
+        "environment-intensity" | "key-light-intensity" | "fill-light-intensity" => Some((0., 20.)),
+        "environment-rotation" => Some((-1_000_000., 1_000_000.)),
+        "exposure" => Some((-10., 10.)),
+        "ambient-occlusion-radius" => Some((0.001, 10.)),
+        _ => None,
+    };
+    if let Some((minimum, maximum)) = lighting_bounds
+        && value
+            .parse::<f64>()
+            .ok()
+            .is_none_or(|number| !number.is_finite() || !(minimum..=maximum).contains(&number))
+    {
+        return Err(invalid(format!(
+            "{name} requires a finite number from {minimum} to {maximum}"
+        )));
+    }
     let allowed: Option<&[&str]> = match name {
+        "shadows" => Some(&["true", "false", "none"]),
         "display" => Some(&["none", "block", "flex"]),
         "visibility" => Some(&["visible", "hidden"]),
         "flex-direction" => Some(&["row", "column"]),

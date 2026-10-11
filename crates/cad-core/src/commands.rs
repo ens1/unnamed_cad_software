@@ -105,6 +105,24 @@ pub enum Command {
     PutMaterial {
         material: Material,
     },
+    PutFinish {
+        finish: Box<crate::appearance::Finish>,
+    },
+    DeleteFinish {
+        finish: Id,
+    },
+    SetPartFinish {
+        definition: Id,
+        finish: Id,
+    },
+    SetInstanceFinish {
+        assembly: Id,
+        instance: Id,
+        finish: Option<Id>,
+    },
+    SetLighting {
+        lighting: crate::appearance::Lighting,
+    },
     DeleteDrawing {
         drawing: Id,
     },
@@ -336,6 +354,7 @@ impl Command {
                                 name: part.name.clone(),
                                 definition: part.id.clone(),
                                 placement,
+                                finish: None,
                                 configuration: None,
                                 fixed: false,
                                 translation_expressions: None,
@@ -408,6 +427,47 @@ impl Command {
             }
             Self::PutMaterial { material } => {
                 document.materials.insert(material.id.clone(), material);
+            }
+            Self::PutFinish { finish } => {
+                crate::appearance::validate_finish(document, &finish)?;
+                document.finishes.insert(finish.id.clone(), *finish);
+            }
+            Self::DeleteFinish { finish } => crate::appearance::delete_finish(document, &finish)?,
+            Self::SetPartFinish { definition, finish } => {
+                if !document.finishes.contains_key(&finish) {
+                    return Err(CadError::Invalid(
+                        "The selected finish does not exist".into(),
+                    ));
+                }
+                document
+                    .parts
+                    .get_mut(&definition)
+                    .ok_or_else(missing)?
+                    .finish = finish;
+            }
+            Self::SetInstanceFinish {
+                assembly,
+                instance,
+                finish,
+            } => {
+                if finish
+                    .as_ref()
+                    .is_some_and(|id| !document.finishes.contains_key(id))
+                {
+                    return Err(CadError::Invalid(
+                        "The selected finish does not exist".into(),
+                    ));
+                }
+                document
+                    .assemblies
+                    .get_mut(&assembly)
+                    .and_then(|a| a.instances.get_mut(&instance))
+                    .ok_or_else(missing)?
+                    .finish = finish;
+            }
+            Self::SetLighting { lighting } => {
+                crate::appearance::validate_lighting(&lighting)?;
+                document.lighting = lighting;
             }
             Self::PutDrawing { drawing } => crate::drawing::put_sheet(document, drawing)?,
             Self::DeleteDrawing { drawing } => crate::drawing::delete_sheet(document, &drawing)?,

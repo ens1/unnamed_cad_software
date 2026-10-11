@@ -1,3 +1,4 @@
+mod appearances_ui;
 mod assembly_inspection_ui;
 mod background;
 mod body_filter_ui;
@@ -25,6 +26,7 @@ mod presentation_controls;
 mod presentation_resources;
 mod reference_curves_ui;
 mod reference_ui;
+mod render_appearance;
 mod rib_ui;
 mod sections_ui;
 mod selection_ui;
@@ -37,6 +39,7 @@ mod sketch_handles;
 mod sketch_ui;
 mod split_ui;
 mod surface_ui;
+mod texture_assets;
 mod ui;
 mod viewport;
 mod worker;
@@ -57,7 +60,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1;adapter/20;solver/tcad-native-lm/12";
+const BACKEND: &str = "monstertruck/0.4.1;adapter/21;solver/tcad-native-lm/12";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -72,6 +75,8 @@ pub struct Workspace {
     pub requested: Option<RequestIdentity>,
     pub changed: Instant,
     pub status: String,
+    pub appearance_diagnostics: Vec<String>,
+    pub appearance_validation_key: String,
     pub dialog: Option<String>,
     pub json: String,
     pub dialog_title: String,
@@ -176,6 +181,8 @@ impl Workspace {
             requested: None,
             changed: Instant::now(),
             status,
+            appearance_diagnostics: vec![],
+            appearance_validation_key: String::new(),
             dialog: None,
             json: String::new(),
             dialog_title: String::new(),
@@ -260,6 +267,20 @@ impl Workspace {
             })
         {
             self.status = "The current feature source must be validated before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if self.fields.contains_key("appearance-tool") && render_appearance::resources_pending(self)
+        {
+            self.confirm_requested = true;
+            self.status = "Waiting for the current texture resources to finish loading".into();
+            return;
+        }
+        if self.fields.contains_key("appearance-tool")
+            && !appearances_ui::current_source_is_valid(self)
+        {
+            self.status =
+                "Correct the current visual finish or lighting source before applying".into();
             self.confirm_requested = false;
             return;
         }
@@ -359,6 +380,8 @@ impl Workspace {
         self.manager_tree = true;
         self.compare = None;
         self.compare_document = None;
+        self.appearance_diagnostics.clear();
+        self.appearance_validation_key.clear();
         self.saved_source = self.session.committed.fingerprint();
         self.recovery_path =
             recovery_directory().join(format!("{}.json", self.session.committed.id));
@@ -426,7 +449,10 @@ impl Workspace {
         self.edge_selection_path = None;
         self.candidates.clear();
         self.fields.retain(|key, _| {
-            !key.starts_with("drawing-editor:") && key != "drawing-source-invalid"
+            !key.starts_with("appearance-")
+                && !key.starts_with("lighting-")
+                && !key.starts_with("drawing-editor:")
+                && key != "drawing-source-invalid"
         });
         self.fields.remove("smart-dimension-mode");
         self.fields.remove("component-pattern-editor");
@@ -454,6 +480,19 @@ impl Workspace {
         self.status = "Operation cancelled".into();
     }
     pub fn confirm_tool(&mut self) {
+        if self.fields.contains_key("appearance-tool") && render_appearance::resources_pending(self)
+        {
+            self.confirm_requested = true;
+            self.status = "Waiting for the current texture resources to finish loading".into();
+            return;
+        }
+        if self.fields.contains_key("appearance-tool")
+            && !appearances_ui::current_source_is_valid(self)
+        {
+            self.status =
+                "Correct the current visual finish or lighting source before applying".into();
+            return;
+        }
         if self
             .fields
             .contains_key("assembly-inspection-source-invalid")
@@ -507,7 +546,8 @@ impl Workspace {
         }
 
         if (self.fields.contains_key("exploded-view-editor")
-            || self.fields.contains_key("assembly-inspection-editor"))
+            || self.fields.contains_key("assembly-inspection-editor")
+            || self.fields.contains_key("appearance-tool"))
             && self.session.draft.is_none()
         {
             self.tool_checkpoint = None;
@@ -515,7 +555,8 @@ impl Workspace {
             self.manager_tree = true;
             self.fields.clear();
             self.confirm_requested = false;
-            self.status = "Saved assembly view or inspection unchanged".into();
+            self.rendered_key.clear();
+            self.status = "Editor closed; source unchanged".into();
             return;
         }
         if self.sketch.is_none() && self.session.draft.is_none() {
@@ -569,10 +610,14 @@ pub struct ViewImage {
 }
 #[derive(Component)]
 pub struct CadCamera;
+pub enum CadMaterial {
+    Standard(Handle<StandardMaterial>),
+    Finish(Handle<render_appearance::FinishMaterial>),
+}
 #[derive(Component)]
 pub struct CadBody {
     pub mesh: Handle<Mesh>,
-    pub material: Handle<StandardMaterial>,
+    pub material: CadMaterial,
 }
 fn main() {
     App::new()
@@ -589,6 +634,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(render_appearance::FinishRenderPlugin)
         .add_plugins(EguiPlugin::default())
         .add_systems(Startup, setup)
         .add_systems(
@@ -596,6 +642,8 @@ fn main() {
             (
                 navigation::collect_input,
                 poll_workers,
+                render_appearance::poll_assets,
+                render_appearance::lighting,
                 viewport::sync_scene,
             )
                 .chain(),
@@ -614,6 +662,7 @@ fn setup(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut textures: ResMut<EguiUserTextures>,
+    mut appearance: ResMut<render_appearance::Runtime>,
 ) {
     let size = Extent3d {
         width: 1000,
@@ -646,27 +695,10 @@ fn setup(
         Transform::from_xyz(3., 2., 4.).looking_at(Vec3::new(0., 0.35, 0.), Vec3::Y),
         RenderLayers::layer(1),
         CadCamera,
+        render_appearance::camera_components(),
     ));
     commands.spawn((Camera2d, PrimaryEguiContext));
-    commands.insert_resource(GlobalAmbientLight {
-        color: Color::WHITE,
-        brightness: 300.,
-        ..default()
-    });
-    for (pos, illuminance) in [
-        (Vec3::new(-3., 7., 5.), 12500.),
-        (Vec3::new(4., 3., -4.), 7000.),
-    ] {
-        commands.spawn((
-            DirectionalLight {
-                illuminance,
-                shadow_maps_enabled: true,
-                ..default()
-            },
-            Transform::from_translation(pos).looking_at(Vec3::ZERO, Vec3::Y),
-            RenderLayers::layer(1),
-        ));
-    }
+    render_appearance::setup(&mut commands, &mut images, &mut appearance);
 }
 fn poll_workers(mut w: ResMut<Workspace>) {
     for (ok, message) in w.jobs.drain() {

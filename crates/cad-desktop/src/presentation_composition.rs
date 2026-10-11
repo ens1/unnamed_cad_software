@@ -305,6 +305,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::sketch_ui::dimension_semantics(w));
     elements.extend(cad_core::navigation::semantic_fields(&w.view.navigation));
     elements.extend(crate::presentation_resources::semantics(w));
+    elements.extend(crate::appearances_ui::semantics(w));
     for element in crate::cad_ui::semantics(w) {
         if let Some(existing) = elements
             .iter_mut()
@@ -382,6 +383,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data: serde_json::json!({"contract":"tcad.presentation.overlay","version":1,"styleable":true}),
         });
     }
+    crate::appearances_ui::reconcile_semantics(w, &mut elements);
     elements
 }
 
@@ -577,6 +579,19 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    for identity in [
+        "appearance-finish",
+        "appearance-lighting",
+        "appearance-part",
+        "appearance-instance",
+        "appearance-ui",
+    ] {
+        adapters.register(
+            identity,
+            crate::appearances_ui::set_value,
+            crate::appearances_ui::current_value,
+        );
+    }
     adapters.register(
         "sketch-block",
         crate::sketch_blocks_ui::set_value,

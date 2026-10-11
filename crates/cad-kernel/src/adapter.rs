@@ -779,7 +779,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1;adapter/20;solver/tcad-native-lm/12"
+        "monstertruck/0.4.1;adapter/21;solver/tcad-native-lm/12"
     }
     fn sheet_metadata(
         &self,

@@ -244,6 +244,7 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "viewport.orientation.isometric",
             "viewport.fit",
             "viewport.normal-sketch",
+            "lighting",
         ],
         "Tools" => vec![
             "assembly.edit",
@@ -253,6 +254,7 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "configurations",
             "equations",
             "materials",
+            "appearances",
             "manufacturing",
             "drawings",
             "libraries",
@@ -880,11 +882,17 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
         "configuration-source-invalid",
         "exploded-view-source-invalid",
         "assembly-inspection-source-invalid",
+        "appearance-source-invalid",
     ]
     .iter()
     .any(|key| w.fields.contains_key(*key))
     {
         return Some("Correct the active operation's source before applying");
+    }
+    if w.fields.contains_key("appearance-tool")
+        && !crate::appearances_ui::current_source_is_valid(w)
+    {
+        return Some("Correct the visual finish or lighting fields before applying");
     }
     if let Some(draft) = &w.session.draft {
         if draft.error.is_some() {
@@ -995,7 +1003,9 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Interference / Clearance…", "assembly.inspection-new"),
                 ("Configurations…", "configurations"),
                 ("Equations…", "equations"),
-                ("Materials…", "materials"),
+                ("Engineering Materials…", "materials"),
+                ("Visual Finishes…", "appearances"),
+                ("Studio Lighting…", "lighting"),
                 ("Manufacturing…", "manufacturing"),
                 ("Drawings…", "drawings"),
                 ("Component Libraries…", "libraries"),
@@ -1599,6 +1609,25 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                             role: "material".into(),
                         },
                     );
+                }
+                let finish = doc
+                    .finishes
+                    .get(&effective.finish)
+                    .map(|finish| finish.name.as_str())
+                    .unwrap_or("Missing finish");
+                if controls::button(
+                    ui,
+                    &format!("{}::finish", part.id),
+                    "appearance-assignment",
+                    &["feature-tree-row"],
+                    &format!("Finish: {finish}"),
+                    w.tool_checkpoint.is_none(),
+                    false,
+                )
+                .clicked()
+                {
+                    w.view.active_part = Some(part.id.clone());
+                    crate::appearances_ui::begin(w, false);
                 }
                 ui.separator();
                 for name in ["Front Plane", "Top Plane", "Right Plane"] {

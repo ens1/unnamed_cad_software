@@ -52,6 +52,8 @@ pub struct Overrides {
     pub component_configurations: BTreeMap<Id, Option<Id>>,
     #[serde(default)]
     pub material: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish: Option<Id>,
     #[serde(default)]
     pub properties: BTreeMap<String, String>,
     #[serde(default)]
@@ -174,6 +176,9 @@ fn merge(target: &mut Overrides, next: &Overrides) {
         .component_configurations
         .extend(next.component_configurations.clone());
     target.properties.extend(next.properties.clone());
+    if next.finish.is_some() {
+        target.finish = next.finish.clone();
+    }
     if next.material.is_some() {
         target.material = next.material.clone();
     }
@@ -350,6 +355,11 @@ pub fn validate(doc: &Document) -> Result<()> {
                 {
                     return Err(invalid("Configured material is missing"));
                 }
+                if let Some(finish) = &o.finish
+                    && !doc.finishes.contains_key(finish)
+                {
+                    return Err(invalid("Configured surface finish is missing"));
+                }
             } else if let Some(a) = doc.assemblies.get(definition) {
                 require_keys(
                     o.parameters.keys(),
@@ -380,8 +390,11 @@ pub fn validate(doc: &Document) -> Result<()> {
                     || !o.feature_dimensions.is_empty()
                     || !o.sketches.is_empty()
                     || o.material.is_some()
+                    || o.finish.is_some()
                 {
-                    return Err(invalid("Feature/sketch/material overrides require a part"));
+                    return Err(invalid(
+                        "Feature/sketch/material/finish overrides require a part",
+                    ));
                 }
                 for (id, config) in &o.component_configurations {
                     let instance = a
@@ -437,6 +450,9 @@ fn apply_part(part: &mut Part, o: &Overrides) -> Result<()> {
         {
             f.suppressed = *s;
         }
+    }
+    if let Some(finish) = &o.finish {
+        part.finish = finish.clone();
     }
     if let Some(material) = &o.material {
         part.material = material.clone();
@@ -679,6 +695,7 @@ pub fn csv(table: &Table) -> Result<String> {
         "parent".into(),
         "description".into(),
         "material".into(),
+        "finish".into(),
         "bom.exclude".into(),
         "bom.name".into(),
         "bom.part_number".into(),
@@ -708,6 +725,7 @@ fn cell(c: &Definition, h: &str) -> Result<String> {
         "parent" => c.parent.clone().unwrap_or_default(),
         "description" => c.description.clone(),
         "material" => o.material.clone().unwrap_or_default(),
+        "finish" => o.finish.clone().unwrap_or_default(),
         "bom.exclude" => o.bom.exclude.map(|b| b.to_string()).unwrap_or_default(),
         "bom.name" => o
             .bom
@@ -874,6 +892,7 @@ fn set_cell(c: &mut Definition, h: &str, value: &str) -> Result<()> {
         "parent" => c.parent = Some(value.into()),
         "description" => c.description = value.into(),
         "material" => c.overrides.material = Some(value.into()),
+        "finish" => c.overrides.finish = Some(value.into()),
         "bom.exclude" => c.overrides.bom.exclude = Some(boolean(value)?),
         "bom.name" => {
             c.overrides.bom.name = Some(match value {
@@ -1059,6 +1078,16 @@ fn import_into(doc: &mut Document, mut table: Table, replace: bool) -> Result<()
                     .collect::<Vec<_>>(),
                 "sketch",
             )?;
+            if let Some(finish) = &mut o.finish {
+                *finish = named_id(
+                    finish,
+                    &doc.finishes
+                        .values()
+                        .map(|f| (f.id.clone(), f.name.clone()))
+                        .collect::<Vec<_>>(),
+                    "finish",
+                )?;
+            }
             if let Some(material) = &mut o.material {
                 *material = named_id(
                     material,
@@ -1183,6 +1212,7 @@ pub fn placed_parts(
         path: Vec<Id>,
         name: String,
         excluded: bool,
+        finish: Option<Id>,
     }
     struct Walker<'a> {
         source: &'a Document,
@@ -1203,6 +1233,7 @@ pub fn placed_parts(
                 path,
                 name,
                 excluded,
+                finish,
             } = placement;
             let scoped = scope(self.source, context, definition, configuration.as_deref())?;
             check_geometry_context(self.source, &scoped, definition)?;
@@ -1226,6 +1257,7 @@ pub fn placed_parts(
                     configuration: configuration.clone(),
                     mesh_key: key(definition, configuration.as_deref()),
                     bom_excluded: excluded,
+                    finish: Some(finish.unwrap_or_else(|| p.finish.clone())),
                 });
                 return Ok(());
             }
@@ -1271,6 +1303,7 @@ pub fn placed_parts(
                         path: child_path,
                         name: instance.name.clone(),
                         excluded,
+                        finish: instance.finish.clone().or_else(|| finish.clone()),
                     },
                 )?;
             }
@@ -1294,6 +1327,7 @@ pub fn placed_parts(
             path: Vec::new(),
             name: String::new(),
             excluded: false,
+            finish: None,
         },
     )?;
     Ok(w.parts)
@@ -1481,7 +1515,7 @@ pub fn semantic(
             });
         }
         for configuration in definitions(doc, owner).values() {
-            out.push(crate::presentation::SemanticElement {id:format!("{owner}@{}",configuration.id),role:"configuration".into(),label:configuration.name.clone(),value:Some(configuration.description.clone()),state:if doc.active_configurations.get(owner)==Some(&configuration.id){"selected"}else{state}.into(),commands:vec!["configurations".into()],relationships:configuration.parent.iter().map(|id|format!("{owner}@{id}")).chain(std::iter::once(owner.clone())).collect(),data:serde_json::json!({"version":CONTRACT_VERSION,"owner":owner,"source":configuration,"evaluated":evaluation.and_then(|e|e.definitions.get(owner)).and_then(|d|d.get(&configuration.id)),"controls":{"parameters":"unit-expression","suppression":"inherit-resolved-suppressed","material":"inherit-material","component_configurations":"inherit-selected-named","properties":"text-map","bom":"inherit-exclusion-naming"}})});
+            out.push(crate::presentation::SemanticElement {id:format!("{owner}@{}",configuration.id),role:"configuration".into(),label:configuration.name.clone(),value:Some(configuration.description.clone()),state:if doc.active_configurations.get(owner)==Some(&configuration.id){"selected"}else{state}.into(),commands:vec!["configurations".into()],relationships:configuration.parent.iter().map(|id|format!("{owner}@{id}")).chain(std::iter::once(owner.clone())).collect(),data:serde_json::json!({"version":CONTRACT_VERSION,"owner":owner,"source":configuration,"evaluated":evaluation.and_then(|e|e.definitions.get(owner)).and_then(|d|d.get(&configuration.id)),"controls":{"parameters":"unit-expression","suppression":"inherit-resolved-suppressed","material":"inherit-material","finish":"inherit-surface-finish","component_configurations":"inherit-selected-named","properties":"text-map","bom":"inherit-exclusion-naming"}})});
         }
     }
     out

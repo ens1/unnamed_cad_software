@@ -299,6 +299,7 @@ TCAD's original code is WTFPL. Dependencies retain their own licenses. This cata
 | idna | 1.1.0 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/idna-1.1.0/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/idna-1.1.0/LICENSE-MIT) |
 | idna_adapter | 1.2.2 | Apache-2.0 OR MIT | [LICENSE-APACHE](third-party-licenses/idna_adapter-1.2.2/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/idna_adapter-1.2.2/LICENSE-MIT) |
 | image | 0.25.10 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/image-0.25.10/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/image-0.25.10/LICENSE-MIT) |
+| image-webp | 0.2.4 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/image-webp-0.2.4/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/image-webp-0.2.4/LICENSE-MIT) |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT | [LICENSE-APACHE](third-party-licenses/indexmap-2.14.2/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/indexmap-2.14.2/LICENSE-MIT) |
 | inflections | 1.1.1 | MIT | [LICENSE](third-party-licenses/inflections-1.1.1/LICENSE) |
 | inotify | 0.11.5 | ISC | [LICENSE](third-party-licenses/inotify-0.11.5/LICENSE) |

@@ -10,7 +10,7 @@ use cad_core::{
     PlacedPart, TopologyRef,
     protocol::{Evaluation, MeshData},
 };
-fn style(w: &Workspace) -> BTreeMap<String, String> {
+pub(crate) fn style(w: &Workspace) -> BTreeMap<String, String> {
     let region = w
         .layout
         .regions(&w.view.active_layout, 1440., 960.)
@@ -597,6 +597,8 @@ pub fn sync_scene(
     existing: Query<(Entity, &CadBody)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut finishes: ResMut<Assets<render_appearance::FinishMaterial>>,
+    mut appearance: ResMut<render_appearance::Runtime>,
 ) {
     let props = style(&w);
     let key = format!(
@@ -636,6 +638,16 @@ pub fn sync_scene(
             .map(|evaluation| evaluation.identity.source.as_str())
             .unwrap_or("")
     );
+    let key = format!(
+        "{key}:{}:{}:{:?}:{}",
+        appearance.epoch,
+        w.session.generation,
+        w.session
+            .draft
+            .as_ref()
+            .map(|draft| (&draft.id, draft.edit)),
+        w.fields.contains_key("appearance-tool")
+    );
     if w.rendered_key == key {
         return;
     }
@@ -643,10 +655,31 @@ pub fn sync_scene(
     for (entity, body) in existing.iter() {
         commands.entity(entity).despawn();
         meshes.remove(&body.mesh);
-        materials.remove(&body.material);
+        match &body.material {
+            CadMaterial::Standard(material) => {
+                materials.remove(material);
+            }
+            CadMaterial::Finish(material) => {
+                finishes.remove(material);
+            }
+        }
     }
+    let root = w.root();
     let mut layers = vec![];
-    if w.view.history_cursor.is_some() {
+    if w.fields.contains_key("appearance-tool")
+        && !w.view.original
+        && w.view.history_cursor.is_none()
+    {
+        if let Some(evaluation) = w
+            .session
+            .draft
+            .as_ref()
+            .and_then(|draft| draft.preview_evaluation())
+            .or(w.session.evaluation.as_ref())
+        {
+            layers.push((evaluation, w.session.visible(), false, false));
+        }
+    } else if w.view.history_cursor.is_some() {
         if let Some(e) = display_evaluation(&w) {
             layers.push((e, w.session.visible(), false, false));
         }
@@ -664,7 +697,11 @@ pub fn sync_scene(
             layers.push((e, d, false, true));
         }
     }
+    let committed_finishes =
+        cad_core::appearance::resolved_finishes(&w.session.committed).unwrap_or_default();
     for (e, doc, preview, history) in layers {
+        let resolved_finishes = cad_core::appearance::resolved_finishes(doc).unwrap_or_default();
+        let default_finish = cad_core::appearance::Finish::default();
         for instance in display_instances(&w, e) {
             if !visible(&w, instance) {
                 continue;
@@ -688,20 +725,12 @@ pub fn sync_scene(
                                 && old.positions == m.positions
                                 && old.indices == m.indices
                                 && old.normals == m.normals
-                                && cad_core::configuration::material(
-                                    &w.session.committed,
-                                    &i.definition,
-                                    i.configuration.as_deref(),
-                                )
-                                .ok()
-                                .and_then(|id| w.session.committed.materials.get(&id))
-                                    == cad_core::configuration::material(
-                                        doc,
-                                        &instance.definition,
-                                        instance.configuration.as_deref(),
-                                    )
-                                    .ok()
-                                    .and_then(|id| doc.materials.get(&id))
+                                && committed_finishes
+                                    .get(&i.path)
+                                    .and_then(|id| w.session.committed.finishes.get(id))
+                                    == resolved_finishes
+                                        .get(&instance.path)
+                                        .and_then(|id| doc.finishes.get(id))
                         })
                 {
                     continue;
@@ -739,14 +768,11 @@ pub fn sync_scene(
                     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
                     .with_inserted_indices(Indices::U32(m.indices.clone())),
                 );
-                let material_id = cad_core::configuration::material(
-                    doc,
-                    &instance.definition,
-                    instance.configuration.as_deref(),
-                )
-                .ok();
-                let material = material_id.as_ref().and_then(|id| doc.materials.get(id));
-                let c = material.map(|m| m.color).unwrap_or([0.65, 0.69, 0.74]);
+                let finish = resolved_finishes
+                    .get(&instance.path)
+                    .and_then(|id| doc.finishes.get(id))
+                    .unwrap_or(&default_finish);
+                let c = finish.base_color.map(|value| value as f32);
                 let base_color = if preview {
                     style_color(
                         &props,
@@ -770,34 +796,30 @@ pub fn sync_scene(
                     .faces
                     .iter()
                     .any(|face| face.body_kind == cad_core::protocol::BodyKind::Surface);
-                let material = materials.add(StandardMaterial {
-                    base_color,
-                    metallic: if ghost {
-                        0.1
-                    } else {
-                        material.map(|m| m.metallic).unwrap_or(0.8)
+                let material = finishes.add(render_appearance::material(
+                    doc,
+                    finish,
+                    instance,
+                    &root,
+                    &mut appearance,
+                    render_appearance::SurfaceStyle {
+                        tint: ghost.then_some(base_color),
+                        translucent: ghost,
+                        two_sided: ghost || has_surfaces,
                     },
-                    perceptual_roughness: material.map(|m| m.roughness).unwrap_or(0.3),
-                    reflectance: 0.5,
-                    alpha_mode: if ghost {
-                        AlphaMode::Blend
-                    } else {
-                        AlphaMode::Opaque
-                    },
-                    double_sided: ghost || has_surfaces,
-                    cull_mode: if ghost || has_surfaces {
-                        None
-                    } else {
-                        Some(bevy::render::render_resource::Face::Back)
-                    },
-                    ..default()
-                });
-                commands.spawn((
+                ));
+                let mut entity = commands.spawn((
                     Mesh3d(mesh.clone()),
                     MeshMaterial3d(material.clone()),
                     RenderLayers::layer(1),
-                    CadBody { mesh, material },
+                    CadBody {
+                        mesh,
+                        material: CadMaterial::Finish(material),
+                    },
                 ));
+                if ghost {
+                    entity.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+                }
             }
         }
     }
@@ -876,7 +898,10 @@ pub fn sync_scene(
                 RenderLayers::layer(1),
                 bevy::light::NotShadowCaster,
                 bevy::light::NotShadowReceiver,
-                CadBody { mesh, material },
+                CadBody {
+                    mesh,
+                    material: CadMaterial::Standard(material),
+                },
             ));
         }
     }

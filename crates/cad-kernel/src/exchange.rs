@@ -264,6 +264,7 @@ pub fn import_structure(doc: &mut Document, resource: &str, root: &Path) -> Resu
                         definition: part.id.clone(),
                         placement: Default::default(),
                         configuration: None,
+                        finish: None,
                         fixed: true,
                         translation_expressions: None,
                     },
@@ -328,6 +329,7 @@ pub fn import_structure(doc: &mut Document, resource: &str, root: &Path) -> Resu
                 rotation_deg: [x.to_degrees(), y.to_degrees(), z.to_degrees()],
             },
             configuration: None,
+            finish: None,
             fixed: true,
             translation_expressions: None,
         };
@@ -368,6 +370,7 @@ pub fn import_structure(doc: &mut Document, resource: &str, root: &Path) -> Resu
                 definition,
                 placement: Default::default(),
                 configuration: None,
+                finish: None,
                 fixed: true,
                 translation_expressions: None,
             },

@@ -33,6 +33,15 @@ pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> 
         data: serde_json::Value::Null,
     }];
     let doc = session.visible();
+    out.extend(crate::appearance::semantic(
+        doc,
+        active,
+        if session.draft.is_some() {
+            "draft"
+        } else {
+            "committed"
+        },
+    ));
     out.extend(crate::configuration::semantic(
         doc,
         session
@@ -1096,7 +1105,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("bom", "Bill of materials"),
     ("inspection.properties", "Mass Properties"),
     ("comments", "Review comments"),
-    ("materials", "Materials"),
+    ("materials", "Engineering Materials"),
+    ("appearances", "Visual Finishes"),
+    ("lighting", "Studio Lighting"),
     ("libraries", "Component libraries"),
     ("drawings", "Drawings"),
     ("manufacturing", "Manufacturing"),
