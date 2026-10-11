@@ -455,3 +455,20 @@ loft proofs are still kernel work for the later Astra pass. Broader mechanical
 CAD coverage remains incomplete; completing this application pass does not close
 those families. No tests, assertion probes or interactive smoke tests were
 introduced or performed.
+
+### Validation and publication
+
+Workspace library/binary `cargo check --workspace --lib --bins --locked` passed.
+Final `cargo clippy --workspace --lib --bins --locked -- -D warnings`,
+`cargo fmt --all -- --check`, `git diff --check` and packaging-script syntax
+checks passed. The existing `proc-macro-error2` future-incompatibility notice
+remains. `scripts/package-macos.sh` compiled the entire workspace, created fresh
+executables, signed and strictly verified the nested worker/CLI and complete
+bundle, then published `dist/TCAD.app`. It contains `TCAD`, `tcad-worker` and
+`tcad-cli`; no app launch or interactive acceptance was performed.
+
+Implementation checkpoint `a4270ee` is committed and pushed to the canonical
+private origin. Repository visibility was verified as private. The public
+Monstertruck fork received no changes during this pass. The refreshed bundle is
+ready for the user's interactive acceptance, with the geometric limitations
+documented above still in force.
