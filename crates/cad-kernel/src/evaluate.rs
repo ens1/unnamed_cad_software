@@ -954,6 +954,21 @@ impl<K: KernelAdapter> Evaluator<K> {
                             })
                             .transpose()?
                             .unwrap_or_default(),
+                        material_regions: if matches!(
+                            self.shapes.get(&part.reference(&feature.id)),
+                            Some(Shape::Sketch { .. })
+                        ) {
+                            resolved
+                                .as_ref()
+                                .map(|source| {
+                                    self.adapter
+                                        .sketch_material_regions(doc, definition, source, &plane)
+                                })
+                                .transpose()?
+                                .unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        },
                         solved: resolved,
                     },
                 );

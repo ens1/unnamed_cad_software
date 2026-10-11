@@ -34,6 +34,7 @@ pub mod sketch_dimensions;
 pub mod sketch_equation;
 pub mod sketch_geometry;
 pub mod sketch_handles;
+pub mod sketch_topology;
 pub mod solid_sections;
 pub mod solver;
 pub mod split;

@@ -190,6 +190,17 @@ pub struct EvaluatedSketch {
     pub polylines: Vec<crate::sketch_geometry::SketchPolyline>,
     #[serde(default)]
     pub solved: Option<crate::Sketch>,
+    /// Current validated material-region membership over authored native member
+    /// identities. Closed hole wires belong to their surrounding region; this
+    /// disposable metadata never replaces sketch or feature definitions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub material_regions: Vec<EvaluatedMaterialRegion>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvaluatedMaterialRegion {
+    pub outer_members: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hole_members: Vec<Vec<Id>>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EvaluatedCircle {

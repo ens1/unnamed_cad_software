@@ -68,7 +68,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/27;solver/tcad-native-lm/12";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/28;solver/tcad-native-lm/12";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -598,6 +598,7 @@ impl Workspace {
         }
         holes_ui::remember_positions(self);
         rib_ui::remember_contours(self);
+        contours_ui::remember_contours(self);
         curve_pattern_ui::remember_path(self);
         placement_pattern_ui::remember_points(self);
         if self.fields.contains_key("component-pattern-source-invalid")

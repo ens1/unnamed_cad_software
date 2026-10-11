@@ -8,7 +8,7 @@ The user resumed work after enabling Ultra; the earlier stop request is revoked.
 - Editable interpolating and control-point NURBS splines with fit/control handles, degree, knots, positive weights, parameterization and expressions. Exact rho conics, parabolas, partial/full rational ellipses and true circular arc slots retain editable source intent.
 - Sketch editing includes bounded line–line/line–arc/arc–arc tangent fillets, straight-corner chamfers, exact line/arc/circle offsets and algebraically proven straight/circular Bezier/NURBS or degree-one polyline offsets. Repair joins only mutually unique independent near endpoints through explicit coincidence and can remove exactly duplicate relations. Stretch targets explicit independent controls; Replace retains the target member identity and compatible references. Dynamic mirror enrolls newly drawn source members; generated pattern instances support suppression and additional affine placement. Suppressed outputs and their relations are excluded from profile construction/solve without discarding their saved identities.
 - Sketch Text retains pinned static local TrueType/OpenType/collection font bytes and application-owned exact polynomial outlines. Em-height, offsets, rotation, tracking, alignment, multiline layout, construction state and a draggable anchor are editable. Compatible glyph/member IDs survive edits; retiring referenced contours fails explicitly. Bounds are 32 MiB per font, 1024 characters and 32768 outline segments. Font/render objects are not saved as authoritative geometry.
-- Stable Selected Contours on Extrude/Revolve/Loft/Sweep retain current native outer boundaries or supported thin chains and contained holes. Explicit selected order gives Loft correspondence; new connectors anchor native regions, while legacy ordinal connectors must be explicitly anchored before selected-region use. Associative point sources add model/datum extrusion starts.
+- Stable Selected Contours on Extrude/Revolve/Loft/Sweep retain current native material regions or supported thin chains and contained holes. Multiple boundary-member picks resolve deduplicated regions, including picks on contained hole boundaries. Explicit selected order gives Loft correspondence; new connectors anchor native regions, while legacy ordinal connectors must be explicitly anchored before selected-region use. Associative point sources add model/datum extrusion starts.
 - Sketch blocks retain same-sketch native source definitions/internal relations, stable instance output maps and parametric positive uniform placement. Prepared local solves are reused across equivalent instances and outer solver residuals. Independent anchors and optional literal angle variables supply rigid instance DOFs. Docked source/instance editing, local control/anchor dragging, construction/suppression and exact Explode use the shared sketch draft.
 - Extrusion retains sketch-normal or explicit/associative axis direction, sketch/planar-face/native sketch-vertex start and offset, independent opposite end conditions, Mid-plane and Through All Both. Ends include Blind, Through All, planar Up to Face/Offset from Face, stable sketch-point Up to Vertex and proven unique fully covering forward Up to Next/Body. Curved termination uses a full four-sided separable positive-rational graph patch over a rectangular normal section. Thin line/arc/circle sections support one-side/two-side/midplane thickness and flat ends; drafted extrusion requires a straight closed profile and normal direction. New/join/cut/intersect operate on explicit feature-output scope.
 - Native revolutions add reverse, midplane, independent second angle, angular start and thin sections, with total extent no greater than one full turn. Actual rational/revolution carriers and shared partial caps replace separate approximated end geometry. All nonzero starts are applied; only an exact full-turn extent closes the revolution. A half-plane control-hull proof, one connected stationary axis boundary chain and native near-axis/pole guards bound supported singularities. Wall/station/endpoint ancestry names generated topology.
@@ -55,7 +55,8 @@ Native schema remains 1; additive defaults omit empty/None values so existing so
 | Body editing / surface intent | 2 / 3 |
 | Configuration / component pattern / drilled holes | 3 / 1 / 2 |
 | Sheet metal / weldment / mold / drawing tables / inspection | 1 / 1 / 1 / 2 / 1 |
-| Feature order / contour selection / sketch blocks / sketch handles | 1 / 1 / 2 / 2 |
+| Feature order / contour selection / sketch blocks / sketch handles | 1 / 2 / 2 / 2 |
+| Derived sketch section topology | 1 |
 | Rib / direct edit / body filter / reference curves | 1 / 1 / 1 / 1 |
 | Dimension groups / equation curves / curve pattern / placement pattern | 1 / 1 / 1 / 1 |
 | Split / assembly inspection / exploded views / drawing sheet formats | 1 / 1 / 1 / 1 |
@@ -595,3 +596,50 @@ the pre-existing `proc-macro-error2 2.0.1` future-compatibility notice. No tests
 assertion probes, CLI modeling exercises, app launches or manual acceptance
 checks were run. This is implementation and source-review evidence, not a
 claim of interactively verified fillet behavior.
+
+## Multiple sketch contours — 2026-10-11
+
+`tcad.sketch_topology` version 1 preserves authored solved endpoint aliases
+through section flattening and propagates shared endpoint ancestry through
+matching sketch pattern transforms/instance placements. Isolated mutually
+unique material endpoints can share a derived vertex within `1e-6 mm`; complete
+alias-cluster distances are checked, with no transitive gap bridging. Saved
+source controls, constraints and pattern definitions stay unchanged. Native
+profile building and section consumers share this connectivity. Closed Bézier
+members split exactly into two native edges instead of constructing a same-ID
+endpoint edge. Legacy polygon controls use the same canonical coordinates.
+
+`tcad.contours` version 2 keeps the historical `outer_members` JSON field while
+allowing multiple region picks in one record. Each current boundary member must
+resolve uniquely; holes select their parent material region with the holes
+retained. Repeated region picks are deduplicated in first-pick order, including
+thin-chain selections. All Closed Contours keeps valid closed regions despite
+disconnected open chains. Truly open-only sources still fail solid construction
+and require closure or Thin Feature. Branching networks and uncertain native
+arrangements remain explicit gaps; no general region-arrangement solver is
+claimed. Existing multi-tool boss/cut handling and scope/through-all bounds are
+retained.
+
+The worker publishes disposable outer/hole member membership through
+`KernelAdapter::sketch_material_regions` and `EvaluatedSketch.material_regions`.
+Only application-owned source IDs cross this boundary. The compact scrollable
+picker uses current solved classification, including available source profiles
+in failed feature evaluations. A parent and its holes form one choice; outer
+anchors are preferred so deleting a hole does not lose an otherwise surviving
+region. All, Selected, Select All, Clear and explicit loft ordering share native
+controls and semantic presentation actions. `contour-list` exposes `max-height`
+and `contour-option`/`contour-mode`/`contour-action` roles expose styled controls.
+Semantic commands reject changed feature source and stale row indices. Pending
+classification cannot become a validated region selection. Command/Shift sketch
+member picks survive asynchronous sketch confirmation using a document/part/
+profile-scoped deferred payload for Extrude/Cut/Revolve/Loft/Sweep presets.
+
+Both desktop and kernel use
+`monstertruck/0.4.1+fc2306852a46;adapter/28;solver/tcad-native-lm/12`.
+The Monstertruck dependency revision is unchanged in this continuation.
+Locked workspace library/binary compilation, workspace formatting and strict
+Clippy (`-D warnings`) and diff checks passed. `scripts/package-macos.sh`
+rebuilt `dist/TCAD.app`, validated its plist and verified nested and whole-bundle
+signatures. The pre-existing `proc-macro-error2 2.0.1` future-compatibility
+notice remains. No tests, modeling probes, app launches or manual UI acceptance
+checks were run.

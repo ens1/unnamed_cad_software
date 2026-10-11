@@ -18,6 +18,51 @@ pub(crate) struct BuiltSketch {
     pub shape: Shape,
     pub members: std::collections::HashMap<EdgeId, (String, usize)>,
 }
+
+/// Publish native region membership as disposable application-owned source IDs.
+/// The UI uses this classification to select an outer boundary and its holes
+/// together; renderer tessellation and native face ordering are not identities.
+pub(crate) fn material_regions(
+    doc: &Document,
+    owner: &str,
+    sketch: &Sketch,
+    plane: &cad_core::Plane,
+) -> Result<Vec<cad_core::protocol::EvaluatedMaterialRegion>> {
+    let built = build_traced(doc, owner, sketch, plane)?;
+    let Shape::Sketch { faces, .. } = built.shape else {
+        return Err(invalid("Expected native sketch material regions"));
+    };
+    let boundary_members = |wire: &Wire| {
+        wire.iter()
+            .filter_map(|edge| {
+                built
+                    .members
+                    .get(&edge.id())
+                    .map(|(member, _)| member.clone())
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+    };
+    Ok(faces
+        .iter()
+        .filter_map(|face| {
+            let boundaries = face.boundaries();
+            let outer_members = boundary_members(&boundaries[0]);
+            let hole_members = boundaries[1..]
+                .iter()
+                .map(boundary_members)
+                .collect::<Vec<_>>();
+            if outer_members.is_empty() && hole_members.iter().all(Vec::is_empty) {
+                return None;
+            }
+            Some(cad_core::protocol::EvaluatedMaterialRegion {
+                outer_members,
+                hole_members,
+            })
+        })
+        .collect())
+}
 pub(crate) fn build_traced(
     doc: &Document,
     owner: &str,
@@ -30,7 +75,10 @@ pub(crate) fn build_traced(
     let v = Vector3::from(plane.v);
     let origin = Point3::from(plane.origin);
     let at = |p: [f64; 2]| origin + u * p[0] + v * p[1];
-    let aliases = cad_core::sketch_relations::topological_point_aliases(sketch, 1e-6)?;
+    let aliases = cad_core::sketch_topology::point_aliases(
+        sketch,
+        cad_core::sketch_topology::DEFAULT_TOLERANCE_MM,
+    )?;
     let canonical_vertices = sketch
         .points
         .iter()
@@ -61,7 +109,7 @@ pub(crate) fn build_traced(
             &sketch
                 .profile_order
                 .iter()
-                .map(|id| sketch.points[id])
+                .map(|id| sketch.points[aliases.get(id).unwrap_or(id)])
                 .collect::<Vec<_>>(),
             plane,
         )?);
@@ -121,11 +169,26 @@ pub(crate) fn build_traced(
                     .iter()
                     .map(|id| vertex(id).map(Vertex::point))
                     .collect::<Result<Vec<_>>>()?;
-                edges.push(builder::bezier(
-                    vertex(&points[0])?,
-                    vertex(points.last().unwrap())?,
-                    inter,
-                ));
+                let first = vertex(&points[0])?;
+                let last = vertex(points.last().unwrap())?;
+                if first == last {
+                    let controls = std::iter::once(first.point())
+                        .chain(inter)
+                        .chain(std::iter::once(last.point()))
+                        .collect();
+                    let mut curve =
+                        BsplineCurve::new(KnotVector::bezier_knot(points.len() - 1), controls);
+                    let middle = builder::vertex(curve.subs(0.5));
+                    let second = curve.cut(0.5);
+                    closed.push(Wire::from(vec![
+                        Edge::try_new(first, &middle, Curve::BsplineCurve(curve))
+                            .map_err(invalid)?,
+                        Edge::try_new(&middle, first, Curve::BsplineCurve(second))
+                            .map_err(invalid)?,
+                    ]));
+                } else {
+                    edges.push(builder::bezier(first, last, inter));
+                }
             }
             SketchCurve::Nurbs {
                 points,
@@ -200,8 +263,9 @@ pub(crate) fn build_traced(
     }
     let mut paths = Vec::new();
     while !edges.is_empty() {
-        // Start at an open endpoint when one exists. Stable point identities
-        // join mixed lines/arcs/splines without inferring approximate coincidence.
+        // Start at an open endpoint when one exists. Derived section aliases
+        // preserve authored and pattern connections, with isolated tolerance
+        // healing supplied by the application-owned sketch topology contract.
         let endpoint = edges
             .iter()
             .flat_map(|e| [e.front().id(), e.back().id()])

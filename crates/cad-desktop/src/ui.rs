@@ -1947,8 +1947,18 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
         return;
     }
     crate::history::latest(w);
-    let requested_name = name;
-    let name = match name {
+    let pending_contours = match crate::contours_ui::pending(w, name) {
+        Ok(pending) => pending,
+        Err(error) => {
+            w.status = error;
+            return;
+        }
+    };
+    let requested_name = pending_contours
+        .as_ref()
+        .map(|pending| pending.requested_name.as_str())
+        .unwrap_or(name);
+    let name = match requested_name {
         "Mid-plane Extrude" | "Two-direction Extrude" | "Thin Extrude" => "Extrude",
         "Through All Cut" | "Through Both Cut" | "Up to Face Cut" | "Thin Cut" => "Cut",
         "Revolved Cut" => "Revolve",
@@ -1960,13 +1970,13 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
     };
 
     if w.confirm_requested {
-        w.after_confirm = Some(requested_name.into());
+        w.after_confirm = Some(crate::contours_ui::deferred_preset(w, requested_name));
         return;
     }
     if w.sketch.is_some() {
-        w.after_confirm = Some(requested_name.into());
+        w.after_confirm = Some(crate::contours_ui::deferred_preset(w, requested_name));
         w.confirm_tool();
-        if w.sketch.is_some() {
+        if w.sketch.is_some() && !w.confirm_requested {
             w.after_confirm = None;
         }
         return;
@@ -2012,20 +2022,24 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
         definition: part.id.clone(),
         node: "select-body-node".into(),
     });
-    let profile = part
-        .features
-        .iter()
-        .find(|f| {
-            w.view.active_node.as_ref() == Some(&f.id)
-                && matches!(f.operation, Operation::Profile { .. })
-        })
+    let profile = pending_contours
+        .as_ref()
+        .map(|pending| pending.profile.clone())
         .or_else(|| {
             part.features
                 .iter()
-                .rev()
-                .find(|f| matches!(f.operation, Operation::Profile { .. }))
+                .find(|f| {
+                    w.view.active_node.as_ref() == Some(&f.id)
+                        && matches!(f.operation, Operation::Profile { .. })
+                })
+                .or_else(|| {
+                    part.features
+                        .iter()
+                        .rev()
+                        .find(|f| matches!(f.operation, Operation::Profile { .. }))
+                })
+                .map(|f| part.reference(&f.id))
         })
-        .map(|f| part.reference(&f.id))
         .unwrap_or(NodeRef {
             definition: part.id.clone(),
             node: "select-profile-node".into(),
@@ -2350,6 +2364,7 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
         }
         _ => {}
     }
+    crate::contours_ui::seed_operation(w, &mut op, pending_contours.as_ref());
     w.start_tool();
     let base_name = match requested_name {
         "Revolved Cut" => "Cut-Revolve",

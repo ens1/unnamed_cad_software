@@ -59,6 +59,17 @@ pub trait KernelAdapter {
         plane: &CadPlane,
         inputs: &BTreeMap<NodeRef, Shape>,
     ) -> Result<cad_core::Sketch>;
+    /// Disposable material-region membership for semantic contour selection.
+    /// Only stable application source IDs cross the adapter boundary.
+    fn sketch_material_regions(
+        &self,
+        _doc: &Document,
+        _owner: &str,
+        _sketch: &cad_core::Sketch,
+        _plane: &CadPlane,
+    ) -> Result<Vec<cad_core::protocol::EvaluatedMaterialRegion>> {
+        Ok(vec![])
+    }
     fn sketch_plane(
         &self,
         plane: &CadPlane,
@@ -849,7 +860,16 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/27;solver/tcad-native-lm/12"
+        "monstertruck/0.4.1+fc2306852a46;adapter/28;solver/tcad-native-lm/12"
+    }
+    fn sketch_material_regions(
+        &self,
+        doc: &Document,
+        owner: &str,
+        sketch: &cad_core::Sketch,
+        plane: &CadPlane,
+    ) -> Result<Vec<cad_core::protocol::EvaluatedMaterialRegion>> {
+        crate::sketches::material_regions(doc, owner, sketch, plane)
     }
     fn sheet_metadata(
         &self,

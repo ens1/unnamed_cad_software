@@ -467,6 +467,9 @@ fn sketch_tool_command(tool: sketch::Tool) -> String {
 /// The same presentation command route is used by native controls and arbitrary
 /// user-composed copies of them. Modeling continues through existing commands.
 pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
+    if crate::contours_ui::action(w, command) {
+        return true;
+    }
     if let Some(name) = command.strip_prefix("viewport.orientation.") {
         let orbit = match name {
             "front" => [0., 0.],
@@ -865,6 +868,7 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             }
         }
     }
+    out.extend(crate::contours_ui::semantics(w));
     out
 }
 
@@ -2585,6 +2589,7 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
             changed |= profile_selector(ui, &doc, &feature.id, "Profile", profile);
             changed |= crate::contours_ui::fields(
                 ui,
+                w,
                 &doc,
                 std::slice::from_ref(profile),
                 &mut options.contours,
@@ -2815,6 +2820,7 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
             changed |= profile_selector(ui, &doc, &feature.id, "Profile", profile);
             changed |= crate::contours_ui::fields(
                 ui,
+                w,
                 &doc,
                 std::slice::from_ref(profile),
                 &mut options.contours,
@@ -3413,7 +3419,7 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
             changed |= result_fields(ui, &doc, &feature.id, body, mode);
             changed |= crate::sections_ui::sweep(
                 ui,
-                &doc,
+                w,
                 &feature.id,
                 profile,
                 path_sketch.as_ref(),

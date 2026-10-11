@@ -514,6 +514,13 @@ pub(crate) fn source(
         }
         sketch.members.get_mut(&member).unwrap().curve = curve;
     }
+    // Preserve solved endpoint connections before flattening the temporary
+    // section. Constraints and pattern ancestry are needed to derive these
+    // identities, even though the source document itself remains unchanged.
+    let aliases = cad_core::sketch_topology::point_aliases(
+        &sketch,
+        cad_core::sketch_topology::DEFAULT_TOLERANCE_MM,
+    )?;
     let suppressed = cad_core::sketch_transform::suppressed_members(&sketch);
     sketch.members.retain(|key, _| !suppressed.contains(key));
     sketch.conversions.clear();
@@ -577,6 +584,34 @@ pub(crate) fn source(
     sketch.profile_order.clear();
     sketch.segments.clear();
     sketch.circles.clear();
+    let canonical = |point: &mut Id| {
+        if let Some(alias) = aliases.get(point) {
+            *point = alias.clone();
+        }
+    };
+    for member in sketch.members.values_mut() {
+        match &mut member.curve {
+            SketchCurve::Line { start, end } => {
+                canonical(start);
+                canonical(end);
+            }
+            SketchCurve::Arc {
+                start,
+                through,
+                end,
+            } => {
+                canonical(start);
+                canonical(through);
+                canonical(end);
+            }
+            SketchCurve::Bezier { points } | SketchCurve::Nurbs { points, .. } => {
+                points.iter_mut().for_each(&canonical);
+            }
+            SketchCurve::Circle { center, .. } | SketchCurve::Ellipse { center, .. } => {
+                canonical(center);
+            }
+        }
+    }
     Ok((sketch, plane))
 }
 
@@ -788,7 +823,9 @@ fn selection_requests<'a>(
         .collect::<Vec<_>>();
     for selection in &requests {
         if selection.outer_members.is_empty() {
-            return Err(invalid("Selected Contours need an outer-boundary member"));
+            return Err(invalid(
+                "Select at least one material contour or choose All Closed Contours",
+            ));
         }
         for member in &selection.outer_members {
             validate_native_member(doc, profile, member)?;
@@ -837,25 +874,26 @@ fn filter_sections(
     }
     let mut selected = Vec::new();
     for selection in requests {
-        let regions = sections
-            .iter()
-            .enumerate()
-            .filter(|(_, section)| {
-                let members = outer_members(section);
-                selection
-                    .outer_members
-                    .iter()
-                    .all(|member| members.contains(member))
-            })
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        if regions.len() != 1 {
-            return Err(invalid(
-                "A Selected Contour must identify exactly one outer material boundary; holes follow their outer region automatically",
-            ));
-        }
-        if !selected.contains(&regions[0]) {
-            selected.push(regions[0]);
+        for member in &selection.outer_members {
+            let regions = sections
+                .iter()
+                .enumerate()
+                .filter(|(_, section)| {
+                    section
+                        .members
+                        .values()
+                        .any(|source| source.sources.contains(member))
+                })
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            if regions.len() != 1 {
+                return Err(invalid(
+                    "A selected sketch member must belong to one closed material region; open, missing or ambiguous members cannot select a solid contour",
+                ));
+            }
+            if !selected.contains(&regions[0]) {
+                selected.push(regions[0]);
+            }
         }
     }
     let mut sections = sections.into_iter().map(Some).collect::<Vec<_>>();
@@ -902,12 +940,12 @@ pub(crate) fn profiles_traced(
     let (source, plane) = source(adapter, doc, reference, inputs)?;
     let requests = selection_requests(doc, &source, reference, selections)?;
     let built = crate::sketches::build_traced(doc, &reference.definition, &source, &plane)?;
-    let Shape::Sketch { faces, paths } = built.shape else {
+    let Shape::Sketch { faces, .. } = built.shape else {
         return Err(invalid("Expected native source sketch sections"));
     };
-    if faces.is_empty() || (!paths.is_empty() && requests.is_empty()) {
+    if faces.is_empty() {
         return Err(invalid(
-            "Solid sections need closed sketch material contours; use Selected Contours to exclude unrelated open chains",
+            "The sketch has no closed material contours; close its endpoints or enable Thin Feature for open chains",
         ));
     }
     let sections = faces
@@ -968,31 +1006,29 @@ pub(crate) fn thin_profiles_traced(
     let requests = selection_requests(doc, &source, reference, selections)?;
     let mut groups = chains(&source)?;
     if !requests.is_empty() {
-        let mut selected = BTreeSet::new();
+        let mut selected = Vec::new();
         for selection in &requests {
-            let matches = groups
-                .iter()
-                .enumerate()
-                .filter(|(_, group)| {
-                    selection
-                        .outer_members
-                        .iter()
-                        .all(|member| group.contains(member))
-                })
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-            if matches.len() != 1 {
-                return Err(invalid(
-                    "A thin Selected Contour must identify one connected source chain",
-                ));
+            for member in &selection.outer_members {
+                let matches = groups
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, group)| group.contains(member))
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                if matches.len() != 1 {
+                    return Err(invalid(
+                        "A thin selected member must identify one connected source chain",
+                    ));
+                }
+                if !selected.contains(&matches[0]) {
+                    selected.push(matches[0]);
+                }
             }
-            selected.insert(matches[0]);
         }
-        groups = groups
+        let mut available = groups.into_iter().map(Some).collect::<Vec<_>>();
+        groups = selected
             .into_iter()
-            .enumerate()
-            .filter(|(index, _)| selected.contains(index))
-            .map(|(_, group)| group)
+            .map(|index| available[index].take().unwrap())
             .collect();
     }
     for group in &groups {

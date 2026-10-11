@@ -175,6 +175,7 @@ pub(crate) fn loft(
     let mut changed = false;
     changed |= crate::contours_ui::fields(
         ui,
+        w,
         doc,
         profiles,
         &mut options.contours,
@@ -223,16 +224,18 @@ pub(crate) fn loft(
 }
 pub(crate) fn sweep(
     ui: &mut egui::Ui,
-    doc: &Document,
+    w: &Workspace,
     current: &str,
     profile: &NodeRef,
     path: Option<&NodeRef>,
     body: Option<&NodeRef>,
     options: &mut SweepOptions,
 ) -> bool {
+    let doc = w.session.visible();
     let mut changed = false;
     changed |= crate::contours_ui::fields(
         ui,
+        w,
         doc,
         std::slice::from_ref(profile),
         &mut options.contours,

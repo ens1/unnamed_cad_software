@@ -2,13 +2,15 @@
 use crate::{CadError, Id, NodeRef, Result};
 use serde::{Deserialize, Serialize};
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selection {
     pub profile: NodeRef,
-    /// One or more native material members on the same outer boundary.
-    /// In thin mode these identify one connected source chain.
+    /// Persistent native material members identifying one or more regions.
+    /// Hole boundaries select their containing region, retaining the hole.
+    /// In thin mode each member identifies its connected source chain.
+    /// The historical field name is retained for saved-document compatibility.
     pub outer_members: Vec<Id>,
 }
 
@@ -22,7 +24,7 @@ pub fn validate_profiles(profiles: &[NodeRef], selections: &[Selection]) -> Resu
         }
         if selection.outer_members.is_empty() {
             return Err(CadError::Invalid(
-                "A Selected Contour needs a native outer-boundary member".into(),
+                "Select at least one material contour or choose All Closed Contours".into(),
             ));
         }
     }
@@ -30,5 +32,5 @@ pub fn validate_profiles(profiles: &[NodeRef], selections: &[Selection]) -> Resu
 }
 
 pub fn semantics(selections: &[Selection], thin: bool) -> serde_json::Value {
-    serde_json::json!({"contract":"tcad.contours","version":CONTRACT_VERSION,"selection":"native_outer_boundary_members","selections":selections,"order":"selected_record_order_per_profile","unlisted_profiles":"all_material_regions","contained_holes":"retained","thin_selection":if thin {"connected_source_chain"}else{"disabled"},"validation":"one_unique_current_region_or_chain_per_selection","editable":true})
+    serde_json::json!({"contract":"tcad.contours","version":CONTRACT_VERSION,"selection":"native_material_boundary_members","selections":selections,"order":"selected_record_then_member_order_per_profile","unlisted_profiles":"all_closed_material_regions","unselected_open_chains":"ignored_for_solid_sections","contained_holes":"retained","hole_boundary_selection":"containing_material_region","thin_selection":if thin {"connected_source_chains"}else{"disabled"},"validation":"one_unique_current_region_or_chain_per_member","editable":true})
 }
