@@ -390,3 +390,24 @@ private implementation commit. This is not a claim of universal kernel coverage;
 interactive geometric acceptance remains with the user. The unsupported
 intersection, mixed-blend and offset families listed above remain kernel work,
 not work that presentation or feature-editor changes can resolve.
+
+## macOS launch packaging repair — 2026-10-11
+
+The user reported that the refreshed bundle failed to open. Existing macOS
+crash reports identify `SIGKILL (Code Signature Invalid)` with `CODESIGNING /
+Invalid Page` in dyld, before desktop startup. Static bundle verification also
+failed because the linker signature did not seal the assembled app resources.
+The previous packaging script overwrote executables in an existing bundle and
+never signed the completed app.
+
+`scripts/package-macos.sh` now builds in a fresh staging directory, preserves
+distinct executable names, ad-hoc signs the worker and CLI before sealing the
+whole bundle, and verifies each executable plus the complete resource seal.
+The existing package is replaced only after successful verification; failed
+publication restores the preceding package. Fresh files also avoid reusing
+executable inodes associated with stale macOS code-signature pages.
+`sh -n scripts/package-macos.sh`, `git diff --check` and the complete
+compile/sign/verify packaging workflow passed. After publication,
+`codesign --verify --deep --strict --verbose=2 dist/TCAD.app` and independent
+worker/CLI signature checks also passed. No tests, app launch or interactive
+acceptance were performed; the user retains interactive acceptance.
