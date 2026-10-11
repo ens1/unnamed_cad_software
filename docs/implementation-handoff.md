@@ -874,3 +874,9 @@ compilation, `cargo fmt --all -- --check`,
 No tests, probes, model exercises, app launches or UI smoke checks were performed;
 interactive acceptance remains the user's work. The existing
 `proc-macro-error2` future-incompatibility notice remains.
+
+Signed packaging completed for implementation commit `1995454`:
+`scripts/package-macos.sh` rebuilt the locked workspace, validated the bundle
+plist, signed all three distinct executables and signature-verified
+`dist/TCAD.app`. The implementation was pushed to the private canonical origin.
+No app was launched or tested interactively.

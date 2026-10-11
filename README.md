@@ -127,4 +127,10 @@ The continuation adds [configured feature-expression dimensions](docs/configurat
 
 Visual finishes stay separate from engineering materials. New parts default to clear anodized aluminum; presets also include bare aluminum, green anodizing and an approximate RAL 1015 paint display. **Tools → Appearance · Colors and Textures** opens a separate resizable panel in bundled layouts, with explicit part/occurrence assignment and target customization that creates an independent finish. Users can import grayscale bump/height images and color, normal, roughness, metallic and occlusion maps as portable project resources. Physical bump depth and tile size control their lighting relief; **Tools → Studio Lighting** controls illumination and exposure. Edits preview in the shared viewport and commit through validated Apply/Cancel. See [visual finishes](docs/visual-finishes.md) for supported maps, semantic styling and rendering limits.
 
+Parts default to shaded display with depth-tested edges. Hovering near supported
+circular edges reveals center marks and axes; straight edges reveal midpoint
+guides. **Settings → Application → Model display** controls all three displays,
+with colors, widths and hover targets also exposed to user themes. See
+[part edges and hover guides](docs/presentation.md#part-edges-and-hover-center-guides).
+
 **Edit → Settings…** (or **Cmd+,**) opens a compact, searchable dialog for model preferences and application preferences. Model units, precision, evaluation tolerance, new-part finish and lighting travel with the CAD file. Interface scale, navigation, recovery and new-model defaults are saved for the current user. **Application → Themes** picks or loads a complete presentation package or CSS/JSON stylesheet, with live preview, Apply persistence, and Cancel restoration. The bundled [Nocturne example](docs/theme-example.md) moves the inspector right and tools below the viewport, with dark colors and larger circular and pill controls. Apply/OK/Cancel preserve the shared validated draft and undo behavior. The dialog and its fields expose semantic bindings and CSS-like style targets. See [settings](docs/settings.md).
