@@ -1,5 +1,5 @@
 monstertruck-fillet-0.4.1
 Declared SPDX license: Apache-2.0
 Upstream: https://github.com/virtualritz/monstertruck
-Locked source: git+https://github.com/ens1/monstertruck.git?rev=e52aab0677610f65c647e7f8dc0829efe2cb1318#e52aab0677610f65c647e7f8dc0829efe2cb1318
+Locked source: git+https://github.com/ens1/monstertruck.git?rev=fc2306852a463573d35f9204ac76b1a6f712cc84#fc2306852a463573d35f9204ac76b1a6f712cc84
 Dependency modifications retain the upstream license.

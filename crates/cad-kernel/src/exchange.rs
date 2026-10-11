@@ -3,7 +3,7 @@ use cad_core::{
 };
 use monstertruck::{
     assembly::assy::{Assembly as KernelAssembly, EdgeEntity, NodeEntity},
-    modeling::{Matrix4, Shell, Solid},
+    modeling::{Curve, Matrix4, Shell, Solid},
     step::{
         common::PartAttributes,
         save::{CompleteStepDisplay, StepDesign, StepHeaderDescriptor, StepModel},
@@ -21,6 +21,25 @@ fn attrs(id: &str, name: &str) -> PartAttributes {
         shape_representation: None,
     }
 }
+
+fn validate_step_boundaries(shell: &Shell) -> Result<()> {
+    for edge in shell.edge_iter() {
+        if let Curve::IntersectionCurve(curve) = edge.curve()
+            && !curve.branch_halfspaces().is_empty()
+        {
+            // STEP's current writer serializes the search guide as CURVE_3D.
+            // A branch-constrained intersection need not lie on that guide,
+            // and the branch halfspaces have no matching export representation.
+            // Refuse before Display (which cannot report a modeling error) or
+            // any destination write rather than export a different boundary.
+            return Err(CadError::Unsupported(
+                "STEP export cannot yet preserve branch-constrained intersection trims from cylindrical-end fillets; save the editable TCAD document instead".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn export_step(
     doc: &Document,
     evaluated: &BTreeMap<Id, cad_core::assembly_geometry::EvaluatedAssembly>,
@@ -69,20 +88,25 @@ pub fn export_step(
             } else {
                 name
             };
-            let shape =
-                if scoped.parts.contains_key(definition) {
-                    self.bodies
-                        .get(&key)
-                        .into_iter()
-                        .flatten()
-                        .map(|body| StepBody::new(StepModel::from(&body.compress()).to_string()))
-                        .chain(self.surfaces.get(&key).into_iter().flatten().map(|shell| {
-                            StepBody::new(StepModel::from(&shell.compress()).to_string())
-                        }))
-                        .collect::<Result<Vec<_>>>()?
-                } else {
-                    Vec::new()
-                };
+            let shape = if scoped.parts.contains_key(definition) {
+                self.bodies
+                    .get(&key)
+                    .into_iter()
+                    .flatten()
+                    .map(|body| {
+                        for shell in body.boundaries() {
+                            validate_step_boundaries(shell)?;
+                        }
+                        StepBody::new(StepModel::from(&body.compress()).to_string())
+                    })
+                    .chain(self.surfaces.get(&key).into_iter().flatten().map(|shell| {
+                        validate_step_boundaries(shell)?;
+                        StepBody::new(StepModel::from(&shell.compress()).to_string())
+                    }))
+                    .collect::<Result<Vec<_>>>()?
+            } else {
+                Vec::new()
+            };
             let node = self.graph.create_node(NodeEntity {
                 shape,
                 attrs: attrs(&key, &name),
