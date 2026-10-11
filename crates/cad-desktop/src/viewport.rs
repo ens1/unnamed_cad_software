@@ -3,17 +3,18 @@ use bevy::math::DVec3;
 use bevy::{
     asset::RenderAssetUsages,
     mesh::Indices,
-    render::render_resource::{Extent3d, PrimitiveTopology},
+    render::render_resource::{Extent3d, Face, PrimitiveTopology},
 };
 use bevy_egui::egui;
 use cad_core::{
     PlacedPart, TopologyRef,
-    protocol::{Evaluation, MeshData},
+    protocol::{Evaluation, MeshData, OPERATION_PREVIEW_VERSION},
 };
-pub(crate) fn style(w: &Workspace) -> BTreeMap<String, String> {
+fn style_target(w: &Workspace) -> cad_core::presentation::StyleTarget {
+    let [width, height] = w.presentation_resources.logical_size;
     let region = w
         .layout
-        .regions(&w.view.active_layout, 1440., 960.)
+        .regions(&w.view.active_layout, width.max(1.), height.max(1.))
         .ok()
         .and_then(|rs| rs.into_iter().find(|r| r.role == "model-viewport"))
         .unwrap_or(cad_core::presentation::Region {
@@ -24,10 +25,11 @@ pub(crate) fn style(w: &Workspace) -> BTreeMap<String, String> {
             classes: vec![],
             resizable: false,
         });
-    w.theme.properties_for(
-        &w.layout
-            .style_target(&region, &w.view.active_layout, "ready"),
-    )
+    w.layout
+        .style_target(&region, &w.view.active_layout, "ready")
+}
+pub(crate) fn style(w: &Workspace) -> BTreeMap<String, String> {
+    w.theme.properties_for(&style_target(w))
 }
 fn style_color(props: &BTreeMap<String, String>, key: &str, fallback: Color) -> Color {
     props
@@ -128,12 +130,31 @@ fn triangle(o: [f64; 3], d: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> 
     let t = e2.dot(q) * inverse;
     (t > 0.).then_some(t)
 }
-fn mesh_for<'a>(e: &'a Evaluation, i: &PlacedPart) -> Option<&'a MeshData> {
-    e.meshes.get(if i.mesh_key.is_empty() {
-        &i.definition
-    } else {
-        &i.mesh_key
-    })
+fn render_mesh(source: &MeshData, instance: &PlacedPart) -> Mesh {
+    let positions = source
+        .positions
+        .iter()
+        .map(|point| render_point(placed(*point, instance)).to_array())
+        .collect::<Vec<_>>();
+    let normals = source
+        .normals
+        .iter()
+        .map(|normal| {
+            let normal: [f64; 3] = std::array::from_fn(|axis| {
+                instance.matrix[axis][0] * normal[0]
+                    + instance.matrix[axis][1] * normal[1]
+                    + instance.matrix[axis][2] * normal[2]
+            });
+            render_point(normal).normalize_or_zero().to_array()
+        })
+        .collect::<Vec<_>>();
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_indices(Indices::U32(source.indices.clone()))
 }
 pub(crate) fn display_evaluation(w: &Workspace) -> Option<&Evaluation> {
     w.session
@@ -181,6 +202,190 @@ fn visible(w: &Workspace, i: &PlacedPart) -> bool {
         || w.view.active_part.as_deref() == Some(&i.definition)
         || w.view.pinned.iter().any(|p| i.path.contains(p))
         || w.view.ghost_others
+}
+fn ghost_neighbor(w: &Workspace, instance: &PlacedPart) -> bool {
+    w.view.isolation
+        && !w.peek
+        && w.view.active_part.as_ref() != Some(&instance.definition)
+        && !w.view.pinned.iter().any(|id| instance.path.contains(id))
+}
+#[derive(Clone, Copy, Debug)]
+enum PreviewKind {
+    Added,
+    Removed,
+}
+impl PreviewKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Added => "added",
+            Self::Removed => "removed",
+        }
+    }
+}
+struct PreviewMesh<'a> {
+    mesh: &'a MeshData,
+    instance: &'a PlacedPart,
+    kind: PreviewKind,
+}
+fn preview_meshes(w: &Workspace) -> Vec<PreviewMesh<'_>> {
+    if w.view.original || w.view.history_cursor.is_some() {
+        return vec![];
+    }
+    let Some(evaluation) = display_evaluation(w) else {
+        return vec![];
+    };
+    let Some(preview) = crate::operation_preview::displayed(w)
+        .filter(|preview| preview.version == OPERATION_PREVIEW_VERSION)
+    else {
+        return vec![];
+    };
+    let instances = display_instances(w, evaluation);
+    let displayed = instances
+        .iter()
+        .map(|instance| (&instance.path, cad_core::history::mesh_key(instance)))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut meshes = vec![];
+    for instance in instances.iter().filter(|instance| visible(w, instance)) {
+        let Some(change) = preview.changes.get(cad_core::history::mesh_key(instance)) else {
+            continue;
+        };
+        for (source, kind) in [
+            (&change.added, PreviewKind::Added),
+            (&change.removed, PreviewKind::Removed),
+        ] {
+            if let Some(mesh) = source
+                .as_ref()
+                .filter(|mesh| !mesh.positions.is_empty() && !mesh.indices.is_empty())
+            {
+                meshes.push(PreviewMesh {
+                    mesh,
+                    instance,
+                    kind,
+                });
+            }
+        }
+    }
+    // A delete or replacement can remove an occurrence from the result. Keep
+    // only its removal cache at the baseline placement, never its complete body.
+    for instance in preview.baseline_instances.iter().filter(|instance| {
+        visible(w, instance)
+            && !displayed.contains(&(&instance.path, cad_core::history::mesh_key(instance)))
+    }) {
+        if let Some(mesh) = preview
+            .changes
+            .get(cad_core::history::mesh_key(instance))
+            .and_then(|change| change.removed.as_ref())
+            .filter(|mesh| !mesh.positions.is_empty() && !mesh.indices.is_empty())
+        {
+            meshes.push(PreviewMesh {
+                mesh,
+                instance,
+                kind: PreviewKind::Removed,
+            });
+        }
+    }
+    meshes
+}
+fn preview_color(props: &BTreeMap<String, String>, kind: PreviewKind) -> Color {
+    let (property, fallback) = match kind {
+        PreviewKind::Added => ("preview-added-color", Color::srgba(0.15, 0.85, 0.52, 0.45)),
+        PreviewKind::Removed => ("preview-removed-color", Color::srgba(1., 0.35, 0.12, 0.48)),
+    };
+    style_color(
+        props,
+        property,
+        style_color(props, "preview-color", fallback),
+    )
+}
+#[derive(Debug)]
+struct PreviewStyle {
+    color: Color,
+    edge_width: f32,
+}
+fn preview_style(
+    w: &Workspace,
+    preview: &PreviewMesh<'_>,
+    viewport: &BTreeMap<String, String>,
+) -> Option<PreviewStyle> {
+    let kind = preview.kind.name();
+    let key = cad_core::history::mesh_key(preview.instance);
+    let parent = style_target(w);
+    let state = crate::operation_preview::summary(w)
+        .map(|(state, _)| state)
+        .unwrap_or_else(|| "ready".into());
+    let mut target = parent.child(
+        &format!("operation-preview:{key}:{kind}"),
+        &format!("operation-preview-{kind}"),
+        &["viewport-overlay".into(), "operation-preview".into()],
+        &state,
+    );
+    target.node.attributes.insert("mesh-key".into(), key.into());
+    target.node.attributes.insert("kind".into(), kind.into());
+    let properties = w.theme.properties_for(&target);
+    if properties
+        .get("display")
+        .is_some_and(|value| value == "none")
+        || properties
+            .get("visibility")
+            .is_some_and(|value| value == "hidden")
+    {
+        return None;
+    }
+    // Generic UI text colors must not erase directional material colors. A
+    // semantic role, class, ID or state selector can override the delta color;
+    // compare against an ordinary viewport child to recognize that override.
+    let generic = w.theme.properties_for(&parent.child(
+        "viewport.generic-overlay",
+        "viewport-overlay",
+        &["viewport-overlay".into()],
+        &state,
+    ));
+    let fallback = preview_color(viewport, preview.kind);
+    let color = if properties.get("color") != generic.get("color") {
+        style_color(&properties, "color", fallback)
+    } else {
+        fallback
+    };
+    let mut color = color.to_srgba();
+    color.alpha *= crate::presentation_controls::number(&properties, "opacity", 1.).clamp(0., 1.);
+    if ghost_neighbor(w, preview.instance) {
+        color.alpha *=
+            crate::presentation_controls::number(viewport, "ghost-opacity", 0.13).clamp(0., 1.);
+    }
+    if color.alpha <= 0. {
+        return None;
+    }
+    let edge_width = crate::presentation_controls::number(
+        &properties,
+        "stroke-width",
+        crate::presentation_controls::number(viewport, "preview-edge-width", 1.25),
+    )
+    .clamp(0., 8.);
+    Some(PreviewStyle {
+        color: color.into(),
+        edge_width,
+    })
+}
+type PreviewStyleKey = (String, &'static str, bool);
+fn preview_style_key(w: &Workspace, preview: &PreviewMesh<'_>) -> PreviewStyleKey {
+    (
+        cad_core::history::mesh_key(preview.instance).into(),
+        preview.kind.name(),
+        ghost_neighbor(w, preview.instance),
+    )
+}
+fn preview_styles(
+    w: &Workspace,
+    previews: &[PreviewMesh<'_>],
+    viewport: &BTreeMap<String, String>,
+) -> BTreeMap<PreviewStyleKey, Option<PreviewStyle>> {
+    let mut styles = BTreeMap::new();
+    for preview in previews {
+        styles
+            .entry(preview_style_key(w, preview))
+            .or_insert_with(|| preview_style(w, preview, viewport));
+    }
+    styles
 }
 /// Picking and its feedback share the same evaluated input during a feature edit.
 /// A newly previewed shell/fillet may have replaced the topology being selected.
@@ -484,7 +689,8 @@ pub fn fit(w: &mut Workspace, selection: bool) {
     };
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
-    for i in display_instances(w, e) {
+    let props = style(w);
+    for i in display_instances(w, e).iter().filter(|i| visible(w, i)) {
         if selection
             && w.selected.as_ref().map_or_else(
                 || w.view.active_part.as_ref() != Some(&i.definition),
@@ -552,6 +758,25 @@ pub fn fit(w: &mut Workspace, selection: bool) {
             }
         }
     }
+    for preview in preview_meshes(w) {
+        if preview_style(w, &preview, &props).is_none() {
+            continue;
+        }
+        if selection
+            && w.selected.as_ref().map_or_else(
+                || w.view.active_part.as_ref() != Some(&preview.instance.definition),
+                |selected| selected.path != preview.instance.path,
+            )
+        {
+            continue;
+        }
+        for corner in 0..8 {
+            let point = std::array::from_fn(|axis| preview.mesh.bounds[(corner >> axis) & 1][axis]);
+            let point = render_point(placed(point, preview.instance));
+            min = min.min(point);
+            max = max.max(point);
+        }
+    }
     if min.is_finite() && max.is_finite() {
         w.view.target = ((min + max) * 0.5).to_array();
         w.view.distance = ((max - min).length() * 1.4).max(0.08);
@@ -601,6 +826,7 @@ pub fn sync_scene(
     mut appearance: ResMut<render_appearance::Runtime>,
 ) {
     let props = style(&w);
+    let preview_styles = preview_styles(&w, &preview_meshes(&w), &props);
     let key = format!(
         "{}:{}:{}:{}:{}:{}:{:?}:{:?}:{}:{:?}:{:?}:{:?}:{}",
         w.session
@@ -639,14 +865,20 @@ pub fn sync_scene(
             .unwrap_or("")
     );
     let key = format!(
-        "{key}:{}:{}:{:?}:{}",
+        "{key}:{}:{}:{:?}:{}:{:?}:{:?}:{preview_styles:?}",
         appearance.epoch,
         w.session.generation,
         w.session
             .draft
             .as_ref()
             .map(|draft| (&draft.id, draft.edit)),
-        w.fields.contains_key("appearance-tool")
+        w.fields.contains_key("appearance-tool"),
+        crate::operation_preview::focus(&w),
+        crate::operation_preview::displayed(&w).map(|preview| (
+            &preview.baseline_identity,
+            &preview.focus,
+            preview.version
+        ))
     );
     if w.rendered_key == key {
         return;
@@ -666,40 +898,23 @@ pub fn sync_scene(
     }
     let root = w.root();
     let mut layers = vec![];
-    if w.fields.contains_key("appearance-tool")
-        && !w.view.original
-        && w.view.history_cursor.is_none()
-    {
-        if let Some(evaluation) = w
-            .session
-            .draft
-            .as_ref()
-            .and_then(|draft| draft.preview_evaluation())
-            .or(w.session.evaluation.as_ref())
-        {
-            layers.push((evaluation, w.session.visible(), false, false));
-        }
-    } else if w.view.history_cursor.is_some() {
-        if let Some(e) = display_evaluation(&w) {
-            layers.push((e, w.session.visible(), false, false));
-        }
-    } else {
-        if let Some(e) = &w.session.evaluation {
-            layers.push((e, &w.session.committed, false, false));
-        }
-        if !w.view.original
-            && let Some(d) = &w.session.draft
-            && let Some(e) = d.preview_evaluation()
-        {
-            layers.push((e, &d.document, true, false));
-        }
-        if let (Some(e), Some(d)) = (&w.compare, &w.compare_document) {
-            layers.push((e, d, false, true));
-        }
+    // The evaluated result supplies the one neutral model. A modeling preview
+    // is expressed by localized added/removed caches below, never by layering a
+    // complete translucent draft over the complete committed part.
+    if let Some(evaluation) = display_evaluation(&w) {
+        let document = if w.view.original && w.view.history_cursor.is_none() {
+            &w.session.committed
+        } else {
+            w.session.visible()
+        };
+        layers.push((evaluation, document, false));
     }
-    let committed_finishes =
-        cad_core::appearance::resolved_finishes(&w.session.committed).unwrap_or_default();
-    for (e, doc, preview, history) in layers {
+    if w.view.history_cursor.is_none()
+        && let (Some(e), Some(d)) = (&w.compare, &w.compare_document)
+    {
+        layers.push((e, d, true));
+    }
+    for (e, doc, history) in layers {
         let resolved_finishes = cad_core::appearance::resolved_finishes(doc).unwrap_or_default();
         let default_finish = cad_core::appearance::Finish::default();
         for instance in display_instances(&w, e) {
@@ -710,76 +925,15 @@ pub fn sync_scene(
                 if m.positions.is_empty() || m.indices.is_empty() {
                     continue;
                 }
-                if preview
-                    && w.session
-                        .evaluation
-                        .as_ref()
-                        .and_then(|old| {
-                            display_instances(&w, old)
-                                .iter()
-                                .find(|i| i.path == instance.path)
-                                .and_then(|i| mesh_for(old, i).map(|oldm| (i, oldm)))
-                        })
-                        .is_some_and(|(i, old)| {
-                            i.matrix == instance.matrix
-                                && old.positions == m.positions
-                                && old.indices == m.indices
-                                && old.normals == m.normals
-                                && committed_finishes
-                                    .get(&i.path)
-                                    .and_then(|id| w.session.committed.finishes.get(id))
-                                    == resolved_finishes
-                                        .get(&instance.path)
-                                        .and_then(|id| doc.finishes.get(id))
-                        })
-                {
-                    continue;
-                }
-                let ghost_neighbor = w.view.isolation
-                    && !w.peek
-                    && w.view.active_part.as_ref() != Some(&instance.definition)
-                    && !w.view.pinned.iter().any(|p| instance.path.contains(p));
-                let ghost = preview || history || ghost_neighbor;
-                let positions = m
-                    .positions
-                    .iter()
-                    .map(|p| render_point(placed(*p, instance)).to_array())
-                    .collect::<Vec<_>>();
-                let normals = m
-                    .normals
-                    .iter()
-                    .map(|n| {
-                        let n: [f64; 3] = std::array::from_fn(|j| {
-                            instance.matrix[j][0] * n[0]
-                                + instance.matrix[j][1] * n[1]
-                                + instance.matrix[j][2] * n[2]
-                        });
-                        Vec3::new(n[0] as f32, n[2] as f32, -n[1] as f32)
-                            .normalize_or_zero()
-                            .to_array()
-                    })
-                    .collect::<Vec<_>>();
-                let mesh = meshes.add(
-                    Mesh::new(
-                        PrimitiveTopology::TriangleList,
-                        RenderAssetUsages::default(),
-                    )
-                    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-                    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-                    .with_inserted_indices(Indices::U32(m.indices.clone())),
-                );
+                let ghost_neighbor = ghost_neighbor(&w, instance);
+                let ghost = history || ghost_neighbor;
+                let mesh = meshes.add(render_mesh(m, instance));
                 let finish = resolved_finishes
                     .get(&instance.path)
                     .and_then(|id| doc.finishes.get(id))
                     .unwrap_or(&default_finish);
                 let c = finish.base_color.map(|value| value as f32);
-                let base_color = if preview {
-                    style_color(
-                        &props,
-                        "preview-color",
-                        Color::srgba(0.15, 0.85, 0.52, 0.38),
-                    )
-                } else if history {
+                let base_color = if history {
                     style_color(&props, "comparison-color", Color::srgba(0.2, 0.4, 1., 0.22))
                 } else if ghost_neighbor {
                     let opacity = props
@@ -823,6 +977,42 @@ pub fn sync_scene(
             }
         }
     }
+    for preview in preview_meshes(&w) {
+        let Some(Some(overlay)) = preview_styles.get(&preview_style_key(&w, &preview)) else {
+            continue;
+        };
+        let mesh = meshes.add(render_mesh(preview.mesh, preview.instance));
+        // Added boundaries share the result's exterior and removed boundaries
+        // share its cut interface. A depth-biased, untextured overlay gives that
+        // localized context without competing opaque bodies or finish maps.
+        let two_sided = matches!(preview.kind, PreviewKind::Removed)
+            || preview
+                .mesh
+                .faces
+                .iter()
+                .any(|face| face.body_kind == cad_core::protocol::BodyKind::Surface);
+        let material = materials.add(StandardMaterial {
+            base_color: overlay.color,
+            metallic: 0.03,
+            perceptual_roughness: 0.62,
+            alpha_mode: AlphaMode::Blend,
+            depth_bias: 2.,
+            double_sided: two_sided,
+            cull_mode: if two_sided { None } else { Some(Face::Back) },
+            ..default()
+        });
+        commands.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            RenderLayers::layer(1),
+            bevy::light::NotShadowCaster,
+            bevy::light::NotShadowReceiver,
+            CadBody {
+                mesh,
+                material: CadMaterial::Standard(material),
+            },
+        ));
+    }
     if let Some(selection) = w
         .selected
         .as_ref()
@@ -832,7 +1022,7 @@ pub fn sync_scene(
             .iter()
             .find(|instance| selected_instance(selection, instance) && visible(&w, instance))
     {
-        let faces = display_meshes(&w, evaluation, instance)
+        let faces = selection_meshes(&w, evaluation, instance)
             .into_iter()
             .flat_map(|mesh| {
                 mesh.faces
@@ -933,6 +1123,31 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
         return;
     };
     let painter = ui.painter().with_clip_rect(rect);
+    let previews = preview_meshes(w);
+    let styles = preview_styles(w, &previews, &props);
+    for preview in previews {
+        if let Some(Some(overlay)) = styles.get(&preview_style_key(w, &preview))
+            && overlay.edge_width > 0.
+        {
+            let color = overlay.color.to_srgba();
+            let color = egui::Color32::from_rgba_unmultiplied(
+                (color.red * 255.) as u8,
+                (color.green * 255.) as u8,
+                (color.blue * 255.) as u8,
+                (color.alpha * 255.) as u8,
+            );
+            for edge in &preview.mesh.edges {
+                for pair in edge.points.windows(2) {
+                    if let (Some(a), Some(b)) = (
+                        project(w, rect, placed(pair[0], preview.instance)),
+                        project(w, rect, placed(pair[1], preview.instance)),
+                    ) {
+                        painter.line_segment([a, b], egui::Stroke::new(overlay.edge_width, color));
+                    }
+                }
+            }
+        }
+    }
     if w.view.exploded_view.is_none()
         && w.view.history_cursor.is_none()
         && let Some(highlight) = crate::assembly_inspection_ui::highlight(w, e)

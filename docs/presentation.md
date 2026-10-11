@@ -10,6 +10,63 @@ The optional `editing` object overrides `width_logical_px`, `height_logical_px`,
 
 Modeling editors use the common validated preview transaction. The compact orange Apply action waits for the matching evaluation and commits one undoable change. The sketch editor remains open while validation is pending or fails, retaining fields for correction. Further edits cancel the queued confirmation and update the preview. Cancel restores the session checkpoint taken when the operation started, retaining any edits that predated the operation. Existing Apply/Cancel command bindings remain available for custom layouts and general document edits.
 
+Operation previews draw one neutral evaluated result with localized added and
+removed material. An additive extrude highlights its new volume; cuts, chamfers,
+and other subtractive edits highlight the removed volume. Existing feature
+editors compare that feature's current evaluated input and output, so the old
+feature and downstream geometry do not become the comparison baseline. Opening
+an existing feature requests this display cache even before changing a value.
+The rest of the result retains its visual finish, without a second complete
+committed body behind the draft.
+
+Highlights belong to the displayed evaluation, its feature target, and its
+baseline identity. Pending or invalid changes retain matching last-valid
+display geometry; it never becomes eligible for Apply. Original and History
+views hide operation highlights. Explicit revision comparisons remain a separate
+view. Removal caches do not participate in topology picking, property
+integration, modeling, or export. Fit includes localized removed geometry.
+
+The worker prefers native B-rep material differences and uses bounded
+tessellated differences when the native display comparison is unavailable. A
+display approximation is labeled in the status bar, with details on hover.
+Unsupported or oversized comparisons leave the valid result neutral and show a
+localized-highlight diagnostic; they do not invalidate the CAD operation.
+Surface creation/deletion and unchanged native faces have localized caches;
+overlapping edited surface trims currently report unavailable. Generic
+checkpoint comparisons describe local shape changes, rather than occurrence-only
+assembly movement.
+
+Style additions and removals independently on the viewport:
+
+```css
+[role=model-viewport] {
+  preview-added-color: #4ECF8880;
+  preview-removed-color: #FF8A4A80;
+  preview-edge-width: 1.25px;
+}
+```
+
+Color alpha controls the translucent overlay. Existing `preview-color` remains
+the fallback for styles that omit these properties. Individual overlays also
+support semantic child selectors under the actual viewport ancestry:
+
+```css
+[role=model-viewport] > [role=operation-preview-added] {
+  color: #4ECF88;
+  opacity: 0.5;
+  stroke-width: 1px;
+}
+[role=operation-preview-removed] { color: #FF8A4A80; }
+```
+
+Use `display: none` or `visibility: hidden` to hide a selected overlay role.
+These controls affect rendering and Fit, without changing the CAD operation.
+Semantic
+`workspace.operation-preview` and `operation-preview:<mesh-key>:added|removed`
+descriptors expose the target, availability, baseline kind, representation,
+tolerance, and retained/unavailable diagnostics without palette or widget data.
+The application-owned operation-preview contract is version 1.
+
 History stations now invoke the view-only `history.inspect` command. A matching valid evaluation supplies cached intermediate body meshes and sketch visibility at each feature. Clicking a station replaces the displayed active part with that stage; other parts retain their latest geometry and assembly placements/configurations remain intact. Later rows are dimmed. Mesh rendering, picking, selection outlines and Fit use the same cached stage, so invisible later faces and sketches cannot be selected. The cursor does not change definitions, outputs, suppression, draft or undo state, and switching stations never submits an evaluation request. **Latest model** in the rail, **Latest** in the viewport, the `history.latest` command, or Escape from the viewport restores the current display. Feature editing leaves inspection before opening its normal editor; geometry modeling actions explain that Latest must be restored first.
 
 History is feature-sequence inspection using current parameter values, separate from Git revision comparison. A pending/failed evaluation, missing/incompatible cache or non-causal feature order reports an explicit reason instead of rebuilding on click or substituting final geometry. Normal evaluation prepares the caches once. Inspection cannot start during an active modeling operation. The cursor is transient and saved projects reopen at Latest. Semantic `history-station` IDs are `history:definition-id::feature-id`; they expose the versioned target, index, availability and disabled reason. Bind `history-view` for the inspection label and Return to Latest action in a custom layout.

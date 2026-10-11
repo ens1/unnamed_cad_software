@@ -101,6 +101,18 @@ pub trait KernelAdapter {
         ))
     }
     fn mesh(&self, shape: &Shape, producer: &NodeRef, tolerance: f64) -> Result<MeshData>;
+    /// Disposable operation display geometry, independent from evaluated bodies.
+    fn operation_delta(
+        &self,
+        _before: &Shape,
+        _after: &Shape,
+        _owner: &NodeRef,
+        _tolerance: f64,
+    ) -> Result<cad_core::protocol::OperationPreviewChange> {
+        Err(CadError::Unsupported(
+            "This geometry adapter does not provide localized operation previews".into(),
+        ))
+    }
 }
 #[derive(Default)]
 pub struct MonstertruckAdapter {
@@ -779,7 +791,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1;adapter/21;solver/tcad-native-lm/12"
+        "monstertruck/0.4.1;adapter/22;solver/tcad-native-lm/12"
     }
     fn sheet_metadata(
         &self,
@@ -1916,6 +1928,15 @@ impl KernelAdapter for MonstertruckAdapter {
         }
         self.record_history(owner, op, &result, inputs, mapped_input, &generated_history)?;
         Ok(result)
+    }
+    fn operation_delta(
+        &self,
+        before: &Shape,
+        after: &Shape,
+        owner: &NodeRef,
+        tolerance: f64,
+    ) -> Result<cad_core::protocol::OperationPreviewChange> {
+        crate::operation_preview::delta(self, before, after, owner, tolerance)
     }
     fn mesh(&self, shape: &Shape, producer: &NodeRef, tolerance: f64) -> Result<MeshData> {
         if !tolerance.is_finite() || tolerance <= 0. {

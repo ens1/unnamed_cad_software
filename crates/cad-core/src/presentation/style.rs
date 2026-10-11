@@ -52,6 +52,9 @@ pub const SUPPORTED_STYLE_PROPERTIES: &[&str] = &[
     "cursor",
     "selection-color",
     "preview-color",
+    "preview-added-color",
+    "preview-removed-color",
+    "preview-edge-width",
     "comparison-color",
     "selection-opacity",
     "ghost-opacity",
@@ -657,6 +660,8 @@ fn validate_property(name: &str, value: &str) -> Result<()> {
             | "border-color"
             | "selection-color"
             | "preview-color"
+            | "preview-added-color"
+            | "preview-removed-color"
             | "comparison-color"
             | "reference-curve-color"
             | "explode-line-color"
@@ -689,6 +694,7 @@ fn validate_property(name: &str, value: &str) -> Result<()> {
             | "column-gap"
             | "border-width"
             | "stroke-width"
+            | "preview-edge-width"
             | "size"
             | "hit-size"
             | "hit-width"

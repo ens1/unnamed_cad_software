@@ -3623,6 +3623,18 @@ pub fn status(ui: &mut egui::Ui, w: &mut Workspace) {
             ui.spinner();
         }
         ui.label(&w.status);
+        if let Some((state, label)) = crate::operation_preview::summary(w) {
+            ui.separator();
+            controls::label(
+                ui,
+                "workspace.operation-preview",
+                "operation-preview-status",
+                &[],
+                &label,
+                &state,
+            )
+            .on_hover_text(crate::operation_preview::tooltip(w));
+        }
         if w.session.draft.is_some() && w.tool_checkpoint.is_none() {
             if controls::button(
                 ui,

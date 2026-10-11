@@ -30,12 +30,14 @@ fn run() -> Result<()> {
                 document,
                 project_root,
                 tolerance,
+                operation_preview,
             } => evaluator
-                .evaluate(
+                .evaluate_with_operation_preview(
                     identity,
                     &document,
                     std::path::Path::new(&project_root),
                     tolerance,
+                    operation_preview,
                 )
                 .map(|result| WorkerResponse::Evaluation { result }),
             WorkerRequest::Export {
@@ -106,7 +108,7 @@ fn run() -> Result<()> {
             }
             WorkerRequest::Shutdown => unreachable!(),
         }));
-        let response = match response {
+        let mut response = match response {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => WorkerResponse::Error {
                 identity,
@@ -120,7 +122,25 @@ fn run() -> Result<()> {
                 }
             }
         };
-        write_frame(&mut output, &response)?;
+        if let Err(error) = write_frame(&mut output, &response) {
+            // write_frame checks size before writing. If the optional display
+            // cache causes an oversized response, retain the valid CAD result.
+            let oversized = matches!(&error, cad_core::CadError::Invalid(message) if message == "IPC frame exceeds limit");
+            let WorkerResponse::Evaluation { result } = &mut response else {
+                return Err(error);
+            };
+            let Some(preview) = result.operation_preview.as_mut().filter(|_| oversized) else {
+                return Err(error);
+            };
+            preview.changes.clear();
+            preview.baseline_instances.clear();
+            preview.diagnostics = vec![Diagnostic {
+                severity: "warning".into(),
+                target: preview.focus.as_ref().map(|focus| focus.node.clone()),
+                message: "Localized highlights were omitted to keep the validated CAD result within the worker transport limit".into(),
+            }];
+            write_frame(&mut output, &response)?;
+        }
     }
     Ok(())
 }

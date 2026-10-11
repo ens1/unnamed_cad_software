@@ -5,6 +5,21 @@ use cad_core::{
     solver::{ConstraintSolver, NativeSolver},
 };
 use std::{collections::BTreeMap, path::Path, time::Instant};
+struct PreviewByteBudget {
+    remaining: usize,
+}
+impl std::io::Write for PreviewByteBudget {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.remaining = self
+            .remaining
+            .checked_sub(bytes.len())
+            .ok_or_else(|| std::io::Error::other("Localized preview byte budget exceeded"))?;
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 pub struct Evaluator<K: KernelAdapter = MonstertruckAdapter> {
     pub adapter: K,
     pub shapes: BTreeMap<NodeRef, Shape>,
@@ -14,6 +29,8 @@ pub struct Evaluator<K: KernelAdapter = MonstertruckAdapter> {
     last_source: String,
     last_tolerance: f64,
     history_cache: BTreeMap<String, (String, f64, cad_core::history::PartHistory)>,
+    preview_focus: Option<NodeRef>,
+    focused_previews: BTreeMap<String, OperationPreviewChange>,
 }
 impl Default for Evaluator {
     fn default() -> Self {
@@ -26,10 +43,251 @@ impl Default for Evaluator {
             last_source: String::new(),
             last_tolerance: 0.,
             history_cache: BTreeMap::new(),
+            preview_focus: None,
+            focused_previews: BTreeMap::new(),
         }
     }
 }
 impl<K: KernelAdapter> Evaluator<K> {
+    /// Evaluate authoritative geometry first-class, with optional isolated
+    /// display comparison. Highlight failures never invalidate the CAD result.
+    pub fn evaluate_with_operation_preview(
+        &mut self,
+        identity: RequestIdentity,
+        document: &Document,
+        root: &Path,
+        tolerance: f64,
+        request: Option<Box<OperationPreviewRequest>>,
+    ) -> Result<Evaluation> {
+        let start = Instant::now();
+        self.preview_focus = None;
+        self.focused_previews.clear();
+        let Some(request) = request else {
+            return self.evaluate(identity, document, root, tolerance);
+        };
+        let mut preview = OperationPreview {
+            version: OPERATION_PREVIEW_VERSION,
+            baseline_identity: request.baseline_identity.clone(),
+            baseline_kind: if request.focus.is_some() {
+                PreviewBaseline::FeatureInput
+            } else {
+                PreviewBaseline::Checkpoint
+            },
+            focus: request.focus.clone(),
+            tolerance_mm: tolerance,
+            changes: BTreeMap::new(),
+            baseline_instances: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        let baseline_valid = request.baseline_identity.protocol == PROTOCOL_VERSION
+            && request.baseline_identity.backend == self.fingerprint()
+            && request.baseline_identity.source == request.baseline.fingerprint();
+        let mut baseline = None;
+        if !baseline_valid {
+            preview.diagnostics.push(crate::operation_preview::warning(
+                request.focus.as_ref(),
+                "Localized preview baseline identity does not match its source/backend; the validated model is displayed neutrally",
+            ));
+        } else if request.focus.is_none() {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.evaluate(
+                    request.baseline_identity.clone(),
+                    &request.baseline,
+                    root,
+                    tolerance,
+                )
+            })) {
+                Ok(Ok(evaluated)) => {
+                    preview.baseline_instances = evaluated.instances;
+                    baseline = Some((self.body_sets.clone(), self.surface_sets.clone()));
+                }
+                failed => {
+                    let reason = match failed {
+                        Ok(Err(error)) => error.to_string(),
+                        Err(_) => {
+                            self.last_source.clear();
+                            "baseline display evaluation failed internally".into()
+                        }
+                        Ok(Ok(_)) => unreachable!(),
+                    };
+                    preview.diagnostics.push(crate::operation_preview::warning(
+                        None,
+                        format!("Localized preview baseline is unavailable: {reason}"),
+                    ));
+                }
+            }
+        } else {
+            self.preview_focus = request.focus.clone();
+        }
+        let evaluated = self.evaluate(identity, document, root, tolerance);
+        self.preview_focus = None;
+        let mut evaluated = evaluated?;
+        if request.focus.is_some() && baseline_valid {
+            preview.changes = std::mem::take(&mut self.focused_previews);
+            preview.baseline_instances = evaluated.instances.clone();
+            if preview.changes.is_empty() {
+                preview.diagnostics.push(crate::operation_preview::warning(
+                    request.focus.as_ref(),
+                    "The selected feature has no current solid/surface output for a localized operation preview",
+                ));
+            }
+        } else if let Some((before_bodies, before_surfaces)) = baseline {
+            let keys = before_bodies
+                .keys()
+                .chain(before_surfaces.keys())
+                .chain(self.body_sets.keys())
+                .chain(self.surface_sets.keys())
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
+            for key in keys {
+                let shape = |bodies: &BTreeMap<String, Vec<monstertruck::modeling::Solid>>,
+                             surfaces: &BTreeMap<String, Vec<monstertruck::modeling::Shell>>| {
+                    if let Some(shells) = surfaces.get(&key).filter(|shells| !shells.is_empty()) {
+                        if bodies.get(&key).is_some_and(|bodies| !bodies.is_empty()) {
+                            return None;
+                        }
+                        Some(Shape::Surfaces(shells.clone()))
+                    } else {
+                        Some(Shape::Bodies(bodies.get(&key).cloned().unwrap_or_default()))
+                    }
+                };
+                let owner = NodeRef {
+                    definition: evaluated
+                        .instances
+                        .iter()
+                        .chain(&preview.baseline_instances)
+                        .find(|instance| instance.mesh_key == key)
+                        .map(|instance| instance.definition.clone())
+                        .unwrap_or_else(|| key.clone()),
+                    node: "operation-preview".into(),
+                };
+                let change = match (
+                    shape(&before_bodies, &before_surfaces),
+                    shape(&self.body_sets, &self.surface_sets),
+                ) {
+                    (Some(before), Some(after)) => {
+                        self.display_delta(&before, &after, &owner, tolerance)
+                    }
+                    _ => Self::unavailable_change(
+                        &owner,
+                        "Mixed solid and surface output needs separate localized display comparisons",
+                    ),
+                };
+                if change.added.is_some()
+                    || change.removed.is_some()
+                    || !change.diagnostics.is_empty()
+                {
+                    preview.changes.insert(key, change);
+                }
+            }
+        }
+        let mut budget = PreviewByteBudget {
+            remaining: 16 * 1024 * 1024,
+        };
+        let mut omitted = false;
+        preview.changes.retain(|_, change| {
+            let start = budget.remaining;
+            if serde_json::to_writer(&mut budget, change).is_err() {
+                budget.remaining = start;
+                omitted = true;
+                false
+            } else {
+                true
+            }
+        });
+        if omitted {
+            preview.diagnostics.push(crate::operation_preview::warning(
+                request.focus.as_ref(),
+                "Some localized highlights exceed the 16 MiB cumulative display cache bound; their validated model geometry is displayed neutrally",
+            ));
+        }
+        evaluated.operation_preview = Some(Box::new(preview));
+        evaluated.elapsed_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+        Ok(evaluated)
+    }
+
+    fn unavailable_change(owner: &NodeRef, message: impl Into<String>) -> OperationPreviewChange {
+        OperationPreviewChange {
+            added: None,
+            removed: None,
+            representation: PreviewRepresentation::ExactBrep,
+            diagnostics: vec![crate::operation_preview::warning(Some(owner), message)],
+        }
+    }
+
+    fn display_delta(
+        &self,
+        before: &Shape,
+        after: &Shape,
+        owner: &NodeRef,
+        tolerance: f64,
+    ) -> OperationPreviewChange {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.adapter
+                .operation_delta(before, after, owner, tolerance)
+        })) {
+            Ok(Ok(change)) => change,
+            Ok(Err(error)) => Self::unavailable_change(owner, error.to_string()),
+            Err(_) => Self::unavailable_change(
+                owner,
+                "Localized operation display comparison failed internally; the validated model is displayed neutrally",
+            ),
+        }
+    }
+
+    fn focused_preview(&mut self, part: &cad_core::Part, key: &str, tolerance: f64) {
+        let Some(owner) = self
+            .preview_focus
+            .as_ref()
+            .filter(|focus| focus.definition == part.id)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(feature) = part
+            .features
+            .iter()
+            .find(|feature| feature.id == owner.node && !feature.suppressed)
+        else {
+            return;
+        };
+        let Some(after) = self.shapes.get(&owner) else {
+            return;
+        };
+        if !matches!(after, Shape::Bodies(_) | Shape::Surfaces(_)) {
+            return;
+        }
+        // Visibility consumption includes the Boolean tool. Material change
+        // starts from its left operand, not the union of left and cutter.
+        let inputs = match &feature.operation {
+            cad_core::Operation::Boolean { left, .. } => vec![left.clone()],
+            operation => operation.consumed_outputs(),
+        };
+        let mut bodies = Vec::new();
+        let mut surfaces = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for input in inputs
+            .into_iter()
+            .filter(|input| seen.insert(input.clone()))
+        {
+            match self.shapes.get(&input) {
+                Some(Shape::Bodies(source)) => bodies.extend(source.clone()),
+                Some(Shape::Surfaces(source)) => surfaces.extend(source.clone()),
+                _ => {}
+            }
+        }
+        let before = if !surfaces.is_empty() && bodies.is_empty() {
+            Shape::Surfaces(surfaces)
+        } else if surfaces.is_empty() {
+            Shape::Bodies(bodies)
+        } else {
+            self.focused_previews.insert(key.into(), Self::unavailable_change(&owner, "The selected feature mixes solid and surface input; localized comparison is unavailable"));
+            return;
+        };
+        let change = self.display_delta(&before, after, &owner, tolerance);
+        self.focused_previews.insert(key.into(), change);
+    }
+
     fn build(&mut self, doc: &Document, root: &Path, tolerance: f64) -> Result<Document> {
         doc.validate()?;
         if !tolerance.is_finite() || !(1e-6..=1.).contains(&tolerance) {
@@ -579,6 +837,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         let mut weldments = BTreeMap::new();
         let mut history = BTreeMap::new();
         for part in solved.parts.values() {
+            self.focused_preview(part, &part.id, tolerance);
             for (feature, weldment) in self.weldment_output(&solved, &part.id)? {
                 weldments.insert(format!("{}::{feature}", part.id), weldment);
             }
@@ -652,6 +911,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                     self.history_output(&configured_solved, &i.definition, &key, tolerance),
                 );
                 let part = &configured_solved.parts[&i.definition];
+                self.focused_preview(part, &key, tolerance);
                 if !part.outputs.is_empty() {
                     let (mesh, bodies, surfaces) = self.part_output(part, tolerance)?;
                     meshes.insert(key.clone(), mesh);
@@ -694,6 +954,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             sheets,
             weldments,
             history: std::sync::Arc::new(history),
+            operation_preview: None,
         };
         cad_core::drawing::validate_evaluation(document, &evaluated)?;
         Ok(evaluated)

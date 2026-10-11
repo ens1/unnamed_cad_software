@@ -20,6 +20,7 @@ mod inspection_ui;
 mod mate_ui;
 mod mold_ui;
 mod navigation;
+mod operation_preview;
 mod placement_pattern_ui;
 mod presentation_composition;
 mod presentation_controls;
@@ -64,7 +65,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1;adapter/21;solver/tcad-native-lm/12";
+const BACKEND: &str = "monstertruck/0.4.1;adapter/22;solver/tcad-native-lm/12";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -79,6 +80,8 @@ pub struct Workspace {
     pub worker: worker::WorkerClient,
     pub exporter: worker::WorkerClient,
     pub requested: Option<RequestIdentity>,
+    pub requested_preview: Option<operation_preview::RequestKey>,
+    pub preview_error: Option<(operation_preview::RequestKey, String)>,
     pub changed: Instant,
     pub status: String,
     pub appearance_diagnostics: Vec<String>,
@@ -209,6 +212,8 @@ impl Workspace {
             worker: worker::WorkerClient::new(),
             exporter: worker::WorkerClient::new(),
             requested: None,
+            requested_preview: None,
+            preview_error: None,
             changed: Instant::now(),
             status,
             appearance_diagnostics: vec![],
@@ -762,7 +767,8 @@ fn poll_workers(mut w: ResMut<Workspace>) {
             WorkerResponse::Evaluation { result } => {
                 let ms = result.elapsed_ms;
                 let valid = result.valid;
-                if w.session.accept(result) {
+                if operation_preview::accepts(&w, &result) && w.session.accept(result) {
+                    w.preview_error = None;
                     if w.view.exploded_view.is_some() {
                         exploded_views_ui::clear_selection(&mut w);
                     }
@@ -791,6 +797,8 @@ fn poll_workers(mut w: ResMut<Workspace>) {
             WorkerResponse::Error { identity, message } => {
                 if let Some(i) = identity {
                     if i == w.session.identity() {
+                        w.preview_error =
+                            operation_preview::request_key(&w).map(|key| (key, message.clone()));
                         w.session.fail(&i, message.clone());
                         w.confirm_requested = false;
                         w.status = message;
@@ -841,15 +849,23 @@ fn poll_workers(mut w: ResMut<Workspace>) {
         }
     }
     let identity = w.session.identity();
+    let preview_key = operation_preview::request_key(&w);
     history::reconcile(&mut w);
-    if w.requested.as_ref() != Some(&identity) && w.changed.elapsed().as_millis() > 160 {
+    if (w.requested.as_ref() != Some(&identity) || w.requested_preview != preview_key)
+        && w.changed.elapsed().as_millis() > 160
+    {
         w.worker.submit(WorkerRequest::Evaluate {
             identity: identity.clone(),
             document: w.session.visible().clone(),
             project_root: w.root().to_string_lossy().into(),
             tolerance: w.tolerance(),
+            operation_preview: preview_key
+                .as_ref()
+                .map(|key| Box::new(operation_preview::request(&w, key))),
         });
         w.requested = Some(identity);
+        w.requested_preview = preview_key;
+        w.preview_error = None;
     }
     settings::poll(&mut w);
     if w.application_preferences.recovery_enabled

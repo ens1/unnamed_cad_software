@@ -307,6 +307,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::presentation_resources::semantics(w));
     elements.extend(crate::appearances_ui::semantics(w));
     elements.extend(crate::settings_ui::semantics(w));
+    elements.extend(crate::operation_preview::semantics(w));
     for element in crate::cad_ui::semantics(w) {
         if let Some(existing) = elements
             .iter_mut()

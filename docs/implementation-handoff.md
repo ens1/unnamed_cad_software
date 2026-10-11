@@ -61,7 +61,7 @@ Native schema remains 1; additive defaults omit empty/None values so existing so
 | Split / assembly inspection / exploded views / drawing sheet formats | 1 / 1 / 1 / 1 |
 | Portable block resources / configured dimension fields / drawing symbols | 1 / 2 / 1 |
 
-Core solver source reports `tcad-native-lm/12`. Adapter and desktop source constants use `monstertruck/0.4.1;adapter/21;solver/tcad-native-lm/12`. Internal boxing retains native JSON shapes. The kernel directly declares the existing workspace `serde` dependency for bounded report serialization; the desktop now directly declares the already-pinned `winit` 0.30.13 for primary-window gesture phases. No new third-party package or dependency version is introduced, and existing dependency notices cover both.
+Core solver source reports `tcad-native-lm/12`. Adapter and desktop source constants use `monstertruck/0.4.1;adapter/22;solver/tcad-native-lm/12`. Internal boxing retains native JSON shapes. The kernel directly declares the existing workspace `serde` dependency for bounded report serialization; the desktop now directly declares the already-pinned `winit` 0.30.13 for primary-window gesture phases. No new third-party package or dependency version is introduced, and existing dependency notices cover both.
 
 The preceding interaction correction adds [exact face-attached boss joins](boss-joins.md), [two-pick Smart Dimension](sketch-smart-dimension.md), and saved [navigation preference contract version 1](navigation.md). Contact joins remove native opposing caps and retain real shared edge/face ancestry for supported inset and matching-outline contacts, including separated repeated bosses. Smart Dimension supports tool-first picking or Command/Shift preselection, signed-side center-to-line gaps, current owned straight model-edge construction conversions, live values and a local dimension checkpoint including promoted parameters. New conversions retain construction parameter orientation; legacy incident-face ordering remains explicitly readable. The trackpad adapter reverses the default scroll-orbit directions and adds cursor-anchor pinch, native roll/smart zoom, saved sensitivities/direction switches, precision modifiers and gesture ownership/cancellation. Geometry and hardware limits remain recorded in the capability documentation.
 
@@ -175,3 +175,32 @@ A searchable, compact, resizable **Settings…** dialog now groups current-model
 Settings edits share the current validated source/undo behavior and checkpoint Cancel. Application-only editing during an existing tool leaves its model draft untouched. Unrelated source actions are blocked while Settings is open; asynchronous STEP import replies remain queued. Dimension annotations and inspection follow model display units without rescaling canonical source. Recovery reloads an unsaved committed snapshot when there is no draft, against the matching saved base. Semantic fields, category/actions and CSS sizing/positioning keep the default modal replaceable. See [settings](settings.md).
 
 Final `cargo fmt --all --check`, `cargo clippy --workspace --locked -- -D warnings` and `scripts/package-macos.sh` passed for this integration. The refreshed package is `dist/TCAD.app` with distinct `TCAD`, `tcad-worker` and `tcad-cli` executables. No tests, probes, CLI CAD exercises or manual/UI smoke checks were written or run. Interactive acceptance remains with the user. The existing dependency future-incompatibility notice remains `proc-macro-error2` 2.0.1.
+
+## Localized operation previews — 2026-10-11
+
+Adapter 22 adds application-owned operation-preview contract 1 to the worker
+evaluation protocol. A focused feature compares its evaluated input and output;
+general source drafts compare their starting checkpoint. Disposable added and
+removed meshes retain evaluation, feature and baseline identity, including
+configured definition mesh keys. Boolean cuts use their left operand as stock.
+The viewport draws the neutral result once, with localized translucent material
+overlays instead of a complete committed/draft pair. Existing feature editors
+request their preview without changing source; pending or failed drafts retain
+only a matching last-valid display cache. Original and History suppress these
+overlays. Selection uses the authored input topology independently.
+
+Native exact differences are preferred. Bounded tessellated differences are
+labeled display approximations, never modeling or export shapes. Unavailable
+comparisons and worker transport limits preserve valid CAD evaluation and leave
+affected geometry neutral. The cumulative serialized preview cache is limited
+to 16 MiB; per-comparison geometry and BSP work also have explicit bounds.
+Overlapping edited surface trims and occurrence-only assembly movement remain
+outside the localized comparison scope. See [presentation](presentation.md)
+for semantic roles, independent added/removed colors, opacity and outlines.
+
+Final source integration passed `cargo fmt --all -- --check`,
+`cargo clippy --workspace --locked -- -D warnings`, `git diff --check` and
+`scripts/package-macos.sh`. The updated `dist/TCAD.app` retains distinct desktop,
+worker and CLI executable names. No tests, probes or manual/UI smoke checks were
+written or run; interactive acceptance remains with the user. The existing
+`proc-macro-error2` 2.0.1 future-incompatibility notice remains.

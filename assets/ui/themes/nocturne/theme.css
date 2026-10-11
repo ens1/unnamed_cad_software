@@ -342,6 +342,9 @@
   padding: 0px;
   selection-color: var(--active);
   preview-color: #75F9DD66;
+  preview-added-color: #75F9DD88;
+  preview-removed-color: #FF91B488;
+  preview-edge-width: 1.5px;
   comparison-color: #FF91B4;
   reference-curve-color: #AC9DFF;
   explode-line-color: #CDFA6D;

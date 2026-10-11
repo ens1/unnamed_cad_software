@@ -68,6 +68,9 @@
   background: #D5D9DF;
   selection-color: #FF5A00;
   preview-color: #FFAD4266;
+  preview-added-color: #4ECF8880;
+  preview-removed-color: #FF8A4A80;
+  preview-edge-width: 1.25px;
 }
 
 [role=dependency-view], [role=view-navigation], [role=property-manager] {

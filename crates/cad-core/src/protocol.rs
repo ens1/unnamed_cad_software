@@ -6,6 +6,7 @@ use std::{
 };
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME: usize = 256 * 1024 * 1024;
+pub const OPERATION_PREVIEW_VERSION: u32 = 1;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RequestIdentity {
     pub protocol: u32,
@@ -64,6 +65,55 @@ pub struct Diagnostic {
     pub target: Option<Id>,
     pub message: String,
 }
+/// Optional display work requested alongside evaluation. It never changes CAD
+/// definitions, the evaluated result's validity, or Apply eligibility.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OperationPreviewRequest {
+    pub baseline: Document,
+    pub baseline_identity: RequestIdentity,
+    /// A focused feature compares its own evaluated input and output; generic
+    /// edits compare the checkpoint document and current document instead.
+    pub focus: Option<crate::NodeRef>,
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewBaseline {
+    FeatureInput,
+    #[default]
+    Checkpoint,
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewRepresentation {
+    #[default]
+    ExactBrep,
+    /// A bounded difference of tessellated display geometry. This cache is
+    /// explicitly approximate and is never a modeling or export shape.
+    Tessellated,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OperationPreviewChange {
+    pub added: Option<MeshData>,
+    pub removed: Option<MeshData>,
+    #[serde(default)]
+    pub representation: PreviewRepresentation,
+    #[serde(default)]
+    pub diagnostics: Vec<Diagnostic>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OperationPreview {
+    pub version: u32,
+    pub baseline_identity: RequestIdentity,
+    pub focus: Option<crate::NodeRef>,
+    pub baseline_kind: PreviewBaseline,
+    pub tolerance_mm: f64,
+    /// Mesh-keyed local material changes, shared across matching occurrences.
+    pub changes: BTreeMap<Id, OperationPreviewChange>,
+    /// Placement context for a completely removed body or occurrence.
+    pub baseline_instances: Vec<PlacedPart>,
+    #[serde(default)]
+    pub diagnostics: Vec<Diagnostic>,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Evaluation {
     pub identity: RequestIdentity,
@@ -102,6 +152,8 @@ pub struct Evaluation {
     /// Optional versioned display cache; never authoritative or eligible for Apply.
     #[serde(default)]
     pub history: std::sync::Arc<BTreeMap<String, crate::history::PartHistory>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_preview: Option<Box<OperationPreview>>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EvaluatedSketch {
@@ -127,6 +179,8 @@ pub enum WorkerRequest {
         document: Document,
         project_root: String,
         tolerance: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation_preview: Option<Box<OperationPreviewRequest>>,
     },
     Export {
         identity: RequestIdentity,

@@ -585,6 +585,17 @@ fn preview_status(ui: &mut egui::Ui, w: &Workspace) {
         .unwrap_or("●  Committed model");
     ui.label(RichText::new(label).strong().size(11.));
     ui.small(&w.status).on_hover_text(&w.status);
+    if let Some((state, label)) = crate::operation_preview::summary(w) {
+        crate::presentation_controls::label(
+            ui,
+            "workspace.operation-preview",
+            "operation-preview-status",
+            &[],
+            &label,
+            &state,
+        )
+        .on_hover_text(crate::operation_preview::tooltip(w));
+    }
 }
 fn presentation_registry() -> crate::presentation_composition::Registry {
     let mut registry = crate::presentation_composition::Registry::default();
@@ -3613,6 +3624,7 @@ fn compare(w: &mut Workspace, d: Document, root: PathBuf) {
         document: d,
         project_root: root.to_string_lossy().into(),
         tolerance: w.tolerance(),
+        operation_preview: None,
     });
     w.status = "Evaluating comparison revision".into();
 }
