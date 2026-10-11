@@ -129,6 +129,12 @@ impl ShellHistory {
         self.faces.insert(face, origin);
         Ok(())
     }
+    pub(crate) fn retain_edge(&mut self, edge: EdgeId, source: EdgeId) -> Result<()> {
+        let reference = self.edge(source)?;
+        self.generated.inherit_edge(edge, reference.clone());
+        self.edges.insert(edge, reference);
+        Ok(())
+    }
     pub(crate) fn construct_face(
         &mut self,
         face: FaceId,

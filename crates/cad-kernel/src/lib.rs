@@ -22,6 +22,7 @@ mod curve_pattern;
 mod curve_sampling;
 mod direct_edit;
 mod drilled_pockets;
+mod edge_round;
 mod extrusion;
 mod extrusion_surface;
 mod holes;

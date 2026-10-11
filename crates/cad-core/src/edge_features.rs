@@ -3,6 +3,28 @@ use crate::{Dimension, Document, Expr, Operation, TopologyRef, presentation::Sem
 use serde::{Deserialize, Serialize};
 
 pub const CONTRACT_VERSION: u32 = 1;
+/// Bound authored input before native selection resolution in a worker.
+pub const MAX_SELECTED_EDGES: usize = 512;
+
+pub fn validate_selection(edges: &[TopologyRef]) -> crate::Result<()> {
+    if edges.is_empty() || edges.len() > MAX_SELECTED_EDGES {
+        return Err(crate::CadError::Invalid(format!(
+            "Select between 1 and {MAX_SELECTED_EDGES} model edges for this operation"
+        )));
+    }
+    if edges.iter().any(|edge| {
+        edge.topology != "edge"
+            || edge.role.is_empty()
+            || edge.producer.definition.is_empty()
+            || edge.producer.node.is_empty()
+    }) {
+        return Err(crate::CadError::Invalid(
+            "Fillet and Chamfer require saved model-edge references; replace invalid selections"
+                .into(),
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -42,11 +64,40 @@ pub fn semantic_fields(
     operation: &Operation,
     state: &str,
 ) -> Vec<SemanticElement> {
+    if let Operation::Fillet {
+        body,
+        edges,
+        radius,
+    } = operation
+    {
+        return vec![
+            SemanticElement {
+                id: format!("{node}::fillet::radius"),
+                role: "feature-field".into(),
+                label: "Radius".into(),
+                value: Some(radius.0.clone()),
+                state: state.into(),
+                commands: vec!["feature.edit".into()],
+                relationships: vec![node.into(), body.node.clone()],
+                data: serde_json::json!({"contract":"tcad.fillet","version":1,"field":"radius","type":"quantity","dimension":Dimension::Length,"expression":radius,"evaluated":crate::expression::value(doc,owner,radius,Dimension::Length).ok(),"editable":true}),
+            },
+            SemanticElement {
+                id: format!("{node}::fillet::selection"),
+                role: "feature-selection".into(),
+                label: "Edges to fillet".into(),
+                value: Some(format!("{} selected", edges.len())),
+                state: state.into(),
+                commands: vec!["feature.edit".into()],
+                relationships: vec![node.into(), body.node.clone()],
+                data: serde_json::json!({"contract":"tcad.fillet","version":1,"body":body,"edges":edges,"selection":"explicit_edge_set","maximum_edges":MAX_SELECTED_EDGES}),
+            },
+        ];
+    }
     let Operation::Chamfer {
+        body,
         distance,
         options,
         edges,
-        ..
     } = operation
     else {
         return vec![];
@@ -74,6 +125,16 @@ pub fn semantic_fields(
         id: format!("{node}::chamfer::options"), role: "feature-options".into(), label: "Chamfer Options".into(),
         value: None, state: state.into(), commands: vec!["feature.edit".into()], relationships: vec![node.into()],
         data: serde_json::json!({"contract":"tcad.chamfer","version":CONTRACT_VERSION,"options":options,"edges":edges,"methods":["equal_distance","two_distances","distance_angle"],"unequal_geometry":"convex_straight_edges_between_supporting_planar_faces","distance_1_face":"explicit_reference_or_deterministic_normal_order","angle":"between_chamfer_and_distance_1_face"}),
+    });
+    out.push(SemanticElement {
+        id: format!("{node}::chamfer::selection"),
+        role: "feature-selection".into(),
+        label: "Edges to chamfer".into(),
+        value: Some(format!("{} selected", edges.len())),
+        state: state.into(),
+        commands: vec!["feature.edit".into()],
+        relationships: vec![node.into(), body.node.clone()],
+        data: serde_json::json!({"contract":"tcad.chamfer","version":CONTRACT_VERSION,"body":body,"edges":edges,"selection":"explicit_edge_set","maximum_edges":MAX_SELECTED_EDGES}),
     });
     out
 }

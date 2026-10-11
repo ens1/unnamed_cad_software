@@ -209,6 +209,36 @@ pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
         });
     input.or_else(|| display_evaluation(w))
 }
+/// Editing an existing edge feature selects its authored input from the history
+/// cache. The checkpoint's final mesh may already contain the old fillet/chamfer.
+fn selection_meshes<'a>(w: &Workspace, e: &'a Evaluation, i: &PlacedPart) -> Vec<&'a MeshData> {
+    if let Some(feature) = crate::selection_ui::edge_feature(w)
+        && let Some((body, _)) = crate::selection_ui::edge_selection(&feature)
+    {
+        if i.definition != body.definition || !crate::selection_ui::edge_occurrence(w, &i.path) {
+            return vec![];
+        }
+        let key = cad_core::history::mesh_key(i);
+        if let Some(mesh) = e
+            .history
+            .get(key)
+            .and_then(|history| history.meshes.get(&body.node))
+        {
+            return vec![mesh.as_ref()];
+        }
+        // Older evaluations may have no history cache. Only accept a current
+        // display mesh that actually belongs to the authored input output.
+        return display_meshes(w, e, i)
+            .into_iter()
+            .filter(|mesh| {
+                mesh.edges
+                    .iter()
+                    .any(|edge| edge.body.as_ref() == Some(body))
+            })
+            .collect();
+    }
+    display_meshes(w, e, i)
+}
 fn selected_instance(selection: &Selection, instance: &PlacedPart) -> bool {
     selection.path == instance.path && selection.definition == instance.definition
 }
@@ -232,7 +262,7 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
         if !visible(w, instance) {
             continue;
         }
-        for mesh in display_meshes(w, e, instance) {
+        for mesh in selection_meshes(w, e, instance) {
             let key = instance
                 .path
                 .last()
@@ -324,6 +354,13 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
         w.status = "Select geometry on the part being edited".into();
         return false;
     }
+    if let Some(feature) = crate::selection_ui::edge_feature(w)
+        && let Some((body, _)) = crate::selection_ui::edge_selection(&feature)
+        && (s.body.as_ref() != Some(body) || !crate::selection_ui::edge_occurrence(w, &s.path))
+    {
+        w.status = "Select edges or faces on this feature's input body and component".into();
+        return false;
+    }
     // Tab candidates can outlive a worker result. Resolve only a unique native
     // reference on the current occurrence, rather than selecting stale topology.
     if matches!(s.reference.topology.as_str(), "face" | "edge") {
@@ -332,7 +369,7 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
                 display_instances(w, evaluation)
                     .iter()
                     .filter(|instance| selected_instance(&s, instance) && visible(w, instance))
-                    .flat_map(|instance| display_meshes(w, evaluation, instance))
+                    .flat_map(|instance| selection_meshes(w, evaluation, instance))
                     .map(|mesh| {
                         if s.reference.topology == "face" {
                             mesh.faces
@@ -353,6 +390,7 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
             w.status = "Selection changed during evaluation; select the geometry again".into();
             w.candidates.clear();
             w.selected = None;
+            w.geometry_selection.clear();
             w.selected_feature_path = None;
             w.context_selection = None;
             return false;
@@ -366,11 +404,72 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
     }
     w.context_selection = None;
     w.selected_feature_path = None;
+    if !feature_editing
+        || crate::selection_ui::edge_feature(w).is_some() && w.edge_selection_path.is_none()
+    {
+        w.edge_selection_path = Some(s.path.clone());
+    }
+    w.geometry_selection = vec![s.clone()];
     w.selected = Some(s);
     w.active_plane = None;
     w.rendered_key.clear();
     crate::navigation::stop(w);
     true
+}
+/// Command/Shift preselection accumulates edges on one body occurrence. During
+/// feature editing the authored edge vector is handled by its draft capture.
+pub fn select_modified(w: &mut Workspace, s: Selection, toggle: bool) -> bool {
+    let prior = w.geometry_selection.clone();
+    let editing = w.tool_checkpoint.is_some();
+    if !select(w, s.clone()) {
+        return false;
+    }
+    if toggle && !editing && s.reference.topology == "edge" {
+        let mut selected = prior
+            .into_iter()
+            .filter(|pick| {
+                pick.reference.topology == "edge"
+                    && pick.path == s.path
+                    && pick.definition == s.definition
+                    && pick.body == s.body
+            })
+            .collect::<Vec<_>>();
+        if let Some(index) = selected
+            .iter()
+            .position(|pick| selected_topology(pick, &s.reference, &s.body))
+        {
+            selected.remove(index);
+            w.selected = selected.last().cloned();
+        } else {
+            selected.push(s);
+        }
+        w.geometry_selection = selected;
+    }
+    true
+}
+
+pub(crate) fn preselected_edges(w: &Workspace, body: &cad_core::NodeRef) -> Vec<TopologyRef> {
+    let Some(selected) = w
+        .selected
+        .as_ref()
+        .filter(|s| s.reference.topology == "edge" && s.body.as_ref() == Some(body))
+    else {
+        return vec![];
+    };
+    let mut edges = vec![];
+    for pick in w.geometry_selection.iter().chain(std::iter::once(selected)) {
+        if pick.path == selected.path
+            && pick.body.as_ref() == Some(body)
+            && pick.definition == body.definition
+            && pick.reference.topology == "edge"
+            && !edges
+                .iter()
+                .any(|edge| crate::selection_ui::same_edge(edge, &pick.reference))
+        {
+            edges.push(pick.reference.clone());
+        }
+    }
+    edges
 }
 pub fn fit(w: &mut Workspace, selection: bool) {
     if w.sketch
@@ -905,12 +1004,13 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
         }
     }
     let feedback_evaluation = selection_evaluation(w).unwrap_or(e);
+    let edge_feature = crate::selection_ui::edge_feature(w);
     let mut marker = None;
     for i in display_instances(w, feedback_evaluation) {
         if !visible(w, i) {
             continue;
         }
-        let meshes = display_meshes(w, feedback_evaluation, i);
+        let meshes = selection_meshes(w, feedback_evaluation, i);
         let selected = w.selected.as_ref().filter(|s| {
             selected_instance(s, i)
                 && meshes
@@ -942,6 +1042,23 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                                     && face.role == s.reference.role
                                     && face.topology == s.reference.topology
                             }))
+                }) || edge_feature.as_ref().is_some_and(|feature| {
+                    crate::selection_ui::edge_selection(feature).is_some_and(|(body, edges)| {
+                        i.definition == body.definition
+                            && w.edge_selection_path
+                                .as_ref()
+                                .is_some_and(|path| path == &i.path)
+                            && edge.body.as_ref() == Some(body)
+                            && edges.iter().any(|reference| {
+                                crate::selection_ui::same_edge(reference, &edge.reference)
+                            })
+                    })
+                }) || w.selected.as_ref().is_some_and(|primary| {
+                    selected_instance(primary, i)
+                        && w.geometry_selection.iter().any(|pick| {
+                            selected_instance(pick, i)
+                                && selected_topology(pick, &edge.reference, &edge.body)
+                        })
                 });
                 if active || m.indices.is_empty() {
                     let curve_color = props

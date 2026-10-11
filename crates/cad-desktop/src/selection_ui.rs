@@ -13,6 +13,227 @@ pub struct ActionPopup {
     presentation_parent: Option<Region>,
 }
 
+/// The editor reads the shared draft, rather than retaining a second edge list.
+pub(crate) fn edge_feature(w: &Workspace) -> Option<Feature> {
+    if w.dialog.as_deref() != Some("feature")
+        || w.tool_checkpoint.is_none()
+        || w.fields.contains_key("feature-source-invalid")
+    {
+        return None;
+    }
+    let id = w.fields.get("feature-editor-id")?;
+    w.session
+        .visible()
+        .parts
+        .get(w.view.active_part.as_ref()?)?
+        .features
+        .iter()
+        .find(|feature| {
+            &feature.id == id
+                && matches!(
+                    feature.operation,
+                    cad_core::Operation::Fillet { .. } | cad_core::Operation::Chamfer { .. }
+                )
+        })
+        .cloned()
+}
+
+pub(crate) fn edge_selection(
+    feature: &Feature,
+) -> Option<(&cad_core::NodeRef, &[cad_core::TopologyRef])> {
+    match &feature.operation {
+        cad_core::Operation::Fillet { body, edges, .. }
+        | cad_core::Operation::Chamfer { body, edges, .. } => Some((body, edges)),
+        _ => None,
+    }
+}
+
+pub(crate) fn same_edge(first: &cad_core::TopologyRef, second: &cad_core::TopologyRef) -> bool {
+    first.topology == second.topology
+        && first.producer == second.producer
+        && first.role == second.role
+}
+
+pub(crate) fn edge_key(feature: &str, edge: &cad_core::TopologyRef) -> String {
+    // Use the full provenance identity, never the mutable list position or a
+    // tessellated endpoint. Commands remain attached to their original edge.
+    format!(
+        "{feature}/{}/{}/{}",
+        edge.producer.definition, edge.producer.node, edge.role
+    )
+}
+
+pub(crate) fn accepts_edge(
+    w: &Workspace,
+    body: &cad_core::NodeRef,
+    pick: &viewport::Selection,
+) -> bool {
+    pick.reference.topology == "edge"
+        && pick.definition == body.definition
+        && pick.body.as_ref() == Some(body)
+        && edge_occurrence(w, &pick.path)
+}
+
+pub(crate) fn edge_occurrence(w: &Workspace, path: &[cad_core::Id]) -> bool {
+    w.edge_selection_path.as_ref().map_or_else(
+        || {
+            w.view
+                .active_instance
+                .as_ref()
+                .is_none_or(|id| path.contains(id))
+        },
+        |selected| selected == path,
+    )
+}
+
+pub(crate) fn known_edge_occurrence(w: &Workspace, definition: &str) -> Option<Vec<cad_core::Id>> {
+    let evaluation = viewport::selection_evaluation(w)?;
+    let instances = viewport::display_instances(w, evaluation);
+    let known = w
+        .selected
+        .as_ref()
+        .filter(|pick| pick.definition == definition)
+        .map(|pick| &pick.path)
+        .or(w.selected_feature_path.as_ref())
+        .or(w.edge_selection_path.as_ref());
+    if let Some(path) = known.filter(|path| {
+        instances
+            .iter()
+            .any(|instance| instance.definition == definition && &instance.path == *path)
+    }) {
+        return Some(path.clone());
+    }
+    let mut candidates = instances.iter().filter(|instance| {
+        instance.definition == definition
+            && w.view
+                .active_instance
+                .as_ref()
+                .is_none_or(|id| instance.path.contains(id))
+    });
+    let first = candidates.next()?;
+    candidates.next().is_none().then(|| first.path.clone())
+}
+
+pub(crate) fn clear_edge_pick(w: &mut Workspace) {
+    for key in [
+        "edge-pick-base",
+        "edge-pick-last",
+        "edge-pick-feature",
+        "edge-pick-toggle",
+    ] {
+        w.fields.remove(key);
+    }
+}
+
+fn edge_controls(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+    let Some(feature) = edge_feature(w) else {
+        return vec![];
+    };
+    let Some((body, edges)) = edge_selection(&feature) else {
+        return vec![];
+    };
+    let selection = w
+        .selected
+        .as_ref()
+        .filter(|pick| accepts_edge(w, body, pick));
+    let mut out = vec![cad_core::presentation::SemanticElement {
+        id: format!("{}::edge-selection", feature.id),
+        role: "edge-selection".into(),
+        label: "Selected edges".into(),
+        value: Some(format!("{} selected", edges.len())),
+        state: "draft".into(),
+        commands: vec![],
+        relationships: vec![feature.id.clone(), body.node.clone()],
+        data: serde_json::json!({"contract":"tcad.presentation.edge-selection","version":1,"definition":body.definition,"feature":feature.id,"input_body":body,"occurrence_path":w.edge_selection_path,"edges":edges,"shared_draft":true,"requires_current_validation":true,"hint":"Click edges to add. Command-click or Shift-click toggles an edge. Tab cycles the current pick without adding every candidate."}),
+    }];
+    for (suffix, label, enabled) in [
+        (
+            "add",
+            "Add selected edge",
+            selection
+                .is_some_and(|pick| !edges.iter().any(|edge| same_edge(edge, &pick.reference))),
+        ),
+        ("clear", "Clear edges", !edges.is_empty()),
+    ] {
+        let command = format!("selection.edge-{suffix}/{}", feature.id);
+        out.push(cad_core::presentation::SemanticElement {
+            id: command.clone(), role:"edge-selection-action".into(), label:label.into(),
+            value: (!enabled).then(|| "Select an edge on this feature's input body".into()),
+            state: if enabled {"ready"} else {"disabled"}.into(), commands:vec![command],
+            relationships:vec![feature.id.clone()],
+            data:serde_json::json!({"presentation_control":true,"feature":feature.id,"input_body":body,"enabled":enabled,"classes":["property-control"]}),
+        });
+    }
+    for (index, edge) in edges.iter().enumerate() {
+        let key = edge_key(&feature.id, edge);
+        let command = format!("selection.edge-remove/{key}");
+        out.push(cad_core::presentation::SemanticElement {
+            id: format!("edge-selection/{key}"), role:"edge-selection-item".into(), label:format!("Edge {}", index + 1),
+            value:Some(edge.role.clone()), state:"selected".into(), commands:vec![command.clone()],
+            relationships:vec![feature.id.clone()],
+            data:serde_json::json!({"feature":feature.id,"edge":edge,"input_body":body,"classes":["property-control"]}),
+        });
+        out.push(cad_core::presentation::SemanticElement {
+            id: command.clone(), role:"edge-selection-action".into(), label:format!("Remove edge {}", index + 1),
+            value:Some(edge.role.clone()), state:"ready".into(), commands:vec![command],
+            relationships:vec![feature.id.clone()],
+            data:serde_json::json!({"presentation_control":true,"feature":feature.id,"edge":edge,"input_body":body,"classes":["property-control","edge-remove"]}),
+        });
+    }
+    out
+}
+
+pub(crate) fn edge_action(w: &mut Workspace, command: &str) -> bool {
+    if !command.starts_with("selection.edge-") {
+        return false;
+    }
+    let controls = edge_controls(w);
+    let Some(control) = controls
+        .iter()
+        .find(|element| element.commands.iter().any(|id| id == command))
+    else {
+        w.status = "The edge selection changed; use its current controls".into();
+        return true;
+    };
+    if control.state == "disabled" {
+        w.status = control.value.clone().unwrap_or_default();
+        return true;
+    }
+    let Some(mut feature) = edge_feature(w) else {
+        return true;
+    };
+    let edges = match &mut feature.operation {
+        cad_core::Operation::Fillet { edges, .. } | cad_core::Operation::Chamfer { edges, .. } => {
+            edges
+        }
+        _ => return true,
+    };
+    if command.starts_with("selection.edge-add/") {
+        if let Some(pick) = &w.selected {
+            edges.push(pick.reference.clone());
+        }
+    } else if command.starts_with("selection.edge-clear/") {
+        edges.clear();
+    } else if let Some(reference) = control
+        .data
+        .get("edge")
+        .and_then(|value| serde_json::from_value::<cad_core::TopologyRef>(value.clone()).ok())
+    {
+        edges.retain(|edge| !same_edge(edge, &reference));
+    }
+    if w.selected.as_ref().is_some_and(|pick| {
+        pick.reference.topology == "edge"
+            && !edges.iter().any(|edge| same_edge(edge, &pick.reference))
+    }) {
+        w.selected = None;
+        w.geometry_selection.clear();
+    }
+    clear_edge_pick(w);
+    w.json = serde_json::to_string_pretty(&feature).unwrap_or_default();
+    ui::preview_feature(w, feature);
+    true
+}
+
 pub fn current(w: &Workspace) -> Option<SelectionTarget> {
     if let Some(target) = &w.context_selection {
         return Some(target.clone());
@@ -67,8 +288,9 @@ pub fn current(w: &Workspace) -> Option<SelectionTarget> {
 }
 
 pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+    let mut edge_elements = edge_controls(w);
     let Some(target) = current(w) else {
-        return vec![];
+        return edge_elements;
     };
     let mut elements = descriptors(w, &target);
     for action in &mut elements {
@@ -132,7 +354,8 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             data: serde_json::json!({"presentation_control":true,"target":target}),
         });
     }
-    elements
+    edge_elements.extend(elements);
+    edge_elements
 }
 
 fn descriptors(
@@ -238,6 +461,7 @@ pub(crate) fn feature_selected_at(
     response: &egui::Response,
     path: Option<Vec<cad_core::Id>>,
 ) {
+    w.geometry_selection.clear();
     if response.double_clicked() {
         crate::history::latest(w);
     }
@@ -287,6 +511,7 @@ pub(crate) fn feature_selected_at(
     }
     if w.view.active_part.as_deref() != Some(definition) {
         w.view.active_instance = None;
+        w.edge_selection_path = None;
     }
     w.context_selection = None;
     w.view.active_part = Some(definition.into());
@@ -783,6 +1008,7 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
 
 /// Sidebar and graph selections still publish actions without opening a popup.
 pub fn object_selected(w: &mut Workspace, target: SelectionTarget) {
+    w.geometry_selection.clear();
     w.selection_popup = None;
     w.selected_feature_path = None;
     w.context_selection = Some(target);

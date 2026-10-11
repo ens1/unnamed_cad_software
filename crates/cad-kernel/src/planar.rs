@@ -1,4 +1,5 @@
-use cad_core::{CadError, Result};
+use crate::shell_history::ShellHistory;
+use cad_core::{CadError, Result, TopologyRef};
 use monstertruck::modeling::*;
 use std::collections::{HashMap, HashSet};
 
@@ -18,24 +19,35 @@ pub(crate) struct CutOutput {
 }
 
 #[derive(Clone)]
-struct BoundaryPlane {
-    face: Face,
-    origin: Point3,
-    normal: Vector3,
+pub(crate) struct BoundaryPlane {
+    pub face: Face,
+    pub origin: Point3,
+    pub normal: Vector3,
 }
 impl BoundaryPlane {
-    fn signed(&self, point: Point3) -> f64 {
+    pub fn signed(&self, point: Point3) -> f64 {
         (point - self.origin).dot(self.normal)
     }
 }
 
 // Positive rational controls prove planarity of a carrier; no tessellation is
 // used to turn a curved face into a plane.
-fn boundary_plane(face: &Face) -> Result<Option<BoundaryPlane>> {
+pub(crate) fn boundary_plane(face: &Face) -> Result<Option<BoundaryPlane>> {
     let Some(vertex) = face.vertex_iter().next() else {
         return Ok(None);
     };
-    let normal = face.oriented_surface().normal(0., 0.);
+    let normal = match face.oriented_surface() {
+        Surface::Plane(plane) => plane.normal(),
+        Surface::BsplineSurface(surface) => {
+            let ((u0, u1), (v0, v1)) = surface.range_tuple();
+            surface.normal((u0 + u1) * 0.5, (v0 + v1) * 0.5)
+        }
+        Surface::NurbsSurface(surface) => {
+            let ((u0, u1), (v0, v1)) = surface.range_tuple();
+            surface.normal((u0 + u1) * 0.5, (v0 + v1) * 0.5)
+        }
+        _ => return Ok(None),
+    };
     if !normal.magnitude2().is_finite() || normal.magnitude2() < 1e-18 {
         return Ok(None);
     }
@@ -54,21 +66,31 @@ fn boundary_plane(face: &Face) -> Result<Option<BoundaryPlane>> {
         .all(|p| plane.signed(*p).abs() <= EPSILON)
         .then_some(plane))
 }
-fn straight_edge(edge: &Edge) -> Result<bool> {
+pub(crate) fn straight_edge(edge: &Edge) -> Result<bool> {
     let a = edge.front().point();
     let delta = edge.back().point() - a;
     let length = delta.magnitude2();
     if length <= EPSILON * EPSILON {
         return Ok(false);
     }
-    Ok(crate::extrusion::curve_hull(&edge.curve())?
-        .iter()
-        .all(|p| {
-            let t = (*p - a).dot(delta) / length;
-            (-1e-9..=1. + 1e-9).contains(&t) && (*p - a - delta * t).magnitude() <= EPSILON
-        }))
+    let hull = match crate::extrusion::curve_hull(&edge.curve()) {
+        Ok(hull) => hull,
+        Err(CadError::Unsupported(_)) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if !hull.iter().all(|p| {
+        let t = (*p - a).dot(delta) / length;
+        (-1e-9..=1. + 1e-9).contains(&t) && (*p - a - delta * t).magnitude() <= EPSILON
+    }) {
+        return Ok(false);
+    }
+    match crate::bounded_carriers::line(&edge.curve()) {
+        Ok(()) => Ok(true),
+        Err(CadError::Unsupported(_)) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
-fn supporting_planes(solid: &Solid) -> Result<Vec<BoundaryPlane>> {
+pub(crate) fn supporting_planes(solid: &Solid) -> Result<Vec<BoundaryPlane>> {
     let hull = crate::adapter::solid_control_points(solid)?;
     let mut planes = Vec::new();
     for face in solid.face_iter() {
@@ -677,55 +699,249 @@ fn edge_between(cache: &mut HashMap<(VertexId, VertexId), Edge>, a: &Vertex, b: 
     edge
 }
 
-// Keep the negative half-space. Intersections are exact line/plane intersections;
-// curved faces are retained only when their control hull is wholly inside.
-fn clip(solid: &Solid, origin: Point3, normal: Vector3) -> Result<Solid> {
+// A bevel half-space is computed on the original stock. Clipping the complete
+// shared shell, rather than collecting every coplanar polygon segment, makes
+// several selected setbacks meet at the same exact corner topology.
+#[derive(Clone)]
+struct BevelPlane {
+    origin: Point3,
+    normal: Vector3,
+    sources: Vec<TopologyRef>,
+}
+
+fn simple_polygon(vertices: &[Vertex], normal: Vector3) -> bool {
+    let mut seen = HashSet::new();
+    if vertices.iter().any(|vertex| !seen.insert(vertex.id())) {
+        return false;
+    }
+    for i in 0..vertices.len() {
+        let a = vertices[i].point();
+        let b = vertices[(i + 1) % vertices.len()].point();
+        let u = b - a;
+        let length_u = u.magnitude();
+        if length_u <= EPSILON {
+            return false;
+        }
+        for j in i + 1..vertices.len() {
+            if j == i + 1 || (i == 0 && j + 1 == vertices.len()) {
+                continue;
+            }
+            let c = vertices[j].point();
+            let d = vertices[(j + 1) % vertices.len()].point();
+            let v = d - c;
+            let length_v = v.magnitude();
+            if length_v <= EPSILON {
+                return false;
+            }
+            let denominator = normal.dot(u.cross(v));
+            if denominator.abs() > 1e-12 * length_u * length_v {
+                let t = normal.dot((c - a).cross(v)) / denominator;
+                let s = normal.dot((c - a).cross(u)) / denominator;
+                if (-EPSILON / length_u..=1. + EPSILON / length_u).contains(&t)
+                    && (-EPSILON / length_v..=1. + EPSILON / length_v).contains(&s)
+                {
+                    return false;
+                }
+            } else if (c - a).cross(u).magnitude() <= EPSILON * length_u {
+                let c = (c - a).dot(u) / length_u;
+                let d = (d - a).dot(u) / length_u;
+                if c.min(d).max(0.) <= c.max(d).min(length_u) + EPSILON {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+fn wholly_inside(face: &Face, origin: Point3, normal: Vector3) -> Result<bool> {
     let signed = |p: Point3| (p - origin).dot(normal);
+    if !face.edge_iter().all(|edge| {
+        curve_hull(edge.curve())
+            .is_some_and(|points| points.iter().all(|point| signed(*point) <= EPSILON))
+    }) {
+        return Ok(false);
+    }
+    if boundary_plane(face)?.is_some() {
+        return Ok(true);
+    }
+    Ok(match face.surface() {
+        Surface::BsplineSurface(surface) => surface
+            .control_points()
+            .iter()
+            .flatten()
+            .all(|point| signed(*point) <= EPSILON),
+        Surface::NurbsSurface(surface) => surface.control_points().iter().flatten().all(|p| {
+            p.w.is_finite()
+                && p.w > 0.
+                && signed(Point3::new(p.x / p.w, p.y / p.w, p.z / p.w)) <= EPSILON
+        }),
+        _ => false,
+    })
+}
+
+// Open boundaries are the unmatched, oriented edge occurrences of the clipped
+// shell. Existing edges exactly on the cut plane occur twice and cancel. This
+// also includes a cap edge whose neighboring wall was retained unchanged.
+fn bevel_boundaries(shell: &Shell, plane: &BevelPlane) -> Result<Vec<Wire>> {
+    let mut occurrences: HashMap<EdgeId, Vec<Edge>> = HashMap::new();
+    for edge in shell.edge_iter() {
+        occurrences.entry(edge.id()).or_default().push(edge.clone());
+    }
+    let mut edges = Vec::new();
+    for paired in occurrences.into_values() {
+        match paired.as_slice() {
+            [edge] => {
+                if !curve_hull(edge.curve()).is_some_and(|points| {
+                    points
+                        .iter()
+                        .all(|point| (*point - plane.origin).dot(plane.normal).abs() <= EPSILON)
+                }) {
+                    return Err(CadError::Invalid(
+                        "Chamfer produced an open boundary away from its setback plane".into(),
+                    ));
+                }
+                edges.push(edge.inverse());
+            }
+            [a, b] if a.front().id() == b.back().id() && a.back().id() == b.front().id() => {}
+            _ => {
+                return Err(CadError::Invalid(
+                    "Chamfer setbacks overlap or produce non-manifold corner topology".into(),
+                ));
+            }
+        }
+    }
+    let mut starts = HashMap::new();
+    let mut ends = HashSet::new();
+    for edge in edges {
+        if starts.insert(edge.front().id(), edge.clone()).is_some()
+            || !ends.insert(edge.back().id())
+        {
+            return Err(CadError::Invalid(
+                "Chamfer setbacks collapse into a branching corner; reduce the distances".into(),
+            ));
+        }
+    }
+    let mut boundaries = Vec::new();
+    while let Some(first) = shell
+        .vertex_iter()
+        .find_map(|vertex| starts.get(&vertex.id()).cloned())
+    {
+        let start = first.front().id();
+        let mut wire = Wire::new();
+        let mut cursor = first;
+        loop {
+            starts.remove(&cursor.front().id());
+            let next = cursor.back().id();
+            wire.push_back(cursor);
+            if next == start {
+                break;
+            }
+            cursor = starts.remove(&next).ok_or_else(|| {
+                CadError::Invalid("Chamfer setback boundary is open; reduce the distances".into())
+            })?;
+        }
+        if wire.len() < 3 {
+            return Err(CadError::Invalid(
+                "Chamfer setbacks collapse a bevel face; reduce the distances".into(),
+            ));
+        }
+        boundaries.push(wire);
+    }
+    if !starts.is_empty() {
+        return Err(CadError::Invalid(
+            "Chamfer boundary contains an unconnected corner".into(),
+        ));
+    }
+    boundaries.sort_by(|a, b| {
+        let area = |wire: &Wire| {
+            polygon_area(
+                &wire
+                    .iter()
+                    .map(|edge| edge.front().point())
+                    .collect::<Vec<_>>(),
+            )
+            .magnitude2()
+        };
+        area(b).total_cmp(&area(a))
+    });
+    for (index, wire) in boundaries.iter().enumerate() {
+        let area = polygon_area(
+            &wire
+                .iter()
+                .map(|edge| edge.front().point())
+                .collect::<Vec<_>>(),
+        )
+        .dot(plane.normal);
+        if area.abs() <= EPSILON * EPSILON || (index == 0 && area < 0.) {
+            return Err(CadError::Invalid(
+                "Chamfer setbacks collapse or reverse a bevel face; reduce the distances".into(),
+            ));
+        }
+        if index > 0 && area > 0. {
+            return Err(CadError::Unsupported(
+                "Chamfer would separate its bevel into several disconnected regions".into(),
+            ));
+        }
+    }
+    Ok(boundaries)
+}
+
+// Keep the negative half-space. Straight positive rational carriers are trimmed
+// to actual lines; curved pocket faces survive only with a full inside proof.
+fn clip(solid: &Solid, plane: &BevelPlane, history: &mut ShellHistory) -> Result<Solid> {
+    let signed = |p: Point3| (p - plane.origin).dot(plane.normal);
+    let Some(exterior) = solid.boundaries().first() else {
+        return Err(CadError::Invalid(
+            "Chamfer requires a closed source body".into(),
+        ));
+    };
+    // Enclosed void shells need no modification when their complete carriers are
+    // disjoint from the bevel. Intersecting one needs a general curved Boolean.
+    for cavity in solid.boundaries().iter().skip(1) {
+        if cavity
+            .iter()
+            .map(|face| wholly_inside(face, plane.origin, plane.normal))
+            .collect::<Result<Vec<_>>>()?
+            .iter()
+            .any(|inside| !inside)
+        {
+            return Err(CadError::Unsupported(
+                "Chamfer intersects an enclosed void boundary; reduce the distances or select another edge".into(),
+            ));
+        }
+    }
     let mut edge_cache = HashMap::new();
-    for edge in solid.edge_iter() {
+    for edge in exterior.edge_iter() {
         edge_cache.insert((edge.front().id(), edge.back().id()), edge.clone());
         edge_cache.insert((edge.back().id(), edge.front().id()), edge.inverse());
     }
+    let mut vertices = exterior.vertex_iter().collect::<Vec<_>>();
     let mut intersections = HashMap::new();
-    let mut faces = Vec::new();
-    let mut cap_edges = Vec::new();
-    for face in solid.face_iter() {
+    let mut faces = Shell::new();
+    let mut changed = false;
+    for face in exterior {
         let boundaries = face.boundaries();
-        let all_inside = boundaries.iter().flatten().all(|edge| {
-            curve_hull(edge.curve())
-                .is_some_and(|points| points.iter().all(|p| signed(*p) <= EPSILON))
-        });
-        if all_inside {
-            let surface_inside = match face.surface() {
-                Surface::Plane(_) => true,
-                Surface::BsplineSurface(surface) => surface
-                    .control_points()
-                    .iter()
-                    .flatten()
-                    .all(|p| signed(*p) <= EPSILON),
-                Surface::NurbsSurface(surface) => {
-                    surface.control_points().iter().flatten().all(|p| {
-                        p.w > 0. && signed(Point3::new(p.x / p.w, p.y / p.w, p.z / p.w)) <= EPSILON
-                    })
-                }
-                _ => false,
-            };
-            if surface_inside {
-                faces.push(face.clone());
-                continue;
-            }
+        if wholly_inside(face, plane.origin, plane.normal)? {
+            faces.push(face.clone());
+            continue;
         }
-        if !matches!(face.surface(), Surface::Plane(_))
+        changed = true;
+        let carrier = boundary_plane(face)?;
+        if carrier.is_none()
             || boundaries[0]
                 .iter()
-                .any(|e| !matches!(e.curve(), Curve::Line(_)))
-            || boundaries.iter().skip(1).flatten().any(|e| {
-                !curve_hull(e.curve())
-                    .is_some_and(|points| points.iter().all(|p| signed(*p) <= EPSILON))
+                .map(straight_edge)
+                .collect::<Result<Vec<_>>>()?
+                .iter()
+                .any(|straight| !straight)
+            || boundaries.iter().skip(1).flatten().any(|edge| {
+                !curve_hull(edge.curve())
+                    .is_some_and(|points| points.iter().all(|point| signed(*point) < -EPSILON))
             })
         {
             return Err(CadError::Unsupported(
-                "This planar cut intersects a curved face or an existing pocket boundary".into(),
+                "Chamfer intersects a curved wall or pocket boundary; reduce the distances or select another edge".into(),
             ));
         }
         let mut polygon = Vec::new();
@@ -745,10 +961,19 @@ fn clip(solid: &Solid, origin: Point3, normal: Vector3) -> Result<Solid> {
                     intersections
                         .entry(edge.id())
                         .or_insert_with(|| {
-                            builder::vertex(a.point() + (b.point() - a.point()) * (da / (da - db)))
+                            vertex_for(
+                                &mut vertices,
+                                a.point() + (b.point() - a.point()) * (da / (da - db)),
+                            )
                         })
                         .clone()
                 };
+                let (front, back) = if inside_a { (a, &vertex) } else { (&vertex, b) };
+                if front.point().distance(back.point()) > EPSILON && history.edge(edge.id()).is_ok()
+                {
+                    let segment = edge_between(&mut edge_cache, front, back);
+                    history.retain_edge(segment.id(), edge.id())?;
+                }
                 polygon.push(vertex);
             }
             if inside_b {
@@ -763,49 +988,66 @@ fn clip(solid: &Solid, origin: Point3, normal: Vector3) -> Result<Solid> {
         {
             polygon.pop();
         }
-        if polygon.len() < 3 {
+        if polygon.len() < 3
+            || polygon_area(&polygon.iter().map(Vertex::point).collect::<Vec<_>>()).magnitude()
+                <= EPSILON * EPSILON
+        {
             continue;
+        }
+        let normal = carrier
+            .map(|carrier| carrier.normal)
+            .ok_or_else(|| CadError::Unsupported("Chamfer wall is not provably planar".into()))?;
+        if !simple_polygon(&polygon, normal) {
+            return Err(CadError::Unsupported(
+                "Chamfer splits or collapses a concave wall boundary; reduce the distances".into(),
+            ));
         }
         let mut wire = Wire::new();
         for index in 0..polygon.len() {
             let a = &polygon[index];
             let b = &polygon[(index + 1) % polygon.len()];
-            let edge = edge_between(&mut edge_cache, a, b);
-            if signed(a.point()).abs() <= EPSILON && signed(b.point()).abs() <= EPSILON {
-                cap_edges.push(edge.inverse());
-            }
-            wire.push_back(edge);
+            wire.push_back(edge_between(&mut edge_cache, a, b));
         }
         let mut wires = vec![wire];
         wires.extend(boundaries.into_iter().skip(1));
-        faces.push(
-            Face::try_new(wires, face.oriented_surface())
-                .map_err(|e| CadError::Invalid(e.to_string()))?,
-        );
+        let trimmed = Face::try_new(wires, face.oriented_surface())
+            .map_err(|error| CadError::Invalid(format!("Chamfer wall trimming: {error}")))?;
+        history.retain_face(trimmed.id(), face.id())?;
+        faces.push(trimmed);
     }
-    if cap_edges.is_empty() {
-        if faces.len() == solid.face_iter().count() {
-            return Ok(solid.clone());
-        }
-        return Err(CadError::Unsupported(
-            "The planar cut removes the whole body".into(),
+    if !changed {
+        return Ok(solid.clone());
+    }
+    if faces.is_empty() {
+        return Err(CadError::Invalid(
+            "Chamfer setbacks consume the whole body; reduce the distances".into(),
         ));
     }
-    let mut cap = Wire::from(vec![cap_edges.remove(0)]);
-    while !cap_edges.is_empty() {
-        let end = cap.back().unwrap().back().id();
-        let Some(index) = cap_edges.iter().position(|edge| edge.front().id() == end) else {
-            return Err(CadError::Invalid(
-                "Planar cut boundary could not be joined".into(),
-            ));
-        };
-        cap.push_back(cap_edges.remove(index));
+    let boundaries = bevel_boundaries(&faces, plane)?;
+    if boundaries.is_empty() {
+        return Err(CadError::Invalid(
+            "Chamfer setbacks collapse the remaining body; reduce the distances".into(),
+        ));
     }
-    if cap.front().unwrap().front().id() != cap.back().unwrap().back().id() {
-        return Err(CadError::Invalid("Planar cut boundary is open".into()));
+    let cap = builder::try_attach_plane(boundaries)
+        .map_err(|error| CadError::Invalid(format!("Chamfer bevel construction: {error}")))?;
+    history.construct_face(
+        cap.id(),
+        &plane.sources,
+        serde_json::json!({"operation":"chamfer","constructor":"edge_setback"}),
+    )?;
+    faces.push(cap);
+    if faces.connected_components().len() != 1 {
+        return Err(CadError::Unsupported(
+            "Chamfer would separate this source body into several components".into(),
+        ));
     }
-    faces.push(builder::try_attach_plane(vec![cap]).map_err(|e| CadError::Invalid(e.to_string()))?);
-    Solid::try_new(vec![faces.into()]).map_err(|e| CadError::Invalid(e.to_string()))
+    let mut shells = vec![faces];
+    shells.extend(solid.boundaries().iter().skip(1).cloned());
+    let result = Solid::try_new(shells)
+        .map_err(|error| CadError::Invalid(format!("Chamfer corner construction: {error}")))?;
+    crate::validation::solid(&result)?;
+    Ok(result)
 }
 
 pub(crate) struct ChamferSpec {
@@ -820,14 +1062,26 @@ pub(crate) fn chamfer(
     solid: &Solid,
     selected: &[EdgeId],
     spec: &ChamferSpec,
+    history: &mut ShellHistory,
 ) -> Result<Option<Solid>> {
+    if selected.is_empty() || !spec.distance.is_finite() || spec.distance <= EPSILON {
+        return Err(CadError::Invalid(
+            "Chamfer requires selected edges and a finite positive distance above the modeling tolerance".into(),
+        ));
+    }
+    let selected = selected.iter().copied().collect::<HashSet<_>>();
     let mut seen = HashSet::new();
-    let mut planes = Vec::new();
+    let mut planes: Vec<BevelPlane> = Vec::new();
+    let stock_hull = match crate::adapter::solid_control_points(solid) {
+        Ok(hull) => hull,
+        Err(CadError::Unsupported(_)) => return Ok(None),
+        Err(error) => return Err(error),
+    };
     for edge in solid
         .edge_iter()
         .filter(|e| selected.contains(&e.id()) && seen.insert(e.id()))
     {
-        if !matches!(edge.curve(), Curve::Line(_)) {
+        if !straight_edge(&edge)? {
             return Ok(None);
         }
         let mut faces = solid
@@ -837,7 +1091,10 @@ pub(crate) fn chamfer(
         if faces.len() != 2
             || faces
                 .iter()
-                .any(|f| !matches!(f.surface(), Surface::Plane(_)))
+                .map(|face| boundary_plane(face))
+                .collect::<Result<Vec<_>>>()?
+                .iter()
+                .any(Option::is_none)
         {
             return Ok(None);
         }
@@ -849,21 +1106,37 @@ pub(crate) fn chamfer(
             };
             faces.swap(0, index);
         } else {
-            faces.sort_by(|a, b| {
-                let a = a.oriented_surface().normal(0., 0.).normalize();
-                let b = b.oriented_surface().normal(0., 0.).normalize();
-                a.x.total_cmp(&b.x)
-                    .then(a.y.total_cmp(&b.y))
-                    .then(a.z.total_cmp(&b.z))
-            });
+            let normal = |face: &Face| -> Result<Vector3> {
+                boundary_plane(face)?
+                    .map(|plane| plane.normal)
+                    .ok_or_else(|| {
+                        CadError::Unsupported("Chamfer edge must adjoin proven planar faces".into())
+                    })
+            };
+            let a = normal(faces[0])?;
+            let b = normal(faces[1])?;
+            if a.x
+                .total_cmp(&b.x)
+                .then(a.y.total_cmp(&b.y))
+                .then(a.z.total_cmp(&b.z))
+                .is_gt()
+            {
+                faces.swap(0, 1);
+            }
         }
         if spec.flip {
             faces.swap(0, 1);
         }
         let normals = faces
             .iter()
-            .map(|f| f.oriented_surface().normal(0., 0.).normalize())
-            .collect::<Vec<_>>();
+            .map(|face| -> Result<Vector3> {
+                boundary_plane(face)?
+                    .map(|plane| plane.normal)
+                    .ok_or_else(|| {
+                        CadError::Unsupported("Chamfer edge must adjoin proven planar faces".into())
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
         let cosine = normals[0].dot(normals[1]);
         let sine = (1. - cosine * cosine).max(0.).sqrt();
         if sine < EPSILON {
@@ -882,29 +1155,59 @@ pub(crate) fn chamfer(
         } else {
             spec.second_distance.unwrap_or(spec.distance)
         };
-        if !second.is_finite() || second <= 0. {
+        if !second.is_finite() || second <= EPSILON {
             return Err(CadError::Invalid(
-                "Chamfer setback must be finite and positive".into(),
+                "Chamfer setback must be finite and positive above the modeling tolerance".into(),
             ));
         }
         let sum = normals[0] * spec.distance + normals[1] * second;
         let anchor = edge.front().point();
-        if solid.vertex_iter().any(|v| {
-            normals
-                .iter()
-                .any(|n| (v.point() - anchor).dot(*n) > EPSILON)
-        }) {
+        if stock_hull
+            .iter()
+            .any(|point| normals.iter().any(|n| (*point - anchor).dot(*n) > EPSILON))
+        {
             return Ok(None);
         }
         let origin = anchor - sum * (spec.distance * second * sine / sum.magnitude2());
-        planes.push((origin, sum.normalize()));
+        let normal = sum.normalize();
+        if ![origin.x, origin.y, origin.z, normal.x, normal.y, normal.z]
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            return Err(CadError::Invalid(
+                "Chamfer distances are too large to construct a finite setback".into(),
+            ));
+        }
+        let mut sources = vec![history.edge(edge.id())?];
+        sources.extend(
+            faces
+                .iter()
+                .map(|face| history.face(face.id()))
+                .collect::<Result<Vec<_>>>()?,
+        );
+        if let Some(plane) = planes.iter_mut().find(|plane| {
+            plane.normal.dot(normal) > 1. - 1e-12
+                && (origin - plane.origin).dot(normal).abs() <= EPSILON
+        }) {
+            for source in sources {
+                if !plane.sources.contains(&source) {
+                    plane.sources.push(source);
+                }
+            }
+        } else {
+            planes.push(BevelPlane {
+                origin,
+                normal,
+                sources,
+            });
+        }
     }
-    if planes.len() != selected.len() {
+    if seen.len() != selected.len() {
         return Ok(None);
     }
     let mut result = solid.clone();
-    for (origin, normal) in planes {
-        result = clip(&result, origin, normal)?;
+    for plane in planes {
+        result = clip(&result, &plane, history)?;
     }
     Ok(Some(result))
 }

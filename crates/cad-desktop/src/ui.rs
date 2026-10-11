@@ -1205,13 +1205,19 @@ fn model_view(
         } else {
             w.candidates = viewport::pick(w, r, p);
             w.candidate_index = 0;
+            let toggle = ui.input(|input| {
+                input.modifiers.command || input.modifiers.ctrl || input.modifiers.shift
+            });
             if let Some(s) = w.candidates.first().cloned() {
-                if viewport::select(w, s) {
-                    capture_feature_selection(w);
-                    crate::selection_ui::open(w, &response, p);
+                if viewport::select_modified(w, s, toggle) {
+                    capture_feature_selection(w, false, toggle);
+                    if w.tool_checkpoint.is_none() {
+                        crate::selection_ui::open(w, &response, p);
+                    }
                 }
             } else {
                 w.selected = None;
+                w.geometry_selection.clear();
                 w.selected_feature_path = None;
                 w.view.active_node = None;
                 w.context_selection = None;
@@ -1225,8 +1231,10 @@ fn model_view(
     {
         w.candidate_index = (w.candidate_index + 1) % w.candidates.len();
         if viewport::select(w, w.candidates[w.candidate_index].clone()) {
-            capture_feature_selection(w);
-            crate::selection_ui::open(w, &response, response.hover_pos().unwrap_or(r.center()));
+            capture_feature_selection(w, true, false);
+            if w.tool_checkpoint.is_none() {
+                crate::selection_ui::open(w, &response, response.hover_pos().unwrap_or(r.center()));
+            }
         }
     }
     if w.candidates.len() > 1
@@ -1338,6 +1346,9 @@ fn model_view(
     }
 }
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if crate::selection_ui::edge_action(w, cmd) {
+        return;
+    }
     if crate::sketch_blocks_ui::resource_action(w, cmd) {
         return;
     }
@@ -1769,7 +1780,12 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
         crate::sketch::begin(w, Some(f));
         return;
     }
+    let edge_path = crate::selection_ui::edge_selection(&f)
+        .and_then(|(body, _)| crate::selection_ui::known_edge_occurrence(w, &body.definition));
     w.start_tool();
+    if crate::selection_ui::edge_selection(&f).is_some() {
+        w.edge_selection_path = edge_path;
+    }
     w.fields.insert("feature-editor-id".into(), f.id.clone());
     w.fields.remove("feature-source-invalid");
     w.fields.remove("feature-source-error");
@@ -1916,12 +1932,7 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
             definition: part.id.clone(),
             node: "select-profile-node".into(),
         });
-    let edges = w
-        .selected
-        .as_ref()
-        .filter(|s| s.reference.topology == "edge")
-        .map(|s| vec![s.reference.clone()])
-        .unwrap_or_default();
+    let edges = viewport::preselected_edges(w, &body);
     let faces = w
         .selected
         .as_ref()
@@ -2560,16 +2571,27 @@ pub(crate) fn preview_feature(w: &mut Workspace, feature: Feature) {
         }
     }
 }
-fn capture_feature_selection(w: &mut Workspace) {
-    if w.dialog.as_deref() != Some("feature") {
+fn capture_feature_selection(w: &mut Workspace, cycle: bool, toggle: bool) {
+    if w.dialog.as_deref() != Some("feature") || w.fields.contains_key("feature-source-invalid") {
         return;
     }
     let Ok(mut feature) = serde_json::from_str::<Feature>(&w.json) else {
         return;
     };
-    let Some(selected) = &w.selected else {
+    let Some(selected) = w.selected.clone() else {
         return;
     };
+    if let Some((body, _)) = crate::selection_ui::edge_selection(&feature)
+        && !crate::selection_ui::accepts_edge(w, body, &selected)
+    {
+        w.status = "Select edges on this feature's input body and component".into();
+        return;
+    }
+    let is_edge_feature = matches!(
+        feature.operation,
+        Operation::Fillet { .. } | Operation::Chamfer { .. }
+    );
+    let feature_id = feature.id.clone();
     let selections = match &mut feature.operation {
         Operation::Fillet { edges, .. } | Operation::Chamfer { edges, .. }
             if selected.reference.topology == "edge" =>
@@ -2582,11 +2604,61 @@ fn capture_feature_selection(w: &mut Workspace) {
         Operation::Draft { faces, .. } if selected.reference.topology == "face" => faces,
         _ => return,
     };
-    if !selections
+    let before = selections.clone();
+    let mut toggle = toggle;
+    if is_edge_feature {
+        let last_matches = w.fields.get("edge-pick-feature") == Some(&feature_id)
+            && w.fields.get("edge-pick-last").is_some_and(|json| {
+                serde_json::from_str::<Vec<cad_core::TopologyRef>>(json)
+                    .is_ok_and(|last| last == *selections)
+            });
+        if cycle && last_matches {
+            if let Some(base) = w
+                .fields
+                .get("edge-pick-base")
+                .and_then(|json| serde_json::from_str::<Vec<cad_core::TopologyRef>>(json).ok())
+            {
+                *selections = base;
+                toggle = w
+                    .fields
+                    .get("edge-pick-toggle")
+                    .is_some_and(|value| value == "true");
+            }
+        } else {
+            w.fields.insert(
+                "edge-pick-base".into(),
+                serde_json::to_string(selections).unwrap_or_default(),
+            );
+            w.fields.insert("edge-pick-feature".into(), feature_id);
+            w.fields
+                .insert("edge-pick-toggle".into(), toggle.to_string());
+        }
+    }
+    let existing = selections
         .iter()
-        .any(|r| r.producer == selected.reference.producer && r.role == selected.reference.role)
+        .position(|reference| crate::selection_ui::same_edge(reference, &selected.reference));
+    if is_edge_feature
+        && toggle
+        && let Some(index) = existing
     {
+        selections.remove(index);
+    } else if existing.is_none() {
         selections.push(selected.reference.clone());
+    }
+    if is_edge_feature {
+        w.fields.insert(
+            "edge-pick-last".into(),
+            serde_json::to_string(selections).unwrap_or_default(),
+        );
+        if !selections
+            .iter()
+            .any(|edge| crate::selection_ui::same_edge(edge, &selected.reference))
+        {
+            w.selected = None;
+            w.geometry_selection.clear();
+        }
+    }
+    if *selections != before {
         w.json = serde_json::to_string_pretty(&feature).unwrap_or_default();
         preview_feature(w, feature);
     }

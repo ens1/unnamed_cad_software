@@ -57,7 +57,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1;adapter/19;solver/tcad-native-lm/12";
+const BACKEND: &str = "monstertruck/0.4.1;adapter/20;solver/tcad-native-lm/12";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -80,6 +80,10 @@ pub struct Workspace {
     pub theme_text: String,
     pub source_text: String,
     pub selected: Option<viewport::Selection>,
+    /// View-only preselection; authored edge sets belong to their feature draft.
+    pub geometry_selection: Vec<viewport::Selection>,
+    /// Full occurrence anchor for edge selection; a leaf can repeat in subassemblies.
+    pub edge_selection_path: Option<Vec<cad_core::Id>>,
     pub selected_feature_path: Option<Vec<String>>,
     pub selection_popup: Option<selection_ui::ActionPopup>,
     pub context_selection: Option<cad_core::selection_actions::SelectionTarget>,
@@ -180,6 +184,8 @@ impl Workspace {
             theme_text,
             source_text: String::new(),
             selected: None,
+            geometry_selection: vec![],
+            edge_selection_path: None,
             selected_feature_path: None,
             selection_popup: None,
             context_selection: None,
@@ -284,8 +290,15 @@ impl Workspace {
         if self.sketch.is_some() && !sketch::finish(self) {
             return;
         }
+        let editing_edges = selection_ui::edge_feature(self).is_some();
         match self.session.apply() {
             Ok(()) => {
+                if editing_edges {
+                    self.selected = None;
+                    self.geometry_selection.clear();
+                    self.candidates.clear();
+                }
+                self.edge_selection_path = None;
                 self.tool_checkpoint = None;
                 self.dialog = None;
                 self.manager_tree = true;
@@ -308,6 +321,8 @@ impl Workspace {
         self.selection_popup = None;
         self.context_selection = None;
         self.selected_feature_path = None;
+        self.geometry_selection.clear();
+        self.edge_selection_path = None;
         self.tool_checkpoint = None;
         self.confirm_requested = false;
         self.after_confirm = None;
@@ -407,6 +422,8 @@ impl Workspace {
         self.after_confirm = None;
         self.gesture = None;
         self.selected = None;
+        self.geometry_selection.clear();
+        self.edge_selection_path = None;
         self.candidates.clear();
         self.fields.retain(|key, _| {
             !key.starts_with("drawing-editor:") && key != "drawing-source-invalid"

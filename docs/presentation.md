@@ -115,3 +115,26 @@ The desktop catalog adds stable `command-toolbar/<command>`, `command-menu/<comm
 Core exports versioned semantic, layout and style contracts without egui, Bevy or kernel types. A future capability publishes `SemanticElement` descriptors with `value_descriptor` and `actions`: typed values, choices, range, units/dimension, accessibility label, diagnostics, command arguments and disabled reasons. Plain fields/actions need no new native view. A specialized view registers a renderer in the desktop `Registry`; an editor-specific value mutation registers a named `ValueAdapters` reader/setter that owns its transaction rules. Readers fetch current values for every placement, so duplicated transient controls do not restore an older snapshot over the active field. Registered field adapters include document-pointer, sketch-dimension, presentation-resource, sketch-block, configuration-dimension and drawing-annotation. Block fields use fresh editor identities; configuration fields resolve stable feature/record IDs; drawing symbol fields resolve stable sheet/annotation IDs and retained staged input. All preserve their owning shared checkpoint and validated Apply path. Adding a capability does not require adding a closed role enum or changing layout parsing.
 
 Portable package schema 1 is `{ "schema_version": 1, "name": "...", "layout": "layout.json", "theme": "theme.css", "active_layout": "instrument-rail", "extends": ["base/presentation.json"] }`. JSON layout/theme resources can also contain `extends` paths; objects merge recursively and arrays replace, while theme rules from package inheritance preserve their cascade order. CSS supports prefix local `@import "base.css";`. Imports are relative to their source, bounded, checked for cycles and observed for changes. Sharing an exported package does not include CAD definitions or an absolute local dependency path.
+
+
+Fillet and Chamfer maintain an explicit edge set. Command/Ctrl/Shift-click
+preselection on one body seeds a new edge feature; while its editor is open,
+plain clicks add and modified clicks toggle edges. Add, individual Remove and
+Clear use shared draft commands. All authored selected edges remain highlighted
+in the viewport's `selection-color`. Tab replaces the current overlapping pick
+instead of accumulating each candidate. Editing an existing feature uses its
+cached input body so its original edges remain available while the live preview
+shows the modified output. Selection controls use stable full provenance
+identities; list order is only a presentation label. Edge-editor picks and
+highlights retain the complete occurrence path. If repeated shared occurrences
+have no unique active path, the first actual geometry pick anchors the editor
+before the authored set is highlighted.
+
+The active catalog exposes `edge-selection`, `edge-selection-item` and
+`edge-selection-action` roles, with versioned `tcad.presentation.edge-selection`
+metadata. `selection.edge-add/<feature>`, `selection.edge-clear/<feature>` and
+stable-source `selection.edge-remove/<feature>/<producer>/<role>` commands
+serve native controls and custom repeated layouts alike. Saved feature semantics
+also publish radius/distance fields and `feature-selection` descriptors. These
+controls retain shared checkpoint Cancel and current-evaluation Apply; no
+renderer/kernel objects become document source.

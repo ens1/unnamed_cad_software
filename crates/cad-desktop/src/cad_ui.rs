@@ -1460,6 +1460,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
         if active != w.view.active_part && w.sketch.is_none() {
             w.view.active_part = active;
             w.view.active_instance = None;
+            w.edge_selection_path = None;
             w.view.active_node = None;
             w.active_plane = None;
             w.selected = None;
@@ -1512,11 +1513,14 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                     crate::selection_ui::object_selected(
                         w,
                         cad_core::selection_actions::SelectionTarget::Object {
-                            definition: placed.definition,
+                            definition: placed.definition.clone(),
                             object: placed.path.last().cloned().unwrap_or_default(),
                             role: "component-instance".into(),
                         },
                     );
+                    if w.tool_checkpoint.is_none() {
+                        w.edge_selection_path = Some(placed.path.clone());
+                    }
                 }
             }
             if ui.button("Insert Component").clicked() {
@@ -2023,13 +2027,78 @@ fn face_selection_fields(
     }
     changed
 }
-fn selected_edges(ui: &mut egui::Ui, edges: &mut Vec<cad_core::TopologyRef>) -> bool {
+fn selected_edges(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    feature: &str,
+    body: &cad_core::NodeRef,
+    edges: &mut Vec<cad_core::TopologyRef>,
+) -> bool {
+    let mut changed = false;
+    let selected = w
+        .selected
+        .as_ref()
+        .filter(|pick| crate::selection_ui::accepts_edge(w, body, pick));
+    ui.horizontal(|ui| {
+        if controls::button(
+            ui,
+            &format!("selection.edge-add/{feature}"),
+            "edge-selection-action",
+            &["property-control"],
+            "Add selected edge",
+            selected.is_some_and(|pick| {
+                !edges
+                    .iter()
+                    .any(|edge| crate::selection_ui::same_edge(edge, &pick.reference))
+            }),
+            false,
+        )
+        .clicked()
+            && let Some(pick) = selected
+        {
+            edges.push(pick.reference.clone());
+            changed = true;
+        }
+        if controls::button(
+            ui,
+            &format!("selection.edge-clear/{feature}"),
+            "edge-selection-action",
+            &["property-control"],
+            "Clear",
+            !edges.is_empty(),
+            false,
+        )
+        .clicked()
+        {
+            edges.clear();
+            changed = true;
+        }
+    });
     let mut remove = None;
-    for index in 0..edges.len() {
-        ui.push_id(("selected-edge", index), |ui| {
+    for (index, edge) in edges.iter().enumerate() {
+        let key = crate::selection_ui::edge_key(feature, edge);
+        ui.push_id(&key, |ui| {
             ui.horizontal(|ui| {
-                ui.label(format!("Edge {}", index + 1));
-                if ui.small_button("Remove").clicked() {
+                controls::label(
+                    ui,
+                    &format!("edge-selection/{key}"),
+                    "edge-selection-item",
+                    &["property-control"],
+                    &format!("Edge {}", index + 1),
+                    "selected",
+                )
+                .on_hover_text(&edge.role);
+                if controls::button(
+                    ui,
+                    &format!("selection.edge-remove/{key}"),
+                    "edge-selection-action",
+                    &["property-control", "edge-remove"],
+                    "Remove",
+                    true,
+                    false,
+                )
+                .clicked()
+                {
                     remove = Some(index);
                 }
             });
@@ -2037,10 +2106,25 @@ fn selected_edges(ui: &mut egui::Ui, edges: &mut Vec<cad_core::TopologyRef>) -> 
     }
     if let Some(index) = remove {
         edges.remove(index);
-        true
-    } else {
-        false
+        changed = true;
     }
+    if changed {
+        crate::selection_ui::clear_edge_pick(w);
+        if w.selected.as_ref().is_some_and(|pick| {
+            pick.reference.topology == "edge"
+                && !edges
+                    .iter()
+                    .any(|edge| crate::selection_ui::same_edge(edge, &pick.reference))
+        }) {
+            w.selected = None;
+            w.geometry_selection.clear();
+        }
+    }
+    ui.small("Click edges to add. ⌘/Shift-click toggles an edge. Tab cycles the current pick.");
+    if w.edge_selection_path.is_none() {
+        ui.small("Pick an edge on the component to anchor this selection to its occurrence.");
+    }
+    changed
 }
 pub(crate) fn profile_selector(
     ui: &mut egui::Ui,
@@ -2849,40 +2933,26 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
             });
             ui.small("Selected material regions are revolved. The section and its thin offsets must remain on one side of the axis.");
         }
-        Operation::Fillet { edges, radius, .. } => {
+        Operation::Fillet {
+            body,
+            edges,
+            radius,
+        } => {
             ui.label(format!("Edges to fillet: {}", edges.len()));
-            if let Some(selected) = w
-                .selected
-                .as_ref()
-                .filter(|s| s.reference.topology == "edge")
-                && ui.button("Use selected edge").clicked()
-            {
-                *edges = vec![selected.reference.clone()];
-                changed = true;
-            }
-            changed |= selected_edges(ui, edges);
+            changed |= selected_edges(ui, w, &feature.id, body, edges);
             changed |= expression(ui, "Radius", radius);
             if edges.is_empty() {
-                ui.small("Select an edge on the model, then Use selected edge.");
+                ui.small("Select edges on the model to round.");
             }
         }
         Operation::Chamfer {
             edges,
             distance,
             options,
-            ..
+            body,
         } => {
             ui.label(format!("Edges to chamfer: {}", edges.len()));
-            if let Some(selected) = w
-                .selected
-                .as_ref()
-                .filter(|s| s.reference.topology == "edge")
-                && ui.button("Use selected edge").clicked()
-            {
-                *edges = vec![selected.reference.clone()];
-                changed = true;
-            }
-            changed |= selected_edges(ui, edges);
+            changed |= selected_edges(ui, w, &feature.id, body, edges);
             use cad_core::edge_features::ChamferMethod;
             egui::ComboBox::from_id_salt("chamfer-method")
                 .selected_text(match options.method {
@@ -2927,11 +2997,11 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
                 changed |= ui
                     .checkbox(&mut options.flip, "Flip Distance 1 Side")
                     .changed();
-                if let Some(selected) = w
-                    .selected
-                    .as_ref()
-                    .filter(|selection| selection.reference.topology == "face")
-                    && ui.button("Use selected face for Distance 1").clicked()
+                if let Some(selected) = w.selected.as_ref().filter(|selection| {
+                    selection.reference.topology == "face"
+                        && selection.body.as_ref() == Some(body)
+                        && crate::selection_ui::edge_occurrence(w, &selection.path)
+                }) && ui.button("Use selected face for Distance 1").clicked()
                 {
                     options.first_face = Some(selected.reference.clone());
                     changed = true;

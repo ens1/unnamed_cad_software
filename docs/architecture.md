@@ -123,3 +123,18 @@ remains separate work.
 Presentation controls are projected before arrangement. User collections expand stable semantic identities into independent placement identities; the native adapter preserves their hierarchy for clipping, scrolling and style inheritance. Renderer and value-setter registries are the adapter boundary for future specialized controls. Resource installation validates a layout/theme pair and swaps only presentation resources, retaining modeling transactions. See [presentation contracts and extension workflow](presentation.md).
 
 Portable block resources retain exact source intent and detached provenance with original-to-local identity correspondence; copy/remap changes current IDs without altering historical sources. Configuration dimension discovery uses the existing serialized `Expr` marker, versioned field descriptors, stable record selectors and effective configured definitions before worker evaluation. Drawing finish/weld intent remains separate from shared f64 paper vectors. Desktop readers/setters register those editors by name in `ValueAdapters`, keeping current staged values and common checkpoints independent of placement/style. See [blocks](sketch-block-resources.md), [dimensions](configuration-dimensions.md) and [symbols](drawing-symbols.md).
+
+
+Adapter 20 replaces the generic edge-fillet success path with TCAD-owned native
+round construction and reconstructs planar chamfer chains from shared clipped
+shell boundaries. Selected authored edges resolve once over the complete input
+body set, then partition by unique native solid ownership; unselected solids
+survive unchanged. Constructors receive `ShellHistory` and record retained
+walls/edges and selected-source boundary closures before ordinary native B-rep
+validation. No display mesh, failed-edge skipping or sampled replacement carrier
+is used as authoritative edge-feature output. The worker remains the evaluation
+boundary; partial geometry cannot become the current validated Apply result.
+See [round construction](edge-fillets.md) and [chamfer construction](edge-chamfers.md)
+for supported stock and corner classes. Editing an existing edge feature picks
+its cached input-stage geometry; desktop preselection and edge-list controls
+share the same draft commands and current-result confirmation transaction.

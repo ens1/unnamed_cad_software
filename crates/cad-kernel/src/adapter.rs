@@ -4,7 +4,6 @@ use cad_core::{
     protocol::{EdgeData, FaceRange, MeshData},
 };
 use monstertruck::{
-    fillet::{FilletOptions, FilletProfile},
     geometry::prelude::{TryIntoHomogeneousBsplineCurve, TryIntoHomogeneousBsplineSurface},
     meshing::prelude::*,
     modeling::*,
@@ -585,13 +584,6 @@ fn shell_bounds(shell: &Shell) -> [[f64; 3]; 2] {
     }
     bounds
 }
-fn resolve_edges(
-    solid: &Solid,
-    refs: &[TopologyRef],
-    history: Option<&TopologyHistory>,
-) -> Result<Vec<EdgeId>> {
-    resolve_boundary_edges(&solid.edge_iter().collect::<Vec<_>>(), refs, history)
-}
 fn resolve_shape_edges(
     shape: &Shape,
     refs: &[TopologyRef],
@@ -787,7 +779,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1;adapter/19;solver/tcad-native-lm/12"
+        "monstertruck/0.4.1;adapter/20;solver/tcad-native-lm/12"
     }
     fn sheet_metadata(
         &self,
@@ -1163,92 +1155,8 @@ impl KernelAdapter for MonstertruckAdapter {
                 tolerance,
                 &mut generated_history,
             )?,
-            Operation::Fillet {
-                body,
-                edges,
-                radius,
-            }
-            | Operation::Chamfer {
-                body,
-                edges,
-                distance: radius,
-                ..
-            } => {
-                let mut all = vec![];
-                for s in bodies(inputs, body)? {
-                    let history = self.histories.borrow();
-                    let ids = resolve_edges(s, edges, history.get(body))?;
-                    drop(history);
-                    if let Operation::Chamfer { options, .. } = op {
-                        use cad_core::edge_features::ChamferMethod;
-                        let first_face = if let Some(reference) = &options.first_face {
-                            let histories = self.histories.borrow();
-                            resolve_faces(
-                                bodies(inputs, body)?,
-                                std::slice::from_ref(reference),
-                                histories.get(body),
-                            )?
-                            .first()
-                            .copied()
-                        } else {
-                            None
-                        };
-                        let spec = crate::planar::ChamferSpec {
-                            distance: positive(value(radius)?)?,
-                            second_distance: (options.method == ChamferMethod::TwoDistances)
-                                .then(|| value(&options.second_distance).and_then(positive))
-                                .transpose()?,
-                            angle: (options.method == ChamferMethod::DistanceAngle)
-                                .then(|| angle(&options.angle))
-                                .transpose()?,
-                            flip: options.flip,
-                            first_face,
-                        };
-                        if let Some(chamfer) = crate::planar::chamfer(s, &ids, &spec)? {
-                            all.push(chamfer);
-                            continue;
-                        }
-                        if options.method != ChamferMethod::EqualDistance
-                            || options.first_face.is_some()
-                        {
-                            return Err(CadError::Unsupported("Two-distance and distance-angle chamfers require convex straight edges between supporting planar faces".into()));
-                        }
-                    }
-                    let mut shells = s.boundaries().clone();
-                    let options = FilletOptions::constant(positive(value(radius)?)?).with_profile(
-                        if matches!(op, Operation::Chamfer { .. }) {
-                            FilletProfile::Chamfer
-                        } else {
-                            FilletProfile::Round
-                        },
-                    );
-                    let mut done = false;
-                    for shell in &mut shells {
-                        if ids
-                            .iter()
-                            .all(|id| shell.edge_iter().any(|e| e.id() == *id))
-                        {
-                            let mut seen = std::collections::HashSet::new();
-                            let edges = shell
-                                .edge_iter()
-                                .filter(|e| ids.contains(&e.id()) && seen.insert(e.id()))
-                                .collect::<Vec<_>>();
-                            monstertruck::fillet::fillet_edges_generic(
-                                shell,
-                                &edges,
-                                Some(&options),
-                            )
-                            .map_err(err)?;
-                            done = true;
-                            break;
-                        }
-                    }
-                    if !done {
-                        return Err(err("Selected edge chain spans disconnected shells"));
-                    }
-                    all.push(Solid::try_new(shells).map_err(err)?);
-                }
-                Shape::Bodies(all)
+            Operation::Fillet { .. } | Operation::Chamfer { .. } => {
+                self.edge_feature(doc, owner, op, inputs, &mut generated_history)?
             }
             Operation::ReferenceBody {
                 body,
@@ -2239,6 +2147,132 @@ impl MonstertruckAdapter {
                 .insert(resource.sha256.clone(), (table, scale));
         }
         Ok(resource.sha256.clone())
+    }
+    /// Resolve the complete authored selection against the input once, then
+    /// partition it by native body. Unselected bodies retain their authority.
+    fn edge_feature(
+        &self,
+        doc: &Document,
+        owner: &NodeRef,
+        operation: &Operation,
+        inputs: &BTreeMap<NodeRef, Shape>,
+        generated: &mut TopologyHistory,
+    ) -> Result<Shape> {
+        use cad_core::edge_features::ChamferMethod;
+        let (body, references, quantity, name) = match operation {
+            Operation::Fillet {
+                body,
+                edges,
+                radius,
+            } => (body, edges, radius, "Fillet"),
+            Operation::Chamfer {
+                body,
+                edges,
+                distance,
+                ..
+            } => (body, edges, distance, "Chamfer"),
+            _ => return Err(err("Expected an edge modifier")),
+        };
+        cad_core::edge_features::validate_selection(references)?;
+        let source = bodies(inputs, body)?;
+        let selected = self.selected_boundary_edges(body, references, inputs)?;
+        let selected_ids = selected
+            .iter()
+            .map(Edge::id)
+            .collect::<std::collections::HashSet<_>>();
+        // A repeated source object in two outputs cannot provide unambiguous
+        // body ownership. Do not modify both merely because its IDs coincide.
+        for id in &selected_ids {
+            let owners = source
+                .iter()
+                .filter(|solid| solid.edge_iter().any(|edge| edge.id() == *id))
+                .count();
+            if owners != 1 {
+                return Err(CadError::Unsupported(format!(
+                    "{name}: A selected edge has {owners} input-body owners; choose an unambiguous body output"
+                )));
+            }
+        }
+        let size = positive(expression::value(
+            doc,
+            &owner.definition,
+            quantity,
+            Dimension::Length,
+        )?)?;
+        let specification = if let Operation::Chamfer { options, .. } = operation {
+            // Inactive method fields remain authored but do not affect an
+            // equal-distance operation after switching from another method.
+            let first_face = if options.method != ChamferMethod::EqualDistance {
+                options
+                    .first_face
+                    .as_ref()
+                    .map(|reference| {
+                        self.selected_boundary_face(body, reference, inputs)
+                            .map(|face| face.id())
+                    })
+                    .transpose()?
+            } else {
+                None
+            };
+            Some(crate::planar::ChamferSpec {
+                distance: size,
+                second_distance: (options.method == ChamferMethod::TwoDistances)
+                    .then(|| {
+                        expression::value(
+                            doc,
+                            &owner.definition,
+                            &options.second_distance,
+                            Dimension::Length,
+                        )
+                        .and_then(positive)
+                    })
+                    .transpose()?,
+                angle: (options.method == ChamferMethod::DistanceAngle)
+                    .then(|| {
+                        expression::value(doc, &owner.definition, &options.angle, Dimension::Angle)
+                    })
+                    .transpose()?,
+                flip: options.flip,
+                first_face,
+            })
+        } else {
+            None
+        };
+        let mut result = Vec::with_capacity(source.len());
+        for solid in source {
+            let mut seen = std::collections::HashSet::new();
+            let local = solid
+                .edge_iter()
+                .filter(|edge| selected_ids.contains(&edge.id()) && seen.insert(edge.id()))
+                .map(|edge| edge.id())
+                .collect::<Vec<_>>();
+            if local.is_empty() {
+                result.push(solid.clone());
+                continue;
+            }
+            let mut history = crate::shell_history::ShellHistory::new_operation(
+                self,
+                owner,
+                body,
+                solid,
+                if specification.is_some() {
+                    "chamfer"
+                } else {
+                    "fillet"
+                },
+            )?;
+            let output = if let Some(specification) = &specification {
+                crate::planar::chamfer(solid, &local, specification, &mut history)?
+            } else {
+                crate::edge_round::round(solid, &local, size, &mut history)?
+            }.ok_or_else(|| CadError::Unsupported(format!(
+                "{name}: This edge set requires curved, concave or more general corner blending; the current native constructor cannot prove it"
+            )))?;
+            crate::validation::solid(&output)?;
+            generated.merge(history.finish(std::slice::from_ref(&output))?);
+            result.push(output);
+        }
+        Ok(Shape::Bodies(result))
     }
     pub(crate) fn face_source(&self, body: &NodeRef, face: FaceId) -> Option<TopologyRef> {
         self.histories
