@@ -643,3 +643,21 @@ rebuilt `dist/TCAD.app`, validated its plist and verified nested and whole-bundl
 signatures. The pre-existing `proc-macro-error2 2.0.1` future-compatibility
 notice remains. No tests, modeling probes, app launches or manual UI acceptance
 checks were run.
+
+## Classic theme switching correction — 2026-10-11
+
+The portable style property catalog now includes `text-overflow` with explicit
+`clip` and `ellipsis` values. Classic Orange's existing CSS/JSON rows already
+used ellipsis and the native control renderer already implemented it, but
+candidate validation rejected the missing catalog entry. This same mismatch
+blocked Classic selection, F9 presentation recovery and imported packages
+inheriting the default style. Presentation schema remains 1; no theme or model
+definitions are rewritten. Existing validate-before-install and Settings
+preview/Apply/Cancel behavior is retained. Source review found no other
+unsupported property names in either bundled theme.
+
+Workspace formatting, locked library/binary compilation and strict Clippy
+(`-D warnings`) and diff checks passed. `scripts/package-macos.sh` rebuilt
+`dist/TCAD.app`, validated its plist and verified nested/app signatures. The
+existing `proc-macro-error2 2.0.1` future-compatibility notice remains. No tests,
+modeling probes, app launches or manual UI checks were run.

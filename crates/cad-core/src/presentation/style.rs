@@ -18,6 +18,7 @@ pub const SUPPORTED_STYLE_PROPERTIES: &[&str] = &[
     "font-variant-numeric",
     "line-height",
     "text-align",
+    "text-overflow",
     "gap",
     "row-gap",
     "column-gap",
@@ -788,6 +789,7 @@ fn validate_property(name: &str, value: &str) -> Result<()> {
         "position" => Some(&["relative", "absolute"]),
         "overflow" => Some(&["clip", "hidden", "scroll", "auto"]),
         "text-align" => Some(&["left", "right", "center"]),
+        "text-overflow" => Some(&["clip", "ellipsis"]),
         "shape" => Some(&["rectangle", "rounded", "circle"]),
         "anchor" => Some(&[
             "top-left",

@@ -234,8 +234,11 @@ while an active editor owns the shared checkpoint.
 The default toolbar uses 28 px ready and 56 px selected/editing/inspection heights;
 selected history/tree rows retain their 26 px height. Users can override all of
 these values. Viewport overlay positioning now resolves the current state as well
-as its role/ID. Compact row text can use `text-overflow: ellipsis` while preserving
-complete semantic/accessibility and hover labels. Button `max-width` and
+as its role/ID. Compact row text can use the portable `text-overflow: ellipsis`
+property while preserving complete semantic/accessibility and hover labels.
+`text-overflow: clip` retains clipped text without an ellipsis; other values
+are rejected by theme validation. Both CSS and JSON declarations use this
+property, including Classic Orange and presentation recovery. Button `max-width` and
 `max-height` accept percentages relative to the actual available region.
 
 `<sketch-id>::feedback` and `reference-repair-manager` bind directly to the
