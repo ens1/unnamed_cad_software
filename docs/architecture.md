@@ -12,7 +12,7 @@ TCAD's document and command schemas are the product boundary. No Bevy, egui, cgm
 | Project store | Recoverable multi-file JSON store v1 | Preserve deterministic definitions, relative resources and crash recovery |
 | Feature-history display | Application-owned stage/cache contract v1 | Preserve source identity, body branches, sketch visibility, configuration geometry and view-only inspection commands |
 | Semantic presentation | `presentation::project` | Expose IDs, typed data, expressions, prior values, relationships, states and commands |
-| Layout/style | Native composition + CSS-like rules | Keep geometry and interaction commands independent of visual organization |
+| Layout/style | Versioned core contracts; hierarchical native composition, typed bindings, validated CSS cascade and local resource packages | Keep data/action identities and editing transactions independent of renderer registration, collection templates and visual organization |
 | Desktop renderer | Bevy 0.20.0 + egui 0.43.1 | Render derived artifacts and adapt gestures; keep application state outside renderer objects |
 | Version control | Git process adapter | Preserve ordinary repositories and explicit semantic conflicts |
 | Manufacturing/export | Application DTOs + exchange adapters | Preserve source identity, units, tolerances and artifact meaning |
@@ -119,3 +119,5 @@ uncertainty. Saved source contracts remain unchanged; derived caches are
 invalidated and downstream selections split into multiple native faces may
 require explicit repair. Cross-face and cross-pair intersection certification
 remains separate work.
+
+Presentation controls are projected before arrangement. User collections expand stable semantic identities into independent placement identities; the native adapter preserves their hierarchy for clipping, scrolling and style inheritance. Renderer and value-setter registries are the adapter boundary for future specialized controls. Resource installation validates a layout/theme pair and swaps only presentation resources, retaining modeling transactions. See [presentation contracts and extension workflow](presentation.md).

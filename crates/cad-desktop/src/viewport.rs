@@ -24,7 +24,10 @@ fn style(w: &Workspace) -> BTreeMap<String, String> {
             classes: vec![],
             resizable: false,
         });
-    w.theme.properties(&region, &w.view.active_layout, "ready")
+    w.theme.properties_for(
+        &w.layout
+            .style_target(&region, &w.view.active_layout, "ready"),
+    )
 }
 fn style_color(props: &BTreeMap<String, String>, key: &str, fallback: Color) -> Color {
     props
@@ -1127,16 +1130,39 @@ pub fn navigate(w: &mut Workspace, ctx: &egui::Context, response: &egui::Respons
 
 /// A viewport overlay, independent of authoritative camera/model definitions.
 pub fn view_cube(w: &mut Workspace, ui: &egui::Ui, viewport: egui::Rect) -> egui::Rect {
-    let rect = egui::Rect::from_min_size(
-        viewport.right_top() + egui::vec2(-108., 98.),
-        egui::vec2(96., 100.),
+    let Some(rect) = crate::presentation_controls::overlay_rect(
+        "viewport.view-cube",
+        "view-cube",
+        viewport,
+        egui::Rect::from_min_size(
+            viewport.right_top() + egui::vec2(-108., 98.),
+            egui::vec2(96., 100.),
+        ),
+    ) else {
+        return egui::Rect::NOTHING;
+    };
+    let props = crate::presentation_controls::properties(
+        "viewport.view-cube",
+        "view-cube",
+        &["viewport-overlay"],
+        "ready",
     );
-    let center = rect.center() - egui::vec2(0., 12.);
+    let font = egui::FontId::proportional(crate::presentation_controls::number(
+        &props,
+        "font-size",
+        9.,
+    ));
+    let ink = props
+        .get("color")
+        .and_then(|value| crate::ui::color(value))
+        .unwrap_or(ui.visuals().text_color());
+    let scale = rect.width().min(rect.height()) / 96.;
+    let center = rect.center() - egui::vec2(0., 12. * scale);
     let (forward, right, up) = basis(w);
     let painter = ui.painter().with_clip_rect(viewport);
     let screen = |p: [f64; 3]| {
         let p = render_point(p) * 100.;
-        center + egui::vec2(p.dot(right), -p.dot(up)) * 28.
+        center + egui::vec2(p.dot(right), -p.dot(up)) * 28. * scale
     };
     let pointer = ui.input(|i| i.pointer.hover_pos());
     for (label, normal, corners, orbit) in [
@@ -1218,9 +1244,15 @@ pub fn view_cube(w: &mut Workspace, ui: &egui::Ui, viewport: egui::Rect) -> egui
             if inside {
                 ui.visuals().selection.stroke.color.gamma_multiply(0.3)
             } else {
-                egui::Color32::from_gray((150. + 65. * facing) as u8)
+                props
+                    .get("background")
+                    .and_then(|value| crate::ui::color(value))
+                    .unwrap_or(egui::Color32::from_gray((150. + 65. * facing) as u8))
             },
-            egui::Stroke::new(1., egui::Color32::from_gray(55)),
+            egui::Stroke::new(
+                crate::presentation_controls::number(&props, "stroke-width", 1.),
+                ink,
+            ),
         ));
         let position = egui::pos2(
             points.iter().map(|p| p.x).sum::<f32>() / 4.,
@@ -1231,8 +1263,8 @@ pub fn view_cube(w: &mut Workspace, ui: &egui::Ui, viewport: egui::Rect) -> egui
                 position,
                 egui::Align2::CENTER_CENTER,
                 label,
-                egui::FontId::proportional(9.),
-                egui::Color32::BLACK,
+                font.clone(),
+                ink,
             );
         }
         // Face bounding rectangles overlap at oblique views; the convex hit is
@@ -1245,8 +1277,8 @@ pub fn view_cube(w: &mut Workspace, ui: &egui::Ui, viewport: egui::Rect) -> egui
         hit.on_hover_text(format!("{label} view"));
     }
     let iso = egui::Rect::from_center_size(
-        rect.center_bottom() - egui::vec2(0., 6.),
-        egui::vec2(52., 18.),
+        rect.center_bottom() - egui::vec2(0., 6. * scale),
+        egui::vec2(52., 18.) * scale,
     );
     let hit = ui.interact(
         iso,
@@ -1257,8 +1289,8 @@ pub fn view_cube(w: &mut Workspace, ui: &egui::Ui, viewport: egui::Rect) -> egui
         iso.center(),
         egui::Align2::CENTER_CENTER,
         "Isometric",
-        egui::FontId::proportional(9.),
-        ui.visuals().text_color(),
+        font,
+        ink,
     );
     if hit.clicked() {
         w.view.orbit = [0.65, 0.4];

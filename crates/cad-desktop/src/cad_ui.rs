@@ -1,5 +1,5 @@
 //! Familiar CAD workspace widgets over the same document commands and user layout.
-use crate::{Workspace, sketch, ui, viewport};
+use crate::{Workspace, presentation_controls as controls, sketch, ui, viewport};
 use bevy_egui::egui::{self, Color32, RichText, Stroke};
 use cad_core::{Feature, Operation, Part};
 
@@ -19,23 +19,24 @@ enum Icon {
     Select,
 }
 
-fn icon(p: &egui::Painter, center: egui::Pos2, kind: Icon, color: Color32) {
-    let at = |x, y| center + egui::vec2(x, y);
-    let stroke = Stroke::new(1.6, color);
+fn icon(p: &egui::Painter, center: egui::Pos2, kind: Icon, size: f32, color: Color32) {
+    let scale = size / 32.;
+    let at = |x, y| center + egui::vec2(x, y) * scale;
+    let stroke = Stroke::new(1.6 * scale, color);
     let line = |a, b| {
         p.line_segment([a, b], stroke);
     };
     match kind {
         Icon::Rectangle => {
             p.rect_stroke(
-                egui::Rect::from_center_size(center, egui::vec2(25., 18.)),
+                egui::Rect::from_center_size(center, egui::vec2(25., 18.) * scale),
                 0.,
                 stroke,
                 egui::StrokeKind::Inside,
             );
         }
         Icon::Circle => {
-            p.circle_stroke(center, 11., stroke);
+            p.circle_stroke(center, 11. * scale, stroke);
             line(at(-3., 0.), at(3., 0.));
             line(at(0., -3.), at(0., 3.));
         }
@@ -78,7 +79,7 @@ fn icon(p: &egui::Painter, center: egui::Pos2, kind: Icon, color: Color32) {
             for x in [-8., 7.] {
                 for y in [-7., 8.] {
                     p.rect_stroke(
-                        egui::Rect::from_center_size(at(x, y), egui::vec2(9., 9.)),
+                        egui::Rect::from_center_size(at(x, y), egui::vec2(9., 9.) * scale),
                         0.,
                         stroke,
                         egui::StrokeKind::Inside,
@@ -110,70 +111,807 @@ fn icon(p: &egui::Painter, center: egui::Pos2, kind: Icon, color: Color32) {
                 line(corners[a], corners[b]);
             }
             if matches!(kind, Icon::Cut | Icon::Shell) {
-                p.circle_stroke(at(1., -5.), 4., Stroke::new(1.8, color));
+                p.circle_stroke(at(1., -5.), 4. * scale, Stroke::new(1.8 * scale, color));
             }
             if matches!(kind, Icon::Fillet) {
                 p.add(egui::Shape::line(
                     vec![at(-12., 1.), at(-11., -2.), at(-8., -5.), at(-5., -5.)],
-                    Stroke::new(3., color),
+                    Stroke::new(3. * scale, color),
                 ));
             }
             if matches!(kind, Icon::Chamfer) {
-                p.line_segment([at(-12., 1.), at(-6., -5.)], Stroke::new(3., color));
+                p.line_segment([at(-12., 1.), at(-6., -5.)], Stroke::new(3. * scale, color));
             }
         }
     }
 }
 fn tool_button(
     ui: &mut egui::Ui,
+    id: &str,
     label: &str,
     kind: Icon,
     enabled: bool,
     active: bool,
     hint: &str,
 ) -> bool {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(92., 32.), egui::Sense::click());
-    let color = if !enabled {
-        Color32::from_gray(160)
-    } else if active {
-        ui.visuals().selection.stroke.color
-    } else {
-        ui.visuals().text_color()
-    };
-    if enabled && (active || response.hovered()) {
-        ui.painter().rect_filled(
-            rect,
-            3.,
-            if active {
-                ui.visuals().selection.stroke.color.gamma_multiply(0.12)
+    let draw = |p: &egui::Painter, center, size, color| icon(p, center, kind, size, color);
+    controls::icon_button(
+        ui,
+        id,
+        "command-action",
+        &["toolbar-control"],
+        label,
+        enabled,
+        active,
+        Some(&draw),
+    )
+    .on_hover_text(hint)
+    .on_disabled_hover_text(hint)
+    .clicked()
+}
+
+fn command_button(ui: &mut egui::Ui, command: &str, label: &str, enabled: bool) -> egui::Response {
+    controls::button(
+        ui,
+        &format!("command-toolbar/{command}"),
+        "command-action",
+        &["toolbar-control"],
+        label,
+        enabled,
+        false,
+    )
+}
+fn menu_action(ui: &mut egui::Ui, command: &str, label: &str, enabled: bool) -> egui::Response {
+    controls::button(
+        ui,
+        &format!("command-menu/{command}"),
+        "menu-action",
+        &["menu-item"],
+        label,
+        enabled,
+        false,
+    )
+}
+fn menu_button(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui)) {
+    controls::menu_button(
+        ui,
+        &format!("menu/{}", label.to_lowercase().replace(' ', "-")),
+        label,
+        content,
+    );
+}
+
+fn feature_groups() -> Vec<&'static str> {
+    let mut groups = vec![];
+    for group in [
+        "Create",
+        "Remove",
+        "Modify",
+        "Pattern",
+        "Surfaces",
+        "Mold",
+        "Reference",
+        "Sheet Metal",
+        "Weldments",
+    ]
+    .into_iter()
+    .chain(
+        cad_core::modeling_tools::TOOLS
+            .iter()
+            .map(|tool| tool.group),
+    ) {
+        if !groups.contains(&group)
+            && cad_core::modeling_tools::TOOLS
+                .iter()
+                .any(|tool| tool.group == group)
+        {
+            groups.push(group);
+        }
+    }
+    groups
+}
+
+fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
+    let commands: Vec<&str> = match name {
+        "File" => vec![
+            "file.new-part",
+            "file.new",
+            "file.open",
+            "file.save",
+            "file.save-as",
+            "file.import",
+            "file.export",
+            "file.recover",
+            "file.example",
+            "file.export-drawing-dxf",
+            "file.export-flat-pattern",
+            "file.export-cutlist",
+        ],
+        "Edit" => vec!["document.undo", "document.redo", "parameter.new"],
+        "Insert" => {
+            return feature_groups()
+                .into_iter()
+                .map(|group| format!("menu/{}", group.to_lowercase().replace(' ', "-")))
+                .collect();
+        }
+        "View" => vec![
+            "viewport.orientation.front",
+            "viewport.orientation.back",
+            "viewport.orientation.top",
+            "viewport.orientation.bottom",
+            "viewport.orientation.right",
+            "viewport.orientation.left",
+            "viewport.orientation.isometric",
+            "viewport.fit",
+            "viewport.normal-sketch",
+        ],
+        "Tools" => vec![
+            "assembly.edit",
+            "assembly.pattern",
+            "assembly.exploded-new",
+            "assembly.inspection-new",
+            "configurations",
+            "equations",
+            "materials",
+            "manufacturing",
+            "drawings",
+            "libraries",
+            "bom",
+            "controls",
+        ],
+        "Workspace" => vec![
+            "presentation",
+            "versions",
+            "comments",
+            "document.rebuild",
+            "source",
+            "file.release",
+        ],
+        "Size" => vec![
+            "presentation.compact",
+            "presentation.comfortable",
+            "presentation",
+        ],
+        "Shapes" => {
+            return [
+                "rectangle",
+                "center-rectangle",
+                "three-point-rectangle",
+                "three-point-center-rectangle",
+                "parallelogram",
+                "polygon",
+                "slot",
+                "center-slot",
+                "arc-slot",
+            ]
+            .into_iter()
+            .map(|tool| format!("command-toolbar/sketch.tool.{tool}"))
+            .collect();
+        }
+        "Curves" => {
+            return [
+                "circle",
+                "perimeter-circle",
+                "arc",
+                "center-arc",
+                "tangent-arc",
+                "ellipse",
+                "ellipse-arc",
+                "conic",
+                "parabola",
+                "spline",
+                "interpolating-spline",
+                "nurbs",
+            ]
+            .into_iter()
+            .map(|tool| format!("command-toolbar/sketch.tool.{tool}"))
+            .collect();
+        }
+        "Reference" if w.command_tab == "Sketch" => {
+            return ["point", "centerline", "midpoint-line"]
+                .into_iter()
+                .map(|tool| format!("command-toolbar/sketch.tool.{tool}"))
+                .collect();
+        }
+        _ => {
+            let category = if name == "Edit Entities" {
+                "Edit"
+            } else if name == "Patterns" {
+                "Pattern"
+            } else if name == "Blocks" {
+                "Block"
             } else {
-                ui.visuals().widgets.hovered.bg_fill
+                name
+            };
+            let sketch = cad_core::modeling_tools::SKETCH_TOOLS
+                .iter()
+                .filter(|tool| tool.2 == category)
+                .map(|tool| tool.0)
+                .collect::<Vec<_>>();
+            if w.command_tab == "Sketch" && !sketch.is_empty() {
+                sketch
+            } else {
+                cad_core::modeling_tools::TOOLS
+                    .iter()
+                    .filter(|tool| tool.group == name)
+                    .map(|tool| tool.command)
+                    .collect()
+            }
+        }
+    };
+    commands
+        .into_iter()
+        .map(|command| format!("command-menu/{command}"))
+        .collect()
+}
+
+/// A menu is also an ordinary semantic component, so user layouts can move or
+/// duplicate individual headings without embedding a second command route.
+pub fn semantic_menu(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    element: &cad_core::presentation::SemanticElement,
+) {
+    let snapshot = semantics(w);
+    controls::menu_button(ui, &element.id, &element.label, |ui| {
+        for item in element
+            .data
+            .get("items")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+        {
+            let Some(descriptor) = snapshot.iter().find(|descriptor| descriptor.id == item) else {
+                ui.weak(format!("Unavailable menu item: {item}"));
+                continue;
+            };
+            if descriptor.role == "menu" {
+                semantic_menu(ui, w, descriptor);
+                continue;
+            }
+            let response = controls::button(
+                ui,
+                &descriptor.id,
+                "menu-action",
+                &["menu-item"],
+                &descriptor.label,
+                descriptor.state != "disabled",
+                descriptor.state == "selected",
+            )
+            .on_disabled_hover_text(descriptor.value.as_deref().unwrap_or(&descriptor.label));
+            if response.clicked()
+                && let Some(command) = descriptor.commands.first()
+            {
+                ui::action(w, command);
+                ui.close();
+            }
+        }
+    });
+}
+
+const SKETCH_DRAWING_TOOLS: &[(&str, &str, sketch::Tool)] = &[
+    ("line", "Line", sketch::Tool::Polyline),
+    ("rectangle", "Corner Rectangle", sketch::Tool::Rectangle),
+    ("circle", "Circle", sketch::Tool::Circle),
+    ("select", "Select", sketch::Tool::Select),
+    (
+        "center-rectangle",
+        "Center Rectangle",
+        sketch::Tool::CenterRectangle,
+    ),
+    (
+        "three-point-rectangle",
+        "3-point Corner Rectangle",
+        sketch::Tool::ThreePointRectangle,
+    ),
+    (
+        "three-point-center-rectangle",
+        "3-point Center Rectangle",
+        sketch::Tool::ThreePointCenterRectangle,
+    ),
+    (
+        "parallelogram",
+        "Parallelogram",
+        sketch::Tool::Parallelogram,
+    ),
+    ("polygon", "Regular Polygon", sketch::Tool::Polygon),
+    ("slot", "Straight Slot", sketch::Tool::Slot),
+    (
+        "center-slot",
+        "Centerpoint Straight Slot",
+        sketch::Tool::CenterSlot,
+    ),
+    ("arc-slot", "Arc Slot", sketch::Tool::ArcSlot),
+    (
+        "perimeter-circle",
+        "Perimeter Circle",
+        sketch::Tool::PerimeterCircle,
+    ),
+    ("arc", "3-point Arc", sketch::Tool::Arc),
+    ("center-arc", "Centerpoint Arc", sketch::Tool::CenterArc),
+    ("tangent-arc", "Tangent Arc", sketch::Tool::TangentArc),
+    ("ellipse", "Ellipse", sketch::Tool::Ellipse),
+    ("ellipse-arc", "Partial Ellipse", sketch::Tool::EllipseArc),
+    ("conic", "Conic", sketch::Tool::Conic),
+    ("parabola", "Parabola", sketch::Tool::Parabola),
+    ("spline", "Control-point Spline", sketch::Tool::Spline),
+    (
+        "interpolating-spline",
+        "Interpolating Spline",
+        sketch::Tool::InterpolatingSpline,
+    ),
+    ("nurbs", "Control-point NURBS", sketch::Tool::Nurbs),
+    ("point", "Point", sketch::Tool::Point),
+    ("centerline", "Centerline", sketch::Tool::Centerline),
+    ("midpoint-line", "Midpoint Line", sketch::Tool::MidpointLine),
+];
+
+fn sketch_tool_command(tool: sketch::Tool) -> String {
+    SKETCH_DRAWING_TOOLS
+        .iter()
+        .find(|entry| entry.2 == tool)
+        .map(|entry| format!("sketch.tool.{}", entry.0))
+        .unwrap_or_else(|| "sketch.tool.unspecified".into())
+}
+
+/// The same presentation command route is used by native controls and arbitrary
+/// user-composed copies of them. Modeling continues through existing commands.
+pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
+    if let Some(name) = command.strip_prefix("viewport.orientation.") {
+        let orbit = match name {
+            "front" => [0., 0.],
+            "back" => [std::f32::consts::PI, 0.],
+            "top" => [0., std::f32::consts::FRAC_PI_2],
+            "bottom" => [0., -std::f32::consts::FRAC_PI_2],
+            "right" => [std::f32::consts::FRAC_PI_2, 0.],
+            "left" => [-std::f32::consts::FRAC_PI_2, 0.],
+            "isometric" => [0.65, 0.4],
+            _ => return false,
+        };
+        w.view.orbit = orbit;
+        w.view.roll = 0.;
+        crate::navigation::stop(w);
+        return true;
+    }
+    if let Some(name) = command.strip_prefix("sketch.tool.")
+        && let Some((_, _, tool)) = SKETCH_DRAWING_TOOLS.iter().find(|entry| entry.0 == name)
+    {
+        if w.tool_checkpoint.is_none() || w.sketch.is_some() {
+            if w.sketch.is_none() {
+                ui::action(w, "sketch.new");
+            }
+            sketch::set_tool(w, *tool);
+        }
+        return true;
+    }
+    if let Some(name) = command.strip_prefix("presentation.command-tab.")
+        && let Some(tab) = ["Features", "Sketch", "Assembly", "Evaluate", "Graph"]
+            .iter()
+            .find(|tab| tab.eq_ignore_ascii_case(name))
+    {
+        w.command_tab = (*tab).into();
+        if *tab == "Graph" {
+            w.view.active_layout = "graph-workspace".into();
+            w.view.mode = "Flow".into();
+        } else if w.view.active_layout == "graph-workspace" {
+            w.view.active_layout = "instrument-rail".into();
+            w.view.mode = "Model".into();
+        }
+        return true;
+    }
+    if let Some(name) = command.strip_prefix("presentation.navigation.")
+        && let Some(mode) = ["Model", "History", "Flow"]
+            .iter()
+            .find(|mode| mode.eq_ignore_ascii_case(name))
+    {
+        w.manager_tree = true;
+        w.view.mode = (*mode).into();
+        return true;
+    }
+    if let Some(name) = command.strip_prefix("presentation.graph-scope.")
+        && let Some(scope) = ["Features", "Assembly"]
+            .iter()
+            .find(|scope| scope.eq_ignore_ascii_case(name))
+    {
+        w.view.graph_scope = (*scope).into();
+        return true;
+    }
+    match command {
+        "presentation.selection-dismiss" => {
+            w.selection_popup = None;
+        }
+        "document.undo" => {
+            if w.session.can_undo() {
+                w.session.undo();
+                w.requested = None;
+            }
+        }
+        "document.redo" => {
+            if w.session.can_redo() {
+                w.session.redo();
+                w.requested = None;
+            }
+        }
+        "presentation.compact" | "presentation.comfortable" => {
+            let compact = command == "presentation.compact";
+            w.view.ui_scale = if compact { 1. } else { 1.15 };
+            w.view.toolbar_height = if compact { 68. } else { 80. };
+            resize_toolbar(w);
+        }
+        "graph.arrange" => {
+            w.view.graph_positions.clear();
+            w.view.graph_pan = [0.; 2];
+            w.view.graph_zoom = 1.;
+        }
+        "assembly.isolate" => w.isolate(),
+        "presentation.ghost-others" => {
+            w.view.ghost_others = !w.view.ghost_others;
+            w.rendered_key.clear();
+        }
+        "viewport.normal-sketch" => sketch::normal_to(w),
+        "selection.measure" => measure(w),
+        "file.export-drawing-dxf" => ui::export_format(w, "drawing-dxf", "drawing.dxf"),
+        _ => return false,
+    }
+    true
+}
+
+pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+    let mut out = vec![];
+    let sketching = w.sketch.is_some();
+    let blocked = w.tool_checkpoint.is_some() && !sketching;
+    let has_body = w
+        .view
+        .active_part
+        .as_ref()
+        .is_some_and(|id| cad_core::configuration::has_solid_output(w.session.visible(), id));
+    let mut publish = |id: String,
+                       role: &str,
+                       label: &str,
+                       command: String,
+                       enabled: bool,
+                       selected: bool,
+                       parent: &str| {
+        out.push(cad_core::presentation::SemanticElement { id, role:role.into(), label:label.into(), value: (!enabled).then(||"Finish the active operation or create the required geometry first".into()), state:if !enabled {"disabled"} else if selected {"selected"} else {"ready"}.into(), commands:if command.is_empty() {vec![]} else {vec![command]}, relationships:vec![parent.into()], data:serde_json::json!({"presentation_control":true,"accessibility_label":label,"parent":parent,"classes":match role { "menu-action"=>vec!["menu-item"], "command-action"=>vec!["toolbar-control"], "menu"=>vec!["menu-heading"], "command-tab"|"navigation-action"=>vec!["selectable"], _=>vec![] }}) });
+    };
+    for (command, label) in cad_core::presentation::command_catalog() {
+        let enabled = match command {
+            "draft.apply" => confirmation_available(w),
+            "draft.cancel" => w.tool_checkpoint.is_some() || w.session.draft.is_some() || sketching,
+            _ => cad_core::modeling_tools::TOOLS
+                .iter()
+                .find(|tool| tool.command == command)
+                .is_none_or(|tool| !blocked && (!tool.requires_body || has_body)),
+        };
+        for (prefix, role, parent) in [
+            ("command-toolbar", "command-action", "command-manager"),
+            ("command-menu", "menu-action", "document-context"),
+        ] {
+            publish(
+                format!("{prefix}/{command}"),
+                role,
+                label,
+                command.into(),
+                enabled,
+                false,
+                parent,
+            );
+        }
+    }
+    for (name, label, tool) in SKETCH_DRAWING_TOOLS {
+        let command = format!("sketch.tool.{name}");
+        publish(
+            format!("command-toolbar/{command}"),
+            "command-action",
+            label,
+            command,
+            !blocked,
+            w.sketch.as_ref().is_some_and(|s| s.tool == *tool),
+            "command-manager",
+        );
+    }
+    for tab in ["Features", "Sketch", "Assembly", "Evaluate", "Graph"] {
+        publish(
+            format!("command-tab/{}", tab.to_lowercase()),
+            "command-tab",
+            tab,
+            format!("presentation.command-tab.{}", tab.to_lowercase()),
+            true,
+            w.command_tab == tab,
+            "command-manager",
+        );
+    }
+    for (label, mode) in [
+        ("Model", "Model"),
+        ("History", "History"),
+        ("Graph", "Flow"),
+    ] {
+        publish(
+            format!("navigation/{}", mode.to_lowercase()),
+            "navigation-action",
+            label,
+            format!("presentation.navigation.{}", mode.to_lowercase()),
+            true,
+            w.manager_tree && w.view.mode == mode,
+            "view-navigation",
+        );
+    }
+    for menu in [
+        "File",
+        "Edit",
+        "Insert",
+        "View",
+        "Tools",
+        "Workspace",
+        "Size",
+        "Create",
+        "Remove",
+        "Modify",
+        "Pattern",
+        "Surfaces",
+        "Mold",
+        "Reference",
+        "Sheet Metal",
+        "Weldments",
+        "Shapes",
+        "Curves",
+        "Edit Entities",
+        "Transform",
+        "Patterns",
+        "Blocks",
+        "Dimension Groups",
+    ] {
+        publish(
+            format!("menu/{}", menu.to_lowercase().replace(' ', "-")),
+            "menu",
+            menu,
+            String::new(),
+            true,
+            false,
+            if matches!(
+                menu,
+                "File" | "Edit" | "Insert" | "View" | "Tools" | "Workspace"
+            ) {
+                "document-context"
+            } else {
+                "command-manager"
             },
         );
     }
-    icon(
-        ui.painter(),
-        rect.left_center() + egui::vec2(17., 0.),
-        kind,
-        color,
-    );
-    ui.painter().text(
-        rect.left_center() + egui::vec2(35., 0.),
-        egui::Align2::LEFT_CENTER,
-        label,
-        egui::FontId::proportional(10.5),
-        color,
-    );
-    let clicked = enabled && response.clicked();
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    response.on_hover_text(hint);
-    clicked
+    for (command, label, enabled, selected) in [
+        ("document.undo", "Undo", w.session.can_undo(), false),
+        ("document.redo", "Redo", w.session.can_redo(), false),
+        (
+            "presentation.compact",
+            "Compact",
+            true,
+            w.view.ui_scale == 1.,
+        ),
+        (
+            "presentation.comfortable",
+            "Comfortable",
+            true,
+            w.view.ui_scale == 1.15,
+        ),
+        ("graph.arrange", "Arrange Graph", true, false),
+        ("assembly.isolate", "Edit in Place", true, w.view.isolation),
+        (
+            "presentation.ghost-others",
+            "Ghost Others",
+            true,
+            w.view.ghost_others,
+        ),
+        (
+            "viewport.normal-sketch",
+            "Normal To Sketch",
+            sketching,
+            false,
+        ),
+        ("selection.measure", "Measure", w.selected.is_some(), false),
+        (
+            "file.export-drawing-dxf",
+            "Export Drawing DXF…",
+            true,
+            false,
+        ),
+    ] {
+        publish(
+            format!("command:{command}"),
+            "command",
+            label,
+            command.into(),
+            enabled,
+            selected,
+            "workspace",
+        );
+        for (prefix, role, parent) in [
+            ("command-toolbar", "command-action", "command-manager"),
+            ("command-menu", "menu-action", "document-context"),
+        ] {
+            publish(
+                format!("{prefix}/{command}"),
+                role,
+                label,
+                command.into(),
+                enabled,
+                selected,
+                parent,
+            );
+        }
+    }
+    for (id, role, label, command, enabled) in [
+        (
+            "command:draft.apply",
+            "command",
+            "Apply",
+            "draft.apply",
+            confirmation_available(w),
+        ),
+        (
+            "draft.apply",
+            "apply-action",
+            "Apply",
+            "draft.apply",
+            confirmation_available(w),
+        ),
+        (
+            "command:draft.cancel",
+            "command",
+            "Cancel",
+            "draft.cancel",
+            w.tool_checkpoint.is_some() || w.session.draft.is_some() || sketching,
+        ),
+        (
+            "draft.cancel",
+            "cancel-action",
+            "Cancel",
+            "draft.cancel",
+            w.tool_checkpoint.is_some() || w.session.draft.is_some() || sketching,
+        ),
+    ] {
+        publish(
+            id.into(),
+            role,
+            label,
+            command.into(),
+            enabled,
+            false,
+            "property-manager",
+        );
+    }
+    for orientation in [
+        "Front",
+        "Back",
+        "Top",
+        "Bottom",
+        "Right",
+        "Left",
+        "Isometric",
+    ] {
+        let command = format!("viewport.orientation.{}", orientation.to_lowercase());
+        publish(
+            format!("command:{command}"),
+            "command",
+            orientation,
+            command.clone(),
+            true,
+            false,
+            "workspace",
+        );
+        publish(
+            format!("command-menu/{command}"),
+            "menu-action",
+            orientation,
+            command,
+            true,
+            false,
+            "menu/view",
+        );
+    }
+    for group in feature_groups() {
+        let id = format!("menu/{}", group.to_lowercase().replace(' ', "-"));
+        if !out.iter().any(|element| element.id == id) {
+            out.push(cad_core::presentation::SemanticElement {
+                id,
+                role: "menu".into(),
+                label: group.into(),
+                value: None,
+                state: "ready".into(),
+                commands: vec![],
+                relationships: vec!["command-manager".into()],
+                data: serde_json::json!({"classes":["menu-heading"],"presentation_control":true}),
+            });
+        }
+    }
+    for element in &mut out {
+        if element.role == "menu" {
+            let items = menu_items(&element.label, w);
+            element.data["items"] = serde_json::json!(items);
+        }
+        if sketching && w.command_tab == "Sketch" && element.id == "command-toolbar/sketch.new" {
+            element.label = "Finish".into();
+            element.commands = vec!["draft.apply".into()];
+            element.state = if confirmation_available(w) {
+                "selected"
+            } else {
+                "disabled"
+            }
+            .into();
+            element.value = confirmation_disabled_reason(w).map(str::to_owned);
+        }
+    }
+    if let Some(reason) = confirmation_disabled_reason(w) {
+        for element in &mut out {
+            if element
+                .commands
+                .first()
+                .is_some_and(|command| command == "draft.apply")
+            {
+                element.value = Some(reason.into());
+                if let Some(data) = element.data.as_object_mut() {
+                    data.insert("disabled_reason".into(), reason.into());
+                }
+            }
+        }
+    }
+    out
+}
+
+pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if w.confirm_requested {
+        return Some("Waiting for the current operation to finish validation");
+    }
+    if w.sketch.as_ref().is_some_and(|s| {
+        !s.closed
+            || s.error.is_some()
+            || s.choosing_plane
+            || s.edit.is_some()
+            || !s.clicks.is_empty()
+            || s.tool.is_spline() && !s.chain.is_empty()
+    }) {
+        return Some("Finish drawing and resolve sketch errors before applying");
+    }
+    if [
+        "feature-source-invalid",
+        "mate-source-invalid",
+        "drawing-source-invalid",
+        "component-pattern-source-invalid",
+        "configuration-source-invalid",
+        "exploded-view-source-invalid",
+        "assembly-inspection-source-invalid",
+    ]
+    .iter()
+    .any(|key| w.fields.contains_key(*key))
+    {
+        return Some("Correct the active operation's source before applying");
+    }
+    if let Some(draft) = &w.session.draft {
+        if draft.error.is_some() {
+            return Some("Resolve the current preview error before applying");
+        }
+        if draft.pending
+            || !draft.evaluation.as_ref().is_some_and(|evaluation| {
+                evaluation.valid && evaluation.identity == w.session.identity()
+            })
+        {
+            return Some("A current validated preview is required");
+        }
+    } else if !(w.fields.contains_key("exploded-view-editor")
+        || w.fields.contains_key("assembly-inspection-editor"))
+    {
+        return Some("No current operation to apply");
+    }
+    None
+}
+pub fn confirmation_available(w: &Workspace) -> bool {
+    confirmation_disabled_reason(w).is_none()
 }
 
 pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("TCAD").strong());
-        ui.menu_button("File", |ui| {
+        menu_button(ui, "File", |ui| {
             for (label, command) in [
                 ("New Part  ⌘N", "file.new-part"),
                 ("New Assembly", "file.new"),
@@ -184,70 +922,61 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Export…", "file.export"),
                 ("Recover Local Work…", "file.recover"),
             ] {
-                if ui.button(label).clicked() {
+                if menu_action(ui, command, label, true).clicked() {
                     ui::action(w, command);
                     ui.close();
                 }
             }
             ui.separator();
-            if ui.button("Open Example: Drive Unit").clicked() {
+            if menu_action(ui, "file.example", "Open Example: Drive Unit", true).clicked() {
                 ui::action(w, "file.example");
                 ui.close();
             }
             ui.separator();
-            if ui.button("Export Drawing DXF…").clicked() {
+            if menu_action(ui, "file.export-drawing-dxf", "Export Drawing DXF…", true).clicked() {
                 ui::export_format(w, "drawing-dxf", "drawing.dxf");
                 ui.close();
             }
-            if ui.button("Export Flat Pattern DXF…").clicked() {
+            if menu_action(
+                ui,
+                "file.export-flat-pattern",
+                "Export Flat Pattern DXF…",
+                true,
+            )
+            .clicked()
+            {
                 ui::action(w, "file.export-flat-pattern");
                 ui.close();
             }
-            if ui.button("Export Cut List CSV…").clicked() {
+            if menu_action(ui, "file.export-cutlist", "Export Cut List CSV…", true).clicked() {
                 ui::action(w, "file.export-cutlist");
                 ui.close();
             }
         });
-        ui.menu_button("Edit", |ui| {
-            if ui
-                .add_enabled(w.session.can_undo(), egui::Button::new("Undo  ⌘Z"))
-                .clicked()
-            {
+        menu_button(ui, "Edit", |ui| {
+            if menu_action(ui, "document.undo", "Undo  ⌘Z", w.session.can_undo()).clicked() {
                 w.session.undo();
                 w.requested = None;
                 ui.close();
             }
-            if ui
-                .add_enabled(w.session.can_redo(), egui::Button::new("Redo  ⇧⌘Z"))
-                .clicked()
-            {
+            if menu_action(ui, "document.redo", "Redo  ⇧⌘Z", w.session.can_redo()).clicked() {
                 w.session.redo();
                 w.requested = None;
                 ui.close();
             }
-            if ui.button("Parameters…").clicked() {
+            if menu_action(ui, "parameter.new", "Parameters…", true).clicked() {
                 w.open_editor("parameter");
                 ui.close();
             }
         });
-        ui.menu_button("Insert", |ui| {
-            for group in [
-                "Create",
-                "Remove",
-                "Modify",
-                "Pattern",
-                "Surfaces",
-                "Mold",
-                "Reference",
-                "Sheet Metal",
-                "Weldments",
-            ] {
-                ui.menu_button(group, |ui| {
+        menu_button(ui, "Insert", |ui| {
+            for group in feature_groups() {
+                menu_button(ui, group, |ui| {
                     for tool in cad_core::modeling_tools::TOOLS
                         .iter()
                         .filter(|t| t.group == group)
                     {
-                        if ui.button(tool.label).clicked() {
+                        if menu_action(ui, tool.command, tool.label, true).clicked() {
                             ui::action(w, tool.command);
                             ui.close();
                         }
@@ -255,10 +984,10 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 });
             }
         });
-        ui.menu_button("View", |ui| {
+        menu_button(ui, "View", |ui| {
             view_controls(ui, w);
         });
-        ui.menu_button("Tools", |ui| {
+        menu_button(ui, "Tools", |ui| {
             for (label, command) in [
                 ("Assembly and Mates…", "assembly.edit"),
                 ("Component Pattern…", "assembly.pattern"),
@@ -273,13 +1002,13 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Bill of Materials…", "bom"),
                 ("Navigation Settings…", "controls"),
             ] {
-                if ui.button(label).clicked() {
+                if menu_action(ui, command, label, true).clicked() {
                     ui::action(w, command);
                     ui.close();
                 }
             }
         });
-        ui.menu_button("Workspace", |ui| {
+        menu_button(ui, "Workspace", |ui| {
             for (label, command) in [
                 ("Layout and Theme…", "presentation"),
                 ("Versions…", "versions"),
@@ -288,7 +1017,7 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Source Definitions…", "source"),
                 ("Create Release…", "file.release"),
             ] {
-                if ui.button(label).clicked() {
+                if menu_action(ui, command, label, true).clicked() {
                     ui::action(w, command);
                     ui.close();
                 }
@@ -307,7 +1036,7 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
             .strong(),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Find a command  ⌘K").clicked() {
+            if command_button(ui, "commands", "Find a command  ⌘K", true).clicked() {
                 w.open_editor("commands");
             }
         });
@@ -316,7 +1045,15 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
 pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
     ui.horizontal(|ui| {
         for tab in ["Features", "Sketch", "Assembly", "Evaluate", "Graph"] {
-            if ui.selectable_label(w.command_tab == tab, tab).clicked() {
+            if controls::selectable(
+                ui,
+                &format!("command-tab/{}", tab.to_lowercase()),
+                "command-tab",
+                tab,
+                w.command_tab == tab,
+            )
+            .clicked()
+            {
                 w.command_tab = tab.into();
                 if tab == "Graph" {
                     w.view.active_layout = "graph-workspace".into();
@@ -328,14 +1065,14 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.menu_button("Size", |ui| {
-                if ui.button("Compact").clicked() {
+            menu_button(ui, "Size", |ui| {
+                if menu_action(ui, "presentation.compact", "Compact", true).clicked() {
                     w.view.ui_scale = 1.;
                     w.view.toolbar_height = 68.;
                     resize_toolbar(w);
                     ui.close();
                 }
-                if ui.button("Comfortable").clicked() {
+                if menu_action(ui, "presentation.comfortable", "Comfortable", true).clicked() {
                     w.view.ui_scale = 1.15;
                     w.view.toolbar_height = 80.;
                     resize_toolbar(w);
@@ -365,9 +1102,14 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                 "Sketch" => {
                     if tool_button(
                         ui,
+                        "command-toolbar/sketch.new",
                         if sketching { "Finish" } else { "Sketch" },
                         Icon::Sketch,
-                        !blocked,
+                        if sketching {
+                            confirmation_available(w)
+                        } else {
+                            !blocked
+                        },
                         sketching,
                         "Finish the sketch or select a plane to begin",
                     ) {
@@ -385,6 +1127,7 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                     ] {
                         if tool_button(
                             ui,
+                            &format!("command-toolbar/{}", sketch_tool_command(tool)),
                             label,
                             kind,
                             !blocked,
@@ -444,10 +1187,9 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                             ],
                         ),
                     ] {
-                        ui.menu_button(group, |ui| {
+                        menu_button(ui, group, |ui| {
                             for (label, tool) in &tools {
-                                if ui
-                                    .add_enabled(!blocked, egui::Button::new(*label))
+                                if command_button(ui, &sketch_tool_command(*tool), label, !blocked)
                                     .clicked()
                                 {
                                     if w.sketch.is_none() {
@@ -466,12 +1208,10 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                         ("Blocks", "Block"),
                         ("Dimension Groups", "Dimension Groups"),
                     ] {
-                        ui.menu_button(menu, |ui| {
+                        menu_button(ui, menu, |ui| {
                             for (command, label, group) in cad_core::modeling_tools::SKETCH_TOOLS {
                                 if *group == category
-                                    && ui
-                                        .add_enabled(sketching, egui::Button::new(*label))
-                                        .clicked()
+                                    && command_button(ui, command, label, sketching).clicked()
                                 {
                                     ui::action(w, command);
                                     ui.close();
@@ -479,50 +1219,55 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                             }
                         });
                     }
-                    if ui
-                        .add_enabled(sketching, egui::Button::new("Smart Dimension  D"))
-                        .clicked()
+                    if command_button(
+                        ui,
+                        "sketch.smart-dimension",
+                        "Smart Dimension  D",
+                        sketching,
+                    )
+                    .clicked()
                     {
                         ui::action(w, "sketch.smart-dimension");
                     }
-                    if ui
-                        .add_enabled(sketching, egui::Button::new("Text"))
-                        .clicked()
-                    {
+                    if command_button(ui, "sketch.text", "Text", sketching).clicked() {
                         ui::action(w, "sketch.text");
                     }
-                    if ui
-                        .add_enabled(sketching, egui::Button::new("Equation Curve"))
-                        .clicked()
+                    if command_button(ui, "sketch.equation", "Equation Curve", sketching).clicked()
                     {
                         ui::action(w, "sketch.equation");
                     }
-                    if ui
-                        .add_enabled(sketching, egui::Button::new("Reference Dimension"))
-                        .clicked()
+                    if command_button(
+                        ui,
+                        "sketch.reference-dimension",
+                        "Reference Dimension",
+                        sketching,
+                    )
+                    .clicked()
                     {
                         ui::action(w, "sketch.reference-dimension");
                     }
-                    if ui
-                        .add_enabled(sketching, egui::Button::new("Relations"))
-                        .clicked()
-                    {
+                    if command_button(ui, "sketch.relations", "Relations", sketching).clicked() {
                         ui::action(w, "sketch.relations");
                     }
-                    if ui.button("Normal To").clicked() {
+                    if command_button(ui, "viewport.normal-sketch", "Normal To", true).clicked() {
                         sketch::normal_to(w);
                     }
                 }
                 "Graph" => {
                     for scope in ["Features", "Assembly"] {
-                        if ui
-                            .selectable_label(w.view.graph_scope == scope, scope)
-                            .clicked()
+                        if controls::selectable(
+                            ui,
+                            &format!("graph-scope/{}", scope.to_lowercase()),
+                            "graph-scope",
+                            scope,
+                            w.view.graph_scope == scope,
+                        )
+                        .clicked()
                         {
                             w.view.graph_scope = scope.into();
                         }
                     }
-                    if ui.button("Arrange Graph").clicked() {
+                    if command_button(ui, "graph.arrange", "Arrange Graph", true).clicked() {
                         w.view.graph_positions.clear();
                         w.view.graph_pan = [0.; 2];
                         w.view.graph_zoom = 1.;
@@ -535,25 +1280,41 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                         ("Mates", "assembly.edit"),
                         ("Library", "libraries"),
                     ] {
-                        if ui.button(label).clicked() {
+                        if command_button(ui, cmd, label, true).clicked() {
                             ui::action(w, cmd);
                         }
                     }
-                    if ui
-                        .button(if w.view.isolation {
+                    if command_button(
+                        ui,
+                        "assembly.isolate",
+                        if w.view.isolation {
                             "Finish Editing"
                         } else {
                             "Edit in Place"
-                        })
-                        .clicked()
+                        },
+                        true,
+                    )
+                    .clicked()
                     {
                         w.isolate();
                     }
-                    ui.checkbox(&mut w.view.ghost_others, "Ghost others");
+                    if controls::button(
+                        ui,
+                        "command-toolbar/presentation.ghost-others",
+                        "command-action",
+                        &["toolbar-control"],
+                        "Ghost others",
+                        true,
+                        w.view.ghost_others,
+                    )
+                    .clicked()
+                    {
+                        w.view.ghost_others = !w.view.ghost_others;
+                        w.rendered_key.clear();
+                    }
                 }
                 "Evaluate" => {
-                    if ui
-                        .add_enabled(w.selected.is_some(), egui::Button::new("Measure"))
+                    if command_button(ui, "selection.measure", "Measure", w.selected.is_some())
                         .clicked()
                     {
                         measure(w);
@@ -565,7 +1326,7 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                         ("BOM", "bom"),
                         ("Drawings", "drawings"),
                     ] {
-                        if ui.button(label).clicked() {
+                        if command_button(ui, cmd, label, true).clicked() {
                             ui::action(w, cmd);
                         }
                     }
@@ -573,6 +1334,7 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                 _ => {
                     if tool_button(
                         ui,
+                        "command-toolbar/sketch.new",
                         "Sketch",
                         Icon::Sketch,
                         !blocked,
@@ -581,18 +1343,8 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                     ) {
                         ui::action(w, "sketch.new");
                     }
-                    for group in [
-                        "Create",
-                        "Remove",
-                        "Modify",
-                        "Pattern",
-                        "Surfaces",
-                        "Mold",
-                        "Reference",
-                        "Sheet Metal",
-                        "Weldments",
-                    ] {
-                        ui.menu_button(group, |ui| {
+                    for group in feature_groups() {
+                        menu_button(ui, group, |ui| {
                             for tool in cad_core::modeling_tools::TOOLS
                                 .iter()
                                 .filter(|t| t.group == group)
@@ -619,20 +1371,18 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                                     "Shell" => Icon::Shell,
                                     _ => Icon::Sketch,
                                 };
-                                ui.horizontal(|ui| {
-                                    let (r, _) = ui.allocate_exact_size(
-                                        egui::vec2(30., 30.),
-                                        egui::Sense::hover(),
-                                    );
-                                    icon(ui.painter(), r.center(), kind, ui.visuals().text_color());
-                                    if ui
-                                        .add_enabled(enabled, egui::Button::new(tool.label))
-                                        .clicked()
-                                    {
-                                        ui::action(w, tool.command);
-                                        ui.close();
-                                    }
-                                });
+                                if tool_button(
+                                    ui,
+                                    &format!("command-toolbar/{}", tool.command),
+                                    tool.label,
+                                    kind,
+                                    enabled,
+                                    false,
+                                    tool.label,
+                                ) {
+                                    ui::action(w, tool.command);
+                                    ui.close();
+                                }
                             }
                         });
                     }
@@ -661,18 +1411,30 @@ pub fn navigation(ui: &mut egui::Ui, w: &mut Workspace) {
             ("History", "History"),
             ("Graph", "Flow"),
         ] {
-            if ui
-                .selectable_label(w.manager_tree && w.view.mode == mode, label)
-                .clicked()
+            if controls::selectable(
+                ui,
+                &format!("navigation/{}", mode.to_lowercase()),
+                "navigation-action",
+                label,
+                w.manager_tree && w.view.mode == mode,
+            )
+            .clicked()
             {
                 w.manager_tree = true;
                 w.view.mode = mode.into();
             }
         }
-        if ui
-            .small_button("⋯")
-            .on_hover_text("Layout, theme and sizing")
-            .clicked()
+        if controls::button(
+            ui,
+            "navigation/presentation",
+            "command-action",
+            &["navigation-control"],
+            "⋯",
+            true,
+            false,
+        )
+        .on_hover_text("Layout, theme and sizing")
+        .clicked()
         {
             w.open_editor("presentation");
         }
@@ -733,7 +1495,15 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                 );
             }
             for placed in doc.placed_parts().unwrap_or_default() {
-                let response = ui.selectable_label(false, &placed.name);
+                let response = controls::button(
+                    ui,
+                    &format!("component:{}", placed.path.join("/")),
+                    "component-instance",
+                    &["feature-tree-row"],
+                    &placed.name,
+                    true,
+                    w.view.active_instance.as_ref() == placed.path.last(),
+                );
                 if response.clicked() {
                     if w.tool_checkpoint.is_none() {
                         w.view.active_part = Some(placed.definition.clone());
@@ -828,9 +1598,14 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                 }
                 ui.separator();
                 for name in ["Front Plane", "Top Plane", "Right Plane"] {
-                    let response = ui.selectable_label(
+                    let response = controls::button(
+                        ui,
+                        &format!("reference:{}::{name}", part.id),
+                        "reference-plane",
+                        &["feature-tree-row"],
+                        &format!("▱  {name}"),
+                        true,
                         w.active_plane.as_deref() == Some(name),
-                        format!("▱  {name}"),
                     );
                     if response.clicked() {
                         w.selected = None;
@@ -860,7 +1635,15 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                         }
                     });
                 }
-                let response = ui.selectable_label(false, "+  Origin");
+                let response = controls::button(
+                    ui,
+                    &format!("reference:{}::Origin", part.id),
+                    "reference-origin",
+                    &["feature-tree-row"],
+                    "+  Origin",
+                    true,
+                    false,
+                );
                 if response.clicked() {
                     w.active_plane = None;
                     crate::selection_ui::object_selected(
@@ -959,11 +1742,15 @@ pub fn operation_summary(operation: &Operation) -> String {
     }
 }
 fn history(ui: &mut egui::Ui, w: &mut Workspace, part: &Part) {
-    let accent = ui.visuals().selection.stroke.color;
-    if ui
-        .selectable_label(w.view.history_cursor.is_none(), "Latest model")
-        .on_hover_text("Show the current model without rebuilding geometry")
-        .clicked()
+    if controls::selectable(
+        ui,
+        "history-view",
+        "history-view",
+        "Latest model",
+        w.view.history_cursor.is_none(),
+    )
+    .on_hover_text("Show the current model without rebuilding geometry")
+    .clicked()
     {
         crate::history::latest(w);
     }
@@ -982,76 +1769,89 @@ fn history(ui: &mut egui::Ui, w: &mut Workspace, part: &Part) {
                     .view
                     .history_cursor
                     .as_ref()
-                    .map(|c| c.definition == part.id && c.node == feature.id)
+                    .map(|cursor| cursor.definition == part.id && cursor.node == feature.id)
                     .unwrap_or_else(|| w.view.active_node.as_ref() == Some(&feature.id));
                 let future = w
                     .view
                     .history_cursor
                     .as_ref()
-                    .filter(|c| c.definition == part.id)
-                    .and_then(|c| part.features.iter().position(|f| f.id == c.node))
-                    .is_some_and(|i| index > i);
-                let (rect, response) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), if active { 48. } else { 31. }),
-                    egui::Sense::click(),
+                    .filter(|cursor| cursor.definition == part.id)
+                    .and_then(|cursor| {
+                        part.features
+                            .iter()
+                            .position(|feature| feature.id == cursor.node)
+                    })
+                    .is_some_and(|cursor| index > cursor);
+                let id = format!("history:{}::{}", part.id, feature.id);
+                let classes = if future {
+                    vec!["history-row", "future"]
+                } else {
+                    vec!["history-row"]
+                };
+                let props = controls::properties(
+                    &id,
+                    "history-station",
+                    &classes,
+                    if active { "selected" } else { "ready" },
                 );
-                let p = rect.left_top() + egui::vec2(35., 15.);
-                if let Some(last) = last {
-                    ui.painter()
-                        .line_segment([last, p], Stroke::new(1.2, ui.visuals().weak_text_color()));
-                }
-                last = Some(p);
-                ui.painter().text(
-                    p - egui::vec2(19., 0.),
-                    egui::Align2::RIGHT_CENTER,
-                    format!("{:02}", index + 1),
-                    egui::FontId::proportional(10.),
-                    ui.visuals().weak_text_color(),
-                );
-                ui.painter().circle(
-                    p,
-                    if active { 6. } else { 4. },
+                let marker = std::cell::Cell::new(None);
+                let draw = |painter: &egui::Painter, center: egui::Pos2, size: f32, color| {
+                    marker.set(Some(center));
+                    painter.circle_filled(center, size * 0.23, color);
                     if active {
-                        accent
-                    } else if future {
-                        ui.visuals().weak_text_color()
-                    } else {
-                        ui.visuals().text_color()
-                    },
-                    Stroke::NONE,
+                        painter.circle_stroke(
+                            center,
+                            size * 0.42,
+                            Stroke::new(controls::number(&props, "stroke-width", 1.2), color),
+                        );
+                    }
+                };
+                let label = if active {
+                    format!(
+                        "{:02}  {}\n{}",
+                        index + 1,
+                        feature.name,
+                        operation_summary(&feature.operation)
+                    )
+                } else {
+                    format!("{:02}  {}", index + 1, feature.name)
+                };
+                let response = controls::icon_button(
+                    ui,
+                    &id,
+                    "history-station",
+                    &classes,
+                    &label,
+                    true,
+                    active,
+                    Some(&draw),
                 );
+                if let Some(marker) = marker.get() {
+                    let path = controls::properties(
+                        &format!("history-path:{}", part.id),
+                        "history-path",
+                        &[],
+                        "ready",
+                    );
+                    if let Some(last) = last {
+                        let color = path
+                            .get("color")
+                            .and_then(|color| crate::ui::color(color))
+                            .unwrap_or_else(|| ui.visuals().weak_text_color());
+                        ui.painter().line_segment(
+                            [last, marker],
+                            Stroke::new(controls::number(&path, "stroke-width", 1.), color),
+                        );
+                    }
+                    last = Some(marker);
+                }
                 if active
                     && w.fields
                         .get("history-focus")
                         .is_none_or(|id| id != &feature.id)
                 {
-                    ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                    ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
                     w.fields.insert("history-focus".into(), feature.id.clone());
-                }
-                if active {
-                    ui.painter().circle_stroke(p, 9., Stroke::new(1.5, accent));
-                }
-                ui.painter().text(
-                    p + egui::vec2(16., 0.),
-                    egui::Align2::LEFT_CENTER,
-                    &feature.name,
-                    egui::FontId::proportional(12.),
-                    if active {
-                        accent
-                    } else if future {
-                        ui.visuals().weak_text_color()
-                    } else {
-                        ui.visuals().text_color()
-                    },
-                );
-                if active {
-                    ui.painter().text(
-                        p + egui::vec2(16., 16.),
-                        egui::Align2::LEFT_CENTER,
-                        operation_summary(&feature.operation),
-                        egui::FontId::proportional(10.),
-                        ui.visuals().weak_text_color(),
-                    );
                 }
                 if response.clicked()
                     && (w.tool_checkpoint.is_some()
@@ -1070,10 +1870,14 @@ fn history(ui: &mut egui::Ui, w: &mut Workspace, part: &Part) {
             }
         });
 }
+
 fn feature_row(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, feature: &Feature) {
-    let response = ui.selectable_label(
-        w.view.active_node.as_ref() == Some(&feature.id),
-        format!(
+    let response = controls::button(
+        ui,
+        &feature.id,
+        "feature-station",
+        &["feature-tree-row"],
+        &format!(
             "{}  {}",
             if cad_core::configuration::feature_suppressed(w.session.visible(), &part.id, feature) {
                 "○"
@@ -1084,6 +1888,8 @@ fn feature_row(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, feature: &Feat
             },
             feature.name
         ),
+        true,
+        w.view.active_node.as_ref() == Some(&feature.id),
     );
     if response.clicked() {
         crate::selection_ui::feature_selected(w, &part.id, feature, &response);
@@ -1133,54 +1939,31 @@ pub fn properties(ui: &mut egui::Ui, w: &mut Workspace) {
 }
 pub fn confirmation(ui: &mut egui::Ui, w: &mut Workspace) {
     ui.horizontal(|ui| {
-        let closed = w.sketch.as_ref().is_none_or(|s| {
-            s.closed
-                && s.error.is_none()
-                && !s.choosing_plane
-                && s.edit.is_none()
-                && s.clicks.is_empty()
-                && (!s.tool.is_spline() || s.chain.is_empty())
-        });
-        let enabled = closed
-            && !w.confirm_requested
-            && !w.fields.contains_key("feature-source-invalid")
-            && !w.fields.contains_key("mate-source-invalid")
-            && !w.fields.contains_key("drawing-source-invalid")
-            && !w.fields.contains_key("component-pattern-source-invalid")
-            && !w.fields.contains_key("configuration-source-invalid")
-            && !w.fields.contains_key("exploded-view-source-invalid")
-            && !w.fields.contains_key("assembly-inspection-source-invalid");
-        let (rect, response) = ui.allocate_exact_size(egui::vec2(44., 44.), egui::Sense::click());
-        ui.painter().circle(
-            rect.center(),
-            20.,
-            if enabled {
-                ui.visuals().selection.stroke.color
-            } else {
-                ui.visuals().widgets.inactive.bg_fill
-            },
-            Stroke::new(1.3, ui.visuals().text_color()),
-        );
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
+        let enabled = confirmation_available(w);
+        if controls::button(
+            ui,
+            "draft.apply",
+            "apply-action",
+            &["confirmation-control"],
             "Apply",
-            egui::FontId::proportional(11.),
-            if enabled {
-                Color32::BLACK
-            } else {
-                ui.visuals().weak_text_color()
-            },
-        );
-        response
-            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "Apply"));
-        if enabled && response.clicked() {
+            enabled,
+            false,
+        )
+        .on_hover_text("Confirm this operation · Command + Enter")
+        .clicked()
+        {
             w.confirm_tool();
         }
-        response.on_hover_text("Confirm this operation · Command + Enter");
-        if ui
-            .button(RichText::new("×  Cancel").color(Color32::from_rgb(165, 45, 40)))
-            .clicked()
+        if controls::button(
+            ui,
+            "draft.cancel",
+            "cancel-action",
+            &["confirmation-control"],
+            "Cancel",
+            true,
+            false,
+        )
+        .clicked()
         {
             w.cancel_tool();
         }
@@ -1193,13 +1976,12 @@ pub fn confirmation(ui: &mut egui::Ui, w: &mut Workspace) {
     }
 }
 pub(crate) fn expression(ui: &mut egui::Ui, label: &str, expression: &mut cad_core::Expr) -> bool {
-    ui.label(label);
-    ui.add(
-        egui::TextEdit::singleline(&mut expression.0)
-            .id(ui.id().with(("feature-expression", label)))
-            .desired_width(f32::INFINITY),
+    controls::expression(
+        ui,
+        &format!("feature-field/{}", label.to_lowercase().replace(' ', "-")),
+        label,
+        expression,
     )
-    .changed()
 }
 
 fn face_selection_fields(
@@ -2683,7 +3465,14 @@ pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
         ("Left", [-std::f32::consts::FRAC_PI_2, 0.]),
         ("Isometric", [0.65, 0.4]),
     ] {
-        if ui.button(label).clicked() {
+        if menu_action(
+            ui,
+            &format!("viewport.orientation.{}", label.to_lowercase()),
+            label,
+            true,
+        )
+        .clicked()
+        {
             w.view.orbit = orbit;
             w.view.roll = 0.;
             crate::navigation::stop(w);
@@ -2691,11 +3480,11 @@ pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
         }
     }
     ui.separator();
-    if ui.button("Zoom to Fit  F").clicked() {
+    if menu_action(ui, "viewport.fit", "Zoom to Fit  F", true).clicked() {
         viewport::fit(w, false);
         ui.close();
     }
-    if ui.button("Normal To Sketch").clicked() {
+    if menu_action(ui, "viewport.normal-sketch", "Normal To Sketch", true).clicked() {
         sketch::normal_to(w);
         ui.close();
     }
@@ -2707,10 +3496,30 @@ pub fn status(ui: &mut egui::Ui, w: &mut Workspace) {
         }
         ui.label(&w.status);
         if w.session.draft.is_some() && w.tool_checkpoint.is_none() {
-            if ui.small_button("Confirm Changes").clicked() {
+            if controls::button(
+                ui,
+                "draft.apply",
+                "apply-action",
+                &["status-control"],
+                "Confirm Changes",
+                confirmation_available(w),
+                false,
+            )
+            .clicked()
+            {
                 w.confirm_tool();
             }
-            if ui.small_button("Cancel").clicked() {
+            if controls::button(
+                ui,
+                "draft.cancel",
+                "cancel-action",
+                &["status-control"],
+                "Cancel",
+                true,
+                false,
+            )
+            .clicked()
+            {
                 w.cancel();
             }
         }

@@ -20,6 +20,9 @@ mod mate_ui;
 mod mold_ui;
 mod navigation;
 mod placement_pattern_ui;
+mod presentation_composition;
+mod presentation_controls;
+mod presentation_resources;
 mod reference_curves_ui;
 mod reference_ui;
 mod rib_ui;
@@ -62,6 +65,7 @@ pub struct Workspace {
     pub project: Option<PathBuf>,
     pub layout: LayoutDocument,
     pub theme: Theme,
+    pub presentation_resources: crate::presentation_resources::State,
     pub jobs: background::Jobs,
     pub worker: worker::WorkerClient,
     pub exporter: worker::WorkerClient,
@@ -139,19 +143,8 @@ impl Workspace {
             view = saved;
         }
         navigation::load_preferences(&mut view, &mut status, reset);
-        let root = if reset { None } else { root };
-        let layout = root
-            .as_ref()
-            .and_then(|r| LayoutDocument::load(&r.join("ui/layout.json")).ok())
-            .unwrap_or_else(default_layout);
-        let theme = root
-            .as_ref()
-            .and_then(|r| {
-                Theme::load(&r.join("ui/theme.css"))
-                    .or_else(|_| Theme::load(&r.join("ui/theme.json")))
-                    .ok()
-            })
-            .unwrap_or_else(default_theme);
+        let layout = default_layout();
+        let theme = default_theme();
         let saved_source = doc.fingerprint();
         let recovery_path = recovery_directory().join(format!("{}.json", doc.id));
         let recovery_draft = std::fs::read(&recovery_path)
@@ -166,12 +159,13 @@ impl Workspace {
             });
         let layout_text = serde_json::to_string_pretty(&layout).unwrap_or_default();
         let theme_text = serde_json::to_string_pretty(&theme).unwrap_or_default();
-        Self {
+        let mut workspace = Self {
             session: Session::new(doc, BACKEND),
             view,
             project,
             layout,
             theme,
+            presentation_resources: crate::presentation_resources::State::default(),
             jobs: background::Jobs::new(),
             worker: worker::WorkerClient::new(),
             exporter: worker::WorkerClient::new(),
@@ -216,7 +210,9 @@ impl Workspace {
             compare: None,
             compare_document: None,
             compare_worker: worker::WorkerClient::new(),
-        }
+        };
+        crate::presentation_resources::initialize(&mut workspace, reset);
+        workspace
     }
     pub fn root(&self) -> PathBuf {
         self.project

@@ -1,5 +1,5 @@
 //! Native presentation of application-owned selection actions.
-use crate::{Workspace, cad_ui, ui, viewport};
+use crate::{Workspace, cad_ui, presentation_controls as controls, ui, viewport};
 use bevy_egui::egui;
 use cad_core::{
     Feature, commands::Command, presentation::Region, selection_actions::SelectionTarget,
@@ -10,6 +10,7 @@ pub struct ActionPopup {
     anchor: egui::Pos2,
     layer: egui::LayerId,
     opened_frame: u64,
+    presentation_parent: Option<Region>,
 }
 
 pub fn current(w: &Workspace) -> Option<SelectionTarget> {
@@ -66,9 +67,72 @@ pub fn current(w: &Workspace) -> Option<SelectionTarget> {
 }
 
 pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
-    current(w)
-        .map(|target| descriptors(w, &target))
-        .unwrap_or_default()
+    let Some(target) = current(w) else {
+        return vec![];
+    };
+    let mut elements = descriptors(w, &target);
+    for action in &mut elements {
+        if let Some(data) = action.data.as_object_mut() {
+            data.insert(
+                "classes".into(),
+                serde_json::json!(["menu-item", "selection-action"]),
+            );
+        }
+    }
+    let groups = elements
+        .iter()
+        .filter_map(|element| {
+            element
+                .data
+                .get("group")
+                .and_then(serde_json::Value::as_str)
+        })
+        .map(str::to_owned)
+        .collect::<std::collections::BTreeSet<_>>();
+    for group in groups {
+        elements.push(cad_core::presentation::SemanticElement {
+            id: format!("selection-group/{group}"),
+            role: "selection-action-group".into(),
+            label: group,
+            value: None,
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec!["selection-popup".into()],
+            data: serde_json::json!({"presentation_control":true}),
+        });
+    }
+    for (id, role, label, commands) in [
+        (
+            "selection-popup",
+            "selection-actions",
+            title(w, &target),
+            vec![],
+        ),
+        (
+            "selection-popup.title",
+            "selection-title",
+            title(w, &target),
+            vec![],
+        ),
+        (
+            "selection-popup.dismiss",
+            "dismiss-action",
+            "Dismiss actions".into(),
+            vec!["presentation.selection-dismiss".into()],
+        ),
+    ] {
+        elements.push(cad_core::presentation::SemanticElement {
+            id: id.into(),
+            role: role.into(),
+            label,
+            value: None,
+            state: "ready".into(),
+            commands,
+            relationships: vec!["workspace.viewport".into()],
+            data: serde_json::json!({"presentation_control":true,"target":target}),
+        });
+    }
+    elements
 }
 
 fn descriptors(
@@ -146,6 +210,14 @@ pub fn open(w: &mut Workspace, response: &egui::Response, anchor: egui::Pos2) {
             anchor,
             layer: response.layer_id,
             opened_frame: response.ctx.cumulative_frame_nr(),
+            presentation_parent: controls::current_target().map(|target| Region {
+                id: target.node.id,
+                role: target.node.role,
+                classes: target.node.classes,
+                component: None,
+                rect: [0.; 4],
+                resizable: false,
+            }),
         });
     }
 }
@@ -242,7 +314,19 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
         classes: vec![],
         resizable: false,
     };
-    let props = w.theme.properties(&region, &w.view.active_layout, "ready");
+    let target = popup
+        .presentation_parent
+        .as_ref()
+        .map(|parent| {
+            w.layout
+                .style_target(parent, &w.view.active_layout, "ready")
+                .child(&region.id, &region.role, &region.classes, "ready")
+        })
+        .unwrap_or_else(|| {
+            w.layout
+                .style_target(&region, &w.view.active_layout, "ready")
+        });
+    let props = w.theme.properties_for(&target);
     if props.get("display").is_some_and(|v| v == "none") {
         return;
     }
@@ -253,14 +337,17 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
             .filter(|v| v.is_finite())
             .unwrap_or(default)
     };
-    let width = number("width", 232.).clamp(160., ctx.content_rect().width().max(160.));
+    let width = number("width", 232.)
+        .max(number("min-width", 0.))
+        .min(number("max-width", ctx.content_rect().width()))
+        .max(0.);
     let mut frame =
-        egui::Frame::popup(&ctx.global_style()).inner_margin(number("padding", 8.).clamp(0., 32.));
+        egui::Frame::popup(&ctx.global_style()).inner_margin(number("padding", 8.).max(0.));
     if let Some(color) = props.get("background").and_then(|v| ui::color(v)) {
         frame.fill = color;
     }
     frame.corner_radius =
-        egui::CornerRadius::same(number("border-radius", 6.).clamp(0., 32.) as u8);
+        egui::CornerRadius::same(number("border-radius", 6.).clamp(0., 255.) as u8);
     if let Some(border) = props.get("border") {
         let mut words = border.split_whitespace();
         let width = words
@@ -268,7 +355,7 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
             .and_then(|v| v.trim_end_matches("px").parse::<f32>().ok())
             .filter(|v| v.is_finite())
             .unwrap_or(1.)
-            .clamp(0., 8.);
+            .max(0.);
         if let Some(color) = words.next_back().and_then(ui::color) {
             frame.stroke = egui::Stroke::new(width, color);
         }
@@ -294,32 +381,30 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
         egui::PopupCloseBehavior::CloseOnClickOutside
     })
     .show(|ui| {
-        ui.set_width(width);
-        if let Some(color) = props.get("color").and_then(|v| ui::color(v)) {
-            ui.visuals_mut().override_text_color = Some(color);
-        }
-        ui.style_mut().override_font_id = Some(egui::FontId::proportional(
-            number("font-size", 12.).clamp(8., 32.),
-        ));
-        ui.spacing_mut().item_spacing.y = number("gap", 3.).clamp(0., 24.);
-        egui::ScrollArea::vertical()
-            .max_height(
-                number("height", ctx.content_rect().height() - 32.)
-                    .clamp(80., ctx.content_rect().height().max(80.)),
-            )
-            .show(ui, |ui| contents(ui, w, &popup.target));
+        controls::with_target(target, ui, |ui| {
+            ui.set_width(width);
+            if let Some(color) = props.get("color").and_then(|v| ui::color(v)) {
+                ui.visuals_mut().override_text_color = Some(color);
+            }
+            ui.style_mut().override_font_id =
+                Some(egui::FontId::proportional(number("font-size", 12.).max(1.)));
+            ui.spacing_mut().item_spacing.y = number("gap", 3.).max(0.);
+            egui::ScrollArea::vertical()
+                .max_height(
+                    number("height", ctx.content_rect().height() - 32.)
+                        .max(number("min-height", 0.))
+                        .min(number("max-height", ctx.content_rect().height()))
+                        .max(0.),
+                )
+                .show(ui, |ui| contents(ui, w, &popup.target));
+        })
     });
     if open {
         w.selection_popup = Some(popup);
     }
 }
 
-pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) {
-    let actions = descriptors(w, target);
-    if actions.is_empty() {
-        ui.weak("Selection is no longer available");
-        return;
-    }
+fn title(w: &Workspace, target: &SelectionTarget) -> String {
     let name = w
         .session
         .visible()
@@ -328,7 +413,7 @@ pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) 
         .and_then(|p| p.features.iter().find(|f| f.id == target.feature()))
         .map(|f| f.name.as_str())
         .unwrap_or("Selection");
-    let title = match target {
+    match target {
         SelectionTarget::Geometry { reference, .. } => format!(
             "{} · {name}",
             match reference.topology.as_str() {
@@ -368,14 +453,37 @@ pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) 
                 _ => "Selection".into(),
             }
         }
-    };
+    }
+}
+
+pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) {
+    let actions = descriptors(w, target);
+    if actions.is_empty() {
+        ui.weak("Selection is no longer available");
+        return;
+    }
+    let title = title(w, target);
     ui.horizontal(|ui| {
-        ui.strong(title);
+        controls::label(
+            ui,
+            "selection-popup.title",
+            "selection-title",
+            &[],
+            &title,
+            "ready",
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .small_button("×")
-                .on_hover_text("Dismiss actions · Esc")
-                .clicked()
+            if controls::button(
+                ui,
+                "selection-popup.dismiss",
+                "dismiss-action",
+                &["menu-item"],
+                "×",
+                true,
+                false,
+            )
+            .on_hover_text("Dismiss actions · Esc")
+            .clicked()
             {
                 ui.close();
             }
@@ -390,17 +498,28 @@ pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) 
             .unwrap_or("");
         if next != group {
             ui.separator();
-            ui.weak(next);
+            controls::label(
+                ui,
+                &format!("selection-group/{next}"),
+                "selection-action-group",
+                &[],
+                next,
+                "ready",
+            );
             group = next;
         }
-        if ui
-            .add_enabled(
-                element.state != "disabled",
-                egui::Button::new(&element.label).min_size(egui::vec2(ui.available_width(), 24.)),
-            )
-            .on_hover_text(element.value.as_deref().unwrap_or(&element.label))
-            .on_disabled_hover_text(element.value.as_deref().unwrap_or(&element.label))
-            .clicked()
+        if controls::button(
+            ui,
+            &element.id,
+            &element.role,
+            &["menu-item", "selection-action"],
+            &element.label,
+            element.state != "disabled",
+            element.state == "selected",
+        )
+        .on_hover_text(element.value.as_deref().unwrap_or(&element.label))
+        .on_disabled_hover_text(element.value.as_deref().unwrap_or(&element.label))
+        .clicked()
         {
             execute(w, target, &element.commands[0]);
             ui.close();
