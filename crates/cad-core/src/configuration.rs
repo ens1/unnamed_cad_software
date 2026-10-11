@@ -5,7 +5,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
-pub const CONTRACT_VERSION: u32 = 1;
+pub mod dimensions;
+pub use dimensions::{DimensionField, FIELD_CONTRACT_VERSION};
+pub const CONTRACT_VERSION: u32 = 3;
+fn supported_version(value: u32) -> bool {
+    (1..=CONTRACT_VERSION).contains(&value)
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum BomName {
@@ -30,6 +35,9 @@ pub struct Overrides {
     /// Native parameter IDs. Part legacy maps remain readable; these values take precedence.
     #[serde(default)]
     pub parameters: BTreeMap<Id, Expr>,
+    /// Feature IDs in the owning part and typed expression paths within their operations.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub feature_dimensions: BTreeMap<Id, BTreeMap<String, Expr>>,
     #[serde(default)]
     pub features: BTreeMap<Id, bool>,
     #[serde(default)]
@@ -148,6 +156,13 @@ pub fn definitions(doc: &Document, definition: &str) -> BTreeMap<Id, Definition>
 }
 fn merge(target: &mut Overrides, next: &Overrides) {
     target.parameters.extend(next.parameters.clone());
+    for (feature, fields) in &next.feature_dimensions {
+        target
+            .feature_dimensions
+            .entry(feature.clone())
+            .or_default()
+            .extend(fields.clone());
+    }
     target.features.extend(next.features.clone());
     target.sketches.extend(next.sketches.clone());
     target.components.extend(next.components.clone());
@@ -220,12 +235,68 @@ fn require_keys<'a>(
     }
     Ok(())
 }
+/// Discover source fields by native feature identity; only actual `Expr` fields qualify.
+pub fn dimension_fields(doc: &Document, definition: &str) -> Result<Vec<DimensionField>> {
+    let Some(part) = doc.parts.get(definition) else {
+        if doc.assemblies.contains_key(definition) {
+            return Ok(Vec::new());
+        }
+        return Err(invalid("Feature dimension owner is missing"));
+    };
+    part.features
+        .iter()
+        .map(dimensions::fields)
+        .collect::<Result<Vec<_>>>()
+        .map(|groups| groups.into_iter().flatten().collect())
+}
+fn validate_dimensions(
+    part: &Part,
+    overrides: &BTreeMap<Id, BTreeMap<String, Expr>>,
+) -> Result<()> {
+    for (id, fields) in overrides {
+        let feature = part
+            .features
+            .iter()
+            .find(|feature| &feature.id == id)
+            .ok_or_else(|| invalid(format!("Unknown dimensional feature {id} in {}", part.name)))?;
+        let available = dimensions::fields(feature)?
+            .into_iter()
+            .map(|field| field.path)
+            .collect::<BTreeSet<_>>();
+        let operation = serde_json::to_value(&feature.operation)?;
+        for (path, expression) in fields {
+            dimensions::resolve_pointer(&operation, path)
+                .map_err(|error| invalid(format!("{} {path}: {error}", feature.name)))?;
+            if !available.contains(path) {
+                return Err(invalid(format!(
+                    "{} no longer has dimensional field {path}; remove or replace its configuration override",
+                    feature.name
+                )));
+            }
+            crate::expression::references(&expression.0)
+                .map_err(|error| invalid(format!("{} {path}: {error}", feature.name)))?;
+        }
+    }
+    Ok(())
+}
+fn dimension_column(key: &str) -> Result<(&str, &str)> {
+    let (feature, path) = key.split_once(":/").ok_or_else(|| {
+        invalid("Dimension columns require dimension:FEATURE_ID:/operation/field")
+    })?;
+    if feature.is_empty() || path.is_empty() {
+        return Err(invalid(
+            "Dimension column feature identity and field cannot be empty",
+        ));
+    }
+    // Keep the initial slash consumed by the separator above.
+    Ok((feature, &key[feature.len() + 1..]))
+}
 pub fn validate(doc: &Document) -> Result<()> {
     for definition in doc.parts.keys().chain(doc.assemblies.keys()) {
         let configurations = definitions(doc, definition);
         let mut used = BTreeSet::new();
         for (key, c) in &configurations {
-            if c.version != CONTRACT_VERSION
+            if !supported_version(c.version)
                 || c.id != *key
                 || key.is_empty()
                 || key.len() > 256
@@ -261,6 +332,7 @@ pub fn validate(doc: &Document) -> Result<()> {
                     |id| p.features.iter().any(|f| f.id == id),
                     "feature",
                 )?;
+                validate_dimensions(p, &o.feature_dimensions)?;
                 require_keys(
                     o.sketches.keys(),
                     |id| p.sketches.contains_key(id),
@@ -304,7 +376,11 @@ pub fn validate(doc: &Document) -> Result<()> {
                     },
                     "mate",
                 )?;
-                if !o.features.is_empty() || !o.sketches.is_empty() || o.material.is_some() {
+                if !o.features.is_empty()
+                    || !o.feature_dimensions.is_empty()
+                    || !o.sketches.is_empty()
+                    || o.material.is_some()
+                {
                     return Err(invalid("Feature/sketch/material overrides require a part"));
                 }
                 for (id, config) in &o.component_configurations {
@@ -329,6 +405,20 @@ pub fn validate(doc: &Document) -> Result<()> {
     Ok(())
 }
 fn apply_part(part: &mut Part, o: &Overrides) -> Result<()> {
+    validate_dimensions(part, &o.feature_dimensions)?;
+    for feature in &mut part.features {
+        if let Some(fields) = o.feature_dimensions.get(&feature.id) {
+            let mut operation = serde_json::to_value(&feature.operation)?;
+            for (path, expression) in fields {
+                let (pointer, _) = dimensions::resolve_pointer(&operation, path)?;
+                let value = operation.pointer_mut(&pointer).ok_or_else(|| {
+                    invalid(format!("{} has no dimensional field {path}", feature.name))
+                })?;
+                *value = serde_json::to_value(expression)?;
+            }
+            feature.operation = serde_json::from_value(operation)?;
+        }
+    }
     for (id, e) in &o.parameters {
         part.parameters
             .get_mut(id)
@@ -556,6 +646,11 @@ pub fn csv(table: &Table) -> Result<String> {
         for key in c.overrides.parameters.keys() {
             keys.insert(format!("parameter:{key}"));
         }
+        for (feature, fields) in &c.overrides.feature_dimensions {
+            for path in fields.keys() {
+                keys.insert(format!("dimension:{feature}:{path}"));
+            }
+        }
         for key in c.overrides.features.keys() {
             keys.insert(format!("feature:{key}"));
         }
@@ -639,6 +734,14 @@ fn cell(c: &Definition, h: &str) -> Result<String> {
                     .get(key)
                     .map(|e| e.0.clone())
                     .unwrap_or_default(),
+                "dimension" => {
+                    let (feature, path) = dimension_column(key)?;
+                    o.feature_dimensions
+                        .get(feature)
+                        .and_then(|fields| fields.get(path))
+                        .map(|e| e.0.clone())
+                        .unwrap_or_default()
+                }
                 "feature" => o
                     .features
                     .get(key)
@@ -798,6 +901,13 @@ fn set_cell(c: &mut Definition, h: &str, value: &str) -> Result<()> {
                 "parameter" => {
                     o.parameters.insert(key.into(), value.into());
                 }
+                "dimension" => {
+                    let (feature, path) = dimension_column(key)?;
+                    o.feature_dimensions
+                        .entry(feature.into())
+                        .or_default()
+                        .insert(path.into(), value.into());
+                }
                 "feature" => {
                     o.features.insert(key.into(), boolean(value)?);
                 }
@@ -860,8 +970,15 @@ fn normalize_map<T>(
     }
     Ok(())
 }
-pub fn import(doc: &mut Document, mut table: Table, replace: bool) -> Result<()> {
-    if table.version != CONTRACT_VERSION {
+pub fn import(doc: &mut Document, table: Table, replace: bool) -> Result<()> {
+    let mut candidate = doc.clone();
+    import_into(&mut candidate, table, replace)?;
+    validate(&candidate)?;
+    *doc = candidate;
+    Ok(())
+}
+fn import_into(doc: &mut Document, mut table: Table, replace: bool) -> Result<()> {
+    if !supported_version(table.version) {
         return Err(invalid("Unsupported design-table version"));
     }
     let owner = table.definition.clone();
@@ -885,6 +1002,10 @@ pub fn import(doc: &mut Document, mut table: Table, replace: bool) -> Result<()>
         .into_iter()
         .collect::<Vec<_>>();
     for c in &mut table.configurations {
+        if !supported_version(c.version) {
+            return Err(invalid("Unsupported configuration version"));
+        }
+        c.version = CONTRACT_VERSION;
         if let Some(parent) = &mut c.parent {
             *parent = if let Some(id) = identities.get(parent) {
                 id.clone()
@@ -913,6 +1034,15 @@ pub fn import(doc: &mut Document, mut table: Table, replace: bool) -> Result<()>
             .ok_or_else(|| invalid("Design-table owner is missing"))?;
         normalize_map(&mut o.parameters, &parameter_choices, "parameter")?;
         if let Some(p) = doc.parts.get(&owner) {
+            normalize_map(
+                &mut o.feature_dimensions,
+                &p.features
+                    .iter()
+                    .map(|f| (f.id.clone(), f.name.clone()))
+                    .collect::<Vec<_>>(),
+                "feature dimension owner",
+            )?;
+            validate_dimensions(p, &o.feature_dimensions)?;
             normalize_map(
                 &mut o.features,
                 &p.features
@@ -1337,6 +1467,19 @@ pub fn semantic(
             .or_else(|| doc.assemblies.get(owner).map(|a| a.name.clone()))
             .unwrap_or_default();
         out.push(crate::presentation::SemanticElement {id:format!("configuration-table:{owner}"),role:"configuration-table".into(),label:format!("{name} configurations"),value:doc.active_configurations.get(owner).and_then(|id|names(doc,owner).get(id).cloned()),state:state.into(),commands:vec!["configurations".into(),"equations".into()],relationships:vec![owner.clone()],data:serde_json::json!({"contract":"tcad.configuration","version":CONTRACT_VERSION,"owner":owner,"source":table(doc,owner),"selected":doc.active_configurations.get(owner),"evaluated":evaluation.and_then(|e|e.definitions.get(owner)),"local_table_formats":["json","csv"]})});
+        for field in dimension_fields(doc, owner).unwrap_or_default() {
+            out.push(crate::presentation::SemanticElement {
+                id: format!("feature-dimension:{owner}/{}{}", field.feature, field.path),
+                role: "feature-dimension-source".into(),
+                label: field.label.clone(),
+                value: Some(field.expression.0.clone()),
+                state: state.into(),
+                commands: vec!["configurations".into(), "equations".into()],
+                relationships: vec![owner.clone(), field.feature.clone()],
+                data: serde_json::json!({"contract":"tcad.configuration.dimension-source","version":FIELD_CONTRACT_VERSION,
+                    "owner":owner,"source":field,"json":field.expression.0,"kind":"expression","editable":false}),
+            });
+        }
         for configuration in definitions(doc, owner).values() {
             out.push(crate::presentation::SemanticElement {id:format!("{owner}@{}",configuration.id),role:"configuration".into(),label:configuration.name.clone(),value:Some(configuration.description.clone()),state:if doc.active_configurations.get(owner)==Some(&configuration.id){"selected"}else{state}.into(),commands:vec!["configurations".into()],relationships:configuration.parent.iter().map(|id|format!("{owner}@{id}")).chain(std::iter::once(owner.clone())).collect(),data:serde_json::json!({"version":CONTRACT_VERSION,"owner":owner,"source":configuration,"evaluated":evaluation.and_then(|e|e.definitions.get(owner)).and_then(|d|d.get(&configuration.id)),"controls":{"parameters":"unit-expression","suppression":"inherit-resolved-suppressed","material":"inherit-material","component_configurations":"inherit-selected-named","properties":"text-map","bom":"inherit-exclusion-naming"}})});
         }

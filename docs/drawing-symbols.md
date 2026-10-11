@@ -1,0 +1,41 @@
+# Surface requirements and weld symbols
+
+TCAD drawing contract version 5 adds saved version 1 surface-finish and weld-symbol intent. These definitions are independent of widgets, font objects, kernel surfaces and viewport meshes. Their paper dimensions remain f64 millimeters; manufacturing quantities are dimensional expressions. Existing sheets and annotations remain readable without a document migration.
+
+Select an edge or planar face on the model, then use **Surface Finish Symbol** or **Weld Symbol** in command search, or **Drawings → Add Annotation** on a sheet. A new sheet is created when none exists. The selected geometry becomes an associative leader target; an unselected symbol starts with explicit source coordinates. The property manager offers sketch-point references, selected exact edge endpoints or a selected planar-face origin, instance scope, editable edge parameter, view, and paper offsets. Curve/face references that disappear, become ambiguous, or require an unsupported exact carrier fail validation rather than becoming unrelated coordinates.
+
+The drawing property manager edits the same pending source as custom layouts. **Apply Drawing Changes** waits for the current validated evaluation and commits the shared operation; **Cancel** restores its starting checkpoint. Invalid editable input remains available for correction while the last valid definitions and geometry remain available. The paper preview, PDF and drawing DXF consume one vector generator. Symbol edits therefore do not have separate export-only drawing implementations.
+
+## Surface finish
+
+The saved options include:
+
+- ISO 1302 legacy and ASME Y14.36 drafting conventions, with different roughness-field placement.
+- Basic, material-removal-required and material-removal-prohibited symbols.
+- Ra, Rz or Rq parameter, maximum and optional minimum roughness, and printed micrometers or microinches.
+- Optional sampling length and removal allowance, process/treatment text and direction of lay: none, parallel, perpendicular, crossed, multidirectional, circular, radial or particulate.
+- Text height, symbol height, decimal precision and associative leader offsets.
+
+Expressions accept `um`, `µm`, `micrometer`, `micrometers`, `uin`, `microinch` and `microinches`, in addition to existing model length units. Values retain millimeter authority: `3.2 um` is `0.0032 mm`, and one microinch is `0.0000254 mm`. A unitless input is interpreted by the normal expression rules, so use an explicit unit for roughness. Switching printed units converts the evaluated physical quantity, not the saved expression. Parameters resolve against the document's selected configurations.
+
+Maximum roughness must be positive, minimum cannot exceed maximum, and sampling length must be positive. A removal-prohibited symbol cannot specify a removal allowance. The implementation records the named roughness parameter and specified limits; it does not derive a measured roughness from geometric tessellation. ISO 21920 specification operators, evaluation/filter rules, complete standard libraries, general surface-wide application and automatic process verification remain outside the current symbol subset. These conventions are not a claim of standards certification.
+
+## Weld symbols
+
+AWS A2.4 uses a single reference line, arrow-side symbols below and other-side symbols above. ISO 2553 System A uses a continuous arrow-side reference and a dashed other-side identification line; the identification line can move above or below. System B uses the single-line side convention. Equal two-sided System A joints omit the redundant identification line. The seven saved joint families are fillet, square groove/butt, V groove/butt, bevel groove/butt, plug/slot, spot and seam.
+
+Independent arrow-side and other-side records contain an optional size, length, intermittent center-to-center pitch, count, contour and AWS finish letter. ISO fillets distinguish `z` leg and `a` throat size. Flat, convex and concave contours use geometric strokes; supported AWS finishing letters are C, G, H, M, R and U. ISO process information goes in the tail. All-around, field-weld flags and process/specification tail text are separate saved intent.
+
+Pitch always means center-to-center spacing in the TCAD source, so changing the drafting convention preserves the physical intent. AWS prints length-pitch; ISO prints number × length with the clear space `pitch - length` in parentheses. Pitch must exceed segment length. A count requires a pitch and length; count is 2–9999. Staggered symbols require intermittent fillets on both sides. Millimeter/inch display converts quantities while keeping their dimensional expressions intact. Each symbol prints an explicit **Weld dimensions: mm** or **Weld dimensions: in** label in preview, PDF and DXF, so its unit choice remains unambiguous on mixed-unit sheets. Converted display quantities must remain finite; unit-conversion overflow is rejected before validation can accept a symbol.
+
+Spot/seam contour modifiers are rejected. ISO spot/seam interface symbols are centered on the reference line and require one joint record; mixed or paired interface symbols are rejected. AWS finish letters require a contour, and explicit throat prefixes require an ISO fillet. More advanced groove preparation dimensions, unequal fillet legs, secondary fillets, backing/spacers, additional reference lines, weld tables, model-attached 3D PMI, qualification/strength calculations and physical weld bead geometry remain gaps. A drawing weld symbol specifies manufacturing intent; it does not prove a weld exists in the model or satisfies a process standard.
+
+## Presentation and output limits
+
+Both symbol types publish ordinary `drawing-annotation` elements and stable `drawing-annotation-field` descriptors under their annotation identity. Descriptors include current typed values, optional-value enable toggles, choices, dimensional units, source ownership and `drawing.sheet-edit` actions. The registered `drawing-annotation` value adapter reads the latest staged sheet by stable sheet/annotation identity, preventing duplicate controls from overwriting each other's newer input. `drawing.surface-finish-add`, `drawing.weld-symbol-add` and `drawing.annotation-delete` use the same drawing transaction path as the docked property manager.
+
+New task controls use the shared presentation style adapter and stable field IDs. For example, a custom layout can bind a roughness field at `<annotation-id>::symbol/kind/symbol/maximum` or repeat elements with role `drawing-annotation-field`; CSS can style that role or the individual identity. Optional controls end in `/enabled` and remain boolean values even when the underlying expression or side record is absent. The complete renderer-neutral saved definition remains in each annotation's semantic data and Advanced Source.
+
+Paper text height is 1–10 mm, symbol height is 3–20 mm and must be at least 1.5 times text height, reference lines are 24–200 mm, precision is 0–6, and a leader must span at least 3 paper mm. Process/tail text is capped at 128 printable characters, and individual expressions at 1024. Built-in PDF output has the existing Latin annotation font boundary; unsupported characters fail explicitly. Symbol artwork uses lines/circles and shared vector text, with drawing curves remaining independent exact supported carriers. Direct paper dragging, automatic collision avoidance and complete standard-specific symbol libraries remain unfinished.
+
+The source conventions and bounds were checked against official [SolidWorks surface-finish options](https://help.solidworks.com/2021/English/solidworks/sldworks/HIDD_DVE_SFSYMBOL.htm), [SolidWorks weld properties](https://help.solidworks.com/2024/English/SolidWorks/sldworks/HIDD_WELD.htm), [Onshape weld authoring](https://cad.onshape.com/help/Content/Drawing/weld_symbol.htm), [Autodesk weld standard options](https://help.autodesk.com/view/fusion360/ENU/?contextId=DWG-REF-WELDING) and [Creo's ISO intermittent-weld spacing definition](https://support.ptc.com/help/creo/creo_pma/r12/usascii/welding/To_Define_Fillet_Weld_Preferences-ISO.html), retrieved 2026-10-11. These references establish practical workflow and convention context, not certification of TCAD's output.

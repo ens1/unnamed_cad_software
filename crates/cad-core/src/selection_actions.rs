@@ -773,8 +773,15 @@ pub fn sketch_project(
             .is_empty()
             .then_some("Create a saved local block definition first"),
     ));
+    out.push(descriptor(
+        target,
+        "sketch.block-import",
+        "Insert Block From File…",
+        "Block",
+        None,
+    ));
     if members.iter().any(|member|crate::sketch_blocks::instance_for_member(sketch,member).is_some()) || entities.iter().any(|entity|matches!(entity,a::SketchEntity::Point{point} if sketch.block_instances.values().any(|instance|&instance.anchor==point))) {
-        for(command,label)in [("sketch.block-edit","Edit Block Definition…"),("sketch.block-instance","Block Instance Properties…"),("sketch.block-explode","Explode Block")] {out.push(descriptor(target,command,label,"Block",None));}
+        for(command,label)in [("sketch.block-edit","Edit Block Definition…"),("sketch.block-instance","Block Instance Properties…"),("sketch.block-explode","Explode Block"),("sketch.block-export","Export Block…")] {out.push(descriptor(target,command,label,"Block",None));}
     }
     let corner = entities.iter().find_map(|e| {
         if let a::SketchEntity::Point { point } = e {

@@ -291,6 +291,17 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     ));
     elements.extend(crate::selection_ui::semantics(w));
     elements.extend(crate::sketch_edit_ui::semantics(w));
+    for element in crate::sketch_blocks_ui::semantics(w) {
+        if let Some(existing) = elements
+            .iter_mut()
+            .find(|existing| existing.id == element.id)
+        {
+            *existing = element;
+        } else {
+            elements.push(element);
+        }
+    }
+    elements.extend(crate::configuration_ui::semantics(w));
     elements.extend(crate::sketch_ui::dimension_semantics(w));
     elements.extend(cad_core::navigation::semantic_fields(&w.view.navigation));
     elements.extend(crate::presentation_resources::semantics(w));
@@ -566,6 +577,21 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "sketch-block",
+        crate::sketch_blocks_ui::set_value,
+        crate::sketch_blocks_ui::current_value,
+    );
+    adapters.register(
+        "configuration-dimension",
+        crate::configuration_ui::set_value,
+        crate::configuration_ui::current_value,
+    );
+    adapters.register(
+        "drawing-annotation",
+        crate::drawing_ui::set_value,
+        crate::drawing_ui::current_value,
+    );
     adapters.register("document-pointer", set_document_field, |w, element| {
         serde_json::to_value(w.session.visible())
             .ok()?

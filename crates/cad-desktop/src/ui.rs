@@ -1338,6 +1338,9 @@ fn model_view(
     }
 }
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if crate::sketch_blocks_ui::resource_action(w, cmd) {
+        return;
+    }
     if crate::presentation_resources::action(w, cmd) {
         return;
     }
@@ -1403,6 +1406,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
             | "sketch.edit-text"
             | "sketch.block-create"
             | "sketch.block-insert"
+            | "sketch.block-import"
+            | "sketch.block-export"
             | "sketch.block-edit"
             | "sketch.block-instance"
             | "sketch.block-explode"

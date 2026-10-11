@@ -4,7 +4,8 @@ use crate::*;
 use nalgebra::{Matrix2, Rotation2, Vector2};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-pub const CONTRACT_VERSION: u32 = 1;
+pub mod resources;
+pub const CONTRACT_VERSION: u32 = 2;
 pub const MAX_MEMBERS: usize = 4096;
 pub const MAX_INSTANCES: usize = 256;
 pub type Prepared = BTreeMap<Id, Sketch>;
@@ -15,6 +16,9 @@ pub struct Definition {
     pub points: BTreeMap<Id, [f64; 2]>,
     pub members: BTreeMap<Id, SketchMember>,
     pub constraints: Vec<SketchConstraint>,
+    /// Pinned library provenance. Geometry remains self-contained local source.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<resources::Link>,
 }
 impl Definition {
     pub fn expressions(&self) -> Vec<&Expr> {
@@ -94,6 +98,9 @@ pub fn source(key: &str, definition: &Definition) -> Sketch {
     }
 }
 pub fn validate_definition(key: &str, definition: &Definition) -> Result<()> {
+    if let Some(link) = &definition.resource {
+        resources::validate_link(link)?;
+    }
     if definition.name.trim().is_empty()
         || definition.members.is_empty()
         || definition.members.len() > MAX_MEMBERS
@@ -505,6 +512,7 @@ pub fn create(
             .map(|member| (member.clone(), sketch.members[member].clone()))
             .collect(),
         constraints: internal.clone(),
+        resource: None,
     };
     validate_definition(&key, &definition)?;
     let mut candidate = sketch.clone();

@@ -666,6 +666,8 @@ pub const SKETCH_TOOLS: &[(&str, &str, &str)] = &[
     ("sketch.edit-equation", "Edit Equation Curve", "Edit"),
     ("sketch.block-create", "Create Block", "Block"),
     ("sketch.block-insert", "Insert Block", "Block"),
+    ("sketch.block-import", "Insert Block From File", "Block"),
+    ("sketch.block-export", "Export Sketch Block", "Block"),
     ("sketch.block-edit", "Edit Block Definition", "Block"),
     (
         "sketch.block-instance",

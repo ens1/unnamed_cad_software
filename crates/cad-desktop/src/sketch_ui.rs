@@ -161,6 +161,11 @@ pub fn semantic_action(w: &mut Workspace, element: &presentation::SemanticElemen
             };
             crate::sketch_edit_ui::begin_block(w, mode, block_key);
         }
+        "sketch.block-export" if block_key.is_some() => {
+            if let Some(key) = block_key {
+                crate::sketch_blocks_ui::export(w, &key);
+            }
+        }
         "sketch.block-explode" if block_key.is_some() => {
             if let Some(key) = block_key {
                 explode_block(w, &key);
@@ -889,6 +894,20 @@ pub fn action(w: &mut Workspace, command: &str) {
         }
         "sketch.block-insert" => {
             crate::sketch_edit_ui::begin_block(w, crate::sketch_blocks_ui::Mode::Insert, None)
+        }
+        "sketch.block-import" => {
+            crate::sketch_edit_ui::begin_block(w, crate::sketch_blocks_ui::Mode::Import, None)
+        }
+        "sketch.block-export" => {
+            let key = w
+                .sketch
+                .as_ref()
+                .and_then(|s| selected_block(&sketch::sketch_definition(s), &s.selection));
+            if let Some(key) = key {
+                crate::sketch_blocks_ui::export(w, &key);
+            } else {
+                w.status = "Select a block outline or its insertion anchor to export".into();
+            }
         }
         "sketch.block-edit" | "sketch.block-instance" | "sketch.block-explode" => {
             let key = w

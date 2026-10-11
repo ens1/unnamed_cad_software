@@ -829,6 +829,8 @@ fn retarget_drawing_occurrence(
                 }
                 AnnotationKind::Leader { target, .. }
                 | AnnotationKind::Datum { target, .. }
+                | AnnotationKind::SurfaceFinish { target, .. }
+                | AnnotationKind::WeldSymbol { target, .. }
                 | AnnotationKind::GeometricTolerance { target, .. } => {
                     point(&mut target.reference, &reaches, &ids)?;
                 }

@@ -257,6 +257,78 @@ fn properties(ui: &mut egui::Ui, w: &mut Workspace, c: &mut Definition) -> bool 
     w.fields.insert("configuration-property-name".into(), key);
     changed
 }
+fn dimension_cell(
+    ui: &mut egui::Ui,
+    owner: &str,
+    c: &mut Definition,
+    field: &configuration::DimensionField,
+    resolved: Option<&configuration::Resolved>,
+) -> bool {
+    let inherited = resolved
+        .and_then(|r| r.overrides.feature_dimensions.get(&field.feature))
+        .and_then(|fields| fields.get(&field.path))
+        .unwrap_or(&field.expression);
+    let mut explicit = c
+        .overrides
+        .feature_dimensions
+        .get(&field.feature)
+        .is_some_and(|fields| fields.contains_key(&field.path));
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        if ui
+            .checkbox(&mut explicit, "")
+            .on_hover_text("Override this feature dimension in this configuration")
+            .changed()
+        {
+            changed = true;
+            if explicit {
+                c.overrides
+                    .feature_dimensions
+                    .entry(field.feature.clone())
+                    .or_default()
+                    .insert(field.path.clone(), inherited.clone());
+            } else if let Some(fields) = c.overrides.feature_dimensions.get_mut(&field.feature) {
+                fields.remove(&field.path);
+                if fields.is_empty() {
+                    c.overrides.feature_dimensions.remove(&field.feature);
+                }
+            }
+        }
+        if let Some(expression) = c
+            .overrides
+            .feature_dimensions
+            .get_mut(&field.feature)
+            .and_then(|fields| fields.get_mut(&field.path))
+        {
+            let id = dimension_id(owner, &c.id, field, "expression");
+            changed |= crate::presentation_controls::expression(ui, &id, &field.label, expression);
+        } else {
+            crate::presentation_controls::label(
+                ui,
+                &dimension_id(owner, &c.id, field, "expression"),
+                "configuration-dimension-field",
+                &["inherited"],
+                &format!("{}: {}", field.label, inherited.0),
+                "inherited",
+            );
+        }
+    });
+    if changed {
+        c.version = configuration::CONTRACT_VERSION;
+    }
+    changed
+}
+fn dimension_id(
+    owner: &str,
+    configuration: &str,
+    field: &configuration::DimensionField,
+    kind: &str,
+) -> String {
+    format!(
+        "configuration-dimension:{owner}/{configuration}/{}{}:{kind}",
+        field.feature, field.path
+    )
+}
 fn fields(
     ui: &mut egui::Ui,
     w: &mut Workspace,
@@ -320,6 +392,25 @@ fn fields(
             }
         });
     if let Some(part) = doc.parts.get(owner) {
+        egui::CollapsingHeader::new("Feature dimensions")
+            .default_open(true)
+            .show(ui, |ui| {
+                let resolved = configuration::resolve(doc, owner, &c.id).ok();
+                for feature in &part.features {
+                    if let Ok(dimensions) = configuration::dimensions::fields(feature)
+                        && !dimensions.is_empty()
+                    {
+                        egui::CollapsingHeader::new(&feature.name)
+                            .id_salt(("configuration-dimensions", &feature.id))
+                            .show(ui, |ui| {
+                                for dimension in dimensions {
+                                    changed |= dimension_cell(ui, owner, c, &dimension, resolved.as_ref());
+                                }
+                            });
+                    }
+                }
+                ui.weak("Unchecked fields inherit. Expressions use the feature's normal units and may reference @parameters; the current worker preview validates the result.");
+            });
         egui::CollapsingHeader::new("Features")
             .default_open(true)
             .show(ui, |ui| {
@@ -619,8 +710,37 @@ fn table(ui: &mut egui::Ui, w: &mut Workspace, doc: &Document, owner: &str) {
             }
         }
     });
-    ui.small("Select a row to preview and edit its inherited equations, suppression, material and BOM values. Edit a parameter cell directly or select a row for all other values. CSV columns may reference parameter/feature/component names or stable IDs; blank cells inherit and suppression uses true/false. JSON preserves the complete native table.");
+    ui.small("Select a row to preview it. Parameter and feature dimension cells accept unit expressions. Unchecked cells inherit. CSV columns may use unique names or stable IDs; JSON preserves the native table.");
     let params = parameters(doc, owner);
+    let dimensions = configuration::dimension_fields(doc, owner).unwrap_or_default();
+    let mut filter = w
+        .fields
+        .get("configuration-dimension-filter")
+        .cloned()
+        .unwrap_or_default();
+    let mut show_dimensions = w
+        .fields
+        .get("configuration-show-dimensions")
+        .is_none_or(|value| value != "false");
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut show_dimensions, "Feature dimensions");
+        ui.add_enabled(
+            show_dimensions,
+            egui::TextEdit::singleline(&mut filter).hint_text("Filter feature or field…"),
+        );
+    });
+    w.fields
+        .insert("configuration-dimension-filter".into(), filter.clone());
+    w.fields.insert(
+        "configuration-show-dimensions".into(),
+        show_dimensions.to_string(),
+    );
+    let dimensions = dimensions
+        .into_iter()
+        .filter(|field| {
+            show_dimensions && field.label.to_lowercase().contains(&filter.to_lowercase())
+        })
+        .collect::<Vec<_>>();
     egui::ScrollArea::horizontal()
         .id_salt("configuration-grid-scroll")
         .show(ui, |ui| {
@@ -631,6 +751,10 @@ fn table(ui: &mut egui::Ui, w: &mut Workspace, doc: &Document, owner: &str) {
                     ui.strong("Parent");
                     for p in params.values() {
                         ui.strong(&p.name);
+                    }
+                    for field in &dimensions {
+                        ui.strong(&field.label)
+                            .on_hover_text(format!("dimension:{}:{}", field.feature, field.path));
                     }
                     ui.strong("Suppressed");
                     ui.end_row();
@@ -699,6 +823,12 @@ fn table(ui: &mut egui::Ui, w: &mut Workspace, doc: &Document, owner: &str) {
                                         );
                                     }
                                 });
+                            });
+                        }
+                        for field in &dimensions {
+                            ui.push_id((c.id.clone(), &field.feature, &field.path), |ui| {
+                                changed |=
+                                    dimension_cell(ui, owner, &mut c, field, resolved.as_ref());
                             });
                         }
                         ui.label(
@@ -915,4 +1045,209 @@ pub fn open_owner(w: &mut Workspace, owner: &str, configuration: Option<&str>, t
     });
     w.fields.insert("configuration-owner".into(), owner.into());
     select(w, owner, selected);
+}
+
+/// Typed configuration controls are independent of the docked table arrangement.
+pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+    if w.dialog.as_deref() != Some("configurations") {
+        return Vec::new();
+    }
+    let Some(owner) = owner(w) else {
+        return Vec::new();
+    };
+    let doc = w.session.visible();
+    let Ok(fields) = configuration::dimension_fields(doc, &owner) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for mut c in configuration::definitions(doc, &owner).into_values() {
+        if let Ok(local) = source(w)
+            && local.id == c.id
+        {
+            c = local;
+        }
+        let resolved = configuration::resolve(doc, &owner, &c.id).ok();
+        for dimension in &fields {
+            let explicit = c
+                .overrides
+                .feature_dimensions
+                .get(&dimension.feature)
+                .and_then(|fields| fields.get(&dimension.path));
+            let expression = explicit
+                .or_else(|| {
+                    resolved
+                        .as_ref()
+                        .and_then(|r| r.overrides.feature_dimensions.get(&dimension.feature))
+                        .and_then(|fields| fields.get(&dimension.path))
+                })
+                .unwrap_or(&dimension.expression);
+            for (field, value, editable) in [
+                ("override", serde_json::json!(explicit.is_some()), true),
+                (
+                    "expression",
+                    serde_json::json!(expression.0),
+                    explicit.is_some(),
+                ),
+            ] {
+                out.push(cad_core::presentation::SemanticElement {
+                    id: dimension_id(&owner, &c.id, dimension, field),
+                    role: "configuration-dimension-field".into(),
+                    label: format!("{} · {}{}", c.name, dimension.label, if field == "override" { " override" } else { "" }),
+                    value: Some(if field == "override" { explicit.is_some().to_string() } else { expression.0.clone() }),
+                    state: if explicit.is_some() { "overridden" } else { "inherited" }.into(),
+                    commands: Vec::new(),
+                    relationships: vec![owner.clone(), format!("{owner}@{}", c.id), dimension.feature.clone()],
+                    data: serde_json::json!({"contract":"tcad.configuration.dimension-field","version":configuration::FIELD_CONTRACT_VERSION,
+                        "setter":"configuration-dimension","owner":owner,"configuration":c.id,"feature":dimension.feature,
+                        "path":dimension.path,"field":field,"kind":if field=="override" {"boolean"}else{"expression"},
+                        "json":value,"editable":editable,"expression":true,"base_expression":dimension.expression.0,
+                        "current_pointer":dimension.pointer,"positional":dimension.positional,
+                        "accessibility_label":format!("{} {} {}",c.name,dimension.label,field)}),
+                });
+            }
+        }
+    }
+    out
+}
+
+fn dimension_identity(
+    element: &cad_core::presentation::SemanticElement,
+) -> Option<(&str, &str, &str, &str, &str)> {
+    Some((
+        element.data.get("owner")?.as_str()?,
+        element.data.get("configuration")?.as_str()?,
+        element.data.get("feature")?.as_str()?,
+        element.data.get("path")?.as_str()?,
+        element.data.get("field")?.as_str()?,
+    ))
+}
+pub fn current_value(
+    w: &Workspace,
+    element: &cad_core::presentation::SemanticElement,
+) -> Option<serde_json::Value> {
+    let (owner, id, feature, path, field) = dimension_identity(element)?;
+    let c = source(w)
+        .ok()
+        .filter(|c| c.id == id && self::owner(w).as_deref() == Some(owner))
+        .or_else(|| configuration::definitions(w.session.visible(), owner).remove(id))?;
+    let explicit = c
+        .overrides
+        .feature_dimensions
+        .get(feature)
+        .and_then(|fields| fields.get(path));
+    match field {
+        "override" => Some(serde_json::json!(explicit.is_some())),
+        "expression" => {
+            let fields = configuration::dimension_fields(w.session.visible(), owner).ok()?;
+            let base = fields
+                .iter()
+                .find(|field| field.feature == feature && field.path == path)?;
+            let resolved = configuration::resolve(w.session.visible(), owner, id).ok();
+            Some(serde_json::json!(
+                explicit
+                    .or_else(|| resolved
+                        .as_ref()
+                        .and_then(|r| r.overrides.feature_dimensions.get(feature))
+                        .and_then(|fields| fields.get(path)))
+                    .unwrap_or(&base.expression)
+                    .0
+            ))
+        }
+        _ => None,
+    }
+}
+pub fn set_value(
+    w: &mut Workspace,
+    element: &cad_core::presentation::SemanticElement,
+    value: serde_json::Value,
+) -> cad_core::Result<()> {
+    let (owner, id, feature, path, field) = dimension_identity(element).ok_or_else(|| {
+        cad_core::CadError::Invalid("Missing configuration dimension identity".into())
+    })?;
+    if w.dialog.as_deref() != Some("configurations")
+        || self::owner(w).as_deref() != Some(owner)
+        || w.tool_checkpoint.is_none()
+    {
+        return Err(cad_core::CadError::Invalid(
+            "Open this definition's Configurations editor before editing dimensions".into(),
+        ));
+    }
+    let fields = configuration::dimension_fields(w.session.visible(), owner)?;
+    let base = fields
+        .iter()
+        .find(|candidate| candidate.feature == feature && candidate.path == path)
+        .ok_or_else(|| {
+            cad_core::CadError::Invalid("This feature dimension no longer exists".into())
+        })?;
+    let mut c = if w.fields.get("configuration-editor").map(String::as_str) == Some(id) {
+        source(w)?
+    } else {
+        if !current_source_is_valid(w) {
+            return Err(cad_core::CadError::Invalid(
+                "Correct the current configuration source before editing another row".into(),
+            ));
+        }
+        configuration::definitions(w.session.visible(), owner)
+            .remove(id)
+            .ok_or_else(|| {
+                cad_core::CadError::Invalid("This configuration no longer exists".into())
+            })?
+    };
+    match field {
+        "override" => {
+            let enabled = value.as_bool().ok_or_else(|| {
+                cad_core::CadError::Invalid("A dimension override requires a boolean".into())
+            })?;
+            if enabled {
+                let resolved = configuration::resolve(w.session.visible(), owner, id)?;
+                let expression = resolved
+                    .overrides
+                    .feature_dimensions
+                    .get(feature)
+                    .and_then(|fields| fields.get(path))
+                    .unwrap_or(&base.expression)
+                    .clone();
+                c.overrides
+                    .feature_dimensions
+                    .entry(feature.into())
+                    .or_default()
+                    .entry(path.into())
+                    .or_insert(expression);
+            } else if let Some(fields) = c.overrides.feature_dimensions.get_mut(feature) {
+                fields.remove(path);
+                if fields.is_empty() {
+                    c.overrides.feature_dimensions.remove(feature);
+                }
+            }
+        }
+        "expression" => {
+            let expression = value.as_str().ok_or_else(|| {
+                cad_core::CadError::Invalid("A dimension requires expression text".into())
+            })?;
+            let target = c
+                .overrides
+                .feature_dimensions
+                .get_mut(feature)
+                .and_then(|fields| fields.get_mut(path))
+                .ok_or_else(|| {
+                    cad_core::CadError::Invalid(
+                        "Enable this dimension override before editing it".into(),
+                    )
+                })?;
+            target.0 = expression.into();
+        }
+        _ => {
+            return Err(cad_core::CadError::Invalid(
+                "Unknown configuration dimension field".into(),
+            ));
+        }
+    }
+    c.version = configuration::CONTRACT_VERSION;
+    w.fields.insert("configuration-editor".into(), c.id.clone());
+    w.json = serde_json::to_string_pretty(&c)?;
+    submit(w, owner, c.clone());
+    if configuration::definitions(w.session.visible(), owner).get(id) != Some(&c) {
+        return Err(cad_core::CadError::Invalid(w.status.clone()));
+    }
+    Ok(())
 }

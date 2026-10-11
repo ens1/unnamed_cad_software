@@ -99,6 +99,8 @@ fn tokenize(s: &str) -> Result<Vec<Token>> {
 fn unit(name: &str) -> Option<Quantity> {
     let (value, length, angle) = match name {
         "mm" => (1., 1, 0),
+        "um" | "µm" | "micrometer" | "micrometers" => (0.001, 1, 0),
+        "uin" | "microinch" | "microinches" => (0.0000254, 1, 0),
         "cm" => (10., 1, 0),
         "m" => (1000., 1, 0),
         "in" => (25.4, 1, 0),

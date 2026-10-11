@@ -607,6 +607,481 @@ fn dimension_fields(
 fn anchor_fields(ui: &mut egui::Ui, w: &Workspace, label: &str, a: &mut Anchor) -> bool {
     point_fields(ui, w, label, &mut a.point, &mut a.reference)
 }
+fn symbol_field<R>(
+    ui: &mut egui::Ui,
+    id: &str,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<R> {
+    let props = crate::presentation_controls::properties(
+        id,
+        "drawing-annotation-field",
+        &["parameter-field"],
+        "draft",
+    );
+    if props.get("display").is_some_and(|v| v == "none") {
+        return None;
+    }
+    let target = crate::presentation_controls::current_target().map(|parent| {
+        if parent.node.id == id {
+            parent
+        } else {
+            parent.child(
+                id,
+                "drawing-annotation-field",
+                &["parameter-field".into()],
+                "draft",
+            )
+        }
+    });
+    Some(
+        ui.push_id(id, |ui| {
+            ui.scope(|ui| {
+                crate::presentation_controls::apply_properties(ui, &props);
+                let enabled = !props.get("visibility").is_some_and(|v| v == "hidden");
+                if let Some(target) = target {
+                    crate::presentation_controls::with_target(target, ui, |ui| {
+                        ui.add_enabled_ui(enabled, content).inner
+                    })
+                } else {
+                    ui.add_enabled_ui(enabled, content).inner
+                }
+            })
+            .inner
+        })
+        .inner,
+    )
+}
+fn symbol_choice<T: Clone + PartialEq>(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    value: &mut T,
+    choices: &[(T, &str)],
+) -> bool {
+    symbol_field(ui, id, |ui| {
+        let mut changed = false;
+        egui::ComboBox::from_label(label)
+            .selected_text(
+                choices
+                    .iter()
+                    .find(|(choice, _)| choice == value)
+                    .map(|(_, label)| *label)
+                    .unwrap_or("Unsupported value"),
+            )
+            .show_ui(ui, |ui| {
+                for (index, (choice, label)) in choices.iter().enumerate() {
+                    if crate::presentation_controls::selectable(
+                        ui,
+                        &format!("{id}/choice:{index}"),
+                        "choice-option",
+                        label,
+                        choice == value,
+                    )
+                    .clicked()
+                    {
+                        *value = choice.clone();
+                        changed = true;
+                        ui.close();
+                    }
+                }
+            });
+        changed
+    })
+    .unwrap_or(false)
+}
+fn symbol_toggle(ui: &mut egui::Ui, id: &str, label: &str, value: &mut bool) -> bool {
+    symbol_field(ui, id, |ui| ui.checkbox(value, label).changed()).unwrap_or(false)
+}
+fn symbol_text(ui: &mut egui::Ui, id: &str, label: &str, value: &mut String) -> bool {
+    symbol_field(ui, id, |ui| {
+        crate::presentation_controls::label(
+            ui,
+            &format!("{id}/label"),
+            "field-label",
+            &[],
+            label,
+            "ready",
+        );
+        ui.text_edit_singleline(value).changed()
+    })
+    .unwrap_or(false)
+}
+fn symbol_expression(ui: &mut egui::Ui, id: &str, label: &str, value: &mut Expr) -> bool {
+    symbol_field(ui, id, |ui| {
+        crate::presentation_controls::label(
+            ui,
+            &format!("{id}/label"),
+            "field-label",
+            &[],
+            label,
+            "ready",
+        );
+        ui.add(
+            egui::TextEdit::singleline(&mut value.0)
+                .id(ui.id().with(id))
+                .desired_width(ui.available_width()),
+        )
+        .changed()
+    })
+    .unwrap_or(false)
+}
+fn optional_symbol_expression(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    value: &mut Option<Expr>,
+    default: &str,
+) -> bool {
+    let mut enabled = value.is_some();
+    let mut changed = symbol_toggle(ui, &format!("{id}/enabled"), label, &mut enabled);
+    if changed {
+        *value = enabled.then(|| default.into());
+    }
+    if let Some(value) = value {
+        changed |= symbol_expression(ui, id, label, value);
+    }
+    changed
+}
+fn symbol_paper_fields(
+    ui: &mut egui::Ui,
+    id: &str,
+    text: &mut f64,
+    height: &mut f64,
+    precision: &mut usize,
+) -> bool {
+    let mut changed = false;
+    for (field, label, value, bounds) in [
+        ("text_size_mm", "Text height", text, 1. ..=10.),
+        ("symbol_height_mm", "Symbol height", height, 3. ..=20.),
+    ] {
+        changed |= symbol_field(ui, &format!("{id}/{field}"), |ui| {
+            ui.add(
+                egui::DragValue::new(value)
+                    .range(bounds)
+                    .prefix(format!("{label} "))
+                    .suffix(" paper mm")
+                    .speed(0.1),
+            )
+            .changed()
+        })
+        .unwrap_or(false);
+    }
+    changed |= symbol_field(ui, &format!("{id}/precision"), |ui| {
+        ui.add(
+            egui::DragValue::new(precision)
+                .range(0..=6)
+                .prefix("Decimal places "),
+        )
+        .changed()
+    })
+    .unwrap_or(false);
+    changed
+}
+fn surface_fields(ui: &mut egui::Ui, id: &str, symbol: &mut SurfaceFinish) -> bool {
+    let id = format!("{id}::symbol/kind/symbol");
+    let mut changed = symbol_choice(
+        ui,
+        &format!("{id}/convention"),
+        "Drafting convention",
+        &mut symbol.convention,
+        &[
+            (SurfaceConvention::Iso1302, "ISO 1302 · legacy convention"),
+            (SurfaceConvention::AsmeY14_36, "ASME Y14.36 · convention"),
+        ],
+    );
+    changed |= symbol_choice(
+        ui,
+        &format!("{id}/removal"),
+        "Material removal",
+        &mut symbol.removal,
+        &[
+            (MaterialRemoval::Basic, "Basic · any process"),
+            (MaterialRemoval::Required, "Removal required"),
+            (MaterialRemoval::Prohibited, "Removal prohibited"),
+        ],
+    );
+    changed |= symbol_choice(
+        ui,
+        &format!("{id}/parameter"),
+        "Roughness parameter",
+        &mut symbol.parameter,
+        &[
+            (RoughnessParameter::Ra, "Ra · arithmetic mean"),
+            (RoughnessParameter::Rz, "Rz · profile height"),
+            (RoughnessParameter::Rq, "Rq · root mean square"),
+        ],
+    );
+    changed |= symbol_expression(
+        ui,
+        &format!("{id}/maximum"),
+        "Maximum roughness (e.g. 3.2 um)",
+        &mut symbol.maximum,
+    );
+    changed |= optional_symbol_expression(
+        ui,
+        &format!("{id}/minimum"),
+        "Minimum roughness",
+        &mut symbol.minimum,
+        "0.8 um",
+    );
+    changed |= symbol_choice(
+        ui,
+        &format!("{id}/roughness_units"),
+        "Printed roughness units",
+        &mut symbol.roughness_units,
+        &[
+            (RoughnessUnits::Micrometers, "Micrometers · um"),
+            (RoughnessUnits::Microinches, "Microinches · uin"),
+        ],
+    );
+    changed |= optional_symbol_expression(
+        ui,
+        &format!("{id}/sampling_length"),
+        "Sampling length",
+        &mut symbol.sampling_length,
+        "0.8 mm",
+    );
+    changed |= optional_symbol_expression(
+        ui,
+        &format!("{id}/allowance"),
+        "Removal allowance",
+        &mut symbol.allowance,
+        "0.1 mm",
+    );
+    changed |= symbol_text(
+        ui,
+        &format!("{id}/process"),
+        "Production process / treatment",
+        &mut symbol.process,
+    );
+    changed |= symbol_choice(
+        ui,
+        &format!("{id}/lay"),
+        "Direction of lay",
+        &mut symbol.lay,
+        &[
+            (SurfaceLay::None, "None"),
+            (SurfaceLay::Parallel, "Parallel"),
+            (SurfaceLay::Perpendicular, "Perpendicular"),
+            (SurfaceLay::Crossed, "Crossed"),
+            (SurfaceLay::Multidirectional, "Multidirectional"),
+            (SurfaceLay::Circular, "Circular"),
+            (SurfaceLay::Radial, "Radial"),
+            (SurfaceLay::Particulate, "Particulate / nondirectional"),
+        ],
+    );
+    changed |= symbol_paper_fields(
+        ui,
+        &id,
+        &mut symbol.text_size_mm,
+        &mut symbol.symbol_height_mm,
+        &mut symbol.precision,
+    );
+    ui.small("Saved surface requirements, with shared paper-vector output. ISO 1302 legacy and ASME conventions cover the displayed subset; ISO 21920 specification operators are not implied.");
+    changed
+}
+fn weld_joint_fields(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    side: &mut Option<WeldJoint>,
+    convention: &WeldConvention,
+) -> bool {
+    let mut enabled = side.is_some();
+    let mut changed = symbol_toggle(ui, &format!("{id}/enabled"), label, &mut enabled);
+    if changed {
+        *side = enabled.then(WeldJoint::default);
+    }
+    let Some(joint) = side else {
+        return changed;
+    };
+    changed |= symbol_choice(
+        ui,
+        &format!("{id}/joint"),
+        "Joint type",
+        &mut joint.joint,
+        &[
+            (WeldJointKind::Fillet, "Fillet"),
+            (WeldJointKind::SquareGroove, "Square groove / butt"),
+            (WeldJointKind::VGroove, "V groove / butt"),
+            (WeldJointKind::BevelGroove, "Bevel groove / butt"),
+            (WeldJointKind::PlugSlot, "Plug / slot"),
+            (WeldJointKind::Spot, "Spot"),
+            (WeldJointKind::Seam, "Seam"),
+        ],
+    );
+    if joint.joint == WeldJointKind::Fillet || joint.fillet_size == FilletSize::Throat {
+        changed |= symbol_choice(
+            ui,
+            &format!("{id}/fillet_size"),
+            "Size interpretation · throat prefix requires ISO",
+            &mut joint.fillet_size,
+            &[
+                (FilletSize::Leg, "z · leg"),
+                (FilletSize::Throat, "a · throat"),
+            ],
+        );
+    }
+    changed |= optional_symbol_expression(
+        ui,
+        &format!("{id}/size"),
+        "Weld size",
+        &mut joint.size,
+        "3 mm",
+    );
+    changed |= optional_symbol_expression(
+        ui,
+        &format!("{id}/length"),
+        "Weld length",
+        &mut joint.length,
+        "20 mm",
+    );
+    changed |= optional_symbol_expression(
+        ui,
+        &format!("{id}/pitch"),
+        "Intermittent pitch · center to center",
+        &mut joint.pitch,
+        "50 mm",
+    );
+    let mut count = joint.count.is_some();
+    if symbol_toggle(
+        ui,
+        &format!("{id}/count/enabled"),
+        "Specify weld count",
+        &mut count,
+    ) {
+        joint.count = count.then_some(2);
+        changed = true;
+    }
+    if let Some(count) = &mut joint.count {
+        changed |= symbol_field(ui, &format!("{id}/count"), |ui| {
+            ui.add(
+                egui::DragValue::new(count)
+                    .range(2..=9999)
+                    .prefix("Number of welds "),
+            )
+            .changed()
+        })
+        .unwrap_or(false);
+    }
+    changed |= symbol_choice(
+        ui,
+        &format!("{id}/contour"),
+        "Contour",
+        &mut joint.contour,
+        &[
+            (WeldContour::None, "Unspecified"),
+            (WeldContour::Flush, "Flush / flat"),
+            (WeldContour::Convex, "Convex"),
+            (WeldContour::Concave, "Concave"),
+        ],
+    );
+    if *convention == WeldConvention::AwsA2_4 || !joint.finish.is_empty() {
+        changed |= symbol_text(
+            ui,
+            &format!("{id}/finish"),
+            "Finish letter · C / G / H / M / R / U",
+            &mut joint.finish,
+        );
+    }
+    changed
+}
+fn weld_fields(ui: &mut egui::Ui, id: &str, symbol: &mut WeldSymbol) -> bool {
+    let id = format!("{id}::symbol/kind/symbol");
+    let mut changed = symbol_choice(
+        ui,
+        &format!("{id}/convention"),
+        "Drafting convention",
+        &mut symbol.convention,
+        &[
+            (WeldConvention::AwsA2_4, "AWS A2.4 · single reference line"),
+            (
+                WeldConvention::Iso2553SystemA,
+                "ISO 2553 · System A · dual line",
+            ),
+            (
+                WeldConvention::Iso2553SystemB,
+                "ISO 2553 · System B · single line",
+            ),
+        ],
+    );
+    if symbol.convention == WeldConvention::Iso2553SystemA {
+        changed |= symbol_toggle(
+            ui,
+            &format!("{id}/identification_above"),
+            "Identification line above reference",
+            &mut symbol.identification_above,
+        );
+    }
+    changed |= weld_joint_fields(
+        ui,
+        &format!("{id}/arrow_side"),
+        "Arrow-side weld",
+        &mut symbol.arrow_side,
+        &symbol.convention,
+    );
+    changed |= weld_joint_fields(
+        ui,
+        &format!("{id}/other_side"),
+        "Other-side weld",
+        &mut symbol.other_side,
+        &symbol.convention,
+    );
+    changed |= symbol_toggle(
+        ui,
+        &format!("{id}/all_around"),
+        "All around",
+        &mut symbol.all_around,
+    );
+    changed |= symbol_toggle(
+        ui,
+        &format!("{id}/field_weld"),
+        "Field weld",
+        &mut symbol.field_weld,
+    );
+    changed |= symbol_toggle(
+        ui,
+        &format!("{id}/staggered"),
+        "Staggered intermittent fillets",
+        &mut symbol.staggered,
+    );
+    changed |= symbol_text(
+        ui,
+        &format!("{id}/tail"),
+        "Tail · process / specification / notes",
+        &mut symbol.tail,
+    );
+    changed |= symbol_choice(
+        ui,
+        &format!("{id}/units"),
+        "Printed weld dimensions",
+        &mut symbol.units,
+        &[
+            (Units::Millimeters, "Millimeters"),
+            (Units::Inches, "Inches"),
+        ],
+    );
+    changed |= symbol_field(ui, &format!("{id}/reference_length_mm"), |ui| {
+        ui.add(
+            egui::DragValue::new(&mut symbol.reference_length_mm)
+                .range(24. ..=200.)
+                .suffix(" paper mm")
+                .prefix("Reference line ")
+                .speed(0.1),
+        )
+        .changed()
+    })
+    .unwrap_or(false);
+    changed |= symbol_paper_fields(
+        ui,
+        &id,
+        &mut symbol.text_size_mm,
+        &mut symbol.symbol_height_mm,
+        &mut symbol.precision,
+    );
+    ui.small("Drawing requirements, not modeled weld beads or process qualification. Independent arrow/other-side joints, contour and intermittent lengths use the saved convention; unsupported combinations report an error.");
+    changed
+}
 fn annotation_fields(
     ui: &mut egui::Ui,
     w: &Workspace,
@@ -617,6 +1092,14 @@ fn annotation_fields(
 ) -> bool {
     let mut changed = view_fields(ui, views, &mut a.view);
     match &mut a.kind {
+        AnnotationKind::SurfaceFinish { target, symbol } => {
+            changed |= anchor_fields(ui, w, "Surface Target", target);
+            changed |= surface_fields(ui, &a.id, symbol);
+        }
+        AnnotationKind::WeldSymbol { target, symbol } => {
+            changed |= anchor_fields(ui, w, "Weld Target", target);
+            changed |= weld_fields(ui, &a.id, symbol);
+        }
         AnnotationKind::Balloon {
             target,
             table,
@@ -834,6 +1317,115 @@ fn put(w: &mut Workspace, sheet: Drawing) {
         }
     }
 }
+/// Both custom compositions and the docked editor read the latest staged source,
+/// including a rejected expression, rather than copying a frame-old document.
+pub fn current_value(
+    w: &Workspace,
+    element: &cad_core::presentation::SemanticElement,
+) -> Option<serde_json::Value> {
+    let sheet = sheet_source(w, element.data.get("sheet_id")?.as_str()?)?;
+    let entity = sheet.entities.iter().find(|entity| {
+        Some(entity.id.as_str()) == element.data.get("annotation_id").and_then(|v| v.as_str())
+    })?;
+    let value = serde_json::to_value(entity)
+        .ok()?
+        .pointer(element.data.get("field")?.as_str()?)
+        .cloned()?;
+    Some(
+        if element
+            .data
+            .get("optional_enabled")
+            .and_then(|v| v.as_bool())
+            == Some(true)
+        {
+            serde_json::json!(!value.is_null())
+        } else {
+            value
+        },
+    )
+}
+pub fn set_value(
+    w: &mut Workspace,
+    element: &cad_core::presentation::SemanticElement,
+    value: serde_json::Value,
+) -> cad_core::Result<()> {
+    if !drawing_context(w) {
+        return Err(cad_core::CadError::Invalid(w.status.clone()));
+    }
+    let sheet_id = element
+        .data
+        .get("sheet_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| cad_core::CadError::Invalid("Missing drawing sheet field owner".into()))?;
+    let annotation_id = element
+        .data
+        .get("annotation_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            cad_core::CadError::Invalid("Missing drawing annotation field owner".into())
+        })?;
+    let path = element
+        .data
+        .get("field")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            cad_core::CadError::Invalid("Missing drawing annotation field path".into())
+        })?;
+    if !(path.starts_with("/kind/symbol/") || path.starts_with("/offset_mm/") || path == "/view")
+        || path.ends_with("/version")
+    {
+        return Err(cad_core::CadError::Invalid(
+            "This annotation field is not editable".into(),
+        ));
+    }
+    let mut sheet = sheet_source(w, sheet_id).ok_or_else(|| {
+        cad_core::CadError::Invalid("The annotation's sheet no longer exists".into())
+    })?;
+    let entity = sheet
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == annotation_id)
+        .ok_or_else(|| cad_core::CadError::Invalid("The annotation no longer exists".into()))?;
+    if !matches!(
+        entity.kind,
+        AnnotationKind::SurfaceFinish { .. } | AnnotationKind::WeldSymbol { .. }
+    ) {
+        return Err(cad_core::CadError::Invalid(
+            "The annotation's field contract has changed".into(),
+        ));
+    }
+    let mut source = serde_json::to_value(&*entity)?;
+    let field = source.pointer_mut(path).ok_or_else(|| {
+        cad_core::CadError::Invalid("The annotation field no longer exists".into())
+    })?;
+    if element
+        .data
+        .get("optional_enabled")
+        .and_then(|v| v.as_bool())
+        == Some(true)
+    {
+        let enabled = value.as_bool().ok_or_else(|| {
+            cad_core::CadError::Invalid("Expected an annotation option toggle".into())
+        })?;
+        if !enabled {
+            *field = serde_json::Value::Null;
+        } else if field.is_null() {
+            *field = element.data.get("default").cloned().ok_or_else(|| {
+                cad_core::CadError::Invalid("Missing annotation option default".into())
+            })?;
+        }
+    } else {
+        *field = value;
+    }
+    *entity = serde_json::from_value(source)?;
+    select_sheet(w, sheet_id);
+    w.fields.insert("drawing-item".into(), annotation_id.into());
+    put(w, sheet);
+    if !current_source_is_valid(w) {
+        return Err(cad_core::CadError::Invalid(w.status.clone()));
+    }
+    Ok(())
+}
 fn unique_name(doc: &cad_core::Document, base: &str) -> String {
     let mut name = base.to_string();
     let mut index = 2;
@@ -848,8 +1440,7 @@ fn unique_name(doc: &cad_core::Document, base: &str) -> String {
     name
 }
 fn drawing_context(w: &mut Workspace) -> bool {
-    if w.sketch.is_some()
-        || w.dialog.as_deref().is_some_and(|d| d != "drawings") && w.tool_checkpoint.is_some()
+    if w.sketch.is_some() || w.tool_checkpoint.is_some() && w.dialog.as_deref() != Some("drawings")
     {
         w.status = "Accept or cancel the current operation before editing drawing sheets".into();
         return false;
@@ -930,7 +1521,81 @@ fn save_template(w: &mut Workspace, key: &str) {
         w.status = error.to_string();
     }
 }
+fn add_symbol(w: &mut Workspace, requested: Option<&str>, command: &str) {
+    if !drawing_context(w) {
+        return;
+    }
+    let key = requested
+        .map(str::to_owned)
+        .or_else(|| w.fields.get("drawing-active").cloned())
+        .filter(|key| {
+            w.session
+                .visible()
+                .drawings
+                .iter()
+                .any(|sheet| &sheet.id == key)
+        })
+        .or_else(|| {
+            w.session
+                .visible()
+                .drawings
+                .first()
+                .map(|sheet| sheet.id.clone())
+        });
+    let mut sheet = if let Some(key) = key {
+        let Some(sheet) = sheet_source(w, &key) else {
+            return;
+        };
+        sheet
+    } else {
+        let doc = w.session.visible();
+        let definition = w.view.active_part.as_deref().unwrap_or(&doc.root);
+        match new_sheet(doc, definition, unique_name(doc, "Sheet")) {
+            Ok(sheet) => sheet,
+            Err(error) => {
+                w.status = error.to_string();
+                return;
+            }
+        }
+    };
+    let target = selected_anchor(w);
+    let kind = if command == "drawing.surface-finish-add" {
+        AnnotationKind::SurfaceFinish {
+            target,
+            symbol: SurfaceFinish::default(),
+        }
+    } else {
+        AnnotationKind::WeldSymbol {
+            target,
+            symbol: WeldSymbol::default(),
+        }
+    };
+    let annotation = Annotation {
+        id: cad_core::id(),
+        view: w
+            .fields
+            .get("drawing-view")
+            .filter(|view| view_keys(&sheet).contains(view))
+            .cloned()
+            .unwrap_or_else(|| view_keys(&sheet)[0].clone()),
+        offset_mm: [15., 15.],
+        kind,
+    };
+    w.fields
+        .insert("drawing-item".into(), annotation.id.clone());
+    w.fields.insert("drawing-section".into(), "items".into());
+    select_sheet(w, &sheet.id);
+    sheet.entities.push(annotation);
+    put(w, sheet);
+}
 pub fn action(w: &mut Workspace, command: &str) -> bool {
+    if matches!(
+        command,
+        "drawing.surface-finish-add" | "drawing.weld-symbol-add"
+    ) {
+        add_symbol(w, None, command);
+        return true;
+    }
     if !matches!(command, "drawing.sheet-add" | "drawing.sheet-template-load") {
         return false;
     }
@@ -957,6 +1622,20 @@ pub fn semantic_action(
     element: &cad_core::presentation::SemanticElement,
     command: &str,
 ) -> bool {
+    if matches!(
+        command,
+        "drawing.surface-finish-add" | "drawing.weld-symbol-add"
+    ) {
+        add_symbol(
+            w,
+            element
+                .data
+                .get("sheet_id")
+                .and_then(serde_json::Value::as_str),
+            command,
+        );
+        return true;
+    }
     if action(w, command) {
         return true;
     }
@@ -991,7 +1670,15 @@ pub fn semantic_action(
             _ => "items",
         };
         w.fields.insert("drawing-section".into(), section.into());
-        w.fields.insert("drawing-item".into(), element.id.clone());
+        w.fields.insert(
+            "drawing-item".into(),
+            element
+                .data
+                .get("annotation_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(&element.id)
+                .into(),
+        );
         if let Some(table) = element
             .data
             .get("table_id")
@@ -1009,6 +1696,21 @@ pub fn semantic_action(
     }
     match command {
         "drawing.sheet-edit" | "drawing.sheet-preview" => {}
+        "drawing.annotation-delete" => {
+            let annotation_id = element
+                .data
+                .get("annotation_id")
+                .and_then(serde_json::Value::as_str);
+            if let Some(mut sheet) = sheet_source(w, &key)
+                && let Some(id) = annotation_id
+            {
+                let old = sheet.entities.len();
+                sheet.entities.retain(|entity| entity.id != id);
+                if old != sheet.entities.len() {
+                    put(w, sheet);
+                }
+            }
+        }
         "drawing.sheet-template-save" => save_template(w, &key),
         "drawing.sheet-format-load" => load_template(w, Some(&key)),
         "drawing.sheet-delete"
@@ -1436,7 +2138,7 @@ pub fn editor(ui: &mut egui::Ui, w: &mut Workspace) {
         egui::CollapsingHeader::new("View placement and scale").default_open(w.fields.get("drawing-section").is_some_and(|s|s=="views")).show(ui,|ui| {changed|=view_layout_fields(ui,w,&mut sheet);});
         ui.menu_button("Add Dimension",|ui| {for (kind,label) in [(DimensionKind::Aligned,"Aligned"),(DimensionKind::Horizontal,"Horizontal"),(DimensionKind::Vertical,"Vertical"),(DimensionKind::Angular,"Angular"),(DimensionKind::Diameter,"Diameter"),(DimensionKind::Radius,"Radius"),(DimensionKind::HoleCallout,"Hole Callout")] {if ui.button(label).clicked() {let curve=selected_curve(w);let (first,second)=if let Some(CurveReference::ModelEdge {edge,body,instance_path})=&curve {(Some(PointReference::EdgePoint {edge:edge.clone(),body:body.clone(),instance_path:instance_path.clone(),parameter:0.}),Some(PointReference::EdgePoint {edge:edge.clone(),body:body.clone(),instance_path:instance_path.clone(),parameter:1.}))} else {(None,None)};let hole_feature=w.selected.as_ref().filter(|s|doc.parts.get(&s.reference.producer.definition).is_some_and(|p|p.features.iter().any(|f|f.id==s.reference.producer.node && matches!(f.operation,cad_core::Operation::Hole {..}|cad_core::Operation::DrilledHoles {..})))).map(|s|s.reference.producer.clone());sheet.dimensions.push(DrawingDimension {id:cad_core::id(),view:sheet.views.first().cloned().unwrap_or("front".into()),first:[0.;3],second:[50.,0.,0.],offset_mm:10.,parameter:None,tolerance:String::new(),options:DimensionOptions {kind,curve,hole_feature,first,second,third_point:[0.,0.,50.],..Default::default()}});changed=true;ui.close();}}});
         let mut remove=None;for (index,d) in sheet.dimensions.iter_mut().enumerate() {ui.push_id(d.id.clone(),|ui| {egui::CollapsingHeader::new(format!("{:?} Dimension {}",d.options.kind,index+1)).show(ui,|ui| {changed|=dimension_fields(ui,w,&sheet.views,d);if ui.small_button("Delete Dimension").clicked() {remove=Some(index);}});});}if let Some(index)=remove {sheet.dimensions.remove(index);changed=true;}
-        ui.menu_button("Add Annotation",|ui| {for (kind,label) in [(0,"Leader Note"),(1,"Datum Identifier"),(2,"Geometric Tolerance"),(3,"Center Mark"),(4,"Centerline")] {if ui.button(label).clicked() {let target=selected_anchor(w);let annotation=match kind {1=>AnnotationKind::Datum {target,identifier:"A".into()},2=>AnnotationKind::GeometricTolerance {target,characteristic:GeometricCharacteristic::Position,value:"0.1 mm".into(),diameter:false,material:MaterialCondition::Regardless,datums:vec![]},3=>{let Some(curve)=selected_curve(w) else {w.status="Select a circular edge before adding a center mark".into();ui.close();continue;};AnnotationKind::CenterMark {curve,extension_mm:3.}},4=>AnnotationKind::CenterLine {first:target,second:Box::new(Anchor {point:[50.,0.,0.],reference:None}),extension_mm:3.},_=>AnnotationKind::Leader {target,text:"Note".into()}};sheet.entities.push(Annotation {id:cad_core::id(),view:sheet.views.first().cloned().unwrap_or("front".into()),offset_mm:[15.,15.],kind:annotation});changed=true;ui.close();}}});
+        ui.menu_button("Add Annotation",|ui| {for (kind,label) in [(0,"Leader Note"),(1,"Datum Identifier"),(2,"Geometric Tolerance"),(3,"Center Mark"),(4,"Centerline"),(5,"Surface Finish"),(6,"Weld Symbol")] {let clicked=if kind==5 || kind==6 {let command=if kind==5 {"drawing.surface-finish-add"} else {"drawing.weld-symbol-add"};crate::presentation_controls::button(ui,&format!("{}::action:{command}",sheet.id),"command",&["drawing-annotation-create"],label,true,false).clicked()} else {ui.button(label).clicked()};if clicked {let target=selected_anchor(w);let annotation=match kind {1=>AnnotationKind::Datum {target,identifier:"A".into()},2=>AnnotationKind::GeometricTolerance {target,characteristic:GeometricCharacteristic::Position,value:"0.1 mm".into(),diameter:false,material:MaterialCondition::Regardless,datums:vec![]},3=>{let Some(curve)=selected_curve(w) else {w.status="Select a circular edge before adding a center mark".into();ui.close();continue;};AnnotationKind::CenterMark {curve,extension_mm:3.}},4=>AnnotationKind::CenterLine {first:target,second:Box::new(Anchor {point:[50.,0.,0.],reference:None}),extension_mm:3.},5=>AnnotationKind::SurfaceFinish {target,symbol:SurfaceFinish::default()},6=>AnnotationKind::WeldSymbol {target,symbol:WeldSymbol::default()},_=>AnnotationKind::Leader {target,text:"Note".into()}};sheet.entities.push(Annotation {id:cad_core::id(),view:sheet.views.first().cloned().unwrap_or("front".into()),offset_mm:[15.,15.],kind:annotation});changed=true;ui.close();}}});
         changed |= crate::drawing_table_ui::editor(ui,w,&mut sheet);
         if ui.button("Add BOM Balloon").clicked() {
             match crate::drawing_table_ui::default_balloon(w,&sheet,selected_anchor(w)) {
@@ -1444,7 +2146,7 @@ pub fn editor(ui: &mut egui::Ui, w: &mut Workspace) {
                 Err(error) => { w.status=error.to_string(); }
             }
         }
-        let mut remove=None;for (index,a) in sheet.entities.iter_mut().enumerate() {ui.push_id(a.id.clone(),|ui| {egui::CollapsingHeader::new(format!("Annotation {}",index+1)).show(ui,|ui| {changed|=annotation_fields(ui,w,&sheet.views,&sheet.tables,&sheet.definition,a);if ui.small_button("Delete Annotation").clicked() {remove=Some(index);}});});}if let Some(index)=remove {sheet.entities.remove(index);changed=true;}
+        let mut remove=None;for (index,a) in sheet.entities.iter_mut().enumerate() {ui.push_id(a.id.clone(),|ui| {egui::CollapsingHeader::new(format!("{} {}",a.kind.label(),index+1)).default_open(active_item.as_ref()==Some(&a.id)).show(ui,|ui| {changed|=annotation_fields(ui,w,&sheet.views,&sheet.tables,&sheet.definition,a);if crate::presentation_controls::button(ui,&format!("{}::action:drawing.annotation-delete",a.id),"command",&["destructive"],"Delete Annotation",true,false).clicked() {remove=Some(index);}});});}if let Some(index)=remove {sheet.entities.remove(index);changed=true;}
         for note in &mut sheet.annotations {changed|=ui.text_edit_singleline(note).changed();}if ui.small_button("Add Sheet Note").clicked() {sheet.annotations.push(String::new());changed=true;}
         if changed {put(w,sheet);}
     });});}});

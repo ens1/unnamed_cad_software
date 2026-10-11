@@ -380,7 +380,7 @@ fn remap_source_inner(
     }
     fn identity_map(field: &str, owned_features: bool) -> bool {
         if owned_features {
-            return field == "features";
+            return matches!(field, "features" | "feature_dimensions");
         }
         matches!(
             field,
@@ -411,6 +411,7 @@ fn remap_source_inner(
                 | "configurations"
                 | "active_configurations"
                 | "features"
+                | "feature_dimensions"
                 | "components"
                 | "mates"
                 | "component_configurations"
@@ -479,6 +480,34 @@ fn remap_source_inner(
         }
         match value {
             serde_json::Value::Object(object) => {
+                if field == "resource"
+                    && object
+                        .get("resource")
+                        .is_some_and(serde_json::Value::is_string)
+                    && object
+                        .get("sha256")
+                        .is_some_and(serde_json::Value::is_string)
+                    && object
+                        .get("source")
+                        .and_then(|source| source.get("document_sha256"))
+                        .is_some_and(serde_json::Value::is_string)
+                {
+                    // Pinned block-package provenance describes the exporting
+                    // source, not identities in this importing document.
+                    if let Some(local_ids) = object
+                        .get_mut("local_ids")
+                        .and_then(serde_json::Value::as_object_mut)
+                    {
+                        for identity in local_ids.values_mut() {
+                            if let Some(replacement) =
+                                identity.as_str().and_then(|identity| mapping.get(identity))
+                            {
+                                *identity = replacement.clone().into();
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
                 if object.contains_key("producer")
                     && object.contains_key("topology")
                     && let Some(role) = object.get("role").and_then(|v| v.as_str())
@@ -509,7 +538,11 @@ fn remap_source_inner(
                             ) || matches!(field, "points" | "members" | "arc_through")
                                 && value.is_string());
                     // Dictionary keys are native identities or parameter names, not schema field names.
-                    let child_field = if matches!(field, "parameters" | "__parameter_expressions") {
+                    let child_field = if field == "feature_dimensions" {
+                        "__feature_dimension_fields"
+                    } else if field == "__feature_dimension_fields" {
+                        "__feature_dimension_expression"
+                    } else if matches!(field, "parameters" | "__parameter_expressions") {
                         "__parameter_expression"
                     } else if matches!(field, "active_configurations" | "component_configurations")
                         || matches!(field, "points" | "members" | "arc_through")
@@ -534,7 +567,21 @@ fn remap_source_inner(
                     if !(key == "path" && value.is_string() && child_field == key.as_str()) {
                         walk(&mut value, mapping, child_field, refs, owned_features)?;
                     }
-                    let key = if identity_map(field, owned_features) {
+                    let key = if field == "__feature_dimension_fields" {
+                        key.split('/')
+                            .map(|segment| {
+                                let decoded = segment.replace("~1", "/").replace("~0", "~");
+                                decoded
+                                    .strip_prefix("@id=")
+                                    .and_then(|source| mapping.get(source))
+                                    .map(|id| {
+                                        format!("@id={id}").replace('~', "~0").replace('/', "~1")
+                                    })
+                                    .unwrap_or_else(|| segment.into())
+                            })
+                            .collect::<Vec<_>>()
+                            .join("/")
+                    } else if identity_map(field, owned_features) {
                         mapping.get(&key).cloned().unwrap_or(key)
                     } else {
                         key

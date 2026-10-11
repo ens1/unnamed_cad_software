@@ -8,7 +8,10 @@ use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const CONTRACT_VERSION: u32 = 4;
+pub mod symbols;
+pub use symbols::*;
+
+pub const CONTRACT_VERSION: u32 = 5;
 pub const FORMAT_VERSION: u32 = 1;
 pub const VIEW_KEYS: [&str; 6] = [
     "front",
@@ -312,6 +315,14 @@ pub enum MaterialCondition {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AnnotationKind {
+    SurfaceFinish {
+        target: Anchor,
+        symbol: SurfaceFinish,
+    },
+    WeldSymbol {
+        target: Anchor,
+        symbol: WeldSymbol,
+    },
     Leader {
         target: Anchor,
         text: String,
@@ -349,6 +360,20 @@ pub enum AnnotationKind {
         #[serde(default)]
         show_quantity: bool,
     },
+}
+impl AnnotationKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::SurfaceFinish { .. } => "Surface finish",
+            Self::WeldSymbol { .. } => "Weld symbol",
+            Self::Leader { .. } => "Leader note",
+            Self::Datum { .. } => "Datum",
+            Self::GeometricTolerance { .. } => "Geometric tolerance",
+            Self::CenterMark { .. } => "Center mark",
+            Self::CenterLine { .. } => "Centerline",
+            Self::Balloon { .. } => "BOM balloon",
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Annotation {
@@ -1519,6 +1544,8 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
             ));
         }
         match &annotation.kind {
+            AnnotationKind::SurfaceFinish { symbol, .. } => symbol.validate()?,
+            AnnotationKind::WeldSymbol { symbol, .. } => symbol.validate()?,
             AnnotationKind::Balloon { table, .. }
                 if !sheet.tables.iter().any(|t| {
                     &t.id == table
@@ -1563,6 +1590,8 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
             AnnotationKind::Leader { target, .. }
             | AnnotationKind::Datum { target, .. }
             | AnnotationKind::Balloon { target, .. }
+            | AnnotationKind::SurfaceFinish { target, .. }
+            | AnnotationKind::WeldSymbol { target, .. }
             | AnnotationKind::GeometricTolerance { target, .. } => vec![target],
             AnnotationKind::CenterLine { first, second, .. } => vec![first, second],
             AnnotationKind::CenterMark { .. } => vec![],
@@ -2365,6 +2394,28 @@ fn annotation(
     out: &mut Vec<Primitive>,
 ) -> Result<()> {
     match &entity.kind {
+        AnnotationKind::SurfaceFinish { target, symbol } => {
+            let target = view.screen(anchor(doc, e, sheet, target)?)?;
+            let configured = crate::configuration::effective(doc)?;
+            symbol.render(
+                &configured,
+                &sheet.definition,
+                target,
+                entity.offset_mm,
+                out,
+            )?;
+        }
+        AnnotationKind::WeldSymbol { target, symbol } => {
+            let target = view.screen(anchor(doc, e, sheet, target)?)?;
+            let configured = crate::configuration::effective(doc)?;
+            symbol.render(
+                &configured,
+                &sheet.definition,
+                target,
+                entity.offset_mm,
+                out,
+            )?;
+        }
         AnnotationKind::Balloon {
             target,
             table,
@@ -3123,6 +3174,8 @@ pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation
         let mut commands = vec![
             "drawing.sheet-edit".into(),
             "drawing.sheet-preview".into(),
+            "drawing.surface-finish-add".into(),
+            "drawing.weld-symbol-add".into(),
             "drawing.sheet-duplicate".into(),
             "drawing.sheet-delete".into(),
             "drawing.sheet-template-save".into(),
@@ -3151,7 +3204,13 @@ pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation
             out.push(crate::presentation::SemanticElement {id:dimension.id.clone(),role:"drawing-dimension".into(),label:format!("{:?} dimension",dimension.options.kind),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"dimension":dimension,"choices":{"kind":["aligned","horizontal","vertical","angular","diameter","radius","hole_callout"],"tolerance":["none","symmetric","deviation","limits","basic"],"units":["millimeters","inches"]}})});
         }
         for entity in &sheet.entities {
-            out.push(crate::presentation::SemanticElement {id:entity.id.clone(),role:"drawing-annotation".into(),label:match entity.kind {AnnotationKind::Leader {..}=>"Leader note",AnnotationKind::Datum {..}=>"Datum",AnnotationKind::GeometricTolerance {..}=>"Geometric tolerance",AnnotationKind::CenterMark {..}=>"Center mark",AnnotationKind::CenterLine {..}=>"Centerline",AnnotationKind::Balloon {..}=>"BOM balloon"}.into(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"annotation":entity})});
+            out.push(crate::presentation::SemanticElement {id:entity.id.clone(),role:"drawing-annotation".into(),label:entity.kind.label().into(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.annotation-delete".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"annotation_id":entity.id,"annotation":entity,"symbol_contract":"tcad.drawing-symbol","symbol_version":SYMBOL_CONTRACT_VERSION,"actions":[{"command":"drawing.sheet-edit","label":"Edit annotation"},{"command":"drawing.annotation-delete","label":"Delete annotation"}]})});
+            if matches!(
+                entity.kind,
+                AnnotationKind::SurfaceFinish { .. } | AnnotationKind::WeldSymbol { .. }
+            ) {
+                out.extend(symbols::semantic_fields(sheet, entity, state));
+            }
         }
     }
     out

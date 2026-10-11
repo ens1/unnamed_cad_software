@@ -10,8 +10,10 @@ pub enum Mode {
     Insert,
     Definition,
     Instance,
+    Import,
 }
 pub struct Editor {
+    pub id: Id,
     pub mode: Mode,
     pub definition_id: Option<Id>,
     pub instance_id: Option<Id>,
@@ -24,6 +26,9 @@ pub struct Editor {
     pub selection: Vec<SketchEntity>,
     pub relation: usize,
     pub local_dof: Option<usize>,
+    pub resource: Option<blocks::resources::Package>,
+    pub resource_error: Option<String>,
+    pub resource_message: Option<String>,
 }
 impl Editor {
     pub fn new(source: &Sketch, selected: &[SketchEntity], mode: Mode, key: Option<Id>) -> Self {
@@ -71,7 +76,7 @@ impl Editor {
                     .then(|| source.blocks.keys().next().cloned())
                     .flatten()
             });
-        let definition_id = if mode == Mode::Create {
+        let definition_id = if matches!(mode, Mode::Create | Mode::Import) {
             None
         } else {
             definition_id
@@ -80,7 +85,7 @@ impl Editor {
             .as_ref()
             .and_then(|key| source.blocks.get(key))
             .cloned();
-        let instance_id = if matches!(mode, Mode::Create | Mode::Insert) {
+        let instance_id = if matches!(mode, Mode::Create | Mode::Insert | Mode::Import) {
             None
         } else {
             instance_id.or_else(|| {
@@ -113,6 +118,7 @@ impl Editor {
             .copied()
             .unwrap_or([origin[0] + 25., origin[1]]);
         Self {
+            id: id(),
             mode,
             definition_id,
             instance_id,
@@ -125,6 +131,9 @@ impl Editor {
             selection: vec![],
             relation: 0,
             local_dof: None,
+            resource: None,
+            resource_error: None,
+            resource_message: None,
         }
     }
     pub fn refresh(&mut self, source: &Sketch) {
@@ -141,7 +150,21 @@ impl Editor {
         }
     }
     pub fn apply(&mut self, doc: &Document, owner: &str, source: &mut Sketch) -> Result<()> {
+        if let Some(error) = &self.resource_error {
+            return Err(CadError::Invalid(error.clone()));
+        }
         match self.mode {
+            Mode::Import if self.definition_id.is_none() => {
+                let package = self.resource.as_ref().ok_or_else(|| {
+                    CadError::Invalid("Choose a sketch block resource to insert".into())
+                })?;
+                let (definition, instance) =
+                    blocks::resources::insert(doc, owner, source, package, self.anchor)?;
+                self.definition_id = Some(definition.clone());
+                self.instance_id = Some(instance.clone());
+                self.definition = source.blocks.get(&definition).cloned();
+                self.instance = source.block_instances.get(&instance).cloned();
+            }
             Mode::Create if self.definition_id.is_none() => {
                 let (definition, instance) =
                     blocks::create(doc, owner, source, &self.selected, &self.name, self.origin)?;
@@ -243,6 +266,44 @@ pub fn controls(
     owner: &str,
 ) -> bool {
     let mut changed = false;
+    if editor.mode == Mode::Import {
+        ui.label(
+            editor
+                .resource
+                .as_ref()
+                .map(|resource| resource.definition.name.as_str())
+                .unwrap_or("Choose a block from another document"),
+        );
+        if crate::presentation_controls::button(
+            ui,
+            "sketch.block-resource-choose",
+            "command-action",
+            &["toolbar-control"],
+            "Choose block file…",
+            editor.instance_id.is_none(),
+            false,
+        )
+        .clicked()
+            && let Some(path) = rfd::FileDialog::new()
+                .add_filter("TCAD Sketch Block", &["tcadblock", "json"])
+                .pick_file()
+        {
+            changed = true;
+            match blocks::resources::read(&path) {
+                Ok(package) => {
+                    editor.resource = Some(package);
+                    editor.resource_error = None;
+                    editor.resource_message = Some("Self-contained source · external dimensions resolved at export · no live file link".into());
+                }
+                Err(error) => editor.resource_error = Some(error.to_string()),
+            }
+        }
+        if editor.instance_id.is_none() {
+            changed |= point_fields(ui, "Insertion anchor", &mut editor.anchor);
+        } else {
+            ui.small("Cancel this insertion to choose another resource.");
+        }
+    }
     if editor.mode == Mode::Create {
         ui.label(format!(
             "{} independent source members",
@@ -557,5 +618,424 @@ pub fn controls(
         }
         ui.small("Anchor supplies translation freedom; free literal rotation supplies one angle DOF. Scale and expression fields retain their authored intent.");
     }
+    if let Some(key) = &editor.definition_id {
+        ui.horizontal_wrapped(|ui| {
+            if crate::presentation_controls::button(ui, "sketch.block-export", "command-action", &["toolbar-control"], "Export block…", true, false).clicked()
+                && let Some(path) = rfd::FileDialog::new().add_filter("TCAD Sketch Block", &["tcadblock"]).set_file_name("SketchBlock.tcadblock").save_file()
+            {
+                let mut candidate = source.clone();
+                if editor.mode == Mode::Definition && let Some(definition) = &editor.definition {
+                    candidate.blocks.insert(key.clone(), definition.clone());
+                }
+                if editor.mode == Mode::Create && let Some(definition) = candidate.blocks.get_mut(key) {
+                    definition.name = editor.name.clone(); definition.origin = editor.origin;
+                }
+                let result = configuration::effective(doc).and_then(|effective| blocks::resources::snapshot(&effective, owner, &candidate, key))
+                    .and_then(|package| blocks::resources::write(&package, &path));
+                editor.resource_message = Some(match result {
+                    Ok(()) => format!("Exported {}", path.display()),
+                    Err(error) => error.to_string(),
+                });
+            }
+            if editor.mode == Mode::Definition {
+                let imported = editor.definition.as_ref().is_some_and(|definition| definition.resource.is_some());
+                if crate::presentation_controls::button(ui, "sketch.block-resource-update", "command-action", &["toolbar-control"], "Update from library…", imported, false).on_hover_text("Choose an updated file with the same pinned block identity").clicked()
+                    && let Some(path) = rfd::FileDialog::new().add_filter("TCAD Sketch Block", &["tcadblock", "json"]).pick_file()
+                {
+                    let mut candidate = source.clone();
+                    let result = blocks::resources::read(&path).and_then(|package| blocks::resources::update(doc, owner, &mut candidate, key, &package));
+                    match result {
+                        Ok(()) => {
+                            editor.definition = candidate.blocks.get(key).cloned();
+                            editor.resource_error = None;
+                            editor.resource_message = Some("Pinned source update pending · inspect the preview before accepting".into());
+                            changed = true;
+                        }
+                        Err(error) => editor.resource_message = Some(error.to_string()),
+                    }
+                }
+            }
+        });
+    }
+    if let Some(message) = &editor.resource_message {
+        ui.small(message);
+    }
+    if let Some(error) = &editor.resource_error {
+        ui.label(error);
+    }
     changed
+}
+
+pub fn export(w: &mut crate::Workspace, key: &str) {
+    let Some(sketch) = &w.sketch else { return };
+    if sketch.edit.is_some() {
+        w.status = "Use Export block in the active block editor, or accept/cancel the sketch operation first".into();
+        return;
+    }
+    let source = crate::sketch::sketch_definition(sketch);
+    let definition = source
+        .block_instances
+        .get(key)
+        .map(|instance| instance.definition.as_str())
+        .unwrap_or(key);
+    let result = configuration::effective(w.session.visible())
+        .and_then(|doc| blocks::resources::snapshot(&doc, &sketch.definition, &source, definition));
+    match result {
+        Ok(package) => {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("TCAD Sketch Block", &["tcadblock"])
+                .set_file_name("SketchBlock.tcadblock")
+                .save_file()
+            {
+                w.status = match blocks::resources::write(&package, &path) {
+                    Ok(()) => format!("Exported {}", path.display()),
+                    Err(error) => error.to_string(),
+                };
+            }
+        }
+        Err(error) => w.status = error.to_string(),
+    }
+}
+
+/// Typed transient placements share this reader/setter with native block fields.
+pub fn semantics(w: &crate::Workspace) -> Vec<presentation::SemanticElement> {
+    let Some(sketch) = &w.sketch else {
+        return vec![];
+    };
+    let Some(editor) = sketch
+        .edit
+        .as_ref()
+        .and_then(|editor| editor.block.as_ref())
+    else {
+        return vec![];
+    };
+    let mut fields = vec![];
+    if editor.mode == Mode::Create {
+        fields.push((
+            "name",
+            "Block name",
+            serde_json::json!(editor.name),
+            "string",
+        ));
+        fields.push((
+            "origin-x",
+            "Insertion origin X",
+            serde_json::json!(editor.origin[0]),
+            "number",
+        ));
+        fields.push((
+            "origin-y",
+            "Insertion origin Y",
+            serde_json::json!(editor.origin[1]),
+            "number",
+        ));
+    } else if editor.mode == Mode::Definition
+        && let Some(definition) = &editor.definition
+    {
+        fields.push((
+            "name",
+            "Block name",
+            serde_json::json!(definition.name),
+            "string",
+        ));
+        fields.push((
+            "origin-x",
+            "Insertion origin X",
+            serde_json::json!(definition.origin[0]),
+            "number",
+        ));
+        fields.push((
+            "origin-y",
+            "Insertion origin Y",
+            serde_json::json!(definition.origin[1]),
+            "number",
+        ));
+    }
+    if editor.mode != Mode::Definition {
+        fields.push((
+            "anchor-x",
+            "Insertion anchor X",
+            serde_json::json!(editor.anchor[0]),
+            "number",
+        ));
+        fields.push((
+            "anchor-y",
+            "Insertion anchor Y",
+            serde_json::json!(editor.anchor[1]),
+            "number",
+        ));
+        if let Some(instance) = &editor.instance {
+            fields.push((
+                "translation-x",
+                "Translation X",
+                serde_json::json!(instance.translation[0].0),
+                "expression",
+            ));
+            fields.push((
+                "translation-y",
+                "Translation Y",
+                serde_json::json!(instance.translation[1].0),
+                "expression",
+            ));
+            fields.push((
+                "angle",
+                "Rotation",
+                serde_json::json!(instance.angle.0),
+                "expression",
+            ));
+            fields.push((
+                "scale",
+                "Uniform scale",
+                serde_json::json!(instance.scale.0),
+                "expression",
+            ));
+            fields.push((
+                "suppressed",
+                "Suppress instance",
+                serde_json::json!(instance.suppressed),
+                "boolean",
+            ));
+        }
+    }
+    let mut elements = fields.into_iter().map(|(field,label,value,kind)| presentation::SemanticElement {
+            id: format!("sketch-block:{}:{}:{field}", sketch.sketch_id, editor.id),
+        role: "sketch-block-field".into(), label: label.into(), value: Some(value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string())),
+        state: "editing".into(), commands: vec!["field.set".into()], relationships: vec![sketch.sketch_id.clone()],
+        data: serde_json::json!({"contract":"tcad.sketch.block","version":blocks::CONTRACT_VERSION,"sketch":sketch.sketch_id,"field":field,"setter":"sketch-block","kind":kind,"value":value,"editable":true,"unit":if matches!(field,"origin-x"|"origin-y"|"anchor-x"|"anchor-y"|"translation-x"|"translation-y"){Some("mm")}else if field=="angle"{Some("angle")}else{None},"accessibility_label":label}),
+    }).collect::<Vec<_>>();
+    for (command, label, enabled, reason) in [
+        (
+            "sketch.block-resource-choose",
+            "Choose block file…",
+            editor.mode == Mode::Import && editor.instance_id.is_none(),
+            "Start an Insert Block From File operation before choosing a resource",
+        ),
+        (
+            "sketch.block-export",
+            "Export block…",
+            editor.definition_id.is_some(),
+            "Create or choose a block definition first",
+        ),
+        (
+            "sketch.block-resource-update",
+            "Update from library…",
+            editor.mode == Mode::Definition
+                && editor
+                    .definition
+                    .as_ref()
+                    .is_some_and(|definition| definition.resource.is_some()),
+            "Edit an imported block definition before updating its source",
+        ),
+    ] {
+        elements.push(presentation::SemanticElement {
+            id: format!("command:{command}"), role: "command".into(), label: label.into(), value: None,
+            state: if enabled {"ready"}else{"disabled"}.into(), commands: vec![command.into()], relationships: vec![sketch.sketch_id.clone()],
+            data: serde_json::json!({"contract":"tcad.sketch.block-resource","version":blocks::resources::CONTRACT_VERSION,"available":enabled,"disabled_reason":(!enabled).then_some(reason),"actions":[{"command":command,"label":label,"enabled":enabled,"disabled_reason":(!enabled).then_some(reason)}]}),
+        });
+    }
+    elements
+}
+
+/// Resource actions are editing operations, independent of their native buttons.
+pub fn resource_action(w: &mut crate::Workspace, command: &str) -> bool {
+    if !matches!(
+        command,
+        "sketch.block-resource-choose" | "sketch.block-resource-update" | "sketch.block-export"
+    ) {
+        return false;
+    }
+    if command == "sketch.block-export"
+        && w.sketch.as_ref().is_none_or(|sketch| {
+            sketch
+                .edit
+                .as_ref()
+                .is_none_or(|editor| editor.block.is_none())
+        })
+    {
+        return false;
+    }
+    let Some(sketch) = &w.sketch else {
+        w.status = "Open a sketch block editor first".into();
+        return true;
+    };
+    let mut source = crate::sketch::sketch_definition(sketch);
+    let owner = sketch.definition.clone();
+    let Some(block) = sketch
+        .edit
+        .as_ref()
+        .and_then(|editor| editor.block.as_ref())
+    else {
+        w.status = "Open a sketch block editor first".into();
+        return true;
+    };
+    let key = block.definition_id.clone();
+    let allowed = match command {
+        "sketch.block-resource-choose" => block.mode == Mode::Import && block.instance_id.is_none(),
+        "sketch.block-resource-update" => {
+            block.mode == Mode::Definition
+                && block
+                    .definition
+                    .as_ref()
+                    .is_some_and(|definition| definition.resource.is_some())
+        }
+        _ => key.is_some(),
+    };
+    if !allowed {
+        w.status = "This resource action is unavailable in the current block operation".into();
+        return true;
+    }
+    let Some(path) = (if command == "sketch.block-export" {
+        rfd::FileDialog::new()
+            .add_filter("TCAD Sketch Block", &["tcadblock"])
+            .set_file_name("SketchBlock.tcadblock")
+            .save_file()
+    } else {
+        rfd::FileDialog::new()
+            .add_filter("TCAD Sketch Block", &["tcadblock", "json"])
+            .pick_file()
+    }) else {
+        return true;
+    };
+    if command == "sketch.block-export" {
+        if block.mode == Mode::Definition
+            && let (Some(key), Some(definition)) = (&key, &block.definition)
+        {
+            source.blocks.insert(key.clone(), definition.clone());
+        }
+        if block.mode == Mode::Create
+            && let Some(definition) = source.blocks.get_mut(key.as_deref().unwrap())
+        {
+            definition.name = block.name.clone();
+            definition.origin = block.origin;
+        }
+        let result = configuration::effective(w.session.visible())
+            .and_then(|doc| {
+                blocks::resources::snapshot(&doc, &owner, &source, key.as_deref().unwrap())
+            })
+            .and_then(|package| blocks::resources::write(&package, &path));
+        w.status = match result {
+            Ok(()) => format!("Exported {}", path.display()),
+            Err(error) => error.to_string(),
+        };
+        return true;
+    }
+    let result = blocks::resources::read(&path);
+    if command == "sketch.block-resource-choose" {
+        if let Some(block) = w
+            .sketch
+            .as_mut()
+            .and_then(|sketch| sketch.edit.as_mut())
+            .and_then(|editor| editor.block.as_mut())
+        {
+            match result {
+                Ok(package) => {
+                    block.resource = Some(package);
+                    block.resource_error = None;
+                }
+                Err(error) => {
+                    block.resource_error = Some(error.to_string());
+                }
+            }
+        }
+        crate::sketch_edit_ui::rebuild(w, false);
+    } else {
+        let result = result.and_then(|package| {
+            blocks::resources::update(
+                w.session.visible(),
+                &owner,
+                &mut source,
+                key.as_deref().unwrap(),
+                &package,
+            )
+        });
+        match result {
+            Ok(()) => {
+                if let Some(block) = w
+                    .sketch
+                    .as_mut()
+                    .and_then(|sketch| sketch.edit.as_mut())
+                    .and_then(|editor| editor.block.as_mut())
+                {
+                    block.definition = source.blocks.get(key.as_deref().unwrap()).cloned();
+                    block.resource_error = None;
+                }
+                crate::sketch_edit_ui::rebuild(w, false);
+            }
+            Err(error) => w.status = error.to_string(),
+        }
+    }
+    true
+}
+pub fn current_value(
+    w: &crate::Workspace,
+    element: &presentation::SemanticElement,
+) -> Option<serde_json::Value> {
+    semantics(w)
+        .into_iter()
+        .find(|current| current.id == element.id)
+        .and_then(|current| current.data.get("value").cloned())
+}
+pub fn set_value(
+    w: &mut crate::Workspace,
+    element: &presentation::SemanticElement,
+    value: serde_json::Value,
+) -> Result<()> {
+    let current = semantics(w)
+        .into_iter()
+        .find(|current| current.id == element.id)
+        .ok_or_else(|| {
+            CadError::Invalid("The block field belongs to a different sketch operation".into())
+        })?;
+    let field = current.data["field"].as_str().unwrap_or_default();
+    let text = || {
+        value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| CadError::Invalid("Expected a block expression or name".into()))
+    };
+    let number = || {
+        value
+            .as_f64()
+            .filter(|value| value.is_finite())
+            .ok_or_else(|| CadError::Invalid("Expected a finite block coordinate".into()))
+    };
+    let editor = w
+        .sketch
+        .as_mut()
+        .and_then(|sketch| sketch.edit.as_mut())
+        .and_then(|editor| editor.block.as_mut())
+        .ok_or_else(|| CadError::Invalid("Open a sketch block editor first".into()))?;
+    match field {
+        "name" if editor.mode == Mode::Create => editor.name = text()?,
+        "name" => editor.definition.as_mut().unwrap().name = text()?,
+        "origin-x" | "origin-y" => {
+            let index = usize::from(field.ends_with('y'));
+            if editor.mode == Mode::Create {
+                editor.origin[index] = number()?;
+            } else {
+                editor.definition.as_mut().unwrap().origin[index] = number()?;
+            }
+        }
+        "anchor-x" | "anchor-y" => editor.anchor[usize::from(field.ends_with('y'))] = number()?,
+        "translation-x" | "translation-y" => {
+            editor.instance.as_mut().unwrap().translation[usize::from(field.ends_with('y'))] =
+                Expr(text()?)
+        }
+        "angle" => {
+            let instance = editor.instance.as_mut().unwrap();
+            instance.angle = Expr(text()?);
+            if !blocks::rotation_literal(&instance.angle) {
+                instance.free_rotation = false;
+            }
+        }
+        "scale" => editor.instance.as_mut().unwrap().scale = Expr(text()?),
+        "suppressed" => {
+            editor.instance.as_mut().unwrap().suppressed = value
+                .as_bool()
+                .ok_or_else(|| CadError::Invalid("Expected a boolean suppression state".into()))?
+        }
+        _ => return Err(CadError::Invalid("Unknown block field".into())),
+    }
+    crate::sketch_edit_ui::rebuild(w, false);
+    Ok(())
 }
