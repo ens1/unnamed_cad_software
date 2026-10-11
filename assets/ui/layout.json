@@ -47,11 +47,13 @@
       "children": [
         {
           "use": "context",
-          "height_logical_px": 36
+          "height_logical_px": 36,
+          "id": "instrument-rail/context/root/0"
         },
         {
           "use": "commands",
-          "height_logical_px": 68
+          "height_logical_px": 68,
+          "id": "instrument-rail/commands/root/1"
         },
         {
           "id": "model-workspace",
@@ -67,7 +69,8 @@
               "children": [
                 {
                   "use": "navigation",
-                  "height_logical_px": 32
+                  "height_logical_px": 32,
+                  "id": "instrument-rail/navigation/root/2/0/0"
                 },
                 {
                   "use": "dependencies",
@@ -75,7 +78,8 @@
                   "editing": {
                     "height_logical_px": 142,
                     "grow": 0
-                  }
+                  },
+                  "id": "instrument-rail/dependencies/root/2/0/1"
                 },
                 {
                   "use": "parameters",
@@ -84,19 +88,22 @@
                   "editing": {
                     "height_logical_px": 0,
                     "grow": 1
-                  }
+                  },
+                  "id": "instrument-rail/parameters/root/2/0/2"
                 }
               ]
             },
             {
               "use": "viewport",
-              "grow": 1
+              "grow": 1,
+              "id": "instrument-rail/viewport/root/2/1"
             }
           ]
         },
         {
           "use": "status",
-          "height_logical_px": 26
+          "height_logical_px": 26,
+          "id": "instrument-rail/status/root/3"
         }
       ]
     },
@@ -111,26 +118,31 @@
           "children": [
             {
               "use": "context",
-              "grow": 1
+              "grow": 1,
+              "id": "top-workspace/context/root/0/0"
             },
             {
               "use": "preview",
-              "width_logical_px": 250
+              "width_logical_px": 250,
+              "id": "top-workspace/preview/root/0/1"
             },
             {
               "use": "apply",
-              "width_logical_px": 120
+              "width_logical_px": 120,
+              "id": "top-workspace/apply/root/0/2"
             },
             {
               "use": "cancel",
-              "width_logical_px": 120
+              "width_logical_px": 120,
+              "id": "top-workspace/cancel/root/0/3"
             }
           ],
           "height_logical_px": 92
         },
         {
           "use": "viewport",
-          "grow": 1
+          "grow": 1,
+          "id": "top-workspace/viewport/root/1"
         },
         {
           "id": "bottom-editors",
@@ -139,15 +151,18 @@
           "children": [
             {
               "use": "navigation",
-              "width_logical_px": 100
+              "width_logical_px": 100,
+              "id": "top-workspace/navigation/root/2/0"
             },
             {
               "use": "dependencies",
-              "grow": 1
+              "grow": 1,
+              "id": "top-workspace/dependencies/root/2/1"
             },
             {
               "use": "parameters",
-              "grow": 1
+              "grow": 1,
+              "id": "top-workspace/parameters/root/2/2"
             }
           ],
           "height_logical_px": 300,
@@ -163,11 +178,13 @@
       "children": [
         {
           "use": "context",
-          "height_logical_px": 36
+          "height_logical_px": 36,
+          "id": "graph-workspace/context/root/0"
         },
         {
           "use": "commands",
-          "height_logical_px": 68
+          "height_logical_px": 68,
+          "id": "graph-workspace/commands/root/1"
         },
         {
           "layout": "column",
@@ -175,7 +192,8 @@
           "children": [
             {
               "use": "viewport",
-              "grow": 1
+              "grow": 1,
+              "id": "graph-workspace/viewport/root/2/0"
             },
             {
               "layout": "row",
@@ -186,19 +204,127 @@
               "children": [
                 {
                   "use": "dependencies",
-                  "grow": 1
+                  "grow": 1,
+                  "id": "graph-workspace/dependencies/root/2/1/0"
                 },
                 {
                   "use": "parameters",
-                  "width_logical_px": 270
+                  "width_logical_px": 270,
+                  "id": "graph-workspace/parameters/root/2/1/1"
+                }
+              ],
+              "id": "graph-workspace/container/root/2/1"
+            }
+          ],
+          "id": "graph-workspace/container/root/2"
+        },
+        {
+          "use": "status",
+          "height_logical_px": 26,
+          "id": "graph-workspace/status/root/3"
+        }
+      ]
+    },
+    "semantic-workspace": {
+      "id": "semantic-workspace",
+      "layout": "column",
+      "children": [
+        {
+          "id": "semantic-context",
+          "use": "context",
+          "height_logical_px": 34
+        },
+        {
+          "id": "semantic-tools",
+          "role": "semantic-command-collection",
+          "layout": "row",
+          "height_logical_px": 42,
+          "overflow": "auto",
+          "repeat": {
+            "role": "command",
+            "id_prefix": "command:feature.",
+            "limit": 80
+          },
+          "template": {
+            "role": "command-action",
+            "widget": "action",
+            "width_logical_px": 108,
+            "height_logical_px": 30
+          }
+        },
+        {
+          "id": "semantic-model-row",
+          "layout": "row",
+          "grow": 1,
+          "children": [
+            {
+              "id": "semantic-side",
+              "role": "instrument-rail",
+              "layout": "column",
+              "width_logical_px": 238,
+              "min_width_logical_px": 180,
+              "resizable": true,
+              "children": [
+                {
+                  "id": "semantic-features",
+                  "role": "semantic-feature-collection",
+                  "layout": "column",
+                  "grow": 1,
+                  "overflow": "auto",
+                  "repeat": {
+                    "role": "feature-station"
+                  },
+                  "template": {
+                    "role": "semantic-feature-item",
+                    "widget": "action",
+                    "height_logical_px": 28
+                  }
+                },
+                {
+                  "id": "semantic-fields",
+                  "role": "semantic-field-collection",
+                  "layout": "column",
+                  "grow": 1,
+                  "overflow": "auto",
+                  "repeat": {
+                    "role": "operation-field"
+                  },
+                  "template": {
+                    "role": "semantic-field-item",
+                    "widget": "field",
+                    "height_logical_px": 58
+                  }
+                },
+                {
+                  "id": "semantic-confirmation",
+                  "layout": "row",
+                  "height_logical_px": 54,
+                  "children": [
+                    {
+                      "id": "semantic-apply",
+                      "use": "apply",
+                      "width_logical_px": 62
+                    },
+                    {
+                      "id": "semantic-cancel",
+                      "use": "cancel",
+                      "grow": 1
+                    }
+                  ]
                 }
               ]
+            },
+            {
+              "id": "semantic-viewport",
+              "use": "viewport",
+              "grow": 1
             }
           ]
         },
         {
+          "id": "semantic-status",
           "use": "status",
-          "height_logical_px": 26
+          "height_logical_px": 24
         }
       ]
     }

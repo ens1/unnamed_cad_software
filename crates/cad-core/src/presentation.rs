@@ -1,6 +1,14 @@
-use crate::{CadError, Document, Id, Result, Session};
+use crate::{Document, Id, Session};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
+mod layout;
+mod semantic;
+mod style;
+pub use semantic::{ActionDescriptor, ValueDescriptor, ValueKind};
+pub use style::{SUPPORTED_STYLE_PROPERTIES, StyleNode, StyleTarget};
+pub const SEMANTIC_CONTRACT_VERSION: u32 = 1;
+pub const LAYOUT_SCHEMA_VERSION: u32 = 1;
+pub const STYLE_SCHEMA_VERSION: u32 = 1;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SemanticElement {
     pub id: Id,
@@ -1175,6 +1183,35 @@ pub struct Component {
     pub bind: Option<String>,
     #[serde(default)]
     pub command: Option<String>,
+    #[serde(default)]
+    pub widget: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+/// A placement binding never owns a second copy of a domain value or action.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BindingDescriptor {
+    pub bind: Option<String>,
+    pub command: Option<String>,
+    pub widget: Option<String>,
+    pub label: Option<String>,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RepeatBinding {
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub id_prefix: Option<String>,
+    #[serde(default)]
+    pub ids: Vec<String>,
+    #[serde(default)]
+    pub relationships: Vec<String>,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub states: Vec<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LayoutNode {
@@ -1201,9 +1238,51 @@ pub struct LayoutNode {
     #[serde(default)]
     pub classes: Vec<String>,
     #[serde(default)]
+    pub states: Vec<String>,
+    #[serde(default)]
+    pub attributes: BTreeMap<String, String>,
+    #[serde(default)]
     pub children: Vec<LayoutNode>,
     #[serde(default)]
     pub editing: Option<LayoutSizing>,
+    #[serde(default)]
+    pub bind: Option<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub semantic: Option<String>,
+    #[serde(default)]
+    pub widget: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub repeat: Option<RepeatBinding>,
+    #[serde(default)]
+    pub template: Option<Box<LayoutNode>>,
+    #[serde(default)]
+    pub gap_logical_px: Option<f32>,
+    /// Insets use CSS ordering: top, right, bottom, left.
+    #[serde(default)]
+    pub padding_logical_px: Option<[f32; 4]>,
+    #[serde(default)]
+    pub min_width_logical_px: Option<f32>,
+    #[serde(default)]
+    pub max_width_logical_px: Option<f32>,
+    #[serde(default)]
+    pub min_height_logical_px: Option<f32>,
+    #[serde(default)]
+    pub max_height_logical_px: Option<f32>,
+    #[serde(default)]
+    pub align: Option<String>,
+    #[serde(default)]
+    pub justify: Option<String>,
+    /// Anchored children are out of flow and positioned relative to their parent.
+    #[serde(default)]
+    pub anchor: Option<String>,
+    #[serde(default)]
+    pub visibility: Option<String>,
+    #[serde(default)]
+    pub overflow: Option<String>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LayoutSizing {
@@ -1223,7 +1302,7 @@ pub struct StyleRule {
     pub selector: String,
     pub properties: BTreeMap<String, String>,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Theme {
     #[serde(default)]
     pub schema_version: u32,
@@ -1320,316 +1399,6 @@ pub struct Region {
     pub rect: [f32; 4],
     pub classes: Vec<String>,
     pub resizable: bool,
-}
-impl LayoutDocument {
-    pub fn load(path: &Path) -> Result<Self> {
-        let doc: Self = serde_json::from_slice(&std::fs::read(path)?)?;
-        doc.validate()?;
-        Ok(doc)
-    }
-    pub fn validate(&self) -> Result<()> {
-        if self.schema_version > 1 || self.layouts.is_empty() {
-            return Err(CadError::Invalid(
-                "Invalid layout version or no layouts".into(),
-            ));
-        }
-        fn walk(n: &LayoutNode, c: &BTreeMap<String, Component>, depth: usize) -> Result<()> {
-            if depth > 32 {
-                return Err(CadError::Invalid("Layout nesting exceeds 32".into()));
-            }
-            if let Some(key) = &n.component
-                && !c.contains_key(key)
-            {
-                return Err(CadError::Invalid(format!("Unknown layout component {key}")));
-            }
-            for v in [n.width_logical_px, n.height_logical_px, n.grow]
-                .into_iter()
-                .flatten()
-                .chain(
-                    n.editing
-                        .iter()
-                        .flat_map(|s| [s.width_logical_px, s.height_logical_px, s.grow])
-                        .flatten(),
-                )
-            {
-                if !v.is_finite() || v < 0. {
-                    return Err(CadError::Invalid("Invalid layout size".into()));
-                }
-            }
-            if n.position.is_some_and(|p| p.iter().any(|v| !v.is_finite())) {
-                return Err(CadError::Invalid("Invalid position".into()));
-            }
-            for child in &n.children {
-                walk(child, c, depth + 1)?;
-            }
-            Ok(())
-        }
-        for n in self.layouts.values() {
-            walk(n, &self.components, 0)?;
-        }
-        Ok(())
-    }
-    pub fn regions(&self, name: &str, width: f32, height: f32) -> Result<Vec<Region>> {
-        self.regions_editing(name, width, height, false)
-    }
-    pub fn regions_editing(
-        &self,
-        name: &str,
-        width: f32,
-        height: f32,
-        editing: bool,
-    ) -> Result<Vec<Region>> {
-        if editing {
-            let mut layout = self.clone();
-            fn apply(node: &mut LayoutNode) {
-                if let Some(s) = node.editing.take() {
-                    if let Some(width) = s.width_logical_px {
-                        node.width_logical_px = Some(width);
-                    }
-                    if let Some(height) = s.height_logical_px {
-                        node.height_logical_px = Some(height);
-                    }
-                    if let Some(grow) = s.grow {
-                        node.grow = Some(grow);
-                    }
-                }
-                for child in &mut node.children {
-                    apply(child);
-                }
-            }
-            for root in layout.layouts.values_mut() {
-                apply(root);
-            }
-            return layout.regions_editing(name, width, height, false);
-        }
-        let root = self
-            .layouts
-            .get(name)
-            .ok_or_else(|| CadError::Invalid(format!("Unknown layout {name}")))?;
-        let mut regions = vec![];
-        fn walk(
-            doc: &LayoutDocument,
-            node: &LayoutNode,
-            r: [f32; 4],
-            path: &str,
-            out: &mut Vec<Region>,
-        ) {
-            if node.hidden {
-                return;
-            }
-            let r = if let Some(p) = node.position {
-                [
-                    p[0],
-                    p[1],
-                    node.width_logical_px.unwrap_or(r[2]),
-                    node.height_logical_px.unwrap_or(r[3]),
-                ]
-            } else {
-                r
-            };
-            let component = node.component.as_ref().and_then(|k| doc.components.get(k));
-            let role = node
-                .role
-                .clone()
-                .or_else(|| component.map(|c| c.role.clone()))
-                .unwrap_or_else(|| "container".into());
-            let identity = node.id.clone().unwrap_or_else(|| {
-                format!(
-                    "{}@{path}",
-                    node.component.as_deref().unwrap_or("container")
-                )
-            });
-            out.push(Region {
-                id: identity,
-                role,
-                component: node.component.clone(),
-                rect: r,
-                classes: node.classes.clone(),
-                resizable: node.resizable,
-            });
-            if node.children.is_empty() {
-                return;
-            }
-            let row = node.layout.as_deref() == Some("row");
-            let available = if row { r[2] } else { r[3] };
-            let fixed: Vec<_> = node
-                .children
-                .iter()
-                .map(|c| {
-                    if c.hidden {
-                        0.
-                    } else {
-                        if row {
-                            c.width_logical_px
-                        } else {
-                            c.height_logical_px
-                        }
-                        .unwrap_or_else(|| {
-                            if c.grow.unwrap_or(0.) > 0. {
-                                0.
-                            } else {
-                                doc.components
-                                    .get(c.component.as_deref().unwrap_or(""))
-                                    .map(|c| match c.role.as_str() {
-                                        "document-context" => 76.,
-                                        "view-navigation" => 42.,
-                                        "preview-status" => 42.,
-                                        "draft-actions" => 86.,
-                                        "apply-action" => 82.,
-                                        "cancel-action" => 48.,
-                                        "parameter-instrument" => 180.,
-                                        _ => 80.,
-                                    })
-                                    .unwrap_or(82.)
-                            }
-                        })
-                    }
-                })
-                .collect();
-            let growth: f32 = node
-                .children
-                .iter()
-                .filter(|c| !c.hidden)
-                .map(|c| c.grow.unwrap_or(0.))
-                .sum();
-            let remaining = (available - fixed.iter().sum::<f32>()).max(0.);
-            let mut cursor = if row { r[0] } else { r[1] };
-            for (i, child) in node.children.iter().enumerate() {
-                let span = fixed[i]
-                    + if growth > 0. && !child.hidden {
-                        remaining * child.grow.unwrap_or(0.) / growth
-                    } else {
-                        0.
-                    };
-                let rect = if row {
-                    [cursor, r[1], span, r[3]]
-                } else {
-                    [r[0], cursor, r[2], span]
-                };
-                walk(doc, child, rect, &format!("{path}/{i}"), out);
-                cursor += span;
-            }
-        }
-        walk(self, root, [0., 0., width, height], "root", &mut regions);
-        Ok(regions)
-    }
-}
-impl Theme {
-    pub fn load(path: &Path) -> Result<Self> {
-        let data = std::fs::read_to_string(path)?;
-        let theme = if path.extension().is_some_and(|e| e == "css") {
-            Self::from_css(&data)?
-        } else {
-            serde_json::from_str(&data)?
-        };
-        if theme.schema_version > 1 {
-            return Err(CadError::Invalid("Unsupported theme version".into()));
-        }
-        Ok(theme)
-    }
-    pub fn from_css(source: &str) -> Result<Self> {
-        let mut theme = Self::default();
-        let mut remainder = source;
-        while let Some(open) = remainder.find('{') {
-            let selector = remainder[..open].trim();
-            let rest = &remainder[open + 1..];
-            let end = rest
-                .find('}')
-                .ok_or_else(|| CadError::Invalid("Unclosed CSS block".into()))?;
-            let mut properties = BTreeMap::new();
-            for line in rest[..end].split(';').filter(|s| !s.trim().is_empty()) {
-                let (name, value) = line
-                    .split_once(':')
-                    .ok_or_else(|| CadError::Invalid("Expected CSS declaration".into()))?;
-                if name.trim().starts_with("--") {
-                    theme
-                        .variables
-                        .insert(name.trim().into(), value.trim().into());
-                } else {
-                    properties.insert(name.trim().into(), value.trim().into());
-                }
-            }
-            theme.rules.push(StyleRule {
-                selector: selector.into(),
-                properties,
-            });
-            remainder = &rest[end + 1..];
-        }
-        if !remainder.trim().is_empty() {
-            return Err(CadError::Invalid("Incomplete CSS rule".into()));
-        }
-        Ok(theme)
-    }
-    pub fn properties(
-        &self,
-        region: &Region,
-        layout: &str,
-        state: &str,
-    ) -> BTreeMap<String, String> {
-        fn matches(s: &str, r: &Region, layout: &str, state: &str) -> bool {
-            let s = s.trim();
-            if s == "*" || s == ":root" {
-                return true;
-            }
-            if let Some(id) = s.strip_prefix('#') {
-                return r.id == id;
-            }
-            if let Some(class) = s.strip_prefix('.') {
-                return r.classes.iter().any(|c| c == class);
-            }
-            let mut rem = s;
-            while let Some(start) = rem.find('[') {
-                let Some(end) = rem[start..].find(']') else {
-                    return false;
-                };
-                let clause = &rem[start + 1..start + end];
-                let Some((key, value)) = clause.split_once('=') else {
-                    return false;
-                };
-                let value = value.trim_matches(['\'', '"']);
-                if match key.trim() {
-                    "role" => r.role != value,
-                    "layout" => layout != value,
-                    "state" => state != value,
-                    _ => true,
-                } {
-                    return false;
-                }
-                rem = &rem[start + end + 1..];
-            }
-            s.contains('[')
-        }
-        let mut selected = vec![];
-        for (i, rule) in self.rules.iter().enumerate() {
-            for selector in rule.selector.split(',') {
-                if matches(selector, region, layout, state) {
-                    let specificity = selector.matches('#').count() * 100
-                        + selector.matches('[').count() * 10
-                        + selector.matches('.').count() * 10;
-                    selected.push((specificity, i, &rule.properties));
-                    break;
-                }
-            }
-        }
-        selected.sort_by_key(|v| (v.0, v.1));
-        let mut out = BTreeMap::new();
-        for (_, _, props) in selected {
-            for (key, value) in props {
-                let mut v = value.clone();
-                for _ in 0..8 {
-                    let Some(a) = v.find("var(") else { break };
-                    let Some(b) = v[a..].find(')') else { break };
-                    let name = &v[a + 4..a + b];
-                    let Some(replacement) = self.variables.get(name) else {
-                        break;
-                    };
-                    v.replace_range(a..a + b + 1, replacement);
-                }
-                out.insert(key.clone(), v);
-            }
-        }
-        out
-    }
 }
 pub fn default_layout() -> LayoutDocument {
     serde_json::from_str(include_str!("../../../assets/ui/layout.json")).expect("bundled layout")

@@ -1,0 +1,183 @@
+/* TCAD portable style contract v1. Edit or import this file in Layout and theme. */
+:root {
+  --panel: #F4F1E9;
+  --ink: #191919;
+  --active: #FF5A00;
+  --valid: #2DAA45;
+  --spacing: 4px;
+  --reference: #0087BE;
+  --font-size: 11px;
+  --control-height: 24px;
+  --target-size: 24px;
+  --warning: #B37400;
+  --error: #AD392B;
+  --workspace: #D5D9DF;
+}
+
+[role=selection-actions] {
+  background: var(--panel);
+  padding: 8px;
+  border: 1px solid #A9ACAF;
+  border-radius: 6px;
+}
+
+* {
+  color: var(--ink);
+  gap: var(--spacing);
+  font-size: var(--font-size);
+}
+
+[role=instrument-rail], [role=workspace-toolbar], [role=editor-group] {
+  background: var(--panel);
+  padding: 0px;
+}
+
+[role=property-manager], [role=parameter-instrument] {
+  font-size: var(--font-size);
+  font-variant-numeric: tabular-nums;
+}
+
+[role=apply-action] {
+  background: var(--active);
+  border: 2px solid var(--ink);
+}
+
+[layout=instrument-rail] [role=apply-action] {
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  font-size: 11px;
+}
+
+[layout=top-workspace] [role=apply-action] {
+  border-radius: 4px;
+  padding: 12px 24px;
+}
+
+[role=preview-status][state=valid] {
+  color: var(--valid);
+}
+
+[role=document-context], [role=command-manager], [role=status-bar] {
+  background: #F2F0EB;
+  padding: 5px;
+  border: 1px solid #C2C5CA;
+}
+
+[role=model-viewport] {
+  background: #D5D9DF;
+  selection-color: #FF5A00;
+  preview-color: #FFAD4266;
+}
+
+[role=dependency-view], [role=view-navigation], [role=property-manager] {
+  background: var(--panel);
+  padding: 6px;
+}
+
+.semantic-control, .toolbar-control, [role=command-action], [role=command-tab], [role=view-control] {
+  min-target-size: var(--target-size);
+  height: var(--control-height);
+  padding: 3px 6px;
+  border-radius: 3px;
+}
+
+.toolbar-control {
+  height: 26px;
+  padding: 3px 5px;
+  font-size: 10.5px;
+  icon-size: 18px;
+  border: none;
+  background: #F4F1E9;
+}
+
+.toolbar-control:hover, [role=menu-action]:hover, [role=selection-action]:hover {
+  background: #E4E0D8;
+}
+
+[role=command-tab][state=selected], .toolbar-control[state=selected] {
+  color: var(--active);
+  background: #FFE3D2;
+  border: 1px solid #FF5A00;
+}
+
+[role=menu-action], [role=selection-action] {
+  width: 100%;
+  height: 24px;
+  padding: 3px 6px;
+  border: none;
+}
+
+[role=apply-action] {
+  background: var(--active);
+  color: var(--ink);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--ink);
+}
+
+[role=apply-action][state=disabled] {
+  background: #D9D5CE;
+  color: #77736E;
+}
+
+[role=cancel-action] {
+  color: var(--ink);
+  background: #F4F1E9;
+  padding: 3px 8px;
+  border: none;
+  height: 26px;
+}
+
+[role=viewport-toolbar] {
+  font-size: 11px;
+  padding: 0px;
+}
+
+[role=navigation-hint] {
+  font-size: 10px;
+  color: #666666;
+}
+
+[role=semantic-command-collection], [role=semantic-feature-collection], [role=semantic-field-collection] {
+  background: var(--panel);
+  padding: 4px;
+  gap: 2px;
+  overflow: auto;
+}
+
+[role=semantic-feature-item] {
+  padding: 2px;
+  height: 28px;
+}
+
+[role=semantic-field-item] {
+  padding: 4px;
+  height: 58px;
+}
+
+.feature-tree-row, [role=history-station] {
+  width: 100%;
+  text-align: left;
+  padding: 2px 4px;
+  border: none;
+  background: transparent;
+  height: 26px;
+  icon-size: 8px;
+}
+
+.feature-tree-row[state=selected], [role=history-station][state=selected] {
+  color: var(--active);
+  background: #FFE3D2;
+  height: 36px;
+}
+
+[role=history-path] {
+  color: #666666;
+  stroke-width: 1px;
+}
+
+[role=view-cube] {
+  font-size: 9px;
+}
