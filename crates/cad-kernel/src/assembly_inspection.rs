@@ -269,25 +269,19 @@ fn points_bounds(points: &[Point3]) -> Bounds {
     b
 }
 fn native_bounds(solid: &Solid) -> Option<Bounds> {
-    if let Some(bounds) = monstertruck::modeling::bounding::certified_solid_bounding_box(solid) {
-        let a = bounds.min();
-        let b = bounds.max();
-        if finite(a) && finite(b) {
-            return Some([[a.x, a.y, a.z], [b.x, b.y, b.z]]);
+    let enclosures = crate::native_bounds::solid(solid).ok()?;
+    let mut bounds = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
+    for enclosure in enclosures {
+        for (index, direction) in [Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()]
+            .into_iter()
+            .enumerate()
+        {
+            let (low, high) = enclosure.projection(Point3::origin(), direction).ok()?;
+            bounds[0][index] = bounds[0][index].min(low);
+            bounds[1][index] = bounds[1][index].max(high);
         }
     }
-    // Exact analytic conversions outside this explicit carrier domain can
-    // allocate expansion nets; keep the fallback to admitted stored controls.
-    if solid.face_iter().any(|face| {
-        !matches!(
-            face.surface(),
-            Surface::Plane(_) | Surface::BsplineSurface(_) | Surface::NurbsSurface(_)
-        )
-    }) {
-        return None;
-    }
-    let points = crate::adapter::solid_control_points(solid).ok()?;
-    (!points.is_empty() && points.iter().copied().all(finite)).then(|| points_bounds(&points))
+    Some(bounds)
 }
 fn separated(a: Bounds, b: Bounds, tolerance: f64) -> bool {
     let magnitude = a

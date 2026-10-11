@@ -12,7 +12,8 @@ There is no sampled mesh, fitted relay-sphere surface, or successful unchanged
 fallback for a failed selected edge.
 
 The native constructor covers straight convex edges between planar supporting
-walls of a closed convex polyhedral stock envelope. Positive B-spline and NURBS
+walls of a convex stock envelope, including walls with distant earlier round
+trims. Positive B-spline and NURBS
 controls can prove the same planar/straight geometry as explicit planes/lines;
 the enum name alone does not determine admission. At each selected endpoint,
 the stock envelope must have three incident edges and three incident walls.
@@ -65,8 +66,8 @@ items. These bounds are independent of the operation's larger overall selection
 limit. Unsupported input returns a diagnostic rather than an approximate blend.
 
 Variable radii, unequal-dihedral two-edge transitions,
-nontrivalent corners, general curved-edge rounds, and existing rounded exterior
-stock without a closed straight/planar supporting envelope still need further
+nontrivalent corners, general curved-edge rounds, and selected endpoints that
+meet earlier curved transitions still need further
 kernel work in this constructor. Concave chains and enclosed-void shells use
 the separate void-duality path described in the dispatcher documentation. Later
 fillets may use the local or circular constructors when their complete support

@@ -1686,10 +1686,7 @@ fn axis_plane(origin: Point3, axis: Vector3) -> Result<Plane> {
     })
 }
 fn proven_disjoint(a: &Solid, b: &Solid) -> bool {
-    crate::adapter::solid_control_points(a)
-        .ok()
-        .zip(crate::adapter::solid_control_points(b).ok())
-        .is_some_and(|(a, b)| crate::extrusion_surface::bounds_disjoint(&a, &b, 0.))
+    crate::boolean_ops::disjoint(a, b)
 }
 fn exterior_caps(
     solid: &Solid,
@@ -1774,10 +1771,10 @@ fn cut_history(
     owner: &NodeRef,
     scope: &BTreeSet<NodeRef>,
     section: &serde_json::Value,
+    originals: [&Solid; 2],
     output: &crate::planar::CutOutput,
     generated: &mut crate::adapter::TopologyHistory,
 ) -> Result<()> {
-    let mut identities = BTreeSet::new();
     for tag in &output.faces {
         let sources=tag.sources.iter().map(|(face,_)|*face).chain(tag.partition_sources.iter().copied()).map(|face|generated.face_source(face).or_else(||scope.iter().find_map(|body|adapter.face_source(body,face))).ok_or_else(||CadError::Unsupported("Exact cut source-face provenance is unavailable; reselect its current authored source".into()))).collect::<Result<Vec<_>>>()?;
         let face = output
@@ -1786,15 +1783,12 @@ fn cut_history(
             .flat_map(Solid::face_iter)
             .find(|face| face.id() == tag.face)
             .ok_or_else(|| invalid("Exact cut constructor lost a named face"))?;
-        let reference = generated.tool_face(
+        generated.tool_face(
             owner,
             face,
             &sources,
             &serde_json::json!({"operation":"extrusion_cut","scope":section["scope_body_sources"]}),
         )?;
-        if !identities.insert(reference.role) {
-            return Err(CadError::Unsupported("Disconnected cut faces share ambiguous source ancestry; explicit split topology reattachment is required".into()));
-        }
     }
     let mut edges: std::collections::HashMap<EdgeId, (Edge, Vec<cad_core::TopologyRef>)> =
         std::collections::HashMap::new();
@@ -1817,23 +1811,19 @@ fn cut_history(
                 .push(source.clone());
         }
     }
-    let mut identities = BTreeSet::new();
     for (edge, sources) in edges.values() {
-        let reference = if let Some(reference) = generated.edge_source(edge.id()).or_else(|| {
+        if let Some(reference) = generated.edge_source(edge.id()).or_else(|| {
             scope
                 .iter()
                 .find_map(|body| adapter.edge_source(body, edge.id()))
         }) {
-            generated.inherit_edge(edge.id(), reference.clone());
-            reference
+            generated.inherit_edge(edge.id(), reference);
         } else {
-            generated.tool_edge(owner,edge,sources,&serde_json::json!({"operation":"extrusion_cut","constructor":"shared_boundary","scope":section["scope_body_sources"]}))?
+            generated.tool_edge(owner,edge,sources,&serde_json::json!({"operation":"extrusion_cut","constructor":"shared_boundary","scope":section["scope_body_sources"]}))?;
         };
-        if !identities.insert(reference.role) {
-            return Err(CadError::Unsupported("Disconnected cut boundaries share ambiguous source ancestry; explicit split topology reattachment is required".into()));
-        }
     }
-    Ok(())
+    let bodies = output.bodies.iter().collect::<Vec<_>>();
+    adapter.carry_boolean_results(owner, scope, originals, &bodies, generated)
 }
 
 fn scoped_section_identity(
@@ -2152,7 +2142,17 @@ pub(crate) fn operation(
                     joined = contact.solid;
                     continue;
                 }
-                joined = crate::boolean_ops::union(&solid, &joined, tolerance)?;
+                joined = crate::boolean_ops::union_with_history(
+                    &solid,
+                    &joined,
+                    tolerance,
+                    &scope_refs,
+                    crate::revolution::Combination {
+                        adapter,
+                        owner,
+                        generated,
+                    },
+                )?;
             }
             retained.push(joined);
             result = retained;
@@ -2208,12 +2208,28 @@ pub(crate) fn operation(
                                 generated,
                             )?;
                         }
-                        cut_history(adapter, owner, &scope_refs, &scoped_key, &cut, generated)?;
+                        cut_history(
+                            adapter,
+                            owner,
+                            &scope_refs,
+                            &scoped_key,
+                            [&solid, &tool],
+                            &cut,
+                            generated,
+                        )?;
                         next.extend(cut.bodies);
                         continue;
                     }
                     if let Some(cut) = crate::planar::convex_difference(&solid, &tool)? {
-                        cut_history(adapter, owner, &scope_refs, &scoped_key, &cut, generated)?;
+                        cut_history(
+                            adapter,
+                            owner,
+                            &scope_refs,
+                            &scoped_key,
+                            [&solid, &tool],
+                            &cut,
+                            generated,
+                        )?;
                         next.extend(cut.bodies);
                         continue;
                     }

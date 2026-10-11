@@ -190,22 +190,14 @@ pub(crate) fn control_cost(solid: &Solid, limit: usize) -> Result<usize> {
     Ok(count)
 }
 fn hull(solid: &Solid) -> Result<Vec<Point3>> {
-    if let Some(bounds) = monstertruck::modeling::bounding::certified_solid_bounding_box(solid) {
-        let a = bounds.min();
-        let b = bounds.max();
-        return Ok([a.x, b.x]
-            .into_iter()
-            .flat_map(|x| {
-                [a.y, b.y]
-                    .into_iter()
-                    .flat_map(move |y| [a.z, b.z].into_iter().map(move |z| Point3::new(x, y, z)))
-            })
-            .collect());
-    }
-    // A straight revolution generator is analytically unbounded in U; only
-    // the certified native trimmed-boundary enclosure can admit that class.
-    if solid.face_iter().any(|face|matches!(face.surface(),Surface::RevolutionSurface(surface) if matches!(surface.entity().entity_curve(),Curve::Line(_)))){return Err(unsupported("The trimmed analytic revolution stock has no proven finite native enclosure"));}
-    crate::adapter::solid_control_points(solid).map_err(|error|match error{CadError::Unsupported(_)=>unsupported("No exact finite native enclosure is available for this stock; intersection guides and display meshes cannot bound a cutter"),other=>other})
+    crate::native_bounds::solid(solid)
+        .map(|faces| faces.iter().flat_map(|face| face.points().iter().copied()).collect())
+        .map_err(|error| match error {
+            CadError::Unsupported(_) => unsupported(
+                "No exact finite native enclosure is available for this stock; intersection guides and display meshes cannot bound a cutter",
+            ),
+            other => other,
+        })
 }
 struct Budget {
     work: usize,

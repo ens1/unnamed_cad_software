@@ -629,12 +629,93 @@ fn contains_material(profile: &[Segment], query: Point2) -> Result<bool> {
     ))
 }
 
-fn profiles(before: &[Segment], after: &[Segment], outward: bool) -> Result<()> {
+struct OpeningPair {
+    before: Segment,
+    after: Segment,
+}
+fn opening_crossing(segment: &Segment, cap: &Segment, paired: &Segment) -> Result<bool> {
+    let allowed = |point: Point2| {
+        related_endpoint(segment, cap, point) || related_endpoint(segment, paired, point)
+    };
+    if let Some(points) = intersections(segment.equation, cap.equation)? {
+        return Ok(points
+            .into_iter()
+            .any(|point| segment.contains(point) && cap.contains(point) && !allowed(point)));
+    }
+    // A coincident meridian is another planar span on the opening plane.
+    // Positive-length overlap is forbidden; a single native incident endpoint
+    // is the only permitted contact with the opening's complete radial span.
+    let low = segment
+        .start
+        .x
+        .min(segment.end.x)
+        .max(cap.start.x.min(cap.end.x));
+    let high = segment
+        .start
+        .x
+        .max(segment.end.x)
+        .min(cap.start.x.max(cap.end.x));
+    if high < low - EPS {
+        return Ok(false);
+    }
+    if high > low + EPS {
+        return Ok(true);
+    }
+    Ok(!allowed(Point2::new((low + high) * 0.5, cap.start.y)))
+}
+fn opening_profiles(
+    before: &[Segment],
+    after: &[Segment],
+    openings: &[OpeningPair],
+    outward: bool,
+) -> Result<()> {
+    for opening in openings {
+        let old = &opening.before;
+        let new = &opening.after;
+        if !old.equation.same(new.equation)
+            || old.start.x >= old.end.x - EPS
+            || new.start.x >= new.end.x - EPS
+        {
+            return Err(invalid(
+                "An opening changes plane or its radial interval collapses",
+            ));
+        }
+        let (inside, outside) = if outward { (old, new) } else { (new, old) };
+        if inside.start.x < outside.start.x - EPS || inside.end.x > outside.end.x + EPS {
+            return Err(invalid(
+                "The offset opening interval leaves its required material-side nesting",
+            ));
+        }
+        for segment in after.iter().filter(|segment| !segment.opening) {
+            if opening_crossing(segment, old, new)? {
+                return Err(invalid(
+                    "An offset wall crosses a nonincident source opening or its rim",
+                ));
+            }
+        }
+        for segment in before.iter().filter(|segment| !segment.opening) {
+            if opening_crossing(segment, new, old)? {
+                return Err(invalid(
+                    "An expanded opening or rim crosses a nonincident source wall",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn profiles(
+    before: &[Segment],
+    after: &[Segment],
+    openings: &[OpeningPair],
+    outward: bool,
+) -> Result<()> {
     if before.len() > MAX_FACES || after.len() > MAX_FACES {
         return Err(unsupported(
             "Turned profile exceeds the exact collision budget",
         ));
     }
+    opening_profiles(before, after, openings, outward)?;
     for i in 0..after.len() {
         if after[i].start.distance(after[i].end) <= EPS {
             return Err(invalid("Thickness collapses a meridian span"));
@@ -658,7 +739,7 @@ fn profiles(before: &[Segment], after: &[Segment], outward: bool) -> Result<()> 
             }
         }
         for source in before {
-            if source.opening {
+            if source.opening || after[i].opening {
                 continue;
             }
             if crossing(&after[i], source, false)? {
@@ -893,6 +974,7 @@ pub(crate) fn shell(
     // A planar circular cap can have no meridian edge at all. Its material
     // interval in the radial section is still required for collision checks.
     let mut cap_groups = HashSet::new();
+    let mut opening_pairs = Vec::new();
     for face in &faces {
         let wall = walls[&face.id()];
         if !wall.plane || cap_groups.contains(&face.id()) {
@@ -953,34 +1035,36 @@ pub(crate) fn shell(
         let new = [paired[0].1, paired[1].1];
         let ancestry = [paired[0].2, paired[1].2];
         let opening = wall.before.same(wall.after);
-        add_segment(
-            &mut before_profile,
-            Segment {
-                equation: wall.before,
-                start: old[0],
-                end: old[1],
-                mid: old[0] + (old[1] - old[0]) * 0.5,
-                opening,
-                source_start: old[0],
-                source_end: old[1],
-                stations: ancestry,
-            },
-        )?;
-        add_segment(
-            &mut after_profile,
-            Segment {
-                equation: wall.after,
-                start: new[0],
-                end: new[1],
-                mid: new[0] + (new[1] - new[0]) * 0.5,
-                opening,
-                source_start: old[0],
-                source_end: old[1],
-                stations: ancestry,
-            },
-        )?;
+        let before = Segment {
+            equation: wall.before,
+            start: old[0],
+            end: old[1],
+            mid: old[0] + (old[1] - old[0]) * 0.5,
+            opening,
+            source_start: old[0],
+            source_end: old[1],
+            stations: ancestry,
+        };
+        let after = Segment {
+            equation: wall.after,
+            start: new[0],
+            end: new[1],
+            mid: new[0] + (new[1] - new[0]) * 0.5,
+            opening,
+            source_start: old[0],
+            source_end: old[1],
+            stations: ancestry,
+        };
+        if opening {
+            opening_pairs.push(OpeningPair {
+                before: before.clone(),
+                after: after.clone(),
+            });
+        }
+        add_segment(&mut before_profile, before)?;
+        add_segment(&mut after_profile, after)?;
     }
-    profiles(&before_profile, &after_profile, outward)?;
+    profiles(&before_profile, &after_profile, &opening_pairs, outward)?;
     let mut changed = Shell::new();
     let mut changed_faces = HashMap::new();
     for face in &faces {

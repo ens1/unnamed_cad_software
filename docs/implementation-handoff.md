@@ -292,7 +292,7 @@ new unrelated feature families are outside this focused implementation.
 
 The public dependency fork is `https://github.com/ens1/monstertruck`, branch
 `tcad-modeling-reliability`, pinned by TCAD to
-`b70826f22737c4f25534bb1a0c26ab53552988ae`. Its parent code is the published
+`e52aab0677610f65c647e7f8dc0829efe2cb1318`. Its parent code is the published
 Monstertruck 0.4.1 revision. The fork contains only generic dependency work,
 retains Apache-2.0 licensing, and removes an unrelated private `.blueprints`
 submodule that otherwise prevented public Cargo dependency resolution. The
@@ -305,7 +305,13 @@ parameter-domain loop area handling and untouched closed-component indexing.
 It adds bounded triangle-interference/chain construction, fixed-tolerance
 native projection checks, explicit ambiguity failures and stage-specific
 errors. Search tessellations and intersection guides remain derived aids;
-output boundaries retain native supporting surfaces. Generic tangent/coplanar
+output boundaries retain native supporting surfaces. Dependency checkpoint
+`e52aab06` adds an analytic planar arrangement for complete straight-edged
+faces, including coplanar overlap, nonconvex stock, holes, cavities and
+complemented operands. It merges adjacent selected cells, conforms shared
+native topology and preserves absolute source carriers. Complete loop
+admission, fixed-precision arithmetic, complete-link vertex matching and
+bounded predicate work reject uncertain cases. General curved tangent/coplanar
 SSI and globally certified freeform intersection tracing remain incomplete.
 
 TCAD now has set-correct multibody Boolean dispatch and valid empty body-set
@@ -320,36 +326,67 @@ The new edge-treatment paths are registered and integrated before the existing
 simultaneous convex constructors. They add local straight convex/concave
 wedges, convex-void pocket/cavity chains, and complete cylindrical/conical
 rims with exact toroidal fillets or conical bevels. Every candidate keeps a
-private history snapshot. See `docs/edge-treatments.md` for precise limits.
+private history snapshot. Later connected rounds may preserve separated
+previous blends and curved trims on supporting planar walls; only the newly
+selected endpoint neighborhoods require straight three-plane topology. Exact
+affine sphere/torus/revolution enclosures protect retained geometry, including
+nonuniform transforms and composite native curves. Outward interval arithmetic
+covers affine support, inverse transforms, parameter evaluation and rational
+subdivision in collision proofs; guide curves and rounded analytic-to-rational
+conversions cannot certify separation. Native line-revolution walls retain
+their original carrier, use actual rim frames for construction, and enclose
+the changed analytic strip independently with outward Rodrigues evaluation.
+Full positive tensor-control displacement bounds account for rounded profile
+weights. Revolved cap sectors coalesce transactionally into circular disks or
+annuli, retaining rim topology and explicit Distance 1 source relationships.
+See `docs/edge-treatments.md` for precise limits.
 
 Surface Offset/Thicken recognizes exact plane/cylinder/cone/sphere/torus
 carriers. Curved Shell includes conical/cylindrical walls with intersected cap
 offsets and spherical shells. A mixed turned-shell constructor solves bounded
 line/circle meridian offset joins and preserves exact native revolution
-geometry. Offset work and independent source review are ongoing; noncoaxial
-blended-shell coverage and global collision/containment proofs must not be
-claimed complete merely from the existence of these files.
+geometry. Opening-cap radial intervals must nest correctly and remain clear of
+nonincident meridians. Fully rounded convex envelopes now support mixed
+plane/cylinder/sphere shelling through a complete convex-core normal-map
+certificate; separated rounded enclosed cavities use signed-distance
+containment and support-axis separation for the complete offset collar.
+Surface Offset/Thicken also cover these closed envelopes and proven planar
+rational carriers. Offset layers, thickened rims and normal connectors have
+explicit source-derived references. Open blended-pocket networks, mixed-radius
+rounded envelopes, topology-changing offsets and general freeform offsets
+remain unsupported.
 
 The backend fingerprint is now
-`monstertruck/0.4.1+b70826f22737;adapter/23;solver/tcad-native-lm/12` in both
+`monstertruck/0.4.1+e52aab067761;adapter/24;solver/tcad-native-lm/12` in both
 adapter and desktop. Prior derived caches are invalidated, while saved source
 schema and authored definitions stay unchanged. Ambiguous old topology
-references require explicit repair instead of silent retargeting.
+references require explicit repair instead of silent retargeting. Split faces
+and edges use complete canonical source-boundary and source-neighborhood
+signatures. Original vertex anchors must be unique among the inputs; no native
+edge direction, position or traversal index supplies a persistent identity.
+Unknown-source carrier barriers survive intermediate Boolean steps. Ambiguous
+components refuse instead of borrowing a positional fallback identity.
 
 ### Verification and publication state
 
 The fork changes passed library compilation, strict Clippy with default and
 no-default features, targeted nightly rustfmt checks, and `git diff --check`.
-The pinned dependency and TCAD workspace libraries/binaries compiled together.
-`cargo clippy --workspace --lib --bins --locked -- -D warnings`,
+The final pinned dependency and TCAD workspace libraries/binaries compiled
+together. `cargo clippy --workspace --lib --bins --locked -- -D warnings`,
 `cargo fmt --all -- --check`, `git diff --check` and
-`scripts/package-macos.sh` passed for the first private checkpoint. The refreshed
+`scripts/package-macos.sh` passed for both implementation checkpoints. The refreshed
 `dist/TCAD.app` contains the distinct `TCAD`, `tcad-worker` and `tcad-cli`
 executables. The existing `proc-macro-error2` 2.0.1 future-incompatibility notice
 remains. No tests, assertion probes or manual/UI smoke tests were written or run.
 
-Further implementation is active for fully rounded convex-body shelling,
-repeated connected fillets on previously trimmed stock, and native coplanar
-Boolean handling. Those are separate work in progress, not part of the first
-checkpoint's supported behavior. This progress record is not a completed-kernel
-claim; interactive geometric acceptance remains with the user.
+The first private checkpoint is `e67d105`, pushed to the private origin.
+The second checkpoint adds the rounded-body, repeated-round, native revolved-rim
+and planar Boolean work described above. Source review also strengthened
+carrier-ancestry propagation between Boolean steps, unknown-source barriers,
+duplicate-identity validation, bounded ancestry serialization and canonical
+component naming. Final workspace checks and packaging are complete. The
+public dependency changes are pushed; this document accompanies the second
+private implementation commit. This is not a claim of universal kernel coverage;
+interactive geometric acceptance remains with the user. The unsupported
+intersection, mixed-blend and offset families listed above remain kernel work,
+not work that presentation or feature-editor changes can resolve.

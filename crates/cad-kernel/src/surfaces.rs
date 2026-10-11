@@ -301,6 +301,124 @@ fn loft(
     Ok(shell)
 }
 
+fn offset_history(
+    adapter: &MonstertruckAdapter,
+    owner: &NodeRef,
+    source: &NodeRef,
+    offset: &crate::analytic_offset::Offset,
+    purpose: &serde_json::Value,
+    history: &mut TopologyHistory,
+) -> Result<()> {
+    let faces = offset
+        .shell
+        .iter()
+        .map(|face| (face.id(), face))
+        .collect::<HashMap<_, _>>();
+    for (source_id, target) in &offset.faces {
+        let reference = adapter.face_source(source, *source_id).ok_or_else(|| {
+            CadError::Unsupported(
+                "Surface offset needs an authored reference for every source face".into(),
+            )
+        })?;
+        let face = faces
+            .get(target)
+            .ok_or_else(|| invalid("Offset face lost its constructor mapping"))?;
+        history.tool_face(owner, face, &[reference], purpose)?;
+    }
+    for (source_id, edge) in &offset.edges {
+        let reference = adapter.edge_source(source, *source_id).ok_or_else(|| {
+            CadError::Unsupported(
+                "Surface offset needs an authored reference for every source boundary".into(),
+            )
+        })?;
+        history.tool_edge(owner, edge, &[reference], purpose)?;
+    }
+    Ok(())
+}
+fn thicken_history(
+    adapter: &MonstertruckAdapter,
+    owner: &NodeRef,
+    source: &NodeRef,
+    result: &crate::analytic_offset::Thickened,
+    history: &mut TopologyHistory,
+) -> Result<()> {
+    for (index, layer) in result.layers.iter().enumerate() {
+        offset_history(
+            adapter,
+            owner,
+            source,
+            layer,
+            &serde_json::json!({
+                "operation":"surface_thicken","constructor":"normal_layer",
+                "layer":if index==0 { "start" } else { "end" },
+            }),
+            history,
+        )?;
+    }
+    let faces = result
+        .solids
+        .iter()
+        .flat_map(Solid::face_iter)
+        .map(|face| (face.id(), face))
+        .collect::<HashMap<_, _>>();
+    let edges = result
+        .solids
+        .iter()
+        .flat_map(Solid::edge_iter)
+        .map(|edge| (edge.id(), edge))
+        .collect::<HashMap<_, _>>();
+    for (face, edge) in &result.rims {
+        let reference = adapter.edge_source(source, *edge).ok_or_else(|| {
+            CadError::Unsupported("Thicken rim has no authored source boundary".into())
+        })?;
+        let face = faces
+            .get(face)
+            .ok_or_else(|| invalid("Thicken rim lost its constructor mapping"))?;
+        history.tool_face(
+            owner,
+            face,
+            &[reference],
+            &serde_json::json!({
+                "operation":"surface_thicken","constructor":"normal_rim",
+            }),
+        )?;
+    }
+    let mut connector_roles = HashSet::new();
+    for (id, endpoints) in &result.connectors {
+        let mut sources = Vec::new();
+        let mut station = Vec::new();
+        for (edge, back) in endpoints {
+            let reference = adapter.edge_source(source, *edge).ok_or_else(|| {
+                CadError::Unsupported("Thicken connector has no authored source endpoint".into())
+            })?;
+            station.push(serde_json::json!({
+                "edge":crate::adapter::construction_reference(&reference)?,
+                "endpoint":if *back { "end" } else { "start" },
+            }));
+            sources.push(reference);
+        }
+        station.sort_by_key(serde_json::Value::to_string);
+        station.dedup();
+        let edge = edges
+            .get(id)
+            .ok_or_else(|| invalid("Thicken connector lost its constructor mapping"))?;
+        let reference = history.tool_edge(
+            owner,
+            edge,
+            &sources,
+            &serde_json::json!({
+                "operation":"surface_thicken","constructor":"normal_connector","station":station,
+            }),
+        )?;
+        if !connector_roles.insert(reference.role) {
+            return Err(CadError::Unsupported(
+                "Thicken connectors need distinct authored endpoint ancestry".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn operation(
     adapter: &MonstertruckAdapter,
     doc: &Document,
@@ -448,12 +566,22 @@ pub(crate) fn operation(
         }
         SurfaceOperation::Offset { surface, distance } => {
             let distance = length(distance)?;
-            Shape::Surfaces(
-                surfaces(inputs, surface)?
-                    .iter()
-                    .map(|shell| Ok(crate::analytic_offset::offset(shell, distance)?.shell))
-                    .collect::<Result<Vec<_>>>()?,
-            )
+            let mut shells = Vec::new();
+            for shell in surfaces(inputs, surface)? {
+                let offset = crate::analytic_offset::offset(shell, distance)?;
+                offset_history(
+                    adapter,
+                    owner,
+                    surface,
+                    &offset,
+                    &serde_json::json!({
+                        "operation":"surface_offset","constructor":"normal_offset",
+                    }),
+                    history,
+                )?;
+                shells.push(offset.shell);
+            }
+            Shape::Surfaces(shells)
         }
         SurfaceOperation::Reverse { surface } => Shape::Surfaces(
             surfaces(inputs, surface)?
@@ -524,9 +652,10 @@ pub(crate) fn operation(
             }
             let mut solids = Vec::new();
             for shell in surfaces(inputs, surface)? {
-                solids.extend(crate::analytic_offset::thicken(
-                    shell, thickness, *mid_plane, *reverse,
-                )?);
+                let result =
+                    crate::analytic_offset::thicken(shell, thickness, *mid_plane, *reverse)?;
+                thicken_history(adapter, owner, surface, &result, history)?;
+                solids.extend(result.solids);
             }
             Shape::Bodies(solids)
         }

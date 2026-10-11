@@ -47,6 +47,7 @@ mod rib;
 mod section_checks;
 mod section_history;
 mod shell_history;
+mod smooth_shell;
 mod solid_sections;
 mod split;
 mod surface_construct;

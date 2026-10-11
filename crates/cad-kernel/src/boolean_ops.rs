@@ -27,10 +27,16 @@ fn same(a: &Solid, b: &Solid) -> bool {
     faces(a) == faces(b)
 }
 
-fn disjoint(a: &Solid, b: &Solid) -> bool {
-    crate::adapter::solid_control_points(a)
+pub(crate) fn disjoint(a: &Solid, b: &Solid) -> bool {
+    let enclosure = |body| -> Result<Vec<Point3>> {
+        Ok(crate::native_bounds::solid(body)?
+            .iter()
+            .flat_map(|face| face.points().iter().copied())
+            .collect())
+    };
+    enclosure(a)
         .ok()
-        .zip(crate::adapter::solid_control_points(b).ok())
+        .zip(enclosure(b).ok())
         .is_some_and(|(a, b)| {
             !a.is_empty()
                 && !b.is_empty()
@@ -98,6 +104,24 @@ pub(crate) fn union(a: &Solid, b: &Solid, tolerance: f64) -> Result<Solid> {
         .ok_or_else(|| invalid("Union of nonempty material regions returned no material"))
 }
 
+pub(crate) fn union_with_history(
+    a: &Solid,
+    b: &Solid,
+    tolerance: f64,
+    scope: &std::collections::BTreeSet<cad_core::NodeRef>,
+    context: crate::revolution::Combination<'_>,
+) -> Result<Solid> {
+    let output = union(a, b, tolerance)?;
+    context.adapter.carry_boolean_history(
+        context.owner,
+        scope,
+        [a, b],
+        &output,
+        context.generated,
+    )?;
+    Ok(output)
+}
+
 fn insert_union(
     result: &mut Vec<Solid>,
     mut tool: Solid,
@@ -153,7 +177,17 @@ pub(crate) fn union_with_contact(
             )?;
             Ok(contact.solid)
         } else {
-            union(a, b, tolerance)
+            union_with_history(
+                a,
+                b,
+                tolerance,
+                scope,
+                crate::revolution::Combination {
+                    adapter: context.adapter,
+                    owner: context.owner,
+                    generated: context.generated,
+                },
+            )
         }
     })
 }

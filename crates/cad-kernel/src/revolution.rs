@@ -391,27 +391,7 @@ fn section_plane(faces: &[Face], origin: Point3, axis: Vector3) -> Result<()> {
     Ok(())
 }
 fn separated(a: &Solid, b: &Solid) -> bool {
-    let (Ok(a), Ok(b)) = (
-        crate::adapter::solid_control_points(a),
-        crate::adapter::solid_control_points(b),
-    ) else {
-        return false;
-    };
-    if a.is_empty()
-        || b.is_empty()
-        || a.iter()
-            .chain(&b)
-            .any(|p| ![p.x, p.y, p.z].iter().all(|x| x.is_finite()))
-    {
-        return false;
-    }
-    (0..3).any(|axis| {
-        let a0 = a.iter().map(|p| p[axis]).fold(f64::INFINITY, f64::min);
-        let a1 = a.iter().map(|p| p[axis]).fold(f64::NEG_INFINITY, f64::max);
-        let b0 = b.iter().map(|p| p[axis]).fold(f64::INFINITY, f64::min);
-        let b1 = b.iter().map(|p| p[axis]).fold(f64::NEG_INFINITY, f64::max);
-        a1 < b0 - 1e-7 || b1 < a0 - 1e-7
-    })
+    crate::boolean_ops::disjoint(a, b)
 }
 pub(crate) struct Combination<'a> {
     pub adapter: &'a MonstertruckAdapter,
@@ -494,7 +474,17 @@ pub(crate) fn combine(
                     )?;
                     joined = contact.solid;
                 } else {
-                    joined = crate::boolean_ops::union(&body, &joined, tolerance)?;
+                    joined = crate::boolean_ops::union_with_history(
+                        &body,
+                        &joined,
+                        tolerance,
+                        &scope_refs,
+                        Combination {
+                            adapter: context.adapter,
+                            owner: context.owner,
+                            generated: context.generated,
+                        },
+                    )?;
                 }
             }
             retained.push(joined);

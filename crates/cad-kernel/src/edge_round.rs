@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 const EPS: f64 = 1e-7;
 const MAX_EDGES: usize = 256;
 const MAX_FACES: usize = 2048;
+const MAX_SOURCE_EDGES: usize = 16_384;
 const MAX_PROTECTED_CONTROLS: usize = 65_536;
 const MAX_SEPARATION_WORK: usize = 8_000_000;
 
@@ -269,6 +270,38 @@ fn oriented(edge: &Edge, first: &Vertex, last: &Vertex) -> Result<Edge> {
     }
 }
 
+/// Global supporting carriers do not require polygon-only trims. A planar
+/// wall can already contain distant round arcs while the complete body remains
+/// on its material side. Keep this distinct from planar::supporting_planes,
+/// whose other callers require complete straight convex polygons.
+fn supporting_carriers(solid: &Solid) -> Result<HashMap<FaceId, BoundaryPlane>> {
+    let enclosures = crate::native_bounds::solid(solid)?;
+    let mut planes = HashMap::new();
+    let mut work = 0usize;
+    for face in solid.face_iter() {
+        let Some(plane) = crate::planar::boundary_plane(face)? else {
+            continue;
+        };
+        let mut supports = true;
+        for enclosure in &enclosures {
+            work = work.saturating_add(enclosure.len());
+            if work > MAX_SEPARATION_WORK {
+                return Err(unsupported(
+                    "Supporting-carrier proof exceeds its work budget",
+                ));
+            }
+            if enclosure.projection(plane.origin, plane.normal)?.1 > EPS {
+                supports = false;
+                break;
+            }
+        }
+        if supports {
+            planes.insert(face.id(), plane);
+        }
+    }
+    Ok(planes)
+}
+
 /// Returns `None` for stock outside this constructor's proven planar class.
 /// Once eligible, collapsed edges and excessive radii are explicit failures.
 pub(crate) fn round(
@@ -285,12 +318,15 @@ pub(crate) fn round(
             "Radius must be finite and positive above the modeling tolerance",
         ));
     }
-    if selected.len() > MAX_EDGES || solid.face_iter().count() > MAX_FACES {
+    if selected.len() > MAX_EDGES
+        || solid.face_iter().count() > MAX_FACES
+        || solid.edge_iter().take(MAX_SOURCE_EDGES * 2 + 1).count() > MAX_SOURCE_EDGES * 2
+    {
         return Err(unsupported(
             "The round exceeds the native constructor's edge or face work limit",
         ));
     }
-    let planes = match crate::planar::supporting_planes(solid) {
+    let planes = match supporting_carriers(solid) {
         Ok(planes) => planes,
         Err(CadError::Unsupported(_)) => return Ok(None),
         Err(error) => return Err(error),
@@ -298,20 +334,16 @@ pub(crate) fn round(
     if planes.len() < 4 {
         return Ok(None);
     }
-    let planes = planes
-        .into_iter()
-        .map(|plane| (plane.face.id(), plane))
-        .collect::<HashMap<_, _>>();
     let mut edges = HashMap::new();
     let mut adjacency: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
     let mut corners: HashMap<VertexId, Corner> = HashMap::new();
     let selected = selected.iter().copied().collect::<HashSet<_>>();
     for face in solid.face_iter() {
-        if !planes.contains_key(&face.id()) {
-            continue;
-        }
-        for edge in &face.boundaries()[0] {
+        for edge in face.edge_iter() {
             edges.entry(edge.id()).or_insert_with(|| edge.clone());
+            if edges.len() > MAX_SOURCE_EDGES {
+                return Err(unsupported("The source shell exceeds the edge work budget"));
+            }
             adjacency.entry(edge.id()).or_default().push(face.id());
             for vertex in [edge.front(), edge.back()] {
                 let corner = corners.entry(vertex.id()).or_insert_with(|| Corner {
@@ -341,26 +373,52 @@ pub(crate) fn round(
     if adjacency.values().any(|faces| faces.len() != 2) {
         return Ok(None);
     }
-    // Retain holes and pockets only when positive control hulls prove that
-    // their complete carriers miss every selected edge's removal slabs. The
+    for id in &selected {
+        if !crate::planar::straight_edge(&edges[id])?
+            || adjacency[id].iter().any(|face| !planes.contains_key(face))
+        {
+            return Ok(None);
+        }
+    }
+    // Only selected endpoints need the original three-plane, straight-edge
+    // neighborhood. Earlier curved seams elsewhere are retained unchanged.
+    for corner in corners
+        .values()
+        .filter(|corner| !corner.selected.is_empty())
+    {
+        if corner.edges.len() != 3
+            || corner.faces.len() != 3
+            || corner.faces.iter().any(|face| !planes.contains_key(face))
+        {
+            return Ok(None);
+        }
+        for edge in &corner.edges {
+            if !crate::planar::straight_edge(&edges[edge])? {
+                return Ok(None);
+            }
+        }
+    }
+    // Retain holes, pockets and earlier treatments only when certified native
+    // enclosures prove that they miss every selected edge's removal slabs. The
     // wall-specific slab depths below come from all positive strip controls
     // and complete corner-ball bounds. Axial separation is deliberately not
     // assumed, preferring a refusal to an intersecting pocket.
     let mut protected = Vec::new();
+    // Protect every distant trim, including straight coplanar subdivision
+    // edges. No new round may silently cross a wire that is kept unchanged.
+    // Edges at selected endpoints are handled by explicit terminal setbacks.
+    for edge in edges.values().filter(|edge| {
+        corners[&edge.front().id()].selected.is_empty()
+            && corners[&edge.back().id()].selected.is_empty()
+    }) {
+        match crate::native_bounds::curve(&edge.curve()) {
+            Ok(enclosure) => protected.push(enclosure),
+            Err(CadError::Unsupported(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        }
+    }
     for face in solid.face_iter() {
-        if planes.contains_key(&face.id()) {
-            for wire in face.boundaries().iter().skip(1) {
-                let mut hull = Vec::new();
-                for edge in wire {
-                    match crate::extrusion::curve_hull(&edge.curve()) {
-                        Ok(points) => hull.extend(points),
-                        Err(CadError::Unsupported(_)) => return Ok(None),
-                        Err(error) => return Err(error),
-                    }
-                }
-                protected.push(crate::native_bounds::Enclosure::from_hull(hull)?);
-            }
-        } else {
+        if !planes.contains_key(&face.id()) {
             match crate::native_bounds::face(face) {
                 Ok(enclosure) => protected.push(enclosure),
                 Err(CadError::Unsupported(_)) => return Ok(None),
@@ -596,6 +654,12 @@ pub(crate) fn round(
         };
         let first = endpoint(edge.front())?;
         let last = endpoint(edge.back())?;
+        if first.id() == edge.front().id() && last.id() == edge.back().id() {
+            // In particular, retain a previous circular/spherical seam's exact
+            // carrier and orientation instead of replacing it by its chord.
+            trimmed.insert(*id, edge.clone());
+            continue;
+        }
         let delta = edge.back().point() - edge.front().point();
         let length = delta.magnitude2();
         let t0 = (first.point() - edge.front().point()).dot(delta) / length;
@@ -610,69 +674,73 @@ pub(crate) fn round(
                 "Radius consumes a neighbouring sharp edge or makes corner trims overlap; reduce the radius",
             ));
         }
-        let line = if first.id() == edge.front().id() && last.id() == edge.back().id() {
-            edge.clone()
-        } else {
-            builder::line(&first, &last)
-        };
+        let line = builder::line(&first, &last);
         history.retain_edge(line.id(), *id)?;
         trimmed.insert(*id, line);
     }
     let mut faces = Vec::new();
     for face in solid.face_iter() {
-        if !planes.contains_key(&face.id()) {
+        if !planes.contains_key(&face.id())
+            || face.edge_iter().all(|edge| {
+                !blends.contains_key(&edge.id())
+                    && trimmed
+                        .get(&edge.id())
+                        .is_some_and(|new| new.id() == edge.id())
+            })
+        {
             faces.push(face.clone());
             continue;
         }
-        let source_wire = &face.boundaries()[0];
-        let mut segments = Vec::new();
-        for edge in source_wire {
-            let new = if let Some(blend) = blends.get(&edge.id()) {
-                let side = blend.faces.iter().position(|id| *id == face.id()).unwrap();
-                if edge.front().id() == blend.source.front().id() {
-                    blend.rails[side].clone()
+        let mut wires = Vec::new();
+        for source_wire in face.boundaries() {
+            let mut segments = Vec::new();
+            for edge in &source_wire {
+                let new = if let Some(blend) = blends.get(&edge.id()) {
+                    let side = blend.faces.iter().position(|id| *id == face.id()).unwrap();
+                    if edge.front().id() == blend.source.front().id() {
+                        blend.rails[side].clone()
+                    } else {
+                        blend.rails[side].inverse()
+                    }
                 } else {
-                    blend.rails[side].inverse()
-                }
-            } else {
-                let line = &trimmed[&edge.id()];
-                if edge.front().id() == edges[&edge.id()].front().id() {
-                    line.clone()
-                } else {
-                    line.inverse()
-                }
-            };
-            segments.push(new);
-        }
-        let mut wire = Wire::new();
-        for index in 0..segments.len() {
-            let current = &segments[index];
-            let next = &segments[(index + 1) % segments.len()];
-            wire.push_back(current.clone());
-            if current.back().id() != next.front().id() {
-                let vertex = source_wire[index].back();
-                let corner = &corners[&vertex.id()];
-                if corner.selected.len() != 1
-                    || corner
-                        .selected
-                        .iter()
-                        .any(|edge| adjacency[edge].contains(&face.id()))
-                {
-                    return Err(invalid(
-                        "A rounded planar boundary has an unfilled corner gap",
-                    ));
-                }
-                let blend = &blends[&corner.selected[0]];
-                let end = if blend.source.front().id() == vertex.id() {
-                    &blend.ends[0]
-                } else {
-                    &blend.ends[1]
+                    let line = &trimmed[&edge.id()];
+                    if edge.front().id() == edges[&edge.id()].front().id() {
+                        line.clone()
+                    } else {
+                        line.inverse()
+                    }
                 };
-                wire.push_back(oriented(&end.arc, current.back(), next.front())?);
+                segments.push(new);
             }
+            let mut wire = Wire::new();
+            for index in 0..segments.len() {
+                let current = &segments[index];
+                let next = &segments[(index + 1) % segments.len()];
+                wire.push_back(current.clone());
+                if current.back().id() != next.front().id() {
+                    let vertex = source_wire[index].back();
+                    let corner = &corners[&vertex.id()];
+                    if corner.selected.len() != 1
+                        || corner
+                            .selected
+                            .iter()
+                            .any(|edge| adjacency[edge].contains(&face.id()))
+                    {
+                        return Err(invalid(
+                            "A rounded planar boundary has an unfilled corner gap",
+                        ));
+                    }
+                    let blend = &blends[&corner.selected[0]];
+                    let end = if blend.source.front().id() == vertex.id() {
+                        &blend.ends[0]
+                    } else {
+                        &blend.ends[1]
+                    };
+                    wire.push_back(oriented(&end.arc, current.back(), next.front())?);
+                }
+            }
+            wires.push(wire);
         }
-        let mut wires = vec![wire];
-        wires.extend(face.boundaries().into_iter().skip(1));
         let output = Face::try_new(wires, face.oriented_surface())
             .map_err(|error| invalid(&error.to_string()))?;
         history.retain_face(output.id(), face.id())?;

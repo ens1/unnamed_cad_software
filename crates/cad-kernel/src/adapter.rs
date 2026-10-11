@@ -9,7 +9,14 @@ use monstertruck::{
     modeling::*,
     topology::compress::{CompressedEdge, CompressedFace, CompressedShell, CompressedSolid},
 };
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
+#[path = "component_history.rs"]
+mod component_history;
+use component_history::{Budget as HistoryBudget, MAX_HISTORY_BYTES, budget_error, history_size};
+
 #[derive(Clone)]
 pub enum Shape {
     Reference(cad_core::reference_geometry::Geometry),
@@ -125,6 +132,8 @@ pub(crate) struct TopologyHistory {
     faces: std::collections::HashMap<FaceId, TopologyRef>,
     generated_curves: BTreeMap<String, Vec<TopologyRef>>,
     generated_surfaces: BTreeMap<String, Vec<TopologyRef>>,
+    unresolved_curves: BTreeSet<String>,
+    unresolved_surfaces: BTreeSet<String>,
 }
 pub(crate) fn construction_reference(reference: &TopologyRef) -> Result<serde_json::Value> {
     fn normalize(value: &mut serde_json::Value) -> Result<()> {
@@ -175,17 +184,29 @@ impl TopologyHistory {
     pub(crate) fn merge(&mut self, other: Self) {
         self.faces.extend(other.faces);
         self.edges.extend(other.edges);
+        self.unresolved_curves.extend(other.unresolved_curves);
+        self.unresolved_surfaces.extend(other.unresolved_surfaces);
         for (curve, references) in other.generated_curves {
-            self.generated_curves
-                .entry(curve)
-                .or_default()
-                .extend(references);
+            let existing = self.generated_curves.entry(curve).or_default();
+            for reference in references {
+                if !existing
+                    .iter()
+                    .any(|old| old.producer == reference.producer && old.role == reference.role)
+                {
+                    existing.push(reference);
+                }
+            }
         }
         for (surface, references) in other.generated_surfaces {
-            self.generated_surfaces
-                .entry(surface)
-                .or_default()
-                .extend(references);
+            let existing = self.generated_surfaces.entry(surface).or_default();
+            for reference in references {
+                if !existing
+                    .iter()
+                    .any(|old| old.producer == reference.producer && old.role == reference.role)
+                {
+                    existing.push(reference);
+                }
+            }
         }
     }
     pub(crate) fn face_source(&self, face: FaceId) -> Option<TopologyRef> {
@@ -791,7 +812,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+b70826f22737;adapter/23;solver/tcad-native-lm/12"
+        "monstertruck/0.4.1+e52aab067761;adapter/24;solver/tcad-native-lm/12"
     }
     fn sheet_metadata(
         &self,
@@ -2512,6 +2533,185 @@ impl MonstertruckAdapter {
             },
         )
     }
+    /// Preserve proven carrier ancestry between native Boolean steps. A later
+    /// contact join must be able to reference faces created by an earlier join
+    /// in the same feature, before the final document history is published.
+    /// This records only existing identities and unique native carrier origins;
+    /// ambiguous or unrecognized ancestry is never guessed from position.
+    pub(crate) fn carry_boolean_history(
+        &self,
+        owner: &NodeRef,
+        scope: &BTreeSet<NodeRef>,
+        inputs: [&Solid; 2],
+        output: &Solid,
+        generated: &mut TopologyHistory,
+    ) -> Result<()> {
+        self.carry_boolean_results(owner, scope, inputs, &[output], generated)
+    }
+
+    pub(crate) fn carry_boolean_results(
+        &self,
+        owner: &NodeRef,
+        scope: &BTreeSet<NodeRef>,
+        inputs: [&Solid; 2],
+        outputs: &[&Solid],
+        generated: &mut TopologyHistory,
+    ) -> Result<()> {
+        let previous_size = history_size(generated);
+        if previous_size > MAX_HISTORY_BYTES {
+            return Err(budget_error());
+        }
+        let mut budget = HistoryBudget::new();
+        let mut seen_faces = std::collections::HashSet::new();
+        let mut seen_edges = std::collections::HashSet::new();
+        let histories = self.histories.borrow();
+        let mut inherited = TopologyHistory::default();
+        let mut curves = BTreeMap::<String, Vec<TopologyRef>>::new();
+        let mut surfaces = BTreeMap::<String, Vec<TopologyRef>>::new();
+        let mut unresolved_curves = generated.unresolved_curves.clone();
+        let mut unresolved_surfaces = generated.unresolved_surfaces.clone();
+        for body in inputs {
+            for face in body.face_iter() {
+                if !seen_faces.insert(face.id()) {
+                    continue;
+                }
+                if seen_faces.len() > 16_384 {
+                    return Err(budget_error());
+                }
+                let carrier = budget.encoded(&face.surface())?;
+                let source = generated.face_source(face.id()).or_else(|| {
+                    scope
+                        .iter()
+                        .find_map(|reference| histories.get(reference)?.face_source(face.id()))
+                });
+                if let Some(source) = source {
+                    budget.reference(&source)?;
+                    inherited.inherit_face(face.id(), source.clone());
+                    surfaces.entry(carrier).or_default().push(source);
+                } else {
+                    unresolved_surfaces.insert(carrier);
+                }
+            }
+            for edge in body.edge_iter() {
+                if !seen_edges.insert(edge.id()) {
+                    continue;
+                }
+                if seen_edges.len() > 65_536 {
+                    return Err(budget_error());
+                }
+                let carrier = budget.encoded(&edge.curve())?;
+                let source = generated.edge_source(edge.id()).or_else(|| {
+                    scope
+                        .iter()
+                        .find_map(|reference| histories.get(reference)?.edge_source(edge.id()))
+                });
+                if let Some(source) = source {
+                    budget.reference(&source)?;
+                    inherited.inherit_edge(edge.id(), source.clone());
+                    curves.entry(carrier).or_default().push(source);
+                } else {
+                    unresolved_curves.insert(carrier);
+                }
+            }
+        }
+        // A known contributor does not establish unique ancestry when another
+        // entity on that exact carrier has no resolved source identity.
+        surfaces.retain(|carrier, _| !unresolved_surfaces.contains(carrier));
+        curves.retain(|carrier, _| !unresolved_curves.contains(carrier));
+        let mut pending = TopologyHistory::default();
+        let mut output_faces = std::collections::HashMap::new();
+        let mut output_edges = std::collections::HashMap::new();
+        seen_faces.clear();
+        seen_edges.clear();
+        for face in outputs.iter().flat_map(|body| body.face_iter()) {
+            if !seen_faces.insert(face.id()) {
+                continue;
+            }
+            if seen_faces.len() > 16_384 {
+                return Err(budget_error());
+            }
+            let carrier = budget.encoded(&face.surface())?;
+            output_faces.insert(face.id(), carrier.clone());
+            if let Some(source) = generated
+                .face_source(face.id())
+                .or_else(|| inherited.face_source(face.id()))
+                .or_else(|| unique_origin(surfaces.get(&carrier)))
+            {
+                budget.reference(&source)?;
+                pending.inherit_face(face.id(), source);
+            }
+        }
+        for edge in outputs.iter().flat_map(|body| body.edge_iter()) {
+            if !seen_edges.insert(edge.id()) {
+                continue;
+            }
+            if seen_edges.len() > 65_536 {
+                return Err(budget_error());
+            }
+            let curve = edge.curve();
+            let carrier = budget.encoded(&curve)?;
+            output_edges.insert(edge.id(), carrier.clone());
+            let source = generated
+                .edge_source(edge.id())
+                .or_else(|| inherited.edge_source(edge.id()))
+                .or_else(|| unique_origin(curves.get(&carrier)));
+            let source = match source {
+                Some(source) => Some(source),
+                None => carrier_intersection_origin(owner, &curve, &surfaces, &mut budget)?,
+            };
+            if let Some(source) = source {
+                budget.reference(&source)?;
+                pending.inherit_edge(edge.id(), source);
+            }
+        }
+        let originals = inputs
+            .iter()
+            .flat_map(|body| body.boundaries())
+            .collect::<Vec<_>>();
+        let shells = outputs
+            .iter()
+            .flat_map(|body| body.boundaries())
+            .collect::<Vec<_>>();
+        component_history::resolve(
+            owner,
+            &shells,
+            &originals,
+            &inherited.edges,
+            &inherited.faces,
+            &mut pending,
+            &mut budget,
+        )?;
+        for (id, carrier) in output_faces {
+            if let Some(source) = pending.faces.get(&id) {
+                pending
+                    .generated_surfaces
+                    .entry(carrier)
+                    .or_default()
+                    .push(source.clone());
+            } else {
+                unresolved_surfaces.insert(carrier);
+            }
+        }
+        for (id, carrier) in output_edges {
+            if let Some(source) = pending.edges.get(&id) {
+                pending
+                    .generated_curves
+                    .entry(carrier)
+                    .or_default()
+                    .push(source.clone());
+            } else {
+                unresolved_curves.insert(carrier);
+            }
+        }
+        pending.unresolved_curves = unresolved_curves;
+        pending.unresolved_surfaces = unresolved_surfaces;
+        if previous_size.saturating_add(history_size(&pending)) > MAX_HISTORY_BYTES {
+            return Err(budget_error());
+        }
+        generated.merge(pending);
+        Ok(())
+    }
+
     fn record_history(
         &self,
         owner: &NodeRef,
@@ -2521,107 +2721,117 @@ impl MonstertruckAdapter {
         mapped_input: Option<(&NodeRef, Matrix4)>,
         generated: &TopologyHistory,
     ) -> Result<()> {
+        if history_size(generated) > MAX_HISTORY_BYTES {
+            return Err(budget_error());
+        }
         if matches!(result, Shape::ReferenceCurves { .. }) {
             self.histories
                 .borrow_mut()
                 .insert(owner.clone(), generated.clone());
             return Ok(());
         }
+        let mut budget = HistoryBudget::new();
         let mut history = TopologyHistory::default();
         let histories = self.histories.borrow();
         let mut inherited_edges = std::collections::HashMap::new();
         let mut inherited_faces = std::collections::HashMap::new();
         let mut curve_origins = generated.generated_curves.clone();
         let mut surface_origins = generated.generated_surfaces.clone();
+        let mut unresolved_curves = generated.unresolved_curves.clone();
+        let mut unresolved_surfaces = generated.unresolved_surfaces.clone();
+        let mut originals = Vec::new();
         for input in op.dependencies() {
-            if let (Some(shells), Some(h)) = (
-                inputs.get(&input).and_then(Shape::boundary_shells),
-                histories.get(&input),
-            ) {
-                for shell in shells {
-                    for edge in shell.edge_iter() {
-                        if let Some(r) = h.edges.get(&edge.id()) {
-                            inherited_edges.insert(edge.id(), r.clone());
-                            let curve = match mapped_input {
-                                Some((source, m)) if source == &input => {
-                                    edge.curve().transformed(m)
-                                }
-                                _ => edge.curve(),
-                            };
-                            curve_origins
-                                .entry(serde_json::to_string(&curve)?)
-                                .or_default()
-                                .push(r.clone());
-                        }
+            let Some(shells) = inputs.get(&input).and_then(Shape::boundary_shells) else {
+                continue;
+            };
+            let h = histories.get(&input);
+            let mut seen_edges = std::collections::HashSet::new();
+            let mut seen_faces = std::collections::HashSet::new();
+            for shell in shells {
+                originals.push(shell);
+                for edge in shell.edge_iter() {
+                    budget.charge(1)?;
+                    if !seen_edges.insert(edge.id()) {
+                        continue;
                     }
-                    for face in shell.iter() {
-                        if let Some(r) = h.faces.get(&face.id()) {
-                            inherited_faces.insert(face.id(), r.clone());
-                            let surface = match mapped_input {
-                                Some((source, m)) if source == &input => {
-                                    face.surface().transformed(m)
-                                }
-                                _ => face.surface(),
-                            };
-                            surface_origins
-                                .entry(serde_json::to_string(&surface)?)
-                                .or_default()
-                                .push(r.clone());
-                        }
+                    let curve = match mapped_input {
+                        Some((source, m)) if source == &input => edge.curve().transformed(m),
+                        _ => edge.curve(),
+                    };
+                    let carrier = budget.encoded(&curve)?;
+                    if let Some(r) = h.and_then(|h| h.edges.get(&edge.id())) {
+                        budget.reference(r)?;
+                        inherited_edges.insert(edge.id(), r.clone());
+                        curve_origins.entry(carrier).or_default().push(r.clone());
+                    } else {
+                        unresolved_curves.insert(carrier);
+                    }
+                }
+                for face in shell.iter() {
+                    budget.charge(1)?;
+                    if !seen_faces.insert(face.id()) {
+                        continue;
+                    }
+                    let surface = match mapped_input {
+                        Some((source, m)) if source == &input => face.surface().transformed(m),
+                        _ => face.surface(),
+                    };
+                    let carrier = budget.encoded(&surface)?;
+                    if let Some(r) = h.and_then(|h| h.faces.get(&face.id())) {
+                        budget.reference(r)?;
+                        inherited_faces.insert(face.id(), r.clone());
+                        surface_origins.entry(carrier).or_default().push(r.clone());
+                    } else {
+                        unresolved_surfaces.insert(carrier);
                     }
                 }
             }
         }
+        curve_origins.retain(|carrier, _| !unresolved_curves.contains(carrier));
+        surface_origins.retain(|carrier, _| !unresolved_surfaces.contains(carrier));
         if let Some(shells) = result.boundary_shells() {
             let scale_copy =
                 matches!(op, Operation::Scale { options, .. } if options.keep_original);
-            let mut intersection_edges = BTreeMap::new();
-            for (shell_index, shell) in shells.into_iter().enumerate() {
-                let b = shell_bounds(shell);
+            let mut seen_edges = std::collections::HashSet::new();
+            let mut seen_faces = std::collections::HashSet::new();
+            // Collect only proven source ancestry. Current-operation generic
+            // roles are assigned after component resolution and cannot anchor it.
+            for shell in &shells {
                 for edge in shell.edge_iter() {
-                    let sig = edge_signature(&edge)?;
+                    budget.charge(1)?;
+                    if !seen_edges.insert(edge.id()) {
+                        continue;
+                    }
                     let curve = edge.curve();
-                    let geometry = serde_json::to_string(&curve)?;
-                    let inherited = generated.edges.get(&edge.id()).cloned().or_else(|| {
+                    let geometry = budget.encoded(&curve)?;
+                    let source = generated.edges.get(&edge.id()).cloned().or_else(|| {
                         inherited_edges.get(&edge.id()).cloned().or_else(|| {
                             (!scale_copy)
                                 .then(|| unique_origin(curve_origins.get(&geometry)))
                                 .flatten()
                         })
                     });
-                    let intersection_origin = if inherited.is_none() {
-                        carrier_intersection_origin(owner, &curve, &surface_origins)?
-                    } else {
-                        None
+                    let source = match source {
+                        Some(source) => Some(source),
+                        None => carrier_intersection_origin(
+                            owner,
+                            &curve,
+                            &surface_origins,
+                            &mut budget,
+                        )?,
                     };
-                    if let Some(reference) = &intersection_origin {
-                        let key = (reference.producer.clone(), reference.role.clone());
-                        if let Some(previous) = intersection_edges.insert(key, edge.id())
-                            && previous != edge.id()
-                        {
-                            return Err(CadError::Unsupported(
-                                "Boolean provenance: Several disconnected intersection edges share the same source carriers; segmented construction ancestry is required".into(),
-                            ));
-                        }
+                    if let Some(source) = source {
+                        budget.reference(&source)?;
+                        history.inherit_edge(edge.id(), source);
                     }
-                    let r = inherited.or(intersection_origin).unwrap_or(TopologyRef {
-                        producer: owner.clone(),
-                        role: if matches!(op, Operation::Scale { .. }) {
-                            format!("edge:scale:body:{shell_index}:{}", role(sig.center, b))
-                        } else {
-                            format!("edge:{}:{}", op.name().to_lowercase(), role(sig.center, b))
-                        },
-                        topology: "edge".into(),
-                        signature: None,
-                    });
-                    history.edges.insert(edge.id(), r);
                 }
                 for face in shell.iter() {
-                    let pts = face.vertex_iter().map(|v| v.point()).collect::<Vec<_>>();
-                    let c = pts.iter().fold(Vector3::zero(), |s, p| s + p.to_vec())
-                        / pts.len().max(1) as f64;
-                    let geometry = serde_json::to_string(&face.surface())?;
-                    let inherited = generated
+                    budget.charge(1)?;
+                    if !seen_faces.insert(face.id()) {
+                        continue;
+                    }
+                    let geometry = budget.encoded(&face.surface())?;
+                    let source = generated
                         .faces
                         .get(&face.id())
                         .cloned()
@@ -2633,31 +2843,86 @@ impl MonstertruckAdapter {
                             })
                         })
                         .filter(|r| {
-                            // Opening rims are newly constructed faces, even
-                            // though they lie on a removed face's carrier plane.
-                            // Reusing its role for every rim would make picks
-                            // ambiguous on the very next operation.
+                            // A shell opening rim is a new face even on the removed carrier.
                             !matches!(op, Operation::Shell { removed_faces, .. }
-                                if removed_faces.iter().any(|removed|
-                                    removed.producer == r.producer && removed.role == r.role))
+                            if removed_faces.iter().any(|removed|
+                                removed.producer == r.producer && removed.role == r.role))
                         });
-                    let r = inherited.unwrap_or(TopologyRef {
-                        producer: owner.clone(),
-                        role: if matches!(op, Operation::Scale { .. }) {
-                            format!("face:scale:body:{shell_index}:{}", role([c.x, c.y, c.z], b))
-                        } else {
-                            format!(
-                                "face:{}:{}",
-                                op.name().to_lowercase(),
-                                role([c.x, c.y, c.z], b)
-                            )
-                        },
-                        topology: "face".into(),
-                        signature: None,
-                    });
-                    history.faces.insert(face.id(), r);
+                    if let Some(source) = source {
+                        budget.reference(&source)?;
+                        history.inherit_face(face.id(), source);
+                    }
                 }
             }
+            component_history::resolve(
+                owner,
+                &shells,
+                &originals,
+                &inherited_edges,
+                &inherited_faces,
+                &mut history,
+                &mut budget,
+            )?;
+            for (shell_index, shell) in shells.into_iter().enumerate() {
+                let bounds = shell_bounds(shell);
+                for edge in shell.edge_iter() {
+                    if history.edges.contains_key(&edge.id()) {
+                        continue;
+                    }
+                    let signature = edge_signature(&edge)?;
+                    history.inherit_edge(
+                        edge.id(),
+                        TopologyRef {
+                            producer: owner.clone(),
+                            role: if matches!(op, Operation::Scale { .. }) {
+                                format!(
+                                    "edge:scale:body:{shell_index}:{}",
+                                    role(signature.center, bounds)
+                                )
+                            } else {
+                                format!(
+                                    "edge:{}:{}",
+                                    op.name().to_lowercase(),
+                                    role(signature.center, bounds)
+                                )
+                            },
+                            topology: "edge".into(),
+                            signature: None,
+                        },
+                    );
+                }
+                for face in shell.iter() {
+                    if history.faces.contains_key(&face.id()) {
+                        continue;
+                    }
+                    let points = face.vertex_iter().map(|v| v.point()).collect::<Vec<_>>();
+                    let center = points
+                        .iter()
+                        .fold(Vector3::zero(), |sum, p| sum + p.to_vec())
+                        / points.len().max(1) as f64;
+                    history.inherit_face(
+                        face.id(),
+                        TopologyRef {
+                            producer: owner.clone(),
+                            role: if matches!(op, Operation::Scale { .. }) {
+                                format!(
+                                    "face:scale:body:{shell_index}:{}",
+                                    role([center.x, center.y, center.z], bounds)
+                                )
+                            } else {
+                                format!(
+                                    "face:{}:{}",
+                                    op.name().to_lowercase(),
+                                    role([center.x, center.y, center.z], bounds)
+                                )
+                            },
+                            topology: "face".into(),
+                            signature: None,
+                        },
+                    );
+                }
+            }
+            component_history::verify_unique(&history, &mut budget)?;
         }
         drop(histories);
         self.histories.borrow_mut().insert(owner.clone(), history);
@@ -2668,12 +2933,13 @@ fn carrier_intersection_origin(
     owner: &NodeRef,
     curve: &Curve,
     surfaces: &BTreeMap<String, Vec<TopologyRef>>,
+    budget: &mut HistoryBudget,
 ) -> Result<Option<TopologyRef>> {
     let Curve::IntersectionCurve(intersection) = curve else {
         return Ok(None);
     };
-    let lookup = |surface: &Surface| -> Result<Option<TopologyRef>> {
-        let origins = surfaces.get(&serde_json::to_string(surface)?);
+    let mut lookup = |surface: &Surface| -> Result<Option<TopologyRef>> {
+        let origins = surfaces.get(&budget.encoded(surface)?);
         let origin = unique_origin(origins);
         if origin.is_none()
             && origins.is_some_and(|refs| {
@@ -2705,8 +2971,8 @@ fn carrier_intersection_origin(
         return Ok(None);
     }
     let mut carriers = [
-        construction_reference(&first)?,
-        construction_reference(&second)?,
+        serde_json::from_str::<serde_json::Value>(&budget.reference(&first)?)?,
+        serde_json::from_str::<serde_json::Value>(&budget.reference(&second)?)?,
     ];
     carriers.sort_by_key(serde_json::Value::to_string);
     Ok(Some(TopologyRef {
@@ -2714,12 +2980,12 @@ fn carrier_intersection_origin(
         role: if hole {
             format!(
                 "hole-intersection:{}",
-                serde_json::to_string(&serde_json::json!({"carriers":carriers}))?
+                budget.encoded(&serde_json::json!({"carriers":carriers}))?
             )
         } else {
             format!(
                 "construction:{}",
-                serde_json::to_string(&serde_json::json!({
+                budget.encoded(&serde_json::json!({
                     "sources":carriers,
                     "purpose":{"operation":"boolean","constructor":"carrier_intersection"},
                     "topology":"edge"

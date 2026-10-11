@@ -9,6 +9,6 @@ cad-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-monstertruck = { git = "https://github.com/ens1/monstertruck.git", rev = "b70826f22737c4f25534bb1a0c26ab53552988ae", default-features = false, features = ["modeling", "meshing", "solid", "step", "assembly"] }
+monstertruck = { git = "https://github.com/ens1/monstertruck.git", rev = "e52aab0677610f65c647e7f8dc0829efe2cb1318", default-features = false, features = ["modeling", "meshing", "solid", "step", "assembly"] }
 nalgebra.workspace = true
 step-p21 = "=0.1.1"

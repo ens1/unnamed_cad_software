@@ -31,17 +31,6 @@ pub(crate) fn extrudable_edges(edges: impl IntoIterator<Item = Edge>) -> Result<
     Ok(())
 }
 
-pub(crate) fn thicken_planar(shell: &Shell, delta: Vector3) -> Result<Vec<Solid>> {
-    extrudable_edges(shell.edge_iter())?;
-    let source = if shell[0].oriented_surface().normal(0., 0.).dot(delta) < 0. {
-        shell.inverse().into()
-    } else {
-        shell.clone()
-    };
-    let solids = builder::extrude::<_, Vec<_>>(&source, delta);
-    solids.into_iter().map(|s| s.map_err(invalid)).collect()
-}
-
 fn rational_surface(face: &Face) -> Result<NurbsSurface<Vector4>> {
     if matches!(face.surface(), Surface::Plane(_)) {
         return Err(unsupported(

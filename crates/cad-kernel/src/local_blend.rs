@@ -8,7 +8,7 @@ use crate::{
     shell_history::ShellHistory,
 };
 use cad_core::{CadError, Result};
-use monstertruck::{geometry::prelude::TryIntoHomogeneousBsplineCurve, modeling::*};
+use monstertruck::modeling::*;
 use std::collections::{HashMap, HashSet};
 const EPS: f64 = 1e-7;
 const WORK_LIMIT: usize = 4_000_000;
@@ -17,18 +17,6 @@ fn invalid(s: &str) -> CadError {
 }
 fn unsupported(s: &str) -> CadError {
     CadError::Unsupported(format!("Edge treatment: {s}"))
-}
-fn point(h: Vector4) -> Result<Point3> {
-    if ![h.x, h.y, h.z, h.w].iter().all(|v| v.is_finite()) || h.w <= 0. {
-        return Err(unsupported(
-            "Collision bounds require finite positive rational controls",
-        ));
-    }
-    let p = Point3::from_vec(h.truncate() / h.w);
-    if ![p.x, p.y, p.z].iter().all(|v| v.is_finite()) {
-        return Err(invalid("A rational control exceeds finite coordinates"));
-    }
-    Ok(p)
 }
 fn absolute(edge: &Edge) -> Edge {
     if edge.orientation() {
@@ -59,49 +47,47 @@ struct Blend {
     rails: [Edge; 2],
     bounds: Vec<(Point3, Vector3)>,
 }
-fn outside(hull: &[Point3], planes: &[(Point3, Vector3)]) -> bool {
-    !hull.is_empty()
-        && planes
-            .iter()
-            .any(|(origin, normal)| hull.iter().all(|p| (*p - *origin).dot(*normal) > EPS))
+fn outside(hull: &[Point3], planes: &[(Point3, Vector3)]) -> Result<bool> {
+    if hull.is_empty() {
+        return Ok(false);
+    }
+    let enclosure = crate::native_bounds::Enclosure::from_hull(hull.to_vec())?;
+    for (origin, normal) in planes {
+        if enclosure.projection(*origin, *normal)?.0 > EPS {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 fn curve_outside(curve: &Curve, planes: &[(Point3, Vector3)], work: &mut usize) -> Result<bool> {
-    let hull = crate::extrusion::curve_hull(curve)?;
-    *work = work.saturating_add(hull.len());
+    let enclosure = crate::native_bounds::curve(curve)?;
+    *work = work.saturating_add(enclosure.len());
     if *work > WORK_LIMIT {
         return Err(unsupported("Collision proof exceeds its work budget"));
     }
-    if outside(&hull, planes) {
+    if outside(enclosure.points(), planes)? {
         return Ok(true);
     }
-    let Some(curve) = curve.try_into_homogeneous_bspline_curve() else {
+    let Some(curve) = crate::native_bounds::subdivision_curve(curve)? else {
         return Ok(false);
     };
     let mut stack = vec![(curve, 0)];
-    while let Some((mut curve, depth)) = stack.pop() {
-        *work = work.saturating_add(curve.control_points().len());
+    while let Some((curve, depth)) = stack.pop() {
+        *work = work.saturating_add(curve.count().saturating_mul(8));
         if *work > WORK_LIMIT {
             return Err(unsupported("Collision proof exceeds its work budget"));
         }
-        let hull = curve
-            .control_points()
-            .iter()
-            .map(|h| point(*h))
-            .collect::<Result<Vec<_>>>()?;
-        if outside(&hull, planes) {
+        if outside(curve.enclosure()?.points(), planes)? {
             continue;
         }
         if depth == 12 {
             return Ok(false);
         }
-        let (a, b) = curve.range_tuple();
-        let mid = a + (b - a) * 0.5;
-        if mid <= a || mid >= b {
+        let Some([a, b]) = curve.bisect(work, WORK_LIMIT)? else {
             return Ok(false);
-        }
-        let next = curve.cut(mid);
-        stack.push((curve, depth + 1));
-        stack.push((next, depth + 1));
+        };
+        stack.push((a, depth + 1));
+        stack.push((b, depth + 1));
     }
     Ok(true)
 }
@@ -127,43 +113,22 @@ pub(super) fn face_outside(
         return Ok(false);
     };
     let mut stack = vec![(surface, 0)];
-    while let Some((mut surface, depth)) = stack.pop() {
-        let count = surface
-            .control_points()
-            .len()
-            .saturating_mul(surface.control_points().first().map_or(0, Vec::len));
-        *work = work.saturating_add(count);
+    while let Some((surface, depth)) = stack.pop() {
+        *work = work.saturating_add(surface.count().saturating_mul(8));
         if *work > WORK_LIMIT {
             return Err(unsupported("Collision proof exceeds its work budget"));
         }
-        let hull = surface
-            .control_points()
-            .iter()
-            .flatten()
-            .map(|h| point(*h))
-            .collect::<Result<Vec<_>>>()?;
-        if outside(&hull, planes) {
+        if outside(surface.enclosure()?.points(), planes)? {
             continue;
         }
         if depth == 14 {
             return Ok(false);
         }
-        let ((u0, u1), (v0, v1)) = surface.range_tuple();
-        let next = if depth % 2 == 0 {
-            let mid = u0 + (u1 - u0) * 0.5;
-            if mid <= u0 || mid >= u1 {
-                return Ok(false);
-            }
-            surface.cut_u(mid)
-        } else {
-            let mid = v0 + (v1 - v0) * 0.5;
-            if mid <= v0 || mid >= v1 {
-                return Ok(false);
-            }
-            surface.cut_v(mid)
+        let Some([a, b]) = surface.bisect(depth % 2, work, WORK_LIMIT)? else {
+            return Ok(false);
         };
-        stack.push((surface, depth + 1));
-        stack.push((next, depth + 1));
+        stack.push((a, depth + 1));
+        stack.push((b, depth + 1));
     }
     Ok(true)
 }
@@ -318,8 +283,8 @@ fn end(
         controls,
     }))
 }
-fn bounds(edge: &Edge, ends: &[End; 2]) -> Result<Vec<(Point3, Vector3)>> {
-    let vertices = [
+fn changed_hull(edge: &Edge, ends: &[End; 2]) -> Result<Vec<Point3>> {
+    let mut hull = vec![
         edge.front().point(),
         ends[0].points[0].point(),
         ends[0].points[1].point(),
@@ -327,7 +292,19 @@ fn bounds(edge: &Edge, ends: &[End; 2]) -> Result<Vec<(Point3, Vector3)>> {
         ends[1].points[0].point(),
         ends[1].points[1].point(),
     ];
-    let center = Point3::from_vec(vertices.iter().map(|p| p.to_vec()).sum::<Vector3>() / 6.);
+    // The new surface copies these two exact homogeneous rows. Bounding their
+    // outward projections includes any rounding introduced by the fillet
+    // weight, which need not leave its projected middle control at the source
+    // vertex. The remaining straight rails and removed wedge lie in this hull.
+    for end in ends {
+        hull.extend_from_slice(crate::native_bounds::curve(&end.curve.curve())?.points());
+    }
+    Ok(hull)
+}
+fn bounds(edge: &Edge, ends: &[End; 2]) -> Result<Vec<(Point3, Vector3)>> {
+    let hull = changed_hull(edge, ends)?;
+    let vertices = &hull[..6];
+    let enclosure = crate::native_bounds::Enclosure::from_hull(hull.clone())?;
     let mut result = Vec::new();
     for [a, b, c] in [[0, 1, 2], [3, 4, 5], [0, 1, 3], [0, 2, 3], [1, 2, 4]] {
         let raw = (vertices[b] - vertices[a]).cross(vertices[c] - vertices[a]);
@@ -336,15 +313,18 @@ fn bounds(edge: &Edge, ends: &[End; 2]) -> Result<Vec<(Point3, Vector3)>> {
             return Err(invalid("The changed material region collapsed"));
         }
         let mut normal = raw / length;
-        if (center - vertices[a]).dot(normal) > 0. {
+        let (low, high) = enclosure.projection(vertices[a], normal)?;
+        // Normals only propose a supporting direction. Certify its orientation
+        // and support against the complete constructed control hull. outside()
+        // accepts only query.low > EPS, so this identical threshold encloses
+        // every changed point on the retained side of each candidate plane.
+        if high <= EPS {
+            // Already an outward supporting direction.
+        } else if -low <= EPS {
             normal = -normal;
-        }
-        if vertices
-            .iter()
-            .any(|p| (*p - vertices[a]).dot(normal) > EPS)
-        {
+        } else {
             return Err(unsupported(
-                "The terminal planes produce a folded material wedge",
+                "The terminal planes cannot certify a complete unfolded material wedge",
             ));
         }
         result.push((vertices[a], normal));
@@ -565,24 +545,22 @@ pub(super) fn construct(
             if other.edge.id() == blend.edge.id() {
                 continue;
             }
-            let hull = [
-                other.edge.front().point(),
-                other.edge.back().point(),
-                other.ends[0].points[0].point(),
-                other.ends[0].points[1].point(),
-                other.ends[1].points[0].point(),
-                other.ends[1].points[1].point(),
-            ];
-            if !outside(&hull, &blend.bounds) {
-                let own = [
-                    blend.edge.front().point(),
-                    blend.edge.back().point(),
-                    blend.ends[0].points[0].point(),
-                    blend.ends[0].points[1].point(),
-                    blend.ends[1].points[0].point(),
-                    blend.ends[1].points[1].point(),
-                ];
-                if !outside(&own, &other.bounds) {
+            let hull = changed_hull(&other.edge, &other.ends)?;
+            work = work.saturating_add(hull.len());
+            if work > WORK_LIMIT {
+                return Err(unsupported(
+                    "Selected blend separation exceeds its work budget",
+                ));
+            }
+            if !outside(&hull, &blend.bounds)? {
+                let own = changed_hull(&blend.edge, &blend.ends)?;
+                work = work.saturating_add(own.len());
+                if work > WORK_LIMIT {
+                    return Err(unsupported(
+                        "Selected blend separation exceeds its work budget",
+                    ));
+                }
+                if !outside(&own, &other.bounds)? {
                     return Err(invalid(
                         "Selected edge setbacks meet or overlap; reduce their size",
                     ));

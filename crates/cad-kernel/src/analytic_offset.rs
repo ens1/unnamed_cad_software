@@ -706,6 +706,12 @@ pub(crate) fn recognize(face: &Face) -> Result<Option<Carrier>> {
             }
         }
         Surface::NurbsSurface(_) | Surface::BsplineSurface(_) => {
+            if let Some(plane) = crate::planar::boundary_plane(face)? {
+                return Ok(Some(Carrier::Plane {
+                    origin: plane.origin,
+                    normal: plane.normal,
+                }));
+            }
             let Some(net) = surface.try_into_homogeneous_bspline_surface() else {
                 return Ok(None);
             };
@@ -747,6 +753,9 @@ pub(crate) struct Offset {
 pub(crate) fn offset(shell: &Shell, distance: f64) -> Result<Offset> {
     if !distance.is_finite() || shell.is_empty() {
         return Err(invalid("Offset needs a finite distance and nonempty shell"));
+    }
+    if let Some(offset) = crate::smooth_shell::offset(shell, distance)? {
+        return Ok(offset);
     }
     let carrier = recognize(&shell[0])?.ok_or_else(|| {
         unsupported(
@@ -839,12 +848,21 @@ pub(crate) fn offset(shell: &Shell, distance: f64) -> Result<Offset> {
     })
 }
 
+pub(crate) struct Thickened {
+    pub(crate) solids: Vec<Solid>,
+    pub(crate) layers: [Offset; 2],
+    /// Generated opening face -> its authored source boundary edge.
+    pub(crate) rims: HashMap<FaceId, EdgeId>,
+    /// Generated normal connector -> incident source edge endpoint identities.
+    pub(crate) connectors: HashMap<EdgeId, Vec<(EdgeId, bool)>>,
+}
+
 pub(crate) fn thicken(
     shell: &Shell,
     thickness: f64,
     mid_plane: bool,
     reverse: bool,
-) -> Result<Vec<Solid>> {
+) -> Result<Thickened> {
     if shell.is_empty() {
         return Err(invalid("Thicken needs a nonempty surface shell"));
     }
@@ -852,24 +870,6 @@ pub(crate) fn thicken(
         return Err(invalid("Thickness must be finite and positive"));
     }
     let direction = if reverse { -1. } else { 1. };
-    if let Some(Carrier::Plane { normal, .. }) = recognize(&shell[0])? {
-        let sign = side(
-            &shell[0],
-            recognize(&shell[0])?.ok_or_else(|| invalid("Missing planar carrier"))?,
-        )?;
-        let start = offset(
-            shell,
-            if mid_plane {
-                -thickness * direction * 0.5
-            } else {
-                0.
-            },
-        )?;
-        return crate::surface_edit::thicken_planar(
-            &start.shell,
-            normal * sign * direction * thickness,
-        );
-    }
     let lower = if mid_plane { -thickness * 0.5 } else { 0. };
     let upper = if mid_plane {
         thickness * 0.5
@@ -888,6 +888,20 @@ pub(crate) fn thicken(
     } else {
         b.shell.iter().cloned().collect()
     });
+    let mut rims = HashMap::new();
+    let mut connectors = HashMap::new();
+    let mut endpoints: HashMap<VertexId, Vec<(EdgeId, bool)>> = HashMap::new();
+    let mut known = std::collections::HashSet::new();
+    for edge in shell.edge_iter().filter(|edge| known.insert(edge.id())) {
+        endpoints
+            .entry(edge.absolute_front().id())
+            .or_default()
+            .push((edge.id(), false));
+        endpoints
+            .entry(edge.absolute_back().id())
+            .or_default()
+            .push((edge.id(), true));
+    }
     // Extract original boundary loops, then preserve their exact edge pairing.
     for wire in shell.extract_boundaries() {
         let mapped = |offset: &Offset| {
@@ -906,6 +920,31 @@ pub(crate) fn thicken(
         crate::surface_edit::extrudable_edges(lower.iter().cloned())?;
         crate::surface_edit::extrudable_edges(upper.iter().cloned())?;
         let rim = crate::loft_correspondence::skin(&lower, &upper, None, None)?;
+        let layer_edges = lower
+            .iter()
+            .chain(upper.iter())
+            .map(Edge::id)
+            .collect::<std::collections::HashSet<_>>();
+        for ((source, low), (high, face)) in wire.iter().zip(&lower).zip(upper.iter().zip(&rim)) {
+            rims.insert(face.id(), source.id());
+            for edge in face
+                .edge_iter()
+                .filter(|edge| !layer_edges.contains(&edge.id()))
+            {
+                let connects = |a: &Vertex, b: &Vertex| {
+                    (edge.front().id() == a.id() && edge.back().id() == b.id())
+                        || (edge.front().id() == b.id() && edge.back().id() == a.id())
+                };
+                let vertex = if connects(low.front(), high.front()) {
+                    source.front()
+                } else if connects(low.back(), high.back()) {
+                    source.back()
+                } else {
+                    return Err(invalid("A normal rim connector lost its source endpoint"));
+                };
+                connectors.insert(edge.id(), endpoints[&vertex.id()].clone());
+            }
+        }
         result.extend(if reverse {
             rim.inverse()
         } else {
@@ -924,5 +963,10 @@ pub(crate) fn thicken(
     for solid in &solids {
         crate::validation::solid(solid)?;
     }
-    Ok(solids)
+    Ok(Thickened {
+        solids,
+        layers: [a, b],
+        rims,
+        connectors,
+    })
 }

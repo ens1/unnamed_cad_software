@@ -371,6 +371,11 @@ pub(crate) fn shell(
         return spherical(solid, thickness, removed, outward, overrides, history).map(Some);
     }
     let Some(turned) = recognize(solid, thickness, overrides)? else {
+        if let Some(result) =
+            crate::smooth_shell::shell(solid, thickness, removed, outward, overrides, history)?
+        {
+            return Ok(Some(result));
+        }
         return crate::turned_shell::shell(solid, thickness, removed, outward, overrides, history);
     };
     if removed

@@ -13,6 +13,11 @@ authority.
   two remaining walls may be drafted when their dihedral angles to the common
   wall agree. Chamfers clip all selected supporting setbacks together, so
   adjacent bevels share their corner topology.
+  Later round features may retain earlier curved trims on those planar walls:
+  only the newly selected endpoint neighborhoods must still have three straight
+  edges and three supporting planar faces. Complete native enclosures protect
+  distant previous blends and every retained trim against the new removal
+  regions; unchanged curves and faces preserve their existing topology.
 - **Local planar wedges:** a straight convex or concave edge adjoining two
   planar walls and two planar terminal faces may be rounded or chamfered even
   when the rest of the body has pockets, curved walls or earlier treatments.
@@ -39,16 +44,24 @@ authority.
   meridian weights use the actual plane/cone angle. Unselected curved faces,
   existing treatments, pockets and other boundary shells are preserved when
   their separation from the changed volume can be established.
+  Both extruded rational walls and native line-revolution walls are admitted.
+  Revolved planar cap sectors are coalesced along shared native edges into
+  complete circular disks or annuli; surviving rim edges, vertices and explicit
+  Distance 1 face references retain their source relationships.
 
 ## Construction and validation
 
-A turned wall must have positive rational weights, a clamped degree-one axial
-parameter and exactly corresponding circular end columns. The complete column
+A rational turned wall must have positive weights, a clamped degree-one axial
+parameter and corresponding circular end columns. The complete column
 nets must prove a coaxial homothety; the bounded trim arcs must match endpoints
 and signed angular traversal, and the two seams must be complete natural
 straight generatrices. A single circle recognition or matching endpoints alone
 is not enough. In particular, the two semicircles with identical endpoints
 cannot be interchanged.
+Native line-revolution walls recover the construction frame from their actual
+bounded circular rims. Their retained analytic carrier is enclosed separately
+using outward interval Rodrigues evaluation, including stored axis and trim
+residuals. Neither path replaces the original wall surface.
 
 The cap winding, wall normal and wall direction establish which side contains
 material. Shared rails are transformed from the source rational curves.
@@ -58,16 +71,23 @@ incompatible seam vertices produce a diagnostic before a result is published.
 
 Changed straight-edge material is bounded by exact triangular prisms. Changed
 turned-rim material is bounded by rational annular bands. Positive rational
-control hulls and exact knot subdivision establish separation from other
-boundaries; exhausted proof budgets reject uncertain geometry. Earlier analytic
+control hulls and outward interval knot subdivision establish separation from
+other boundaries; every dehomogenization, subdivision and separating projection
+retains arithmetic uncertainty. Exhausted proof budgets reject uncertain
+geometry. Earlier analytic
 sphere, torus and bounded revolution faces also use certified native enclosures.
 Directional sphere and torus support bounds retain the complete affine transform,
 including nonuniform scale, so a rotated part does not rely on the excess corners
 of a world-axis box. Line revolutions use their certified trimmed boundaries;
 their nominal finite generator segment is never substituted for an enclosure.
-Every selected
-ring is checked against other selected changed volumes, not merely against
-unchanged source faces. On a shared cap, the original disjoint/nested circle
+Every selected arc is checked against other selected changed volumes, including
+its actual constructed homogeneous rails and weighted fillet controls; one
+representative arc cannot stand in for the rest of a ring. Retained turned walls
+keep their original native surface and parameterization; only their boundary
+wires change. The complete boundary/carrier validator admits the new trim, and
+interval source-wall rails enclose the removed strip. A complete positive
+tensor-control displacement bound accounts for axial weight differences in
+the constructed profile. On a shared cap, the original disjoint/nested circle
 relationship must be preserved. For void duality, unrelated shells and material
 islands must be separated from the selected removal slabs in the original
 convex void, including full spherical-corner bounds.
