@@ -130,7 +130,7 @@ A command component invokes a catalog identity independently of its appearance. 
 
 Default native widgets use `--panel`, `--ink` and `--active`; `--reference` colors pinned callouts. Optional `--warning` and `--error` override native diagnostic text colors, including assembly inspection results. The panel color selects the native light/dark widget palette, independent of engineering materials. Viewport styles accept `background`, `selection-color`, `preview-color`, `comparison-color`, `ghost-opacity`, `inspection-first-color` and `inspection-second-color`. Hex colors may include an alpha byte, such as `#26D98561`. These are presentation colors; engineering material definitions remain authoritative.
 
-Native CAD editors remain available as registered composite views. Their document fields can be replaced or duplicated through stable bindings. Toolbar actions, command tabs, individual menus and entries, feature/history rows, selection actions and confirmation controls now use the shared styled-control adapter. Smart Dimension value/reference fields, resource source/watch fields, sketch block source/placement, configured feature dimensions, and drawing symbol fields publish transient setters. Viewport context, start hint, view cube, selection candidates, isolation controls and navigation hint have stable styling identities and parent-relative sizing/anchors. Surface, direct-face, sheet-metal, structural-member and mold feature editors now render their individual fields, reference choices, source lists and actions through shared semantic controls. Drawing sheet/format and non-symbol annotation controls, remaining feature families, and some geometry-attached overlay internals still use composite adapters; their full migration remains presentation work. Native file pickers remain operating-system dialogs. Duplicate model viewports currently share one camera and render texture.
+Native CAD editors remain available as registered views. Their document fields can be replaced or duplicated through stable bindings. Toolbar actions, command tabs, individual menus and entries, feature/history rows, selection actions and confirmation controls use the shared styled-control adapter. Smart Dimension value/reference fields, resource source/watch fields, sketch block source/placement, configured feature dimensions, and drawing fields publish transient setters. Viewport context, start hint, view cube, selection candidates, isolation controls and navigation hint have stable styling identities and parent-relative sizing/anchors. Surface, direct-face, sheet-metal, structural-member, mold, fillet, chamfer, shell, draft, pattern, transform, scale, Boolean and mirror editors render individual fields, reference choices, source lists and actions through shared semantic controls. Drawing sheets, views, formats, dimensions, annotations and tables use that same descriptor renderer. Extrude, Revolve, Loft, Sweep, reference geometry, Hole, Rib and other remaining feature editors, plus some geometry-attached overlay internals, still use composite adapters. Native file pickers remain operating-system dialogs. Duplicate model viewports currently share one camera and render texture.
 
 
 Sketch editing publishes stable commands `sketch.convert-entities`, `sketch.offset-entities`, `sketch.fillet`, `sketch.toggle-construction`, and `sketch.detach-conversion`. The default Sketch tab groups these under Edit Entities, and selection actions expose applicability/disabled reasons. Model edges and face boundaries expose Convert Entities while a sketch is active. `sketch-modifier` semantic elements expose saved source relationships, output member IDs, expression values and edit/delete/detach commands. Transient `sketch-edit` elements expose operation expression, direction, construction, source-link state, selected topology references, errors and `sketch.accept-edit` / `sketch.cancel-edit`. The default property manager renders live controls; the same command handlers serve custom layouts. Construction state is uniform for a selected member set and available for every member type. Driven controls carry disabled reasons instead of changing source relations through dragging.
@@ -169,7 +169,7 @@ The desktop catalog adds stable `command-toolbar/<command>`, `command-menu/<comm
 [id="viewport.navigation-hint"] { display: none; }
 ```
 
-Core exports versioned semantic, layout and style contracts without egui, Bevy or kernel types. A future capability publishes `SemanticElement` descriptors with `value_descriptor` and `actions`: typed values, choices, range, units/dimension, accessibility label, diagnostics, command arguments and disabled reasons. Plain fields/actions need no new native view. A specialized view registers a renderer in the desktop `Registry`; an editor-specific value mutation registers a named `ValueAdapters` reader/setter that owns its transaction rules. Readers fetch current values for every placement, so duplicated transient controls do not restore an older snapshot over the active field. Registered field adapters include document-pointer, sketch-dimension, presentation-resource, sketch-block, configuration-dimension and drawing-annotation. Block fields use fresh editor identities; configuration fields resolve stable feature/record IDs; drawing symbol fields resolve stable sheet/annotation IDs and retained staged input. All preserve their owning shared checkpoint and validated Apply path. Adding a capability does not require adding a closed role enum or changing layout parsing.
+Core exports versioned semantic, layout and style contracts without egui, Bevy or kernel types. A future capability publishes `SemanticElement` descriptors with `value_descriptor` and `actions`: typed values, choices, range, units/dimension, accessibility label, diagnostics, command arguments and disabled reasons. Plain fields/actions need no new native view. A specialized view registers a renderer in the desktop `Registry`; an editor-specific value mutation registers a named `ValueAdapters` reader/setter that owns its transaction rules. Readers fetch current values for every placement, so duplicated transient controls do not restore an older snapshot over the active field. Registered field adapters include document-pointer, sketch-dimension, presentation-resource, sketch-block, configuration-dimension, operation-editor, drawing-editor and drawing-annotation. Block and drawing editors use fresh session identities; configuration fields resolve stable feature/record IDs; drawing fields resolve stable sheet/item IDs and retained staged input. All preserve their owning shared checkpoint and validated Apply path. Adding a capability does not require adding a closed role enum or changing layout parsing.
 
 Portable package schema 1 is `{ "schema_version": 1, "name": "...", "inherit_defaults": false, "layout": "layout.json", "theme": "theme.css", "active_layout": "instrument-rail", "extends": ["base/presentation.json"] }`. Complete exported packages use `inherit_defaults: false` so selecting, saving, and reloading preserve the same compositions and style cascade. Legacy manifests that omit this field remain patches over the bundled presentation. JSON layout/theme resources can also contain `extends` paths; objects merge recursively and arrays replace, while theme rules from package inheritance preserve their cascade order. CSS supports prefix local `@import "base.css";`. Imports are relative to their source, bounded, checked for cycles and observed for changes. Sharing an exported package does not include CAD definitions or an absolute local dependency path.
 
@@ -250,7 +250,8 @@ undo state belongs to these renderers.
 
 ## Semantic modeling editor families (2026-10-11)
 
-Surface, direct-face editing, sheet-metal, structural/weldment and mold feature
+Surface, direct-face editing, sheet-metal, structural/weldment, mold, Fillet,
+Chamfer, Shell, Draft, Pattern, Transform, Scale, Boolean and Mirror feature
 editors publish contract-v1 `tcad.presentation.operation-editor` descriptors. The
 native property manager renders these descriptors; it no longer owns a separate
 set of field values or privileged source-selection buttons for these families.
@@ -317,3 +318,79 @@ validation. Removing the relevant field or canceling the editing session discard
 its local invalid input. Advanced Source retains its separate JSON validity path.
 These presentation changes extend control composition and editing safety; they
 do not broaden the native geometry support of the underlying operations.
+
+Numeric constant controls accept explicit compatible units, including `mm` and
+`deg`, without changing the saved f64 unit convention. Omitted optional source
+fields keep their omission until edited. Field `flex-direction: row | column`,
+`width`, `height`, `min-width`, `max-width`, `min-height`, `max-height` and
+`min-target-size` control native value placement and size. Choice menus provide a
+search field and virtualize long catalogs; compact labels retain full hover text.
+
+## Semantic drawing inspector (2026-10-11)
+
+The drawing inspector publishes contract-v1 `tcad.presentation.drawing-editor`
+descriptors. Sheet, Controls, Item and Row selectors expose the current context;
+selecting a different context changes which individual fields and actions appear
+in the catalog. The native inspector uses the same grouped descriptor renderer
+as modeling editors. A custom composition can relocate or duplicate the current
+controls without creating a second drawing draft.
+
+`drawing-editor-field` covers sheet names and model scopes, paper dimensions and
+presets, view selection/order/placement/scale, sheet format borders and zones,
+title-block cells and linked text, dimensions and tolerance options, leader
+notes, datums, geometric tolerances, center marks/lines and BOM balloons. Model
+point, curve and native hole references retain their complete occurrence paths.
+Existing surface-finish and weld-symbol bindings keep the
+`drawing-annotation-field` role and join the same staged inspector.
+
+All six supported table types expose ordinary controls: BOM, revision, general,
+bend, hole and cut-list. Controls include placement, text and row sizing, column
+widths, general headers/cells, revision rows, source scopes/configurations,
+source selections, hole datums and saved item numbers/order. Source-row controls
+remain available for correcting saved numbering even when table-content
+validation rejects that numbering. These controls expose existing native
+drawing capabilities; they do not add new projected-view or annotation geometry.
+
+`drawing-editor-action` supplies sheet/template operations, view toggles and
+ordering, annotation/dimension/table creation and deletion, title-cell and table
+row/column editing, source selection, reservation refresh, Apply/Cancel and
+PDF/DXF export. `drawing-editor-group` and `drawing-editor-help` expose groups and
+diagnostics; group names are CSS classes. Sheet, view, format, dimension,
+annotation and table groups remain independently scrollable through
+`overflow: auto | scroll` and `max-height`.
+
+```json
+{
+  "id": "my-drawing-fields",
+  "role": "semantic-field-collection",
+  "layout": "column",
+  "overflow": "auto",
+  "repeat": { "role": "drawing-editor-field" },
+  "template": { "role": "field-control", "widget": "field", "height_logical_px": 36 }
+}
+```
+
+Use additional collections for `drawing-annotation-field` and
+`drawing-editor-action` to include symbol controls and commands. Direct bindings
+use IDs such as `drawing-editor:<sheet-id>/paper_mm/0` and
+`drawing-editor:<sheet-id>/tables/@<table-id>/position_mm/0`.
+
+```css
+[role=drawing-editor-field] { font-size: 10px; flex-direction: row; height: 24px; }
+[role=drawing-editor-action] { height: 22px; padding: 3px 6px; }
+[role=drawing-editor-group].table-columns { overflow: auto; max-height: 180px; }
+[role=drawing-editor-help] { font-size: 10px; }
+```
+
+Readers and actions validate the current document, sheet and editor-session
+identity before resolving source. Authored dimensions, annotations, title cells,
+tables and revision rows retain their saved IDs. Anonymous general-table rows,
+columns/cells and sheet notes use session slot identities that survive native
+insertion and removal; these identities do not alter the document format.
+Invalid partial text remains staged after focus or inspector context changes and
+prevents Apply/OK until corrected or its source field is removed. Typed source
+that fails document validation stays available for correction without committing
+it. All accepted changes enter the existing `PutDrawing` draft/checkpoint;
+current validated evaluation remains required for Apply, and Cancel restores the
+starting document. Native file/template pickers retain their operating-system
+presentation.

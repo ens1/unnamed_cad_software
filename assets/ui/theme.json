@@ -611,6 +611,120 @@
         "color": "var(--error)",
         "font-size": "10px"
       }
+    },
+    {
+      "selector": "[role=operation-editor-field], [role=drawing-editor-field], [role=configuration-placement-field]",
+      "properties": {
+        "display": "flex",
+        "flex-direction": "row",
+        "gap": "3px",
+        "padding": "1px 0px"
+      }
+    },
+    {
+      "selector": "[role=field-label].modeling-field, [role=field-label].drawing-field",
+      "properties": {
+        "width": "100px",
+        "text-overflow": "ellipsis"
+      }
+    },
+    {
+      "selector": "[role=drawing-editor-group], [role=drawing-editor-help]",
+      "properties": {
+        "font-size": "10px",
+        "padding": "3px 0px",
+        "gap": "3px"
+      }
+    },
+    {
+      "selector": "[role=drawing-editor-action]",
+      "properties": {
+        "height": "22px",
+        "min-target-size": "24px",
+        "padding": "2px 4px",
+        "border-radius": "3px"
+      }
+    },
+    {
+      "selector": "[role=assembly-motion-handle]",
+      "properties": {
+        "width": "84px",
+        "handle-size": "8px",
+        "stroke-width": "2px",
+        "font-size": "10px"
+      }
+    },
+    {
+      "selector": "[role=assembly-motion-handle].axis-x",
+      "properties": {
+        "color": "#D95543"
+      }
+    },
+    {
+      "selector": "[role=assembly-motion-handle].axis-y",
+      "properties": {
+        "color": "#369159"
+      }
+    },
+    {
+      "selector": "[role=assembly-motion-handle].axis-z",
+      "properties": {
+        "color": "#287ACC"
+      }
+    },
+    {
+      "selector": "[role=assembly-motion-handle][state=dragging], [role=assembly-motion-handle][state=selected]",
+      "properties": {
+        "color": "var(--active)",
+        "stroke-width": "3px"
+      }
+    },
+    {
+      "selector": "[role=assembly-motion-request]",
+      "properties": {
+        "color": "var(--warning)",
+        "handle-size": "7px",
+        "stroke-width": "1.5px"
+      }
+    },
+    {
+      "selector": "[role=configuration-placement-field][state=inherited]",
+      "properties": {
+        "color": "var(--reference)"
+      }
+    },
+    {
+      "selector": "[role=configuration-placement-field][state=expression-driven]",
+      "properties": {
+        "color": "var(--warning)"
+      }
+    },
+    {
+      "selector": "[role=configuration-placement-field][state=invalid], [role=drawing-editor-field][state=error], [role=operation-editor-field][state=error]",
+      "properties": {
+        "color": "var(--error)"
+      }
+    },
+    {
+      "selector": "[role=field-choices]",
+      "properties": {
+        "max-height": "240px"
+      }
+    },
+    {
+      "selector": "[role=configuration-placement-field]",
+      "properties": {
+        "flex-direction": "column"
+      }
+    },
+    {
+      "selector": "[role=drawing-annotation-field]",
+      "properties": {
+        "display": "flex",
+        "flex-direction": "row",
+        "gap": "3px",
+        "padding": "1px 0px"
+      }
     }
   ]
 }

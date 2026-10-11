@@ -53,7 +53,7 @@ Native schema remains 1; additive defaults omit empty/None values so existing so
 | Assembly geometry | 4 |
 | Selection actions / drawing | 3 / 5 |
 | Body editing / surface intent | 2 / 3 |
-| Configuration / component pattern / drilled holes | 3 / 1 / 2 |
+| Configuration / component pattern / drilled holes | 4 / 1 / 2 |
 | Sheet metal / weldment / mold / drawing tables / inspection | 1 / 1 / 1 / 2 / 1 |
 | Feature order / contour selection / sketch blocks / sketch handles | 2 / 2 / 2 / 2 |
 | Derived sketch section topology | 1 |
@@ -62,7 +62,7 @@ Native schema remains 1; additive defaults omit empty/None values so existing so
 | Split / assembly inspection / exploded views / drawing sheet formats | 1 / 1 / 1 / 1 |
 | Portable block resources / configured dimension fields / drawing symbols | 1 / 2 / 1 |
 
-Core solver source reports `tcad-native-lm/13`. Adapter and desktop source constants use `monstertruck/0.4.1+fc2306852a46;adapter/29;solver/tcad-native-lm/13`. Transient sketch diagnostics and assembly movement each use version 1. Internal boxing retains native JSON shapes. The kernel directly declares the existing workspace `serde` dependency for bounded report serialization; the desktop now directly declares the already-pinned `winit` 0.30.13 for primary-window gesture phases. No new third-party package or dependency version is introduced, and existing dependency notices cover both.
+Core solver source reports `tcad-native-lm/14`. Adapter and desktop source constants use `monstertruck/0.4.1+fc2306852a46;adapter/30;solver/tcad-native-lm/14`. Transient sketch diagnostics and assembly movement each use version 1. Internal boxing retains native JSON shapes. The kernel directly declares the existing workspace `serde` dependency for bounded report serialization; the desktop now directly declares the already-pinned `winit` 0.30.13 for primary-window gesture phases. No new third-party package or dependency version is introduced, and existing dependency notices cover both.
 
 The preceding interaction correction adds [exact face-attached boss joins](boss-joins.md), [two-pick Smart Dimension](sketch-smart-dimension.md), and saved [navigation preference contract version 1](navigation.md). Contact joins remove native opposing caps and retain real shared edge/face ancestry for supported inset and matching-outline contacts, including separated repeated bosses. Smart Dimension supports tool-first picking or Command/Shift preselection, signed-side center-to-line gaps, current owned straight model-edge construction conversions, live values and a local dimension checkpoint including promoted parameters. New conversions retain construction parameter orientation; legacy incident-face ordering remains explicitly readable. The trackpad adapter reverses the default scroll-orbit directions and adds cursor-anchor pinch, native roll/smart zoom, saved sensitivities/direction switches, precision modifiers and gesture ownership/cancellation. Geometry and hardware limits remain recorded in the capability documentation.
 
@@ -724,3 +724,46 @@ future-compatibility notice remains. No tests, probes, app/CLI modeling launches
 or manual/UI acceptance checks were run. Interactive acceptance remains with
 the user. The implementation checkpoint and follow-up correction are committed
 and pushed to the private canonical origin.
+
+## Model gestures, configuration poses and editor migration — 2026-10-11
+
+Assembly gesture contract 1 adds true viewport component translation on the
+view plane or document axes and rotation on view/axis rings. An owned pointer
+capture retains full occurrence/viewport identity and f64 starting geometry.
+The existing mate-aware persistent worker solves each current sampled goal;
+release submits its final goal, Escape restores the gesture-start draft, and
+Cancel restores the original operation checkpoint. Camera gestures, selection
+menus, Settings, layout replacement and focus/size changes relinquish or reject
+conflicting ownership. A disposable placement display uses unchanged native
+meshes when no in-context dependencies/component patterns require native rebuild;
+it is never a valid document evaluation or an Apply result. Current complete
+evaluation must still preserve accepted poses before confirmation. Flexible
+subassemblies, collision avoidance, continuous winding and large-assembly sparse
+performance remain work.
+
+Configuration contract 4 adds inherited per-axis component placements and free
+Path/Slot/Cam seed maps. Base/Named scoped writes, detail controls, CSV/JSON tables,
+namespace remapping and instance/mate/pattern deletion cover the new stable IDs.
+Expression-driven translations and generated patterns retain their drivers.
+Omitted-empty maps preserve old source shapes and versions 1–3 remain readable.
+Fields use current editor/source identity, exact unit entry and generation-scoped
+invalid-text diagnostics. See [configurations](configurations.md).
+
+Drawing sheets, views, formats/title cells, dimensions, annotations and tables
+now use independently bound inspector fields/actions. Anonymous table/note rows
+retain session slot identities; authored records retain saved IDs. Hidden invalid
+input remains associated with the source item and blocks confirmation until
+corrected or explicitly removed. Existing symbol descriptors and manufacturing
+vector geometry remain unchanged. Common Fillet, Chamfer, Shell, Draft, Pattern,
+Transform, Scale, Boolean and Mirror controls join the five previously migrated
+modeling families. Dynamic actions reject changed source/selection snapshots,
+body changes reconcile dependent faces, and bounded skip enumeration uses set
+membership. Other modeling editor families remain to migrate.
+
+Shared native value controls honor CSS row/column layout, width/height/min/max
+and minimum targets, semantic states and label ellipsis. Choice menus add
+search and virtual scrolling. Projection, picking and cursor-anchored zoom match
+the shared texture's aspect when user layouts stretch or duplicate viewports;
+those viewports still share a camera/render texture. Backend fingerprint is
+`monstertruck/0.4.1+fc2306852a46;adapter/30;solver/tcad-native-lm/14`.
+No Monstertruck dependency revision or repository privacy change was needed.

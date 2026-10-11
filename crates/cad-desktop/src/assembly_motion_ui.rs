@@ -4,6 +4,7 @@ use bevy_egui::egui;
 use cad_core::{
     CadError, Dimension, Document, Expr, Id, Placement, Result,
     assembly_geometry::EvaluatedAssembly,
+    assembly_motion::drag::{self, Handle},
     assembly_motion::{self, Goal, Intent, Outcome},
     commands::Command,
     presentation::SemanticElement,
@@ -11,6 +12,7 @@ use cad_core::{
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, time::Instant};
+mod viewport;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -43,6 +45,13 @@ pub struct State {
     name: String,
     placement: Placement,
     picked_anchor: Option<[f64; 3]>,
+    placement_scope: cad_core::configuration::PlacementScope,
+    preferred_placement: Option<Placement>,
+    selected_handle: Handle,
+    capture: Option<viewport::Capture>,
+    blocked_owner: Option<egui::Id>,
+    blocked_seen: Option<u64>,
+    placement_preview: Option<Evaluation>,
     values: Values,
     submitted: Values,
     accepted: Values,
@@ -210,6 +219,26 @@ fn begin(w: &mut Workspace, path: Vec<Id>, mode: Mode) {
     };
     let name = instance.name.clone();
     let assemblies = evaluation.assemblies.clone();
+    let placement_scope =
+        cad_core::configuration::PlacementScope::selected(&baseline, &baseline.root);
+    let placement_preview = if expression_context
+        .assemblies
+        .get(&baseline.root)
+        .is_some_and(|a| a.component_patterns.is_empty())
+        && !baseline.parts.values().any(|part| {
+            part.features.iter().any(|feature| {
+                matches!(feature.operation, cad_core::Operation::ReferenceBody { .. })
+            })
+        }) {
+        let mut preview = evaluation.clone();
+        preview.valid = false;
+        preview.operation_preview = None;
+        preview.assembly_inspections.clear();
+        preview.exploded_views.clear();
+        Some(preview)
+    } else {
+        None
+    };
     // Collapse exploded display first so the picked point denotes a mechanical
     // location, not the presentation transform of an exploded occurrence.
     w.start_tool();
@@ -242,6 +271,17 @@ fn begin(w: &mut Workspace, path: Vec<Id>, mode: Mode) {
         name,
         placement,
         picked_anchor,
+        placement_scope,
+        preferred_placement: None,
+        selected_handle: if mode == Mode::Rotate {
+            Handle::ViewRotation
+        } else {
+            Handle::ViewPlane
+        },
+        capture: None,
+        blocked_owner: None,
+        blocked_seen: None,
+        placement_preview,
         values: values.clone(),
         submitted: values.clone(),
         accepted: values,
@@ -275,16 +315,12 @@ fn intent(state: &State) -> Result<Intent> {
             Dimension::Angle,
         )
     };
-    let translation = if state.values.mode == Mode::Rotate {
-        vec![0.; 3]
-    } else {
-        state
-            .values
-            .translation
-            .iter()
-            .map(length)
-            .collect::<Result<Vec<_>>>()?
-    };
+    let translation = state
+        .values
+        .translation
+        .iter()
+        .map(length)
+        .collect::<Result<Vec<_>>>()?;
     let rotation = if state.values.mode == Mode::Translate {
         vec![0.; 3]
     } else {
@@ -301,20 +337,17 @@ fn intent(state: &State) -> Result<Intent> {
             .picked_anchor
             .ok_or_else(|| CadError::Invalid("No picked pivot is available".into()))?,
     };
-    let translation = if state.values.mode == Mode::Rotate {
-        [0.; 3]
-    } else {
-        [translation[0], translation[1], translation[2]]
-    };
+    let translation = [translation[0], translation[1], translation[2]];
     let rotation =
         (state.values.mode != Mode::Translate).then_some([rotation[0], rotation[1], rotation[2]]);
-    let goal = Goal::from_offsets(
+    let mut goal = Goal::from_offsets(
         state.path[0].clone(),
         &state.placement,
         anchor,
         translation,
         rotation,
     );
+    goal.preferred_placement = state.preferred_placement.clone();
     goal.validate()?;
     Ok(Intent {
         version: assembly_motion::CONTRACT_VERSION,
@@ -328,6 +361,36 @@ fn changed(state: &mut State) {
     state.error = None;
     state.confirm_after_solve = false;
     state.needs_solve = true;
+    if state.capture.is_none() {
+        state.preferred_placement = None;
+    }
+    if state.values.mode == Mode::Rotate && !state.selected_handle.rotation() {
+        state.selected_handle = Handle::ViewRotation;
+    }
+    if state.values.mode == Mode::Translate && state.selected_handle.rotation() {
+        state.selected_handle = Handle::ViewPlane;
+    }
+}
+fn rebase_values(state: &mut State) {
+    let actual = state
+        .outcome
+        .as_ref()
+        .and_then(|outcome| outcome.placements.get(&state.path[0]))
+        .cloned()
+        .unwrap_or_else(|| state.placement.clone());
+    let anchor = if state.values.pivot == Pivot::Picked {
+        state.picked_anchor.unwrap_or([0.; 3])
+    } else {
+        [0.; 3]
+    };
+    state.values.translation =
+        drag::translation_offsets(&state.placement, &actual, anchor, [0.; 3])
+            .map(|value| Expr(format!("{value:.12} mm")));
+    if let Ok(rotation) = drag::rotation_offsets(&state.placement, &actual, [1., 0., 0.], 0.) {
+        state.values.rotation = rotation.map(|value| Expr(format!("{value:.12} deg")));
+    }
+    changed(state);
+    state.preferred_placement = Some(actual);
 }
 pub fn cancel(w: &mut Workspace) {
     if let Some(state) = w.assembly_motion.take() {
@@ -335,6 +398,11 @@ pub fn cancel(w: &mut Workspace) {
     }
 }
 pub fn ready_to_confirm(w: &mut Workspace) -> bool {
+    if dragging(w) {
+        w.status = "Release the component drag before applying".into();
+        w.confirm_requested = false;
+        return false;
+    }
     if w.assembly_motion.is_some() && w.settings.is_some() {
         w.status = "Close Settings before applying component movement".into();
         w.confirm_requested = false;
@@ -391,7 +459,7 @@ pub fn poll(w: &mut Workspace) {
         state.confirm_after_solve = false;
     }
     if (state.values != state.submitted || state.needs_solve)
-        && state.changed.elapsed().as_millis() >= 60
+        && (state.capture.is_some() || state.changed.elapsed().as_millis() >= 60)
         && state.error.is_none()
     {
         match intent(&state) {
@@ -431,7 +499,11 @@ pub fn poll(w: &mut Workspace) {
             {
                 state.pending = None;
                 let mut document = state.baseline.clone();
-                match assembly_motion::apply(&mut document, &outcome) {
+                match assembly_motion::apply_in_scope(
+                    &mut document,
+                    &outcome,
+                    &state.placement_scope,
+                ) {
                     Ok(()) => {
                         let confirm = state.confirm_after_solve;
                         let expected = document.fingerprint();
@@ -461,6 +533,7 @@ pub fn poll(w: &mut Workspace) {
                         }
                         state.expected_source = w.session.visible().fingerprint();
                         state.accepted = state.submitted.clone();
+                        viewport::preview(&mut state, w, &outcome);
                         state.outcome = Some(*outcome);
                         state.error = None;
                         w.confirm_requested = confirm;
@@ -486,6 +559,41 @@ pub fn poll(w: &mut Workspace) {
         }
     }
     w.assembly_motion = Some(state);
+}
+
+pub fn viewport(
+    w: &mut Workspace,
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    response: &egui::Response,
+    blocked: &[egui::Rect],
+) -> bool {
+    viewport::interact(w, ui, rect, response, blocked)
+}
+pub fn dragging(w: &Workspace) -> bool {
+    w.assembly_motion
+        .as_ref()
+        .is_some_and(|state| state.capture.is_some() || state.blocked_owner.is_some())
+}
+pub fn cancel_drag(w: &mut Workspace) -> bool {
+    viewport::cancel(w)
+}
+pub fn finish_drag(w: &mut Workspace) {
+    viewport::finish(w);
+}
+pub fn finish_ui(w: &mut Workspace, ctx: &egui::Context) {
+    viewport::finish_ui(w, ctx);
+}
+pub fn display_evaluation(w: &Workspace) -> Option<&Evaluation> {
+    let state = w.assembly_motion.as_ref()?;
+    if evaluation(w).is_some() {
+        return None;
+    }
+    state.placement_preview.as_ref().filter(|preview| {
+        state.outcome.is_some()
+            && preview.identity == w.session.identity()
+            && state.expected_source == w.session.visible().fingerprint()
+    })
 }
 
 fn id(state: &State, field: &str) -> String {
@@ -607,7 +715,7 @@ fn modes(ui: &mut egui::Ui, state: &mut State) {
                 && state.values.mode != mode
             {
                 state.values.mode = mode;
-                changed(state);
+                rebase_values(state);
             }
         }
     });
@@ -636,7 +744,7 @@ fn pivot(ui: &mut egui::Ui, state: &mut State) {
                 && state.values.pivot != pivot
             {
                 state.values.pivot = pivot;
-                changed(state);
+                rebase_values(state);
             }
         }
     });
@@ -662,6 +770,62 @@ fn movement_status(state: &State) -> String {
         "Choose a movement; the current model remains visible until its new preview is validated."
             .into()
     }
+}
+fn placement_scope_text(state: &State) -> String {
+    match &state.placement_scope {
+        cad_core::configuration::PlacementScope::Base => "Placement scope: Base assembly".into(),
+        cad_core::configuration::PlacementScope::Named(configuration) => {
+            let name = state
+                .baseline
+                .assemblies
+                .get(&state.baseline.root)
+                .and_then(|a| a.configurations.get(configuration))
+                .map(|c| c.name.as_str())
+                .unwrap_or("Current configuration");
+            format!(
+                "Placement scope: {name}. Child configurations inherit these values unless overridden."
+            )
+        }
+    }
+}
+fn placement_scope_control(ui: &mut egui::Ui, state: &State) {
+    controls::label(
+        ui,
+        &id(state, "placement-scope"),
+        "tool-guidance",
+        &[],
+        &placement_scope_text(state),
+        "ready",
+    );
+    let base = matches!(
+        state.placement_scope,
+        cad_core::configuration::PlacementScope::Base
+    );
+    ui.horizontal_wrapped(|ui| {
+        controls::button(
+            ui,
+            &id(state, "scope-base"),
+            "assembly-motion-scope",
+            &["tool-mode"],
+            "Base",
+            base,
+            base,
+        )
+        .on_disabled_hover_text(
+            "Select Base configuration before starting movement to edit its placements.",
+        );
+        if !base {
+            controls::button(
+                ui,
+                &id(state, "scope-current"),
+                "assembly-motion-scope",
+                &["tool-mode"],
+                "Current configuration",
+                true,
+                true,
+            );
+        }
+    });
 }
 
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
@@ -722,14 +886,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             "ready"
         },
     );
-    controls::label(
-        ui,
-        &id(&state, "placement-scope"),
-        "tool-guidance",
-        &[],
-        "Placement seeds are saved on this assembly definition. Its configuration-specific mates remain active.",
-        "ready",
-    );
+    placement_scope_control(ui, &state);
     let mut reset = false;
     let mut retry = false;
     let mut confirm = false;
@@ -814,6 +971,8 @@ pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Semantic
         modes(ui, &mut state);
     } else if element.role == "assembly-motion-pivot" {
         pivot(ui, &mut state);
+    } else if element.role == "assembly-motion-scope" {
+        placement_scope_control(ui, &state);
     }
     if state.values != before {
         w.confirm_requested = false;
@@ -914,8 +1073,24 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>
                 && state.values.mode != mode
             {
                 state.values.mode = mode;
-                changed(state);
+                rebase_values(state);
                 w.confirm_requested = false;
+            }
+            true
+        }
+        "assembly.motion-handle" => {
+            let handle = data
+                .and_then(|data| data.get("handle"))
+                .and_then(|value| serde_json::from_value::<Handle>(value.clone()).ok());
+            if let Some(handle) = handle
+                && handle.axis([0., 0., 1.]).is_ok()
+                && let Some(state) = w.assembly_motion.as_mut()
+            {
+                state.selected_handle = handle;
+                w.status = format!(
+                    "{}: drag the handle or component in the model",
+                    handle.label()
+                );
             }
             true
         }
@@ -929,7 +1104,7 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>
                 && (pivot != Pivot::Picked || state.picked_anchor.is_some())
             {
                 state.values.pivot = pivot;
-                changed(state);
+                rebase_values(state);
                 w.confirm_requested = false;
             }
             true
@@ -970,9 +1145,22 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         return elements;
     };
     for (key, role, text) in [
-        ("title", "tool-title", format!("Move Component · {}", state.name)),
-        ("guidance", "tool-guidance", "Offsets use assembly axes. Mates and travel limits constrain the requested movement.".into()),
-        ("placement-scope", "tool-guidance", "Placement seeds are saved on this assembly definition. Its configuration-specific mates remain active.".into()),
+        (
+            "title",
+            "tool-title",
+            format!("Move Component · {}", state.name),
+        ),
+        (
+            "guidance",
+            "tool-guidance",
+            "Offsets use assembly axes. Mates and travel limits constrain the requested movement."
+                .into(),
+        ),
+        (
+            "placement-scope",
+            "tool-guidance",
+            placement_scope_text(state),
+        ),
     ] {
         elements.push(SemanticElement {
             id: id(state,key), role: role.into(), label: text, value: None, state: "ready".into(), commands: vec![],
@@ -980,6 +1168,11 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data: serde_json::json!({"contract":"tcad.assembly_motion","version":assembly_motion::CONTRACT_VERSION,"token":state.token,"path":state.path}),
         });
     }
+    elements.push(SemanticElement {
+        id:id(state,"placement-scope-control"),role:"assembly-motion-scope".into(),label:"Placement scope".into(),value:Some(placement_scope_text(state)),state:"selected".into(),commands:vec![],relationships:vec![state.baseline.root.clone()],
+        data:serde_json::json!({"contract":"tcad.assembly_motion","version":assembly_motion::CONTRACT_VERSION,"token":state.token,"scope":state.placement_scope,"editable":false,"base_requires_active_base_configuration":true}),
+    });
+    elements.extend(viewport::semantics(w, state));
     if state.path.len() > 1 {
         elements.push(SemanticElement {
             id:id(state,"scope"), role:"tool-guidance".into(), label:"The selected nested occurrence moves with its rigid top-level subassembly.".into(), value:None, state:"ready".into(), commands:vec![], relationships:vec![state.path[0].clone()],

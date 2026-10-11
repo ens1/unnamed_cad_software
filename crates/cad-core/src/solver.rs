@@ -333,7 +333,7 @@ fn axis_residual(a: Vector3<f64>, b: Vector3<f64>) -> Vector3<f64> {
 }
 impl ConstraintSolver for NativeSolver {
     fn fingerprint(&self) -> &str {
-        "tcad-native-lm/13"
+        "tcad-native-lm/14"
     }
     fn solve_sketch(&self, doc: &Document, part: &str, sketch: &mut Sketch) -> Result<SolveReport> {
         if sketch.points.keys().chain(sketch.members.keys()).any(|id| {

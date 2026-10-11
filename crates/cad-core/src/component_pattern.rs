@@ -374,10 +374,12 @@ pub fn remove(doc: &mut Document, assembly: &str, id: &str) -> Result<()> {
         c.overrides.component_patterns.remove(id);
         for mate in &p.mates {
             c.overrides.mates.remove(&mate.mate);
+            c.overrides.mate_curve_seeds.remove(&mate.mate);
         }
         for id in &ids {
             c.overrides.components.remove(id);
             c.overrides.component_configurations.remove(id);
+            c.overrides.component_placements.remove(id);
         }
     }
     Ok(())

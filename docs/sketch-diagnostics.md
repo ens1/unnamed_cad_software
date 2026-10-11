@@ -36,7 +36,7 @@ actual maximum residual, generated-point provenance and per-equation dependency
 counts. `ConstraintSolver::analyze_sketch` is an optional solver capability. Native
 solving and analysis share the coordinate layout, contact/block variables, curve
 dimensions, prepared constructions and residual blocks. The implementation
-fingerprint is `tcad-native-lm/13`; changing implementations invalidates derived
+fingerprint is `tcad-native-lm/14`; changing implementations invalidates derived
 caches without migrating source sketch definitions.
 
 The numerical derivative and column-scaled SVD are evaluated only at a current

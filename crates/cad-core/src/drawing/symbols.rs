@@ -860,7 +860,7 @@ fn arc(out: &mut Vec<Primitive>, center: [f64; 2], radius: f64, start: f64, end:
 
 /// Stable annotation-owned fields can be moved, duplicated and restyled without
 /// coupling their source identities to a paper position or native editor.
-pub(super) fn semantic_fields(
+pub fn semantic_fields(
     sheet: &crate::Drawing,
     entity: &super::Annotation,
     state: &str,

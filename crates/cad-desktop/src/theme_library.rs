@@ -285,6 +285,7 @@ pub fn capture(w: &Workspace) -> Snapshot {
 }
 
 pub fn restore(w: &mut Workspace, snapshot: Snapshot) {
+    crate::assembly_motion_ui::finish_drag(w);
     let logical_size = w.presentation_resources.logical_size;
     crate::sketch_handles::end(w);
     crate::navigation::stop(w);

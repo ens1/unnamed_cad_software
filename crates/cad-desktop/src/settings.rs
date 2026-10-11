@@ -18,6 +18,7 @@ pub struct State {
 }
 
 pub fn open(w: &mut Workspace, category: Option<&str>) {
+    crate::assembly_motion_ui::cancel_drag(w);
     navigation::stop(w);
     w.selection_popup = None;
     if let Some(state) = &mut w.settings {

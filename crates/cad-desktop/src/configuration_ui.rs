@@ -7,6 +7,8 @@ use cad_core::{
     configuration::{self, BomName, Definition},
 };
 use std::collections::BTreeMap;
+#[path = "configuration_poses_ui.rs"]
+mod poses;
 
 fn owner(w: &Workspace) -> Option<Id> {
     w.fields.get("configuration-owner").cloned()
@@ -35,6 +37,16 @@ fn source(w: &Workspace) -> cad_core::Result<Definition> {
     Ok(c)
 }
 pub fn current_source_is_valid(w: &Workspace) -> bool {
+    let error_prefix = format!(
+        "configuration-pose-error:{}:",
+        w.fields
+            .get("configuration-editor-generation")
+            .map(String::as_str)
+            .unwrap_or("")
+    );
+    if w.fields.keys().any(|key| key.starts_with(&error_prefix)) {
+        return false;
+    }
     let Some(owner) = owner(w) else {
         return false;
     };
@@ -66,6 +78,12 @@ fn synchronized(w: &mut Workspace) {
     }
 }
 fn load(w: &mut Workspace, owner: &str, selected: Option<&str>) {
+    w.confirm_requested = false;
+    w.after_confirm = None;
+    w.fields
+        .retain(|key, _| !key.starts_with("configuration-pose-error:"));
+    w.fields
+        .insert("configuration-editor-generation".into(), cad_core::id());
     w.fields.insert("configuration-owner".into(), owner.into());
     w.fields.insert(
         "configuration-editor".into(),
@@ -83,7 +101,8 @@ fn load(w: &mut Workspace, owner: &str, selected: Option<&str>) {
     synchronized(w);
 }
 pub fn begin(w: &mut Workspace, tab: &str) {
-    if w.fields.contains_key("component-pattern-editor")
+    if (w.tool_checkpoint.is_some() && w.dialog.as_deref() != Some("configurations"))
+        || w.fields.contains_key("component-pattern-editor")
         || w.sketch.is_some()
         || w.dialog.as_deref().is_some_and(|dialog| {
             matches!(dialog, "feature" | "assembly") && w.tool_checkpoint.is_some()
@@ -121,6 +140,8 @@ fn select(w: &mut Workspace, owner: &str, id: Option<Id>) {
     }
 }
 fn submit(w: &mut Workspace, owner: &str, c: Definition) {
+    w.confirm_requested = false;
+    w.after_confirm = None;
     let mut doc = w.session.visible().clone();
     let id = c.id.clone();
     match configuration::put(&mut doc, owner, c) {
@@ -856,6 +877,7 @@ fn table(ui: &mut egui::Ui, w: &mut Workspace, doc: &Document, owner: &str) {
                     }
                 });
         });
+    poses::show(ui, w, true);
 }
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     let doc = w.session.visible().clone();
@@ -969,6 +991,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                         w.json = serde_json::to_string_pretty(&c).unwrap_or_default();
                         submit(w, &owner, c);
                     }
+                    poses::show(ui, w, false);
                 } else {
                     ui.colored_label(
                         egui::Color32::from_rgb(190, 55, 35),
@@ -997,6 +1020,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                     }
                 }
             } else {
+                poses::show(ui, w, false);
                 ui.label("The base definition is selected. Create a named configuration to override equations, feature/sketch suppression, components, mates, material, properties and BOM choices.");
             }
         }
@@ -1060,6 +1084,7 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
         return Vec::new();
     };
     let mut out = Vec::new();
+    out.extend(poses::semantics(w));
     for mut c in configuration::definitions(doc, &owner).into_values() {
         if let Ok(local) = source(w)
             && local.id == c.id
@@ -1125,6 +1150,9 @@ pub fn current_value(
     w: &Workspace,
     element: &cad_core::presentation::SemanticElement,
 ) -> Option<serde_json::Value> {
+    if element.role == "configuration-placement-field" {
+        return poses::current_value(w, element);
+    }
     let (owner, id, feature, path, field) = dimension_identity(element)?;
     let c = source(w)
         .ok()
@@ -1161,6 +1189,9 @@ pub fn set_value(
     element: &cad_core::presentation::SemanticElement,
     value: serde_json::Value,
 ) -> cad_core::Result<()> {
+    if element.role == "configuration-placement-field" {
+        return poses::set_value(w, element, value);
+    }
     let (owner, id, feature, path, field) = dimension_identity(element).ok_or_else(|| {
         cad_core::CadError::Invalid("Missing configuration dimension identity".into())
     })?;
@@ -1250,4 +1281,14 @@ pub fn set_value(
         return Err(cad_core::CadError::Invalid(w.status.clone()));
     }
     Ok(())
+}
+pub fn field_error(
+    w: &mut Workspace,
+    element: &cad_core::presentation::SemanticElement,
+    error: Option<String>,
+) {
+    poses::field_error(w, element, error);
+}
+pub fn field_is_invalid(w: &Workspace, element: &cad_core::presentation::SemanticElement) -> bool {
+    poses::field_is_invalid(w, element)
 }

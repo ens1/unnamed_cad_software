@@ -860,7 +860,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/29;solver/tcad-native-lm/13"
+        "monstertruck/0.4.1+fc2306852a46;adapter/30;solver/tcad-native-lm/14"
     }
     fn sketch_material_regions(
         &self,

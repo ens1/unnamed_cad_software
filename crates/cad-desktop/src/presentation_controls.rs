@@ -111,6 +111,25 @@ fn length(properties: &BTreeMap<String, String>, key: &str, extent: f32, fallbac
         .unwrap_or_else(|| number(properties, key, fallback))
 }
 
+/// Value-widget dimensions resolve against the actual styled parent region.
+pub(crate) fn field_size(ui: &egui::Ui, props: &BTreeMap<String, String>) -> egui::Vec2 {
+    let available = ui.available_width().max(0.);
+    let target = number(props, "min-target-size", 0.).max(0.);
+    let min_width = length(props, "min-width", available, target).max(target);
+    let max_width = length(props, "max-width", available, available).max(min_width);
+    let width = length(props, "width", available, available).clamp(min_width, max_width);
+    let extent = if ui.available_height().is_finite() {
+        ui.available_height()
+    } else {
+        ui.clip_rect().height().max(ui.spacing().interact_size.y)
+    };
+    let min_height = length(props, "min-height", extent, target).max(target);
+    let max_height = length(props, "max-height", extent, f32::INFINITY).max(min_height);
+    let height =
+        length(props, "height", extent, ui.spacing().interact_size.y).clamp(min_height, max_height);
+    egui::vec2(width, height)
+}
+
 fn padding(properties: &BTreeMap<String, String>, fallback: egui::Vec2) -> [f32; 4] {
     let values = properties
         .get("padding")
@@ -443,6 +462,7 @@ pub fn label(
     ui.push_id(id, |ui| {
         ui.scope(|ui| {
             apply_properties(ui, &props);
+            let full_text = text;
             let mut text = egui::RichText::new(text).font(font(ui, &props));
             if props.get("font-weight").is_some_and(|value| {
                 value == "bold" || value.parse::<u16>().is_ok_and(|weight| weight >= 600)
@@ -453,7 +473,9 @@ pub fn label(
                 text =
                     text.color(color.gamma_multiply(number(&props, "opacity", 1.).clamp(0., 1.)));
             }
+            let elide = props.get("text-overflow").is_some_and(|v| v == "ellipsis");
             let widget = egui::Label::new(text).selectable(false);
+            let widget = if elide { widget.truncate() } else { widget };
             if props
                 .get("visibility")
                 .is_some_and(|value| value == "hidden")
@@ -469,9 +491,19 @@ pub fn label(
                     length(&props, "width", ui.available_width(), ui.available_width()),
                     number(&props, "height", font(ui, &props).size),
                 );
-                ui.add_sized(size, widget)
+                let response = ui.add_sized(size, widget);
+                if elide {
+                    response.on_hover_text(full_text)
+                } else {
+                    response
+                }
             } else {
-                ui.add(widget)
+                let response = ui.add(widget);
+                if elide {
+                    response.on_hover_text(full_text)
+                } else {
+                    response
+                }
             }
         })
         .inner

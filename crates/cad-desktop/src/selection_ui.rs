@@ -402,7 +402,7 @@ fn focus_edge(
     Ok(())
 }
 
-fn edge_controls(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+pub(crate) fn edge_controls(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
     let Some(feature) = edge_feature(w) else {
         return vec![];
     };

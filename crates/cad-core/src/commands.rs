@@ -423,6 +423,10 @@ impl Command {
                 for c in a.configurations.values_mut() {
                     c.overrides.components.remove(&instance);
                     c.overrides.component_configurations.remove(&instance);
+                    c.overrides.component_placements.remove(&instance);
+                    c.overrides
+                        .mate_curve_seeds
+                        .retain(|id, _| !removed_mates.contains(id));
                     c.overrides
                         .mates
                         .retain(|id, _| !removed_mates.contains(id));
@@ -449,6 +453,7 @@ impl Command {
                 a.mates.retain(|m| m.id != mate);
                 for c in a.configurations.values_mut() {
                     c.overrides.mates.remove(&mate);
+                    c.overrides.mate_curve_seeds.remove(&mate);
                 }
             }
             Self::PutMaterial { material } => {

@@ -7,7 +7,7 @@ use std::{
 };
 pub mod dimensions;
 pub use dimensions::{DimensionField, FIELD_CONTRACT_VERSION};
-pub const CONTRACT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 4;
 fn supported_version(value: u32) -> bool {
     (1..=CONTRACT_VERSION).contains(&value)
 }
@@ -50,6 +50,12 @@ pub struct Overrides {
     pub mates: BTreeMap<Id, bool>,
     #[serde(default)]
     pub component_configurations: BTreeMap<Id, Option<Id>>,
+    /// Stable owning-assembly occurrence IDs. Each omitted coordinate inherits.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub component_placements: BTreeMap<Id, PoseOverride>,
+    /// Canonical 0..1 source hints for free Path/Slot/Cam mates, never hard fractions.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mate_curve_seeds: BTreeMap<Id, f64>,
     #[serde(default)]
     pub material: Option<Id>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -58,6 +64,58 @@ pub struct Overrides {
     pub properties: BTreeMap<String, String>,
     #[serde(default)]
     pub bom: BomOptions,
+}
+/// Authoritative millimetres and Euler XYZ degrees, matching `Placement`.
+/// These are source seeds; assembly mate solving remains authoritative.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct PoseOverride {
+    #[serde(default)]
+    pub translation: [Option<f64>; 3],
+    #[serde(default)]
+    pub rotation_deg: [Option<f64>; 3],
+}
+impl PoseOverride {
+    pub fn is_empty(&self) -> bool {
+        self.translation
+            .iter()
+            .chain(&self.rotation_deg)
+            .all(Option::is_none)
+    }
+    pub fn apply(&self, pose: &mut crate::Placement) {
+        for axis in 0..3 {
+            if let Some(value) = self.translation[axis] {
+                pose.translation[axis] = value;
+            }
+            if let Some(value) = self.rotation_deg[axis] {
+                pose.rotation_deg[axis] = value;
+            }
+        }
+    }
+    fn merge(&mut self, next: &Self) {
+        for axis in 0..3 {
+            if next.translation[axis].is_some() {
+                self.translation[axis] = next.translation[axis];
+            }
+            if next.rotation_deg[axis].is_some() {
+                self.rotation_deg[axis] = next.rotation_deg[axis];
+            }
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", content = "configuration", rename_all = "snake_case")]
+pub enum PlacementScope {
+    Base,
+    Named(Id),
+}
+impl PlacementScope {
+    pub fn selected(doc: &Document, assembly: &str) -> Self {
+        doc.active_configurations
+            .get(assembly)
+            .cloned()
+            .map(Self::Named)
+            .unwrap_or(Self::Base)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Definition {
@@ -175,6 +233,16 @@ fn merge(target: &mut Overrides, next: &Overrides) {
     target
         .component_configurations
         .extend(next.component_configurations.clone());
+    for (instance, pose) in &next.component_placements {
+        target
+            .component_placements
+            .entry(instance.clone())
+            .or_default()
+            .merge(pose);
+    }
+    target
+        .mate_curve_seeds
+        .extend(next.mate_curve_seeds.clone());
     target.properties.extend(next.properties.clone());
     if next.finish.is_some() {
         target.finish = next.finish.clone();
@@ -317,6 +385,16 @@ pub fn validate(doc: &Document) -> Result<()> {
             }
             let resolved = resolve(doc, definition, key)?;
             let o = &resolved.overrides;
+            for pose in c.overrides.component_placements.values() {
+                validate_pose(pose)?;
+            }
+            for seed in c.overrides.mate_curve_seeds.values() {
+                if !seed.is_finite() || !(0.0..=1.0).contains(seed) {
+                    return Err(invalid(
+                        "Configured free curve mate seeds must be finite fractions in 0..1",
+                    ));
+                }
+            }
             if o.bom.name == Some(BomName::Custom)
                 && !o
                     .bom
@@ -347,6 +425,8 @@ pub fn validate(doc: &Document) -> Result<()> {
                     || !o.mates.is_empty()
                     || !o.component_configurations.is_empty()
                     || !o.component_patterns.is_empty()
+                    || !o.component_placements.is_empty()
+                    || !o.mate_curve_seeds.is_empty()
                 {
                     return Err(invalid("Component/mate overrides require an assembly"));
                 }
@@ -361,6 +441,7 @@ pub fn validate(doc: &Document) -> Result<()> {
                     return Err(invalid("Configured surface finish is missing"));
                 }
             } else if let Some(a) = doc.assemblies.get(definition) {
+                validate_assembly_placements(a, o)?;
                 require_keys(
                     o.parameters.keys(),
                     |id| a.parameters.contains_key(id),
@@ -413,6 +494,176 @@ pub fn validate(doc: &Document) -> Result<()> {
     for (definition, configuration) in &doc.active_configurations {
         if !exists(doc, definition, configuration) {
             return Err(invalid("The selected named configuration is missing"));
+        }
+    }
+    Ok(())
+}
+fn validate_pose(pose: &PoseOverride) -> Result<()> {
+    if pose
+        .translation
+        .iter()
+        .chain(&pose.rotation_deg)
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err(invalid(
+            "Component placement coordinates must be finite millimetres/degrees",
+        ));
+    }
+    let mut placement = crate::Placement::default();
+    pose.apply(&mut placement);
+    if placement.matrix().iter().any(|value| !value.is_finite()) {
+        return Err(invalid(
+            "Component placement does not produce a finite rigid frame",
+        ));
+    }
+    Ok(())
+}
+fn validate_assembly_placements(assembly: &Assembly, overrides: &Overrides) -> Result<()> {
+    let generated = crate::component_pattern::generated(assembly);
+    for (id, pose) in &overrides.component_placements {
+        validate_pose(pose)?;
+        let instance = assembly
+            .instances
+            .get(id)
+            .ok_or_else(|| invalid(format!("Configured placement component {id} is missing")))?;
+        if generated.contains(id) {
+            return Err(invalid(format!(
+                "{} is driven by a component pattern; configure its seed or pattern instead",
+                instance.name
+            )));
+        }
+        if instance.translation_expressions.is_some()
+            && pose.translation.iter().any(Option::is_some)
+        {
+            return Err(invalid(format!(
+                "{} translation is expression-driven; configure its driving parameters instead of numeric placement",
+                instance.name
+            )));
+        }
+        let mut effective = instance.placement.clone();
+        pose.apply(&mut effective);
+        if effective.matrix().iter().any(|value| !value.is_finite()) {
+            return Err(invalid(format!(
+                "{} configured placement has a non-finite rigid frame",
+                instance.name
+            )));
+        }
+    }
+    for (id, seed) in &overrides.mate_curve_seeds {
+        if !seed.is_finite() || !(0.0..=1.0).contains(seed) {
+            return Err(invalid(
+                "Configured free curve mate seeds must be finite fractions in 0..1",
+            ));
+        }
+        let mate = assembly
+            .mates
+            .iter()
+            .find(|mate| &mate.id == id)
+            .ok_or_else(|| invalid(format!("Configured curve mate {id} is missing")))?;
+        if !matches!(
+            mate.relationship
+                .as_deref()
+                .and_then(crate::assembly_geometry::Relationship::curve_position),
+            Some(crate::assembly_geometry::CurvePosition::Free { .. })
+        ) {
+            return Err(invalid(format!(
+                "Mate {id} has no free Path/Slot/Cam parameter; hard fractions cannot be overridden as placement seeds"
+            )));
+        }
+    }
+    Ok(())
+}
+/// Atomically author solved placement hints in an explicit source scope.
+/// Expressions continue to own translation; callers supply only numeric pose fields
+/// that are not expression-owned. Named edits never modify base or sibling seeds.
+pub fn set_component_placements(
+    doc: &mut Document,
+    assembly: &str,
+    scope: &PlacementScope,
+    poses: &BTreeMap<Id, PoseOverride>,
+    curve_seeds: &BTreeMap<Id, f64>,
+) -> Result<()> {
+    let mut candidate = doc.clone();
+    let source = candidate
+        .assemblies
+        .get(assembly)
+        .ok_or_else(|| invalid("Placement assembly is missing"))?;
+    let proposed = Overrides {
+        component_placements: poses.clone(),
+        mate_curve_seeds: curve_seeds.clone(),
+        ..Overrides::default()
+    };
+    validate_assembly_placements(source, &proposed)?;
+    match scope {
+        PlacementScope::Base => {
+            let source = candidate
+                .assemblies
+                .get_mut(assembly)
+                .ok_or_else(|| invalid("Placement assembly is missing"))?;
+            for (id, pose) in poses {
+                pose.apply(
+                    &mut source
+                        .instances
+                        .get_mut(id)
+                        .ok_or_else(|| invalid("Placement component is missing"))?
+                        .placement,
+                );
+            }
+            apply_curve_seeds(source, curve_seeds)?;
+        }
+        PlacementScope::Named(id) => {
+            let source = candidate
+                .assemblies
+                .get_mut(assembly)
+                .ok_or_else(|| invalid("Placement assembly is missing"))?;
+            let configuration = source
+                .configurations
+                .get_mut(id)
+                .ok_or_else(|| invalid("Placement configuration is missing"))?;
+            configuration.version = CONTRACT_VERSION;
+            for (instance, pose) in poses {
+                configuration
+                    .overrides
+                    .component_placements
+                    .entry(instance.clone())
+                    .or_default()
+                    .merge(pose);
+            }
+            configuration
+                .overrides
+                .mate_curve_seeds
+                .extend(curve_seeds.clone());
+        }
+    }
+    candidate.validate()?;
+    *doc = candidate;
+    Ok(())
+}
+fn apply_curve_seeds(assembly: &mut Assembly, seeds: &BTreeMap<Id, f64>) -> Result<()> {
+    for (id, value) in seeds {
+        let mate = assembly
+            .mates
+            .iter_mut()
+            .find(|mate| &mate.id == id)
+            .ok_or_else(|| invalid("Configured curve mate is missing"))?;
+        let position =
+            mate.relationship
+                .as_deref_mut()
+                .and_then(|relationship| match relationship {
+                    crate::assembly_geometry::Relationship::Path { position, .. }
+                    | crate::assembly_geometry::Relationship::Slot { position, .. }
+                    | crate::assembly_geometry::Relationship::Cam { position, .. } => {
+                        Some(position)
+                    }
+                    _ => None,
+                });
+        if let Some(crate::assembly_geometry::CurvePosition::Free { seed }) = position {
+            *seed = *value;
+        } else {
+            return Err(invalid(
+                "A curve placement seed cannot replace a hard mate fraction",
+            ));
         }
     }
     Ok(())
@@ -503,6 +754,7 @@ fn apply_part(part: &mut Part, o: &Overrides) -> Result<()> {
     Ok(())
 }
 fn apply_assembly(assembly: &mut Assembly, o: &Overrides) -> Result<()> {
+    validate_assembly_placements(assembly, o)?;
     for (id, e) in &o.parameters {
         assembly
             .parameters
@@ -515,6 +767,16 @@ fn apply_assembly(assembly: &mut Assembly, o: &Overrides) -> Result<()> {
             i.configuration = config.clone();
         }
     }
+    for (id, pose) in &o.component_placements {
+        pose.apply(
+            &mut assembly
+                .instances
+                .get_mut(id)
+                .ok_or_else(|| invalid("Configured placement component is missing"))?
+                .placement,
+        );
+    }
+    apply_curve_seeds(assembly, &o.mate_curve_seeds)?;
     assembly
         .instances
         .retain(|id, _| !o.components.get(id).copied().unwrap_or(false));
@@ -685,6 +947,21 @@ pub fn csv(table: &Table) -> Result<String> {
         for key in c.overrides.component_configurations.keys() {
             keys.insert(format!("configuration:{key}"));
         }
+        for (key, pose) in &c.overrides.component_placements {
+            for (axis, field) in ["x", "y", "z", "rx", "ry", "rz"].iter().enumerate() {
+                let value = if axis < 3 {
+                    pose.translation[axis]
+                } else {
+                    pose.rotation_deg[axis - 3]
+                };
+                if value.is_some() {
+                    keys.insert(format!("placement:{key}:{field}"));
+                }
+            }
+        }
+        for key in c.overrides.mate_curve_seeds.keys() {
+            keys.insert(format!("curve-seed:{key}"));
+        }
         for key in c.overrides.properties.keys() {
             keys.insert(format!("property:{key}"));
         }
@@ -786,6 +1063,25 @@ fn cell(c: &Definition, h: &str) -> Result<String> {
                     .get(key)
                     .map(|v| v.clone().unwrap_or_else(|| "default".into()))
                     .unwrap_or_default(),
+                "placement" => {
+                    let (instance, axis) = placement_column(key)?;
+                    o.component_placements
+                        .get(instance)
+                        .and_then(|pose| {
+                            if axis < 3 {
+                                pose.translation[axis]
+                            } else {
+                                pose.rotation_deg[axis - 3]
+                            }
+                        })
+                        .map(|v| format!("{v} {}", if axis < 3 { "mm" } else { "deg" }))
+                        .unwrap_or_default()
+                }
+                "curve-seed" => o
+                    .mate_curve_seeds
+                    .get(key)
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
                 "property" => o.properties.get(key).cloned().unwrap_or_default(),
                 _ => return Err(invalid("Unknown design-table column")),
             }
@@ -885,6 +1181,53 @@ fn boolean(value: &str) -> Result<bool> {
         _ => Err(invalid("Suppression/exclusion cells require true or false")),
     }
 }
+fn placement_column(key: &str) -> Result<(&str, usize)> {
+    let (instance, field) = key
+        .rsplit_once(':')
+        .ok_or_else(|| invalid("Placement columns require placement:INSTANCE_ID:x/y/z/rx/ry/rz"))?;
+    if instance.is_empty() {
+        return Err(invalid("A placement component ID cannot be empty"));
+    }
+    let axis = ["x", "y", "z", "rx", "ry", "rz"]
+        .iter()
+        .position(|name| *name == field)
+        .ok_or_else(|| invalid("Placement field must be x, y, z, rx, ry, or rz"))?;
+    Ok((instance, axis))
+}
+/// Parse an exact fixed pose cell. Unitless values use mm/degrees; equations
+/// belong to driving assembly parameters rather than hidden placement state.
+pub fn placement_value(text: &str, axis: usize) -> Result<f64> {
+    if axis >= 6 {
+        return Err(invalid("Unknown placement coordinate"));
+    }
+    let quantity = crate::expression::evaluate(text, |_| {
+        Err(invalid(
+            "Placement cells are fixed poses; configure driving parameters for equations",
+        ))
+    })?;
+    let dimension = if axis < 3 {
+        crate::Dimension::Length
+    } else {
+        crate::Dimension::Angle
+    };
+    let value = if quantity.matches(crate::Dimension::Scalar) {
+        quantity.value
+    } else if quantity.matches(dimension) {
+        if axis < 3 {
+            quantity.value
+        } else {
+            quantity.value.to_degrees()
+        }
+    } else {
+        return Err(invalid(
+            "Placement cells require length or angle units appropriate to the field",
+        ));
+    };
+    if !value.is_finite() {
+        return Err(invalid("Placement coordinates must be finite"));
+    }
+    Ok(value)
+}
 fn set_cell(c: &mut Definition, h: &str, value: &str) -> Result<()> {
     match h {
         "id" => c.id = value.into(),
@@ -951,6 +1294,27 @@ fn set_cell(c: &mut Definition, h: &str, value: &str) -> Result<()> {
                             Some(value.into())
                         },
                     );
+                }
+                "placement" => {
+                    let (instance, axis) = placement_column(key)?;
+                    let number = placement_value(value, axis)?;
+                    let pose = o.component_placements.entry(instance.into()).or_default();
+                    if axis < 3 {
+                        pose.translation[axis] = Some(number);
+                    } else {
+                        pose.rotation_deg[axis - 3] = Some(number);
+                    }
+                }
+                "curve-seed" => {
+                    let seed: f64 = value
+                        .parse()
+                        .map_err(|_| invalid("Curve seed cells require a fraction in 0..1"))?;
+                    if !seed.is_finite() || !(0.0..=1.0).contains(&seed) {
+                        return Err(invalid(
+                            "Curve seed cells require a finite fraction in 0..1",
+                        ));
+                    }
+                    o.mate_curve_seeds.insert(key.into(), seed);
                 }
                 "property" => {
                     o.properties.insert(key.into(), value.into());
@@ -1107,6 +1471,19 @@ fn import_into(doc: &mut Document, mut table: Table, replace: bool) -> Result<()
                 .collect::<Vec<_>>();
             normalize_map(&mut o.components, &instances, "component")?;
             normalize_map(&mut o.component_configurations, &instances, "component")?;
+            normalize_map(
+                &mut o.component_placements,
+                &instances,
+                "placement component",
+            )?;
+            normalize_map(
+                &mut o.mate_curve_seeds,
+                &a.mates
+                    .iter()
+                    .map(|m| (m.id.clone(), m.kind.clone()))
+                    .collect::<Vec<_>>(),
+                "curve mate",
+            )?;
             normalize_map(
                 &mut o.component_patterns,
                 &a.component_patterns
@@ -1515,7 +1892,7 @@ pub fn semantic(
             });
         }
         for configuration in definitions(doc, owner).values() {
-            out.push(crate::presentation::SemanticElement {id:format!("{owner}@{}",configuration.id),role:"configuration".into(),label:configuration.name.clone(),value:Some(configuration.description.clone()),state:if doc.active_configurations.get(owner)==Some(&configuration.id){"selected"}else{state}.into(),commands:vec!["configurations".into()],relationships:configuration.parent.iter().map(|id|format!("{owner}@{id}")).chain(std::iter::once(owner.clone())).collect(),data:serde_json::json!({"version":CONTRACT_VERSION,"owner":owner,"source":configuration,"evaluated":evaluation.and_then(|e|e.definitions.get(owner)).and_then(|d|d.get(&configuration.id)),"controls":{"parameters":"unit-expression","suppression":"inherit-resolved-suppressed","material":"inherit-material","finish":"inherit-surface-finish","component_configurations":"inherit-selected-named","properties":"text-map","bom":"inherit-exclusion-naming"}})});
+            out.push(crate::presentation::SemanticElement {id:format!("{owner}@{}",configuration.id),role:"configuration".into(),label:configuration.name.clone(),value:Some(configuration.description.clone()),state:if doc.active_configurations.get(owner)==Some(&configuration.id){"selected"}else{state}.into(),commands:vec!["configurations".into()],relationships:configuration.parent.iter().map(|id|format!("{owner}@{id}")).chain(std::iter::once(owner.clone())).collect(),data:serde_json::json!({"version":CONTRACT_VERSION,"owner":owner,"source":configuration,"evaluated":evaluation.and_then(|e|e.definitions.get(owner)).and_then(|d|d.get(&configuration.id)),"controls":{"parameters":"unit-expression","suppression":"inherit-resolved-suppressed","material":"inherit-material","finish":"inherit-surface-finish","component_configurations":"inherit-selected-named","component_placements":"inherit-axis-placement-seeds","mate_curve_seeds":"inherit-free-path-seeds","properties":"text-map","bom":"inherit-exclusion-naming"}})});
         }
     }
     out

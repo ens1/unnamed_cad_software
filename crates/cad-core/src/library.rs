@@ -425,6 +425,8 @@ fn remap_source_inner(
                 | "components"
                 | "mates"
                 | "component_configurations"
+                | "component_placements"
+                | "mate_curve_seeds"
                 | "component_patterns"
                 | "exploded_views"
                 | "inspections"

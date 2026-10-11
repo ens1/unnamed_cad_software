@@ -751,6 +751,7 @@ fn load_files(
 }
 
 fn install(w: &mut Workspace, candidate: Candidate, paths: BTreeSet<PathBuf>) {
+    crate::assembly_motion_ui::finish_drag(w);
     // Release the obsolete hit geometry while keeping the current pending edit.
     crate::sketch_handles::end(w);
     crate::navigation::stop(w);

@@ -1,6 +1,6 @@
 # Configured feature dimensions
 
-Configuration contract version 3 stores `feature_dimensions` in native overrides. Version 1 and 2 definitions and design tables remain readable; the new map is omitted when empty. A configuration stores the feature's stable ID within its owning part, an operation-relative field path, and the replacement expression text. Base feature definitions remain unchanged. Renaming or reordering a feature does not retarget its dimensional overrides.
+Configuration contract version 4 retains the `feature_dimensions` overrides introduced in version 3. Versions 1–3 definitions and design tables remain readable; the new map is omitted when empty. A configuration stores the feature's stable ID within its owning part, an operation-relative field path, and the replacement expression text. Base feature definitions remain unchanged. Renaming or reordering a feature does not retarget its dimensional overrides.
 
 The docked Configurations editor now has a Feature dimensions section grouped by feature. Its checkbox makes the value explicit in the current configuration; clearing it restores the inherited value. The Design table contains the same dimension cells alongside named parameter columns. The feature/field filter and horizontal scrolling keep larger tables usable. Derived configurations inherit individual dimensional fields, so a child can override an extrusion depth while inheriting its parent's draft angle or thin wall thickness. Duplicate copies the resolved dimensional expressions along with the other resolved overrides.
 

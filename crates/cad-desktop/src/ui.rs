@@ -89,6 +89,7 @@ pub fn workspace_ui(
         &registry,
         image.texture,
     );
+    crate::assembly_motion_ui::finish_ui(&mut w, ctx);
     let resize_regions = regions.clone();
     let settings_open = w.settings.is_some();
     let viewport_center = regions
@@ -245,7 +246,11 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
             .sketch
             .as_ref()
             .is_some_and(|s| s.drag.is_some() || s.edit.is_some());
-        if w.selection_popup.take().is_some() {
+        if crate::assembly_motion_ui::cancel_drag(w) {
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+            });
+        } else if w.selection_popup.take().is_some() {
             ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
             });
@@ -767,7 +772,10 @@ pub(crate) fn semantic_element(
     }
     if matches!(
         element.role.as_str(),
-        "assembly-motion-field" | "assembly-motion-mode" | "assembly-motion-pivot"
+        "assembly-motion-field"
+            | "assembly-motion-mode"
+            | "assembly-motion-pivot"
+            | "assembly-motion-scope"
     ) {
         crate::assembly_motion_ui::semantic_control(ui, w, element);
         return;
@@ -847,7 +855,7 @@ pub(crate) fn semantic_element(
         }
     }
 }
-fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
+pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
     if crate::settings::action(w, command) {
         return;
     }
@@ -870,6 +878,7 @@ fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) 
         || crate::sketch_relations_ui::semantic_action(w, element, command)
         || crate::feature_order_ui::action(w, command, Some(&element.data))
         || crate::operation_editor_ui::action(w, command, Some(&element.data))
+        || crate::drawing_editor_ui::action(w, command, Some(&element.data))
         || crate::assembly_motion_ui::action(w, command, Some(&element.data))
     {
         return;
@@ -1023,8 +1032,13 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         .data
         .get("setter")
         .and_then(Value::as_str)
-        .is_some_and(|setter| setter.starts_with("appearance-") || setter == "operation-editor")
-    {
+        .is_some_and(|setter| {
+            setter.starts_with("appearance-")
+                || matches!(
+                    setter,
+                    "operation-editor" | "drawing-editor" | "configuration-dimension"
+                )
+        }) {
         element.role.as_str()
     } else {
         "field-control"
@@ -1033,123 +1047,265 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     if let Some(classes) = element.data.get("classes").and_then(Value::as_array) {
         field_classes.extend(classes.iter().filter_map(Value::as_str));
     }
-    let props = crate::presentation_controls::properties(
-        &element.id,
-        role,
-        &field_classes,
-        if editable { "editable" } else { "readonly" },
+    let field_state = format!(
+        "{} {}",
+        element.state,
+        if editable { "editable" } else { "readonly" }
     );
+    let props =
+        crate::presentation_controls::properties(&element.id, role, &field_classes, &field_state);
     if props.get("display").is_some_and(|value| value == "none") {
         return;
     }
     let mut appearance_error = None;
-    let next = ui
-        .scope(|ui| {
+    let target = crate::presentation_controls::current_target().map(|mut parent| {
+        if parent.node.id == element.id {
+            parent.node.role = role.into();
+            parent
+                .node
+                .states
+                .extend(field_state.split_whitespace().map(str::to_owned));
+            parent
+        } else {
+            parent.child(
+                &element.id,
+                role,
+                &field_classes
+                    .iter()
+                    .map(|c| (*c).into())
+                    .collect::<Vec<_>>(),
+                &field_state,
+            )
+        }
+    });
+    let mut draw = |ui: &mut egui::Ui| {
+        ui.scope(|ui| {
             crate::presentation_controls::apply_properties(ui, &props);
-            ui.horizontal(|ui| {
-                crate::presentation_controls::label(
-                    ui,
-                    &format!("{}:label", element.id),
-                    "field-label",
-                    &field_classes,
-                    &element.label,
-                    if editable { "editable" } else { "readonly" },
-                )
-                .on_hover_text(&descriptor.accessibility_label);
-                if let Some(unit) = descriptor.unit.as_deref().filter(|unit| !unit.is_empty()) {
+            let mut content = |ui: &mut egui::Ui| {
+                ui.horizontal(|ui| {
                     crate::presentation_controls::label(
                         ui,
-                        &format!("{}:unit", element.id),
-                        "field-unit",
+                        &format!("{}:label", element.id),
+                        "field-label",
                         &field_classes,
-                        unit,
-                        "ready",
-                    );
-                }
-            });
-            if !descriptor.choices.is_empty() {
-                let mut next = value.clone();
-                let selected_label = descriptor
-                    .choices
-                    .iter()
-                    .find(|choice| choice.get("value").unwrap_or(choice) == &value)
-                    .and_then(|choice| choice.get("label"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| {
-                        value
-                            .as_str()
-                            .map(str::to_owned)
-                            .unwrap_or_else(|| value.to_string())
-                    });
-                egui::ComboBox::from_id_salt((&element.id, editor_generation))
-                    .selected_text(selected_label)
-                    .show_ui(ui, |ui| {
-                        ui.add_enabled_ui(editable, |ui| {
-                            for choice in &descriptor.choices {
-                                let candidate = choice.get("value").unwrap_or(choice);
-                                let label = choice
-                                    .get("label")
-                                    .and_then(Value::as_str)
-                                    .or_else(|| candidate.as_str())
-                                    .map(str::to_string)
-                                    .unwrap_or_else(|| candidate.to_string());
-                                ui.selectable_value(&mut next, candidate.clone(), label);
-                            }
+                        &element.label,
+                        &field_state,
+                    )
+                    .on_hover_text(&descriptor.accessibility_label);
+                    if let Some(unit) = descriptor
+                        .unit
+                        .as_deref()
+                        .filter(|unit| !unit.is_empty() && !value.is_boolean())
+                    {
+                        crate::presentation_controls::label(
+                            ui,
+                            &format!("{}:unit", element.id),
+                            "field-unit",
+                            &field_classes,
+                            unit,
+                            "ready",
+                        );
+                    }
+                });
+                let control_size = crate::presentation_controls::field_size(ui, &props);
+                ui.spacing_mut().interact_size.y = control_size.y;
+                if !descriptor.choices.is_empty() {
+                    let mut next = value.clone();
+                    let selected_label = descriptor
+                        .choices
+                        .iter()
+                        .find(|choice| choice.get("value").unwrap_or(choice) == &value)
+                        .and_then(|choice| choice.get("label"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| {
+                            value
+                                .as_str()
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| value.to_string())
                         });
-                    });
-                return (next != value).then_some(next);
-            }
-            if let Some(mut checked) = value.as_bool() {
-                return ui
-                    .add_enabled(editable, egui::Checkbox::new(&mut checked, "Enabled"))
-                    .changed()
-                    .then_some(Value::Bool(checked));
-            }
-            let current = value
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| value.to_string());
-            let key = format!("presentation-field:{}:{editor_generation}", element.id);
-            let keep_invalid_text = crate::operation_editor_ui::field_is_invalid(w, element);
-            let text = w.fields.entry(key).or_insert(current.clone());
-            let editor = if element.data.get("multiline").and_then(Value::as_bool) == Some(true) {
-                egui::TextEdit::multiline(text)
-                    .code_editor()
-                    .desired_rows(12)
-            } else {
-                egui::TextEdit::singleline(text)
-            };
-            let response = ui.add_enabled(
-                editable,
-                editor
-                    .id_salt((&element.id, editor_generation))
-                    .desired_width(f32::INFINITY),
-            );
-            if !response.has_focus() && !response.changed() && !keep_invalid_text {
-                *text = current;
-                appearance_error = Some(None);
-            }
-            if response.changed() {
-                if value.is_string() {
-                    Some(Value::String(text.clone()))
+                    egui::ComboBox::from_id_salt((&element.id, editor_generation))
+                        .selected_text(selected_label)
+                        .width(control_size.x)
+                        .show_ui(ui, |ui| {
+                            ui.add_enabled_ui(editable, |ui| {
+                                let filter_key = format!(
+                                    "presentation-choice-filter:{}:{editor_generation}",
+                                    element.id
+                                );
+                                let query = w.fields.entry(filter_key).or_default();
+                                ui.add(
+                                    egui::TextEdit::singleline(query)
+                                        .hint_text("Filter choices…")
+                                        .desired_width(ui.available_width()),
+                                );
+                                let search = query.to_lowercase();
+                                let indices = if search.is_empty() {
+                                    None
+                                } else {
+                                    Some(
+                                        descriptor
+                                            .choices
+                                            .iter()
+                                            .enumerate()
+                                            .filter_map(|(index, choice)| {
+                                                let label = choice
+                                                    .get("label")
+                                                    .and_then(Value::as_str)
+                                                    .or_else(|| {
+                                                        choice
+                                                            .get("value")
+                                                            .unwrap_or(choice)
+                                                            .as_str()
+                                                    })
+                                                    .map(str::to_owned)
+                                                    .unwrap_or_else(|| choice.to_string());
+                                                label
+                                                    .to_lowercase()
+                                                    .contains(&search)
+                                                    .then_some(index)
+                                            })
+                                            .collect::<Vec<_>>(),
+                                    )
+                                };
+                                let count =
+                                    indices.as_ref().map_or(descriptor.choices.len(), Vec::len);
+                                let menu_props = crate::presentation_controls::properties(
+                                    &format!("{}:choices", element.id),
+                                    "field-choices",
+                                    &field_classes,
+                                    &field_state,
+                                );
+                                egui::ScrollArea::vertical()
+                                    .max_height(crate::presentation_controls::number(
+                                        &menu_props,
+                                        "max-height",
+                                        240.,
+                                    ))
+                                    .show_rows(
+                                        ui,
+                                        ui.spacing().interact_size.y,
+                                        count,
+                                        |ui, rows| {
+                                            for row in rows {
+                                                let index = indices
+                                                    .as_ref()
+                                                    .map_or(row, |indices| indices[row]);
+                                                let choice = &descriptor.choices[index];
+                                                let candidate =
+                                                    choice.get("value").unwrap_or(choice);
+                                                let label = choice
+                                                    .get("label")
+                                                    .and_then(Value::as_str)
+                                                    .or_else(|| candidate.as_str())
+                                                    .map(str::to_string)
+                                                    .unwrap_or_else(|| candidate.to_string());
+                                                ui.selectable_value(
+                                                    &mut next,
+                                                    candidate.clone(),
+                                                    label,
+                                                );
+                                            }
+                                        },
+                                    );
+                                if count == 0 {
+                                    ui.weak("No matching choices");
+                                }
+                            });
+                        });
+                    return (next != value).then_some(next);
+                }
+                if let Some(mut checked) = value.as_bool() {
+                    return ui
+                        .add_enabled_ui(editable, |ui| {
+                            ui.add_sized(control_size, egui::Checkbox::new(&mut checked, ""))
+                        })
+                        .inner
+                        .on_hover_text(&descriptor.accessibility_label)
+                        .changed()
+                        .then_some(Value::Bool(checked));
+                }
+                let current = value
+                    .as_str()
+                    .map(str::to_string)
+                    .unwrap_or_else(|| value.to_string());
+                let key = format!("presentation-field:{}:{editor_generation}", element.id);
+                let keep_invalid_text = crate::operation_editor_ui::field_is_invalid(w, element)
+                    || crate::drawing_editor_ui::field_is_invalid(w, element)
+                    || crate::configuration_ui::field_is_invalid(w, element);
+                let text = w.fields.entry(key).or_insert(current.clone());
+                let editor = if element.data.get("multiline").and_then(Value::as_bool) == Some(true)
+                {
+                    egui::TextEdit::multiline(text)
+                        .code_editor()
+                        .desired_rows(12)
                 } else {
-                    match serde_json::from_str(text) {
-                        Ok(value) => Some(value),
-                        Err(error) => {
-                            w.status = format!("{}: {error}", element.label);
-                            appearance_error = Some(Some(error.to_string()));
-                            None
+                    egui::TextEdit::singleline(text)
+                };
+                let editor = editor
+                    .id_salt((&element.id, editor_generation))
+                    .desired_width(control_size.x);
+                let response = ui
+                    .add_enabled_ui(editable, |ui| {
+                        if element.data.get("multiline").and_then(Value::as_bool) == Some(true)
+                            && !props.contains_key("height")
+                            && !props.contains_key("max-height")
+                        {
+                            ui.add(editor)
+                        } else {
+                            ui.add_sized(control_size, editor)
+                        }
+                    })
+                    .inner;
+                if !response.has_focus() && !response.changed() && !keep_invalid_text {
+                    *text = current;
+                    appearance_error = Some(None);
+                }
+                if response.changed() {
+                    if value.is_string() {
+                        Some(Value::String(text.clone()))
+                    } else {
+                        match serde_json::from_str(text) {
+                            Ok(value) => Some(value),
+                            Err(_)
+                                if element
+                                    .data
+                                    .get("accepts_quantity_text")
+                                    .and_then(Value::as_bool)
+                                    == Some(true) =>
+                            {
+                                Some(Value::String(text.clone()))
+                            }
+                            Err(error) => {
+                                w.status = format!("{}: {error}", element.label);
+                                appearance_error = Some(Some(error.to_string()));
+                                None
+                            }
                         }
                     }
+                } else {
+                    None
                 }
+            };
+            if props.get("flex-direction").is_some_and(|v| v == "row")
+                && element.data.get("multiline").and_then(Value::as_bool) != Some(true)
+            {
+                ui.horizontal(&mut content).inner
             } else {
-                None
+                content(ui)
             }
         })
-        .inner;
+        .inner
+    };
+    let next = if let Some(target) = target {
+        crate::presentation_controls::with_target(target, ui, &mut draw)
+    } else {
+        draw(ui)
+    };
     if let Some(error) = appearance_error {
         crate::operation_editor_ui::field_error(w, element, error.clone());
+        crate::drawing_editor_ui::field_error(w, element, error.clone());
+        crate::configuration_ui::field_error(w, element, error.clone());
         crate::appearances_ui::field_error(w, element, error);
     }
     if let Some(next) = next {
@@ -1157,11 +1313,15 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
             Ok(()) => {
                 crate::appearances_ui::field_error(w, element, None);
                 crate::operation_editor_ui::field_error(w, element, None);
+                crate::drawing_editor_ui::field_error(w, element, None);
+                crate::configuration_ui::field_error(w, element, None);
             }
             Err(error) => {
                 w.status = error.to_string();
                 crate::appearances_ui::field_error(w, element, Some(error.to_string()));
                 crate::operation_editor_ui::field_error(w, element, Some(error.to_string()));
+                crate::drawing_editor_ui::field_error(w, element, Some(error.to_string()));
+                crate::configuration_ui::field_error(w, element, Some(error.to_string()));
             }
         }
     }
@@ -1212,9 +1372,6 @@ fn model_view(
     if crate::drawing_ui::preview(w, ui, r) {
         return;
     }
-    if viewport::navigate(w, ui.ctx(), &response) {
-        w.selection_popup = None;
-    }
     let toolbar = crate::presentation_controls::overlay_rect_state(
         "viewport.toolbar",
         "viewport-toolbar",
@@ -1238,6 +1395,11 @@ fn model_view(
             ),
         );
         crate::workspace_controls::toolbar(&mut tools, w);
+    }
+    let cube = viewport::view_cube(w, ui, r);
+    let motion_owned = crate::assembly_motion_ui::viewport(w, ui, r, &response, &[toolbar, cube]);
+    if !motion_owned && viewport::navigate(w, ui.ctx(), &response) {
+        w.selection_popup = None;
     }
     let empty = w.sketch.is_none()
         && w.view
@@ -1266,7 +1428,11 @@ fn model_view(
         );
         crate::workspace_controls::start_hint(&mut hint, w);
     }
-    if response.secondary_clicked() && w.sketch.is_none() && w.tool_checkpoint.is_none() {
+    if !motion_owned
+        && response.secondary_clicked()
+        && w.sketch.is_none()
+        && w.tool_checkpoint.is_none()
+    {
         w.selection_popup = None;
         if let Some(pointer) = response.interact_pointer_pos() {
             if let Some(feature) = crate::sketch::pick(w, r, pointer) {
@@ -1282,7 +1448,7 @@ fn model_view(
             }
         }
     }
-    if w.sketch.is_none() {
+    if !motion_owned && w.sketch.is_none() {
         response.context_menu(|ui| {
             if w.tool_checkpoint.is_some() {
                 if ui
@@ -1311,9 +1477,11 @@ fn model_view(
         });
     }
     viewport::overlay(w, ui, r);
-    let cube = viewport::view_cube(w, ui, r);
-    crate::sketch::overlay(w, ui, r, &response, toolbar);
+    if !motion_owned {
+        crate::sketch::overlay(w, ui, r, &response, toolbar);
+    }
     if w.sketch.is_none()
+        && !motion_owned
         && response.clicked()
         && response
             .interact_pointer_pos()
@@ -1359,6 +1527,7 @@ fn model_view(
         }
     }
     if w.sketch.is_none()
+        && !motion_owned
         && response.hovered()
         && ui.input(|i| i.key_pressed(egui::Key::Tab))
         && !w.candidates.is_empty()
@@ -1465,6 +1634,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || crate::selection_ui::set_action(w, cmd)
         || crate::feature_order_ui::action(w, cmd, None)
         || crate::operation_editor_ui::action(w, cmd, None)
+        || crate::drawing_editor_ui::action(w, cmd, None)
         || crate::assembly_motion_ui::action(w, cmd, None)
     {
         return;

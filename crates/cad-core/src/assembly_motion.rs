@@ -8,6 +8,7 @@ use crate::{
 use nalgebra::{Matrix4, Rotation3, Vector3, Vector4};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+pub mod drag;
 
 pub const CONTRACT_VERSION: u32 = 1;
 
@@ -21,6 +22,10 @@ pub struct Goal {
     pub position: Option<[f64; 3]>,
     /// Desired component orientation, XYZ Euler degrees in the owning assembly.
     pub rotation_deg: Option<[f64; 3]>,
+    /// Optional transient starting pose for resolving remaining freedom. It is
+    /// a numerical preference, never an engineering constraint or saved mate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_placement: Option<Placement>,
 }
 impl Goal {
     pub fn from_offsets(
@@ -47,6 +52,7 @@ impl Goal {
                 p.z + translation_mm[2],
             ]),
             rotation_deg,
+            preferred_placement: None,
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -55,6 +61,12 @@ impl Goal {
             || self.anchor.iter().any(|v| !v.is_finite())
             || self.position.iter().flatten().any(|v| !v.is_finite())
             || self.rotation_deg.iter().flatten().any(|v| !v.is_finite())
+            || self.preferred_placement.as_ref().is_some_and(|p| {
+                p.translation
+                    .iter()
+                    .chain(&p.rotation_deg)
+                    .any(|v| !v.is_finite())
+            })
         {
             return Err(CadError::Invalid("Invalid assembly movement goal".into()));
         }
@@ -76,6 +88,7 @@ impl Goal {
         values
     }
     pub(crate) fn preference(&self, baseline: &Placement) -> Placement {
+        let baseline = self.preferred_placement.as_ref().unwrap_or(baseline);
         let rotation_deg = self.rotation_deg.unwrap_or(baseline.rotation_deg);
         let angles = rotation_deg.map(f64::to_radians);
         let rotation = Rotation3::from_euler_angles(angles[0], angles[1], angles[2]);
@@ -293,25 +306,33 @@ pub fn solve(
     })
 }
 
-/// Apply solved seed poses atomically. Fixed/patterned identities and mate
-/// definitions remain intact. Placement seeds belong to the assembly definition.
+/// Apply solved seed poses in the currently selected named configuration or base.
 pub fn apply(doc: &mut Document, outcome: &Outcome) -> Result<()> {
+    let scope = configuration::PlacementScope::selected(doc, &outcome.assembly);
+    apply_in_scope(doc, outcome, &scope)
+}
+
+/// Author solved seeds atomically in the explicitly selected source scope.
+/// Fixed and pattern-driven components retain their source; translation equations
+/// and hard mate fractions remain authoritative.
+pub fn apply_in_scope(
+    doc: &mut Document,
+    outcome: &Outcome,
+    scope: &configuration::PlacementScope,
+) -> Result<()> {
     if outcome.version != CONTRACT_VERSION || outcome.assembly != doc.root {
         return Err(CadError::Invalid("Invalid assembly movement result".into()));
     }
-    let mut candidate = doc.clone();
-    let assembly = candidate
+    let assembly = doc
         .assemblies
-        .get_mut(&outcome.assembly)
+        .get(&outcome.assembly)
         .ok_or_else(|| CadError::Invalid("Movement assembly is missing".into()))?;
     let generated = crate::component_pattern::generated(assembly);
+    let mut poses = BTreeMap::new();
     for (id, placement) in &outcome.placements {
-        let instance = assembly.instances.get_mut(id).ok_or_else(|| {
+        let instance = assembly.instances.get(id).ok_or_else(|| {
             CadError::Invalid("Movement result contains an unknown component".into())
         })?;
-        if generated.contains(id) || instance.fixed {
-            continue;
-        }
         if placement
             .translation
             .iter()
@@ -322,32 +343,38 @@ pub fn apply(doc: &mut Document, outcome: &Outcome) -> Result<()> {
                 "Movement produced a non-finite placement".into(),
             ));
         }
-        if instance.translation_expressions.is_some() {
-            // Expressions still own translation; preserve any coupled rotational
-            // motion without replacing those expressions with numeric positions.
-            instance.placement.rotation_deg = placement.rotation_deg;
-        } else {
-            instance.placement = placement.clone();
+        if generated.contains(id) || instance.fixed {
+            continue;
         }
+        poses.insert(
+            id.clone(),
+            configuration::PoseOverride {
+                translation: if instance.translation_expressions.is_some() {
+                    [None; 3]
+                } else {
+                    placement.translation.map(Some)
+                },
+                rotation_deg: placement.rotation_deg.map(Some),
+            },
+        );
     }
-    for mate in &mut assembly.mates {
-        if let Some(parameter) = outcome.curve_parameters.get(&mate.id)
-            && let Some(crate::assembly_geometry::CurvePosition::Free { seed }) =
-                mate.relationship.as_deref_mut().and_then(|r| match r {
-                    crate::assembly_geometry::Relationship::Path { position, .. }
-                    | crate::assembly_geometry::Relationship::Slot { position, .. }
-                    | crate::assembly_geometry::Relationship::Cam { position, .. } => {
-                        Some(position)
-                    }
-                    _ => None,
-                })
-        {
-            *seed = *parameter;
-        }
-    }
-    candidate.validate()?;
-    *doc = candidate;
-    Ok(())
+    let seeds = outcome
+        .curve_parameters
+        .iter()
+        .filter(|(id, _)| {
+            assembly.mates.iter().any(|mate| {
+                &mate.id == *id
+                    && matches!(
+                        mate.relationship
+                            .as_deref()
+                            .and_then(crate::assembly_geometry::Relationship::curve_position),
+                        Some(crate::assembly_geometry::CurvePosition::Free { .. })
+                    )
+            })
+        })
+        .map(|(id, seed)| (id.clone(), *seed))
+        .collect();
+    configuration::set_component_placements(doc, &outcome.assembly, scope, &poses, &seeds)
 }
 
 /// Solved movement seeds must survive the normal current-source evaluation.

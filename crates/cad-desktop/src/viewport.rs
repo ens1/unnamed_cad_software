@@ -95,14 +95,24 @@ pub fn project(w: &Workspace, rect: egui::Rect, p: [f64; 3]) -> Option<egui::Pos
     if depth <= 0.001 {
         return None;
     }
-    let focal = rect.height() * 0.5 / (std::f32::consts::PI / 8.).tan();
-    Some(rect.center() + egui::vec2(p.dot(r) * focal / depth, -p.dot(u) * focal / depth))
+    let [horizontal, vertical] = focal(w, rect);
+    Some(rect.center() + egui::vec2(p.dot(r) * horizontal / depth, -p.dot(u) * vertical / depth))
+}
+/// Duplicated regions display the same render texture. Match its stretch when
+/// projecting source handles and constructing interaction rays.
+pub(crate) fn focal(w: &Workspace, rect: egui::Rect) -> [f32; 2] {
+    let aspect = w.viewport_size[0].max(1) as f32 / w.viewport_size[1].max(1) as f32;
+    let scale = 0.5 / (std::f32::consts::PI / 8.).tan();
+    [
+        rect.width().max(1.) / aspect * scale,
+        rect.height().max(1.) * scale,
+    ]
 }
 pub fn ray(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> ([f64; 3], [f64; 3]) {
     let (f, r, u) = basis(w);
-    let focal = rect.height() * 0.5 / (std::f32::consts::PI / 8.).tan();
-    let d =
-        (f + r * (p.x - rect.center().x) / focal - u * (p.y - rect.center().y) / focal).normalize();
+    let [horizontal, vertical] = focal(w, rect);
+    let d = (f + r * (p.x - rect.center().x) / horizontal - u * (p.y - rect.center().y) / vertical)
+        .normalize();
     (world_point(eye(w)), [d.x as f64, -d.z as f64, d.y as f64])
 }
 fn triangle(o: [f64; 3], d: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Option<f64> {
@@ -158,6 +168,12 @@ fn render_mesh(source: &MeshData, instance: &PlacedPart) -> Mesh {
 }
 pub(crate) fn display_evaluation(w: &Workspace) -> Option<&Evaluation> {
     if let Some(evaluation) = crate::reference_repair_ui::display_evaluation(w) {
+        return Some(evaluation);
+    }
+    if !w.view.original
+        && w.view.history_cursor.is_none()
+        && let Some(evaluation) = crate::assembly_motion_ui::display_evaluation(w)
+    {
         return Some(evaluation);
     }
     w.session
@@ -684,6 +700,9 @@ pub(crate) fn preselected_edges(w: &Workspace, body: &cad_core::NodeRef) -> Vec<
     edges
 }
 pub fn fit(w: &mut Workspace, selection: bool) {
+    if crate::assembly_motion_ui::dragging(w) {
+        return;
+    }
     if w.sketch
         .as_ref()
         .is_some_and(|s| s.drag.is_some() || !s.chain.is_empty() || !s.clicks.is_empty())
@@ -886,6 +905,10 @@ pub fn sync_scene(
             &preview.focus,
             preview.version
         ))
+    );
+    let key = format!(
+        "{key}:{:?}",
+        display_evaluation(&w).map(|e| (&e.identity, e.valid))
     );
     if w.rendered_key == key {
         return;
@@ -1645,7 +1668,10 @@ pub(crate) fn view_cube_at(
         }
         // Face bounding rectangles overlap at oblique views; the convex hit is
         // authoritative, rather than the native rectangular response's winner.
-        if inside && ui.input(|i| i.pointer.primary_clicked()) {
+        if inside
+            && ui.input(|i| i.pointer.primary_clicked())
+            && !crate::assembly_motion_ui::dragging(w)
+        {
             w.view.orbit = orbit;
             w.view.roll = 0.;
             crate::navigation::stop(w);
@@ -1668,7 +1694,7 @@ pub(crate) fn view_cube_at(
         font,
         ink,
     );
-    if hit.clicked() {
+    if hit.clicked() && !crate::assembly_motion_ui::dragging(w) {
         w.view.orbit = [0.65, 0.4];
         w.view.roll = 0.;
         crate::navigation::stop(w);

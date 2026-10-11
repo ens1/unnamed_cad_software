@@ -12,16 +12,18 @@ use serde_json::{Value, json};
 const CONTRACT: &str = "tcad.presentation.operation-editor";
 const VERSION: u32 = 1;
 const ACTION: &str = "operation-editor.action";
+mod common;
 
 pub fn supports(operation: &Operation) -> bool {
-    matches!(
-        operation,
-        Operation::Surface { .. }
-            | Operation::DirectEdit { .. }
-            | Operation::Sheet { .. }
-            | Operation::Weldment { .. }
-            | Operation::Mold { .. }
-    )
+    common::supports(operation)
+        || matches!(
+            operation,
+            Operation::Surface { .. }
+                | Operation::DirectEdit { .. }
+                | Operation::Sheet { .. }
+                | Operation::Weldment { .. }
+                | Operation::Mold { .. }
+        )
 }
 
 fn current(w: &Workspace) -> Option<(&str, &Feature)> {
@@ -48,6 +50,7 @@ struct Fields<'a> {
     source: Value,
     out: Vec<SemanticElement>,
     group: &'static str,
+    revision: Value,
 }
 impl<'a> Fields<'a> {
     fn new(w: &'a Workspace, owner: &'a str, feature: &'a Feature) -> Self {
@@ -55,9 +58,14 @@ impl<'a> Fields<'a> {
             w,
             owner,
             feature,
-            source: json!(feature),
+            source: editable_source(feature),
             out: vec![],
             group: "definition",
+            revision: json!([
+                w.session.generation,
+                w.session.committed.revision,
+                w.session.draft.as_ref().map(|d| (&d.id, d.edit))
+            ]),
         }
     }
     fn identity(&self, key: &str) -> String {
@@ -66,7 +74,7 @@ impl<'a> Fields<'a> {
     fn metadata(&self) -> Value {
         json!({"contract": CONTRACT, "version": VERSION,
             "document":self.w.session.visible().id,"owner":self.owner,"feature":self.feature.id,
-            "editor":self.w.fields.get("feature-editor-generation"),"group":self.group})
+            "editor":self.w.fields.get("feature-editor-generation"),"group":self.group,"source_revision":self.revision})
     }
     fn enabled(&self) -> bool {
         !self.w.fields.contains_key("feature-source-invalid") && self.w.settings.is_none()
@@ -97,6 +105,8 @@ impl<'a> Fields<'a> {
         data["editable"] = json!(self.enabled());
         data["choices"] = json!(choices);
         data["unit"] = json!(unit);
+        data["accepts_quantity_text"] =
+            json!(value.is_number() && unit.is_some_and(|u| !u.is_empty()));
         data["value_type"] = json!(if !choices.is_empty() {
             if value.is_object() {
                 "reference"
@@ -406,6 +416,7 @@ impl<'a> Fields<'a> {
             .filter(|s| {
                 s.reference.topology == topology
                     && crate::reference_ui::selected_body(self.w, s) == *body
+                    && crate::selection_ui::edge_occurrence(self.w, &s.path)
             })
             .map(|s| json!(s.reference));
         let next = picked.filter(|v| !entries.contains(v));
@@ -1274,7 +1285,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         Operation::Sheet { operation } => sheet_fields(&mut fields, operation),
         Operation::Weldment { operation } => weldment_fields(&mut fields, operation),
         Operation::Mold { operation } => mold_fields(&mut fields, operation),
-        _ => {}
+        _ => common::fields(&mut fields),
     }
     for element in &mut fields.out {
         if let Some(error) = w.fields.get(&error_key(element)) {
@@ -1341,11 +1352,20 @@ fn live_element(w: &Workspace, element: &SemanticElement) -> Result<SemanticElem
 }
 pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
     let fresh = live_element(w, element).ok()?;
+    if fresh.data.get("transient").and_then(Value::as_str) == Some("skip-input") {
+        return Some(json!(
+            w.fields
+                .get(&transient_key(&fresh))
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(1)
+        ));
+    }
     let (_, feature) = current(w)?;
-    let source = json!(feature);
+    let source = editable_source(feature);
     let value = source
-        .pointer(fresh.data.get("pointer")?.as_str()?)?
-        .clone();
+        .pointer(fresh.data.get("pointer")?.as_str()?)
+        .cloned()
+        .or_else(|| fresh.data.get("optional_default").map(|_| Value::Null))?;
     if fresh.data.get("optional_default").is_some() {
         Some(json!(!value.is_null()))
     } else {
@@ -1353,9 +1373,19 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
     }
 }
 fn replace_value(source: &mut Value, pointer: &str, value: Value) -> Result<()> {
-    *source
-        .pointer_mut(pointer)
-        .ok_or_else(|| invalid("The operation field is no longer available"))? = value;
+    if let Some(target) = source.pointer_mut(pointer) {
+        *target = value;
+    } else {
+        let (parent, key) = pointer
+            .rsplit_once('/')
+            .ok_or_else(|| invalid("Invalid operation field"))?;
+        let key = key.replace("~1", "/").replace("~0", "~");
+        source
+            .pointer_mut(parent)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| invalid("The operation field is no longer available"))?
+            .insert(key, value);
+    }
     Ok(())
 }
 fn publish(w: &mut Workspace, feature: Feature) -> Result<()> {
@@ -1390,6 +1420,16 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
 }
 fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Result<()> {
     let element = live_element(w, element)?;
+    if element.data.get("transient").and_then(Value::as_str) == Some("skip-input") {
+        let value = value
+            .as_u64()
+            .and_then(|v| usize::try_from(v).ok())
+            .filter(|v| *v > 0)
+            .ok_or_else(|| invalid("Enter a positive integer instance position"))?;
+        w.fields.insert(transient_key(&element), value.to_string());
+        w.confirm_requested = false;
+        return Ok(());
+    }
     let (_, feature) = current(w).ok_or_else(|| invalid("The modeling editor has closed"))?;
     let pointer = element
         .data
@@ -1407,12 +1447,29 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
             "Choose one of the current compatible references or options",
         ));
     }
-    let mut source = json!(feature);
+    let mut source = editable_source(feature);
     let before = source
         .pointer(pointer)
         .cloned()
+        .or_else(|| element.data.get("optional_default").map(|_| Value::Null))
         .ok_or_else(|| invalid("The bound operation field has changed"))?;
-    let next = if let Some(default) = element.data.get("optional_default") {
+    let next = if element
+        .data
+        .get("accepts_quantity_text")
+        .and_then(Value::as_bool)
+        == Some(true)
+        && value.is_string()
+    {
+        let axis = if element.data.get("unit").and_then(Value::as_str) == Some("deg") {
+            3
+        } else {
+            0
+        };
+        json!(cad_core::configuration::placement_value(
+            value.as_str().unwrap(),
+            axis
+        )?)
+    } else if let Some(default) = element.data.get("optional_default") {
         let enabled = value
             .as_bool()
             .ok_or_else(|| invalid("Expected an override toggle"))?;
@@ -1451,6 +1508,19 @@ fn clear_dependent_selections(
         if kind == "direct_edit" {
             replace_value(source, "/operation/definition/faces", json!([]))?;
         }
+        if kind == "chamfer" {
+            replace_value(source, "/operation/options/first_face", Value::Null)?;
+        }
+        for path in [
+            "/operation/edges",
+            "/operation/faces",
+            "/operation/removed_faces",
+            "/operation/options/face_thicknesses",
+        ] {
+            if source.pointer(path).is_some() {
+                replace_value(source, path, json!([]))?;
+            }
+        }
         for path in ["/operation/operation/edges", "/operation/operation/members"] {
             if source.pointer(path).is_some() {
                 replace_value(source, path, json!([]))?;
@@ -1474,6 +1544,16 @@ fn clear_dependent_selections(
             {
                 replace_value(source, "/operation/operation/member", json!(member))?;
             }
+        }
+    }
+    if pointer == "/operation/options/uniform" && next == &Value::Bool(false) {
+        let factor = source.pointer("/operation/options/factors/0").cloned();
+        if let Some(factor) = factor {
+            replace_value(
+                source,
+                "/operation/options/factors",
+                json!([factor.clone(), factor.clone(), factor]),
+            )?;
         }
     }
     if pointer == "/operation/operation/surface"
@@ -1516,8 +1596,15 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
             ..fresh.clone()
         };
         let fresh = live_element(w, &snapshot)?;
+        if args.get("source_revision") != fresh.data.get("source_revision")
+            || args.get("mutation") != fresh.data.get("mutation")
+        {
+            return Err(invalid(
+                "The source or selection changed; use the current modeling action",
+            ));
+        }
         let (_, feature) = current(w).ok_or_else(|| invalid("The modeling editor has closed"))?;
-        let mut source = json!(feature);
+        let mut source = editable_source(feature);
         let mutation = fresh
             .data
             .get("mutation")
@@ -1617,9 +1704,20 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
         return false;
     }
     let elements = semantics(w);
+    render_elements(ui, w, elements);
+    true
+}
+
+/// Render ordinary editor descriptors; source setters and commands remain
+/// registered separately so other editor families share this composition.
+pub(crate) fn render_elements(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    elements: Vec<SemanticElement>,
+) {
     let mut groups: Vec<(SemanticElement, Vec<SemanticElement>)> = vec![];
     for element in elements {
-        if element.role == "operation-editor-group" {
+        if element.role.ends_with("-group") {
             groups.push((element, vec![]));
         } else if let Some((_, children)) = groups.last_mut() {
             children.push(element);
@@ -1658,10 +1756,10 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                         let mut index = 0;
                         while index < children.len() {
                             let element = &children[index];
-                            if element.role == "operation-editor-action" {
+                            if element.role.ends_with("-action") {
                                 let end = children[index..]
                                     .iter()
-                                    .position(|e| e.role != "operation-editor-action")
+                                    .position(|e| !e.role.ends_with("-action"))
                                     .map_or(children.len(), |n| index + n);
                                 ui.horizontal_wrapped(|ui| {
                                     for element in &children[index..end] {
@@ -1671,7 +1769,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                                 index = end;
                                 continue;
                             }
-                            if element.role == "operation-editor-field" {
+                            if element.data.get("setter").is_some() {
                                 crate::ui::semantic_field(ui, w, element);
                             } else {
                                 controls::label(
@@ -1679,7 +1777,11 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                                     &element.id,
                                     &element.role,
                                     &["modeling-help"],
-                                    &element.label,
+                                    &element
+                                        .value
+                                        .as_ref()
+                                        .map(|v| format!("{} · {v}", element.label))
+                                        .unwrap_or_else(|| element.label.clone()),
                                     &element.state,
                                 );
                             }
@@ -1711,7 +1813,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
             content(ui);
         }
     }
-    true
 }
 
 fn render_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement) {
@@ -1735,7 +1836,28 @@ fn render_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement
     .on_hover_text(element.value.as_deref().unwrap_or(&element.label))
     .on_disabled_hover_text(element.value.as_deref().unwrap_or(&element.label))
     .clicked()
+        && let Some(descriptor) = element.action_descriptors().into_iter().find(|a| a.enabled)
     {
-        action(w, ACTION, Some(&element.data));
+        let mut target = element.clone();
+        target.data = descriptor.arguments;
+        crate::ui::semantic_action(w, &target, &descriptor.command);
     }
+}
+
+fn editable_source(feature: &Feature) -> Value {
+    let mut source = json!(feature);
+    common::normalize_source(&feature.operation, &mut source);
+    source
+}
+
+fn transient_key(element: &SemanticElement) -> String {
+    format!(
+        "{}:{}",
+        element.id,
+        element
+            .data
+            .get("editor")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    )
 }

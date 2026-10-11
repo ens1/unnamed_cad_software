@@ -9,6 +9,7 @@ mod configuration_ui;
 mod contours_ui;
 mod curve_pattern_ui;
 mod direct_edit_ui;
+mod drawing_editor_ui;
 mod drawing_table_ui;
 mod drawing_ui;
 mod exploded_views_ui;
@@ -71,7 +72,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/29;solver/tcad-native-lm/13";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/30;solver/tcad-native-lm/14";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -312,6 +313,11 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !drawing_editor_ui::current_source_is_valid(self) {
+            self.status = "Correct the current drawing fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !assembly_motion_ui::ready_to_confirm(self) {
             return;
         }
@@ -409,6 +415,7 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        drawing_editor_ui::reset(self);
         assembly_motion_ui::cancel(self);
         reference_repair_ui::reset(self);
         navigation::stop(self);
@@ -491,6 +498,13 @@ impl Workspace {
         }
     }
     pub fn open_editor(&mut self, name: &str) {
+        if name == "drawings"
+            && (self.dialog.as_deref() != Some("drawings")
+                || !self.fields.contains_key("drawing-editor-generation"))
+        {
+            self.fields
+                .insert("drawing-editor-generation".into(), cad_core::id());
+        }
         navigation::stop(self);
         self.selection_popup = None;
         self.dialog = Some(name.into());
@@ -517,6 +531,7 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        drawing_editor_ui::reset(self);
         assembly_motion_ui::cancel(self);
         reference_repair_ui::reset(self);
         navigation::stop(self);
@@ -542,6 +557,7 @@ impl Workspace {
         self.candidates.clear();
         self.fields.retain(|key, _| {
             !key.starts_with("appearance-")
+                && !key.starts_with("configuration-pose-error:")
                 && !key.starts_with("lighting-")
                 && !key.starts_with("drawing-editor:")
                 && key != "drawing-source-invalid"
@@ -551,6 +567,7 @@ impl Workspace {
         self.fields.remove("component-pattern-source-invalid");
         self.fields.remove("configuration-owner");
         self.fields.remove("configuration-editor");
+        self.fields.remove("configuration-editor-generation");
         self.fields.remove("configuration-source-invalid");
         self.fields.remove("configuration-equations");
         self.fields.remove("mate-editor");
@@ -575,6 +592,11 @@ impl Workspace {
         self.status = "Operation cancelled".into();
     }
     pub fn confirm_tool(&mut self) {
+        if !drawing_editor_ui::current_source_is_valid(self) {
+            self.status = "Correct the current drawing fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !assembly_motion_ui::ready_to_confirm(self) {
             return;
         }

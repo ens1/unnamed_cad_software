@@ -420,3 +420,82 @@
   color: var(--error);
   font-size: 10px;
 }
+
+[role=operation-editor-field], [role=drawing-editor-field], [role=configuration-placement-field] {
+  display: flex;
+  flex-direction: row;
+  gap: 3px;
+  padding: 1px 0px;
+}
+[role=field-label].modeling-field, [role=field-label].drawing-field {
+  width: 100px;
+  text-overflow: ellipsis;
+}
+[role=drawing-editor-group], [role=drawing-editor-help] {
+  font-size: 10px;
+  padding: 3px 0px;
+  gap: 3px;
+}
+[role=drawing-editor-action] {
+  height: 22px;
+  min-target-size: 24px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+
+[role=assembly-motion-handle] {
+  width: 84px;
+  handle-size: 8px;
+  stroke-width: 2px;
+  font-size: 10px;
+}
+
+[role=assembly-motion-handle].axis-x {
+  color: #D95543;
+}
+
+[role=assembly-motion-handle].axis-y {
+  color: #369159;
+}
+
+[role=assembly-motion-handle].axis-z {
+  color: #287ACC;
+}
+
+[role=assembly-motion-handle][state=dragging], [role=assembly-motion-handle][state=selected] {
+  color: var(--active);
+  stroke-width: 3px;
+}
+
+[role=assembly-motion-request] {
+  color: var(--warning);
+  handle-size: 7px;
+  stroke-width: 1.5px;
+}
+
+[role=configuration-placement-field][state=inherited] {
+  color: var(--reference);
+}
+
+[role=configuration-placement-field][state=expression-driven] {
+  color: var(--warning);
+}
+
+[role=configuration-placement-field][state=invalid], [role=drawing-editor-field][state=error], [role=operation-editor-field][state=error] {
+  color: var(--error);
+}
+
+[role=field-choices] {
+  max-height: 240px;
+}
+
+[role=configuration-placement-field] {
+  flex-direction: column;
+}
+
+[role=drawing-annotation-field] {
+  display: flex;
+  flex-direction: row;
+  gap: 3px;
+  padding: 1px 0px;
+}

@@ -382,6 +382,16 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::settings_ui::semantics(w));
     elements.extend(crate::operation_preview::semantics(w));
     elements.extend(crate::operation_editor_ui::semantics(w));
+    for element in crate::drawing_editor_ui::semantics(w) {
+        if let Some(existing) = elements
+            .iter_mut()
+            .find(|existing| existing.id == element.id)
+        {
+            *existing = element;
+        } else {
+            elements.push(element);
+        }
+    }
     elements.extend(crate::feature_order_ui::semantics(w));
     elements.extend(crate::assembly_motion_ui::semantics(w));
     for element in crate::cad_ui::semantics(w) {
@@ -642,6 +652,11 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "drawing-editor",
+        crate::drawing_editor_ui::set_value,
+        crate::drawing_editor_ui::current_value,
+    );
     adapters.register(
         "operation-editor",
         crate::operation_editor_ui::set_value,

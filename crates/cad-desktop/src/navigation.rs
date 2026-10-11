@@ -188,6 +188,11 @@ pub fn stop(w: &mut Workspace) {
     w.navigation_input.external = false;
     w.navigation_input.last = Some(Instant::now());
 }
+/// A modeling gesture owns this frame, including queued platform gesture tails.
+pub(crate) fn capture_model(w: &mut Workspace) {
+    stop(w);
+    w.navigation_input.handled = true;
+}
 pub fn begin_ui(w: &mut Workspace, ctx: &egui::Context) {
     let frame = ctx.cumulative_frame_nr();
     if w.navigation_input.ui_frame == Some(frame) {
@@ -332,6 +337,7 @@ pub fn finish_ui(w: &mut Workspace) {
 }
 fn edit_capture(w: &Workspace, ctx: &egui::Context) -> bool {
     ctx.egui_wants_keyboard_input()
+        || crate::assembly_motion_ui::dragging(w)
         || w.sketch.as_ref().is_some_and(|s| {
             s.drag.is_some()
                 || !s.chain.is_empty()
@@ -366,9 +372,9 @@ fn zoom(w: &mut Workspace, logarithm: f32, rect: egui::Rect, anchor: egui::Pos2,
         .exp())
     .clamp(0.005, 10000.);
     let (_, r, u) = viewport::basis(w);
-    let focal = rect.height().max(1.) * 0.5 / (std::f32::consts::PI / 8.).tan();
-    let shift = (r * (anchor.x - rect.center().x) / focal
-        - u * (anchor.y - rect.center().y) / focal)
+    let [horizontal, vertical] = viewport::focal(w, rect);
+    let shift = (r * (anchor.x - rect.center().x) / horizontal
+        - u * (anchor.y - rect.center().y) / vertical)
         * (old - w.view.distance);
     w.view.target = (Vec3::from_array(w.view.target) + shift).to_array();
 }
