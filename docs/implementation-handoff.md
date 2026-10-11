@@ -767,3 +767,19 @@ the shared texture's aspect when user layouts stretch or duplicate viewports;
 those viewports still share a camera/render texture. Backend fingerprint is
 `monstertruck/0.4.1+fc2306852a46;adapter/30;solver/tcad-native-lm/14`.
 No Monstertruck dependency revision or repository privacy change was needed.
+
+Final source review also preserves source compatibility for the renderer's
+ambiguous literal `base` configuration ID: the new pose inspector reports the
+collision and declines those ambiguous controls rather than silently writing
+Base. Core identities, evaluation, saved definitions and other named scopes
+remain unchanged.
+
+After the gesture ownership, rotation sampling and scope safety corrections,
+`cargo fmt --all`, locked workspace library/binary compilation, strict workspace
+Clippy (`-D warnings`) and `git diff --check` passed. `scripts/package-macos.sh`
+rebuilt `dist/TCAD.app`, validated its plist and verified nested and whole-bundle
+signatures. Executable names remain `TCAD`, `tcad-worker` and `tcad-cli`. The
+existing `proc-macro-error2 2.0.1` future-compatibility notice remains. No tests,
+probes, app/CLI modeling launches or manual/UI acceptance checks were run.
+The implementation and verification record are committed and pushed to the
+private canonical origin; interactive acceptance remains with the user.

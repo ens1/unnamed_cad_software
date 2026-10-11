@@ -49,3 +49,9 @@ Count includes the seed and is an integer from 1 to 256. A pattern allows at mos
 Internal mate copying remaps both seed participants to their reserved copy IDs while retaining nested geometry endpoints. Each copy resolves its current configured source frames. The copied relations are validated at the pattern-driven placements; the mate solver does not move the copies away from their driving pattern. Changing copy configurations or preserving orientation in a circular pattern can make those relations incompatible and produces an explicit error. Deleting a pattern or removing a seed cleans its configuration override keys and rejects dependent patterns that still use the removed occurrence or axis.
 
 External mates on generated copies need coupled pattern constraints and are currently unsupported. Mirrored components need handed geometry rather than a rigid placement and are not implemented. Additional equal-spacing, second-direction, skipped-position pattern modes, standalone copy-with-mates placement solving, exploded views, flexible subassemblies, and virtual-part workflows remain separate engineering work. The docked pattern editor uses the same current-validation, checkpoint Cancel, and one-undo commit rules as the rest of the application.
+
+The current pose inspector reports an ambiguous saved configuration ID literally
+named `base` and declines controls for the Base / matching named scope, preventing
+silent misrouting. Core source IDs and geometry evaluation remain unchanged;
+other named scopes remain editable. This is a renderer limitation to replace
+with fully typed scope selection, not a saved-source identity restriction.
