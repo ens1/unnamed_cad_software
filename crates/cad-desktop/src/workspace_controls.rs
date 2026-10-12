@@ -3,6 +3,15 @@ use crate::{Workspace, presentation_controls as controls, ui};
 use bevy_egui::egui;
 use cad_core::presentation::SemanticElement;
 
+pub(crate) fn in_place(w: &Workspace) -> bool {
+    w.view.isolation
+        && w.session
+            .visible()
+            .properties
+            .get("document_kind")
+            .is_none_or(|kind| kind != "part")
+}
+
 fn context(w: &Workspace) -> String {
     let document = w.session.visible();
     let mut text = w
@@ -14,7 +23,7 @@ fn context(w: &Workspace) -> String {
         .unwrap_or_else(|| document.name.clone());
     if let Some(sketch) = &w.sketch {
         text.push_str(&format!(" › {} · Editing", sketch.name));
-    } else if w.view.isolation {
+    } else if in_place(w) {
         text.push_str(" › Editing in place");
     }
     if let Some(cursor) = &w.view.history_cursor {
@@ -109,7 +118,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "isolation-controls",
             "Edit in place controls",
             "isolation-controls",
-            w.view.isolation && w.sketch.is_none(),
+            in_place(w) && w.sketch.is_none(),
         ),
         (
             "viewport.navigation-hint",
@@ -207,7 +216,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         (
             "workspace.ghost-others",
             "Ghost others",
-            w.view.isolation && w.sketch.is_none(),
+            in_place(w) && w.sketch.is_none(),
             w.view.ghost_others,
             "viewport.isolation",
         ),
@@ -221,7 +230,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         (
             "workspace.finish-editing",
             "Finish editing",
-            w.view.isolation && idle,
+            in_place(w) && idle,
             false,
             "viewport.isolation",
         ),
@@ -409,7 +418,7 @@ pub(crate) fn start_hint(ui: &mut egui::Ui, w: &mut Workspace) {
 }
 
 pub(crate) fn isolation(ui: &mut egui::Ui, w: &mut Workspace) {
-    if !w.view.isolation || w.sketch.is_some() {
+    if !in_place(w) || w.sketch.is_some() {
         return;
     }
     ui.horizontal_wrapped(|ui| {

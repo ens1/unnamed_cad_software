@@ -306,6 +306,16 @@ pub fn icon_button(
     } else {
         "ready"
     };
+    // Completion semantics provide a styling hook wherever an action is
+    // rendered, including custom semantic layouts. The theme chooses its
+    // dimensions and shape; the full engineering/action label remains intact.
+    let mut action_classes = classes.to_vec();
+    if matches!(role, "apply-action" | "cancel-action")
+        && !action_classes.contains(&"confirmation-control")
+    {
+        action_classes.push("confirmation-control");
+    }
+    let classes = action_classes.as_slice();
     let props = properties(id, role, classes, state);
     let widget_id = ui.id().with(id);
     if props.get("display").is_some_and(|value| value == "none") {
@@ -484,6 +494,38 @@ pub fn selectable(
     selected: bool,
 ) -> Response {
     button(ui, id, role, &["selectable"], label, true, selected)
+}
+
+/// Secondary native groups retain a stable semantic/style identity. Folding
+/// affects presentation only, and child controls keep their normal command and
+/// draft identities when the group is reopened.
+pub fn collapsing(
+    ui: &mut egui::Ui,
+    id: &str,
+    role: &str,
+    label: &str,
+    default_open: bool,
+    content: impl FnOnce(&mut egui::Ui),
+) {
+    let props = properties(id, role, &["secondary"], "ready");
+    if props.get("display").is_some_and(|value| value == "none") {
+        return;
+    }
+    let target =
+        current_target().map(|parent| parent.child(id, role, &["secondary".into()], "ready"));
+    ui.scope(|ui| {
+        apply_properties(ui, &props);
+        egui::CollapsingHeader::new(egui::RichText::new(label).font(font(ui, &props)))
+            .id_salt(id)
+            .default_open(default_open)
+            .show(ui, |ui| {
+                if let Some(target) = target {
+                    with_target(target, ui, content);
+                } else {
+                    content(ui);
+                }
+            });
+    });
 }
 
 pub fn label(

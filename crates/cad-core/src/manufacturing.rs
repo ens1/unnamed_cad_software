@@ -471,6 +471,53 @@ fn pdf_escape(s: &str) -> Result<String> {
     Ok(out)
 }
 
+pub const SOURCE_LABEL_VERSION: u32 = 1;
+/// Disposable human-readable source metadata. Stable fabrication grouping and
+/// reference resolution continue to use the separate authored NodeRef.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SourceLabel {
+    pub version: u32,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_name: Option<String>,
+}
+impl SourceLabel {
+    pub fn display(&self) -> String {
+        match &self.library_name {
+            Some(library) if !library.is_empty() => format!("{library} · {}", self.name),
+            _ => self.name.clone(),
+        }
+    }
+}
+/// Resolve presentation names from current definitions, including imported
+/// library profile names. No geometry, grouping key, or source ID changes.
+pub fn section_label(doc: &Document, source: &crate::NodeRef) -> Option<SourceLabel> {
+    let part = doc.parts.get(&source.definition)?;
+    let name = part
+        .features
+        .iter()
+        .find(|feature| feature.id == source.node)
+        .map(|feature| feature.name.as_str())
+        .or_else(|| {
+            part.sketches
+                .get(&source.node)
+                .map(|sketch| sketch.name.as_str())
+        })?;
+    let library_name = doc
+        .libraries
+        .values()
+        .find(|link| {
+            link.definition == source.definition
+                || link.pinned_definitions.contains_key(&source.definition)
+        })
+        .map(|link| link.name.clone());
+    Some(SourceLabel {
+        version: SOURCE_LABEL_VERSION,
+        name: format!("{} / {name}", part.name),
+        library_name,
+    })
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CutListRow {
     pub definition: Id,
@@ -485,6 +532,8 @@ pub struct CutListRow {
     pub member_reference: Option<crate::weldment::MemberRef>,
     #[serde(default)]
     pub section: Option<crate::NodeRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_label: Option<SourceLabel>,
     #[serde(default)]
     pub start_cut_angle_rad: Option<f64>,
     #[serde(default)]
@@ -533,6 +582,7 @@ pub fn cut_list(doc: &Document) -> Result<Vec<CutListRow>> {
                     configuration: configuration.clone(),
                     member_reference: None,
                     section: None,
+                    section_label: None,
                     start_cut_angle_rad: None,
                     end_cut_angle_rad: None,
                     bend_radius_mm: None,
@@ -719,6 +769,7 @@ fn append_native_cut_list(
                     configuration: configuration.clone(),
                     member_reference: Some(member.reference.clone()),
                     section: Some(member.section.clone()),
+                    section_label: section_label(doc, &member.section),
                     start_cut_angle_rad: Some(member.start_cut_angle_rad),
                     end_cut_angle_rad: Some(member.end_cut_angle_rad),
                     bend_radius_mm: member.bend_radius_mm,
@@ -776,6 +827,7 @@ fn append_native_cut_list(
                     configuration: configuration.clone(),
                     member_reference: Some(accessory.reference.clone()),
                     section: Some(accessory.profile.clone()),
+                    section_label: section_label(doc, &accessory.profile),
                     start_cut_angle_rad: Some(0.),
                     end_cut_angle_rad: Some(0.),
                     bend_radius_mm: None,
@@ -793,7 +845,7 @@ fn append_native_cut_list(
 
 pub fn cut_list_csv_evaluated(doc: &Document, evaluation: &Evaluation) -> Result<String> {
     let escaped = |text: &str| format!("\"{}\"", text.replace('"', "\"\""));
-    let mut out = "Definition,Member,Material,Section,Centerline or stock length mm,Start cut angle deg,Finish cut angle deg,Quantity,Configuration,Member source,Bend radius mm,Bend sweep deg,Accessory,Stock width mm,Stock height mm,Thickness mm,Stock bounds exact\n".to_string();
+    let mut out = "Definition,Member,Material,Section,Centerline or stock length mm,Start cut angle deg,Finish cut angle deg,Quantity,Configuration,Member source,Bend radius mm,Bend sweep deg,Accessory,Stock width mm,Stock height mm,Thickness mm,Stock bounds exact,Section source\n".to_string();
     for row in cut_list_evaluated(doc, evaluation)? {
         let source = row
             .member_reference
@@ -805,18 +857,30 @@ pub fn cut_list_csv_evaluated(doc: &Document, evaluation: &Evaluation) -> Result
                 )
             })
             .unwrap_or_else(|| row.feature.clone());
-        let section = row
+        let section_source = row
             .section
             .as_ref()
             .map(|section| format!("{}::{}", section.definition, section.node))
             .unwrap_or_default();
+        let section = row
+            .section_label
+            .as_ref()
+            .filter(|label| label.version == SOURCE_LABEL_VERSION)
+            .map(SourceLabel::display)
+            .unwrap_or_else(|| {
+                if row.section.is_some() {
+                    "Section unavailable".into()
+                } else {
+                    String::new()
+                }
+            });
         let angle = |value: Option<f64>| {
             value
                 .map(|angle| format!("{:.6}", angle.to_degrees()))
                 .unwrap_or_default()
         };
         out.push_str(&format!(
-            "{},{},{},{},{:.6},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             escaped(&row.definition),
             escaped(&row.description),
             escaped(&row.material),
@@ -846,6 +910,7 @@ pub fn cut_list_csv_evaluated(doc: &Document, evaluation: &Evaluation) -> Result
             row.blank_bounds_exact
                 .map(|v| v.to_string())
                 .unwrap_or_default(),
+            escaped(&section_source),
         ));
     }
     Ok(out)

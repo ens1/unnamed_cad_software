@@ -193,3 +193,9 @@ worker receives lightweight property snapshots, coalesces pending updates, limit
 configuration scratch caching and rejects stale source/evaluation stamps. The
 viewport never waits on monitor calculation. Unknown values remain unavailable;
 alerts do not authorize invalid geometry or replace engineering validation.
+
+## October 12 bounded provenance and presentation changes
+
+Topology source closure v1 stores complete readable descriptors in a canonical DAG, independently of renderer/native IDs. Legacy roles normalize to the same reachable source identity; imports remap descriptors and rebuild canonical indices. Limits still bound work, storage and ancestry. See [source closures](topology-source-closures.md).
+
+Native body-count v1 and fabrication source-label v1 are optional display metadata. Counts describe native solid/surface containers, not shell or output-feature counts. Labels retain original source references and do not participate in manufacturing identity. Presentation state adds typed sketch/reference visibility and independent X-ray/entity-snap settings; semantic actions and renderer-prefixed CSS preserve user-defined placement and styling. Camera/overlay decisions use disposable display data and never become modeling intent. See [workflow fixes](usability-reliability-fixes-2026-10-12.md).

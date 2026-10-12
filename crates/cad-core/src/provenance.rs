@@ -617,3 +617,22 @@ pub fn equivalent(first: &TopologyRef, second: &TopologyRef) -> Result<bool> {
     }
     Ok(normalized_reference(first)? == normalized_reference(second)?)
 }
+/// A readable canonical map key, for saved-reference lookup tables. No digest
+/// or current geometric signature participates in this identity.
+pub fn canonical_key(reference: &TopologyRef) -> Result<String> {
+    bounded_json(&normalized_reference(reference)?, MAX_BYTES)
+}
+/// Reuse a wanted descriptor canonicalized once for a bounded candidate search.
+pub fn matches_normalized(
+    actual: &TopologyRef,
+    wanted: &TopologyRef,
+    canonical: &Value,
+) -> Result<bool> {
+    if actual.producer != wanted.producer || actual.topology != wanted.topology {
+        return Ok(false);
+    }
+    if actual.role == wanted.role {
+        return Ok(true);
+    }
+    Ok(normalized_reference(actual)? == *canonical)
+}

@@ -881,7 +881,11 @@ pub fn poll(w: &mut Workspace) {
     let project = project_target(w);
     if project != w.presentation_resources.project_root && w.settings.is_none() {
         w.presentation_resources.project_root = project.clone();
+        let status = w.status.clone();
         reload(w, project.map(Target::Project).unwrap_or(Target::Personal));
+        if w.presentation_resources.diagnostic.is_none() {
+            w.status = status;
+        }
         return;
     }
     if !w.presentation_resources.watch {

@@ -122,6 +122,11 @@ pub fn summary(w: &Workspace) -> Option<(String, String)> {
         .draft
         .as_ref()
         .is_some_and(|draft| draft.pending || draft.error.is_some());
+    let invalid = w
+        .session
+        .draft
+        .as_ref()
+        .is_some_and(|draft| draft.error.is_some());
     let Some(preview) = displayed(w) else {
         if w.preview_error
             .as_ref()
@@ -133,7 +138,12 @@ pub fn summary(w: &Workspace) -> Option<(String, String)> {
         {
             return Some((
                 "unavailable".into(),
-                "Localized highlight unavailable".into(),
+                if invalid {
+                    "Current edit is invalid · showing the previous model"
+                } else {
+                    "Localized highlight unavailable"
+                }
+                .into(),
             ));
         }
         return Some((
@@ -185,7 +195,11 @@ pub fn summary(w: &Workspace) -> Option<(String, String)> {
     }
     .to_string();
     if retained {
-        label.push_str(" · last valid preview");
+        label.push_str(if invalid {
+            " · current edit invalid; last valid preview"
+        } else {
+            " · updating; last valid preview"
+        });
     }
     if approximate {
         label.push_str(" · display approximation");
@@ -194,6 +208,20 @@ pub fn summary(w: &Workspace) -> Option<(String, String)> {
         label.push_str(" · some highlights unavailable");
     }
     Some((state.into(), label))
+}
+
+pub fn status_control(ui: &mut bevy_egui::egui::Ui, w: &Workspace) {
+    if let Some((state, label)) = summary(w) {
+        crate::presentation_controls::label(
+            ui,
+            "workspace.operation-preview",
+            "operation-preview-status",
+            &["property-control"],
+            &label,
+            &state,
+        )
+        .on_hover_text(tooltip(w));
+    }
 }
 
 pub fn tooltip(w: &Workspace) -> String {

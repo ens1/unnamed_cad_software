@@ -818,7 +818,7 @@ fn source_face(
 ) -> Result<Face> {
     let face = adapter.selected_boundary_face(&source.body, &source.reference, inputs)?;
     let actual = adapter.boundary_face_reference(&source.body, &face)?;
-    if actual.producer != source.reference.producer || actual.role != source.reference.role {
+    if !cad_core::provenance::equivalent(&actual, &source.reference)? {
         return Err(invalid(
             "A face source no longer has its authored construction identity",
         ));

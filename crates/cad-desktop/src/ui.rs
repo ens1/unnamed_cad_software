@@ -301,24 +301,7 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
         save(w, false);
     }
     if shortcuts.3 && !ctx.egui_wants_keyboard_input() {
-        w.selection_popup = None;
-        if crate::drawing_interaction_ui::active(w) {
-            crate::drawing_interaction_ui::escape(w);
-        } else if w.sketch.is_some() {
-            crate::sketch::undo_point(w);
-        } else if w.tool_checkpoint.is_some() {
-            w.cancel_tool();
-        } else if shortcuts.4 {
-            w.session.redo();
-        } else {
-            w.session.undo();
-        }
-        w.fields.retain(|key, _| {
-            !key.starts_with("drawing-editor:") && key != "drawing-source-invalid"
-        });
-        crate::exploded_views_ui::clear_selection(w);
-        w.requested = None;
-        w.changed = Instant::now();
+        history_command(w, shortcuts.4);
     }
     if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::N)) {
         action(w, "file.new-part");
@@ -648,6 +631,9 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     registry.register("parameter-instrument", |ui, w, _| property_manager(ui, w));
     registry.register("property-manager", |ui, w, _| property_manager(ui, w));
     registry.register("preview-status", |ui, w, _| preview_status(ui, w));
+    registry.register("document-identity-editor", |ui, w, _| {
+        crate::document_identity_ui::controls(ui, w)
+    });
     registry.register("apply-action", |ui, w, context| {
         semantic_command(
             ui,
@@ -938,6 +924,9 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         w.status = "Apply or cancel Settings before using another command".into();
         return;
     }
+    if crate::document_identity_ui::semantic_action(w, command, &element.data) {
+        return;
+    }
     if command == "drawings" {
         crate::drawing_ui::open_workspace(w);
         return;
@@ -1133,6 +1122,25 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
     } else {
         action(w, command);
     }
+}
+pub(crate) fn history_command(w: &mut Workspace, redo: bool) {
+    w.selection_popup = None;
+    if crate::drawing_interaction_ui::active(w) {
+        crate::drawing_interaction_ui::escape(w);
+    } else if w.sketch.is_some() {
+        crate::sketch::undo_point(w);
+    } else if w.tool_checkpoint.is_some() {
+        w.cancel_tool();
+    } else if redo {
+        w.session.redo();
+    } else {
+        w.session.undo();
+    }
+    w.fields
+        .retain(|key, _| !key.starts_with("drawing-editor:") && key != "drawing-source-invalid");
+    crate::exploded_views_ui::clear_selection(w);
+    w.requested = None;
+    w.changed = Instant::now();
 }
 pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement) {
     let descriptor = element.value_descriptor();
@@ -1453,6 +1461,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     || crate::standard_parts_ui::field_is_invalid(w, element)
                     || crate::tolerance_stacks_ui::field_is_invalid(w, element)
                     || crate::materials_ui::field_is_invalid(w, element)
+                    || crate::document_identity_ui::field_is_invalid(w, element)
                     || crate::components_ui::field_is_invalid(w, element)
                     || crate::assembly_welds_ui::field_is_invalid(w, element)
                     || crate::operation_editor_ui::field_is_invalid(w, element)
@@ -1552,6 +1561,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         draw(ui)
     };
     if let Some(error) = appearance_error {
+        crate::document_identity_ui::field_error(w, element, error.clone());
         crate::properties_ui::field_error(w, element, error.clone());
         crate::sensors_ui::field_error(w, element, error.clone());
         crate::sketch_block_library_ui::field_error(w, element, error.clone());
@@ -1573,6 +1583,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         match crate::presentation_composition::set_value(w, element, next) {
             Ok(()) => {
                 crate::properties_ui::field_error(w, element, None);
+                crate::document_identity_ui::field_error(w, element, None);
                 crate::sensors_ui::field_error(w, element, None);
                 crate::sketch_block_library_ui::field_error(w, element, None);
                 crate::camera_views_ui::field_error(w, element, None);
@@ -1591,6 +1602,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
             }
             Err(error) => {
                 crate::properties_ui::field_error(w, element, Some(error.to_string()));
+                crate::document_identity_ui::field_error(w, element, Some(error.to_string()));
                 crate::sensors_ui::field_error(w, element, Some(error.to_string()));
                 crate::sketch_block_library_ui::field_error(w, element, Some(error.to_string()));
                 crate::camera_views_ui::field_error(w, element, Some(error.to_string()));
@@ -1955,6 +1967,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         return;
     }
     if crate::workspace_controls::action(w, cmd)
+        || crate::document_identity_ui::action(w, cmd)
+        || crate::sketch_overlay::action(w, cmd)
         || crate::properties_ui::action(w, cmd, None)
         || crate::sensors_ui::action(w, cmd, None)
         || crate::camera_views_ui::handle_command(w, cmd, None)
@@ -2309,10 +2323,17 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
 }
 fn save(w: &mut Workspace, choose: bool) -> bool {
     let path = if choose || w.project.is_none() {
+        let file_name = w
+            .project
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("project.json");
         rfd::FileDialog::new()
-            .set_title("Save TCAD project in a folder")
-            .pick_folder()
-            .map(|p| p.join("project.json"))
+            .set_title("Save TCAD project")
+            .set_file_name(file_name)
+            .add_filter("TCAD project", &["json"])
+            .save_file()
     } else {
         w.project.clone()
     };
@@ -2343,13 +2364,16 @@ fn save(w: &mut Workspace, choose: bool) -> bool {
         })();
         match result {
             Ok(()) => {
+                let saved_path = path.display().to_string();
                 w.project = Some(path);
                 w.rendered_key.clear();
                 w.saved_source = w.session.committed.fingerprint();
                 w.status = if w.session.draft.is_some() {
-                    "Saved committed revision. The draft still needs Apply.".into()
+                    format!(
+                        "Saved committed revision to {saved_path}. The draft still needs Apply."
+                    )
                 } else {
-                    "Project saved".into()
+                    format!("Saved project to {saved_path}")
                 };
                 return true;
             }
@@ -2692,7 +2716,11 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
             definition: part.id.clone(),
             node: "select-profile-node".into(),
         });
-    let edges = viewport::preselected_edges(w, &body);
+    let edges = if matches!(name, "Fillet" | "Chamfer") {
+        crate::selection_ui::preferred_edges(w, &body)
+    } else {
+        viewport::preselected_edges(w, &body)
+    };
     let faces = w
         .selected
         .as_ref()
@@ -3086,6 +3114,10 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         crate::cad_ui::properties(ui, w);
         return;
     }
+    if dialog == "document-identity" {
+        crate::document_identity_ui::controls(ui, w);
+        return;
+    }
     if matches!(
         dialog.as_str(),
         "feature" | "sketch" | "reference-repair" | "feature-order"
@@ -3397,6 +3429,11 @@ fn capture_feature_selection(w: &mut Workspace, cycle: bool, toggle: bool) {
         Operation::Fillet { .. } | Operation::Chamfer { .. }
     );
     let feature_id = feature.id.clone();
+    let incoming = if is_edge_feature {
+        crate::selection_ui::picked_edges(w, &feature_id, &selected)
+    } else {
+        vec![selected.reference.clone()]
+    };
     let selections = match &mut feature.operation {
         Operation::Fillet { edges, .. } | Operation::Chamfer { edges, .. }
             if selected.reference.topology == "edge" =>
@@ -3439,16 +3476,26 @@ fn capture_feature_selection(w: &mut Workspace, cycle: bool, toggle: bool) {
                 .insert("edge-pick-toggle".into(), toggle.to_string());
         }
     }
-    let existing = selections
-        .iter()
-        .position(|reference| crate::selection_ui::same_edge(reference, &selected.reference));
-    if is_edge_feature
-        && toggle
-        && let Some(index) = existing
-    {
-        selections.remove(index);
-    } else if existing.is_none() {
-        selections.push(selected.reference.clone());
+    let all_selected = incoming.iter().all(|pick| {
+        selections
+            .iter()
+            .any(|reference| crate::selection_ui::same_edge(reference, pick))
+    });
+    if is_edge_feature && toggle && all_selected {
+        selections.retain(|reference| {
+            !incoming
+                .iter()
+                .any(|pick| crate::selection_ui::same_edge(reference, pick))
+        });
+    } else {
+        for pick in incoming {
+            if !selections
+                .iter()
+                .any(|reference| crate::selection_ui::same_edge(reference, &pick))
+            {
+                selections.push(pick);
+            }
+        }
     }
     if is_edge_feature {
         w.fields.insert(

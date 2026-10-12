@@ -593,6 +593,79 @@ pub struct FaceFinish {
     pub face: crate::TopologyRef,
     pub finish: Id,
 }
+
+#[derive(Clone)]
+enum FaceIdentity {
+    Key(std::sync::Arc<str>),
+    Invalid(String),
+    Unsupported(String),
+}
+impl FaceIdentity {
+    fn result(&self) -> Result<std::sync::Arc<str>> {
+        match self {
+            Self::Key(key) => Ok(key.clone()),
+            Self::Invalid(message) => Err(CadError::Invalid(message.clone())),
+            Self::Unsupported(message) => Err(CadError::Unsupported(message.clone())),
+        }
+    }
+}
+
+/// Disposable appearance index over authored source identity, independent of
+/// mesh order and geometric signatures. Legacy source trees and closure tables
+/// normalize once per distinct role. Shared keys avoid copying a large closure
+/// into each render/index entry; aggregate bounds cover the complete lookup.
+pub struct FaceFinishIdentityCache<'a> {
+    keys: BTreeMap<(&'a crate::NodeRef, &'a str, &'a str), FaceIdentity>,
+    input_left: usize,
+    output_left: usize,
+}
+impl Default for FaceFinishIdentityCache<'_> {
+    fn default() -> Self {
+        Self {
+            keys: BTreeMap::new(),
+            input_left: 64 * 1024 * 1024,
+            output_left: 64 * 1024 * 1024,
+        }
+    }
+}
+impl<'a> FaceFinishIdentityCache<'a> {
+    pub fn key(&mut self, reference: &'a crate::TopologyRef) -> Result<std::sync::Arc<str>> {
+        let identity = (
+            &reference.producer,
+            reference.topology.as_str(),
+            reference.role.as_str(),
+        );
+        if let Some(cached) = self.keys.get(&identity) {
+            return cached.result();
+        }
+        if self.keys.len() >= 65_536 {
+            return Err(CadError::Unsupported(
+                "Face finish source identity index exceeds 65536 distinct references".into(),
+            ));
+        }
+        let value = if let Some(remaining) = self.input_left.checked_sub(reference.role.len()) {
+            self.input_left = remaining;
+            match crate::provenance::canonical_key(reference) {
+                Ok(key) => match self.output_left.checked_sub(key.len()) {
+                    Some(remaining) => {
+                        self.output_left = remaining;
+                        FaceIdentity::Key(key.into())
+                    }
+                    None => FaceIdentity::Unsupported(
+                        "Face finish canonical identity index exceeds 64 MiB".into(),
+                    ),
+                },
+                Err(CadError::Unsupported(message)) => FaceIdentity::Unsupported(message),
+                Err(error) => FaceIdentity::Invalid(error.to_string()),
+            }
+        } else {
+            FaceIdentity::Unsupported("Face finish source identity input exceeds 64 MiB".into())
+        };
+        let result = value.result();
+        self.keys.insert(identity, value);
+        result
+    }
+}
 fn validate_face_finishes(doc: &Document, part: &crate::Part) -> Result<()> {
     if part.face_finishes.len() > 16_384 {
         return Err(invalid(
@@ -601,6 +674,7 @@ fn validate_face_finishes(doc: &Document, part: &crate::Part) -> Result<()> {
     }
     let mut identities = std::collections::BTreeSet::new();
     let mut targets = std::collections::BTreeSet::new();
+    let mut canonical = FaceFinishIdentityCache::default();
     for assignment in &part.face_finishes {
         if !valid_id(&assignment.id)
             || !identities.insert(&assignment.id)
@@ -610,11 +684,7 @@ fn validate_face_finishes(doc: &Document, part: &crate::Part) -> Result<()> {
             || assignment.face.role.is_empty()
             || assignment.face.role.len() > 1_048_576
             || !doc.finishes.contains_key(&assignment.finish)
-            || !targets.insert((
-                &assignment.body,
-                &assignment.face.producer,
-                &assignment.face.role,
-            ))
+            || !targets.insert((&assignment.body, canonical.key(&assignment.face)?))
         {
             return Err(invalid(format!(
                 "Part {} has an invalid, duplicate or foreign face finish assignment",
@@ -632,11 +702,16 @@ pub fn set_face_finish(doc: &mut Document, definition: &str, assignment: FaceFin
     let mut candidate = part.clone();
     // Reassigning the same source face retains one semantic override, even if
     // the UI provided a new identity for this intentional edit.
-    candidate.face_finishes.retain(|existing| {
-        existing.id != assignment.id
+    let mut retained = Vec::new();
+    for existing in candidate.face_finishes.drain(..) {
+        if existing.id != assignment.id
             && !(existing.body == assignment.body
-                && crate::selection_sets::same_reference(&existing.face, &assignment.face))
-    });
+                && crate::provenance::equivalent(&existing.face, &assignment.face)?)
+        {
+            retained.push(existing);
+        }
+    }
+    candidate.face_finishes = retained;
     candidate.face_finishes.push(assignment);
     validate_face_finishes(doc, &candidate)?;
     doc.parts.insert(definition.into(), candidate);
@@ -705,32 +780,65 @@ pub fn resolve_face_finishes(
     if part.face_finishes.is_empty() {
         return resolution;
     }
-    // Index native construction identities once. Large parts must not rescan
-    // every tessellated face for each assignment or repeat body-graph traversal.
-    let mut faces = BTreeMap::<(&crate::NodeRef, &str), Vec<&crate::protocol::FaceRange>>::new();
+    // Canonical authored identity is independent of whether a saved role uses
+    // the legacy source tree or the new bounded source closure representation.
+    let mut canonical = FaceFinishIdentityCache::default();
+    let mut faces = BTreeMap::<std::sync::Arc<str>, Vec<&crate::protocol::FaceRange>>::new();
     let mut ancestors = BTreeMap::new();
+    let mut native_errors = BTreeMap::new();
     for face in meshes.iter().flat_map(|mesh| &mesh.faces) {
         if face.reference.topology != "face" {
             continue;
         }
-        let Some(body) = &face.body else {
-            continue;
-        };
+        let Some(body) = &face.body else { continue };
         if body.definition != part.id {
             continue;
         }
-        faces
-            .entry((&face.reference.producer, &face.reference.role))
-            .or_default()
-            .push(face);
         ancestors
             .entry(body.clone())
             .or_insert_with(|| body_ancestors(part, body));
+        match canonical.key(&face.reference) {
+            Ok(key) => {
+                faces.entry(key).or_default().push(face);
+            }
+            Err(error) => {
+                // An unknown identity could otherwise conceal an ambiguous
+                // descendant. Keep all assignments for this producer/body
+                // recoverable rather than claiming a unique match.
+                native_errors
+                    .entry((body.clone(), face.reference.producer.clone()))
+                    .or_insert_with(|| error.to_string());
+            }
+        }
     }
     let mut resolved_targets = BTreeMap::new();
+    let mut resolved_keys = BTreeMap::new();
     for assignment in &part.face_finishes {
+        let key = match canonical.key(&assignment.face) {
+            Ok(key) => key,
+            Err(error) => {
+                resolution.diagnostics.push(FaceFinishDiagnostic {
+                    assignment: assignment.id.clone(), state: "invalid-reference".into(), matches: 0,
+                    message: format!("The saved face identity cannot be normalized: {error}. The part finish is shown; repair or remove this assignment."),
+                });
+                continue;
+            }
+        };
+        if let Some(error) = native_errors.iter().find_map(|((body, producer), error)| {
+            (producer == &assignment.face.producer
+                && ancestors
+                    .get(body)
+                    .is_some_and(|sources| sources.contains(&assignment.body.node)))
+            .then_some(error)
+        }) {
+            resolution.diagnostics.push(FaceFinishDiagnostic {
+                assignment: assignment.id.clone(), state: "invalid-native-reference".into(), matches: 0,
+                message: format!("Current native face identities cannot be resolved: {error}. The part finish is shown; the saved assignment is retained."),
+            });
+            continue;
+        }
         let matches = faces
-            .get(&(&assignment.face.producer, assignment.face.role.as_str()))
+            .get(&key)
             .into_iter()
             .flatten()
             .copied()
@@ -740,18 +848,15 @@ pub fn resolve_face_finishes(
                         .body
                         .as_ref()
                         .and_then(|body| ancestors.get(body))
-                        .is_some_and(|ancestors| ancestors.contains(&assignment.body.node))
+                        .is_some_and(|sources| sources.contains(&assignment.body.node))
             })
             .collect::<Vec<_>>();
         if let [face] = matches.as_slice()
             && let Some(body) = &face.body
         {
-            let key = (
-                body.clone(),
-                face.reference.producer.clone(),
-                face.reference.role.clone(),
-            );
-            *resolved_targets.entry(key).or_insert(0_usize) += 1;
+            let target = (body.clone(), key);
+            *resolved_targets.entry(target.clone()).or_insert(0_usize) += 1;
+            resolved_keys.insert(assignment.id.clone(), target);
             resolution.resolved.push(ResolvedFaceFinish {
                 assignment: assignment.id.clone(),
                 finish: assignment.finish.clone(),
@@ -771,11 +876,11 @@ pub fn resolve_face_finishes(
             });
         }
     }
-    // Distinct authored ancestors can converge. Neither assignment wins; each
-    // remains repairable and the neutral part finish owns the shared face.
+    // Distinct authored body ancestors can converge on the same canonical
+    // native face. Neither assignment wins; both remain explicitly repairable.
     resolution.resolved.retain(|resolved| {
-        let key = (resolved.body.clone(), resolved.face.producer.clone(), resolved.face.role.clone());
-        if resolved_targets[&key] <= 1 { return true; }
+        let key = &resolved_keys[&resolved.assignment];
+        if resolved_targets[key] <= 1 { return true; }
         resolution.diagnostics.push(FaceFinishDiagnostic {
             assignment: resolved.assignment.clone(), state: "conflict".into(), matches: 1,
             message: "Multiple source assignments converge on this native face; keep one assignment. The part finish is shown.".into(),
@@ -784,6 +889,7 @@ pub fn resolve_face_finishes(
     });
     resolution
 }
+
 fn field_element(
     id: String,
     label: &str,

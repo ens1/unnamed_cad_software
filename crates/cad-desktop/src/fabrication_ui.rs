@@ -52,7 +52,69 @@ fn sheet_choices(doc: &Document, current: &str) -> Vec<(NodeRef, String)> {
                 .iter()
                 .take_while(|f| f.id != current)
                 .filter(|f| !f.suppressed && matches!(f.operation, Operation::Sheet { .. }))
-                .map(move |f| (part.reference(&f.id), format!("{} / {}", part.name, f.name)))
+                .map(move |f| {
+                    let source = part.reference(&f.id);
+                    let name = cad_core::manufacturing::section_label(doc, &source)
+                        .map(|label| label.display())
+                        .unwrap_or_else(|| format!("{} / {}", part.name, f.name));
+                    (source, name)
+                })
+        })
+        .collect()
+}
+fn selected_profile(w: &Workspace, candidates: &[NodeRef]) -> Option<NodeRef> {
+    w.selected
+        .as_ref()
+        .and_then(|selected| {
+            selected
+                .body
+                .as_ref()
+                .into_iter()
+                .chain(std::iter::once(&selected.reference.producer))
+                .find(|source| candidates.contains(source))
+                .cloned()
+        })
+        .or_else(|| {
+            candidates
+                .iter()
+                .find(|source| {
+                    w.view.active_part.as_ref() == Some(&source.definition)
+                        && w.view.active_node.as_ref() == Some(&source.node)
+                })
+                .cloned()
+        })
+}
+fn preferred_profile(
+    w: &Workspace,
+    candidates: &[NodeRef],
+    suitable: impl Fn(&NodeRef) -> bool,
+) -> Option<NodeRef> {
+    selected_profile(w, candidates)
+        .filter(&suitable)
+        .or_else(|| {
+            candidates
+                .iter()
+                .rev()
+                .find(|source| suitable(source))
+                .cloned()
+        })
+}
+fn compatible_profiles(
+    w: &Workspace,
+    current: &str,
+    selected: &NodeRef,
+    suitable: impl Fn(&NodeRef) -> bool,
+) -> Vec<(NodeRef, String)> {
+    profiles(w.session.visible(), current)
+        .into_iter()
+        .filter_map(|(source, name)| {
+            if suitable(&source) {
+                Some((source, name))
+            } else if &source == selected {
+                Some((source, format!("{name} · incompatible sketch")))
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -64,9 +126,32 @@ fn profiles(doc: &Document, current: &str) -> Vec<(NodeRef, String)> {
                 .iter()
                 .take_while(|f| f.id != current)
                 .filter(|f| !f.suppressed && matches!(f.operation, Operation::Profile { .. }))
-                .map(move |f| (part.reference(&f.id), format!("{} / {}", part.name, f.name)))
+                .map(move |f| {
+                    let source = part.reference(&f.id);
+                    let name = cad_core::manufacturing::section_label(doc, &source)
+                        .map(|label| label.display())
+                        .unwrap_or_else(|| format!("{} / {}", part.name, f.name));
+                    (source, name)
+                })
         })
         .collect()
+}
+pub(crate) fn section_choices(
+    w: &Workspace,
+    current: &str,
+    selected: &NodeRef,
+) -> Vec<(NodeRef, String)> {
+    compatible_profiles(w, current, selected, |source| closed_profile(w, source))
+}
+pub(crate) fn structural_path_choices(
+    w: &Workspace,
+    current: &str,
+    selected: &NodeRef,
+    section: &NodeRef,
+) -> Vec<(NodeRef, String)> {
+    compatible_profiles(w, current, selected, |source| {
+        source != section && !structural_path_members(w, source).is_empty()
+    })
 }
 fn selector(
     ui: &mut egui::Ui,
@@ -167,13 +252,56 @@ pub(crate) fn sheet_target(w: &Workspace, stock: &Stock) -> Option<(String, Opti
                     .any(|child| child.attachment.as_ref() == Some(source))
         })
     };
-    if let Some(active) = w.view.active_node.as_ref()
-        && let Some(flange) = stock
-            .flanges
-            .iter()
-            .find(|flange| &flange.source.node == active)
-            .and_then(|flange| terminal(&flange.source))
-    {
+    let model_terminal = w.selected.as_ref().and_then(|selected| {
+        // Rebuilt sheet geometry is owned by the latest feature, even for
+        // retained earlier strips. The selected carrier's complete source
+        // closure, rather than that ownership field, identifies its flange.
+        let identity = cad_core::provenance::normalized_reference(&selected.reference).ok()?;
+        let mut pending = vec![&identity];
+        let mut sources = std::collections::BTreeSet::new();
+        while let Some(value) = pending.pop() {
+            match value {
+                serde_json::Value::Object(object) => {
+                    if object
+                        .get("role")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|role| role.starts_with("member:"))
+                        && let Some(producer) = object.get("producer")
+                        && let Ok(producer) = serde_json::from_value::<NodeRef>(producer.clone())
+                        && terminal(&producer).is_some()
+                    {
+                        sources.insert(producer);
+                    }
+                    pending.extend(object.values());
+                }
+                serde_json::Value::Array(array) => pending.extend(array),
+                _ => {}
+            }
+        }
+        (sources.len() == 1)
+            .then(|| sources.into_iter().next())
+            .flatten()
+    });
+    let explicit = model_terminal
+        .or_else(|| match w.context_selection.as_ref() {
+            Some(cad_core::selection_actions::SelectionTarget::Feature {
+                definition,
+                feature,
+            }) => Some(NodeRef {
+                definition: definition.clone(),
+                node: feature.clone(),
+            }),
+            _ => None,
+        })
+        .or_else(|| {
+            w.selected_feature_path.as_ref().and_then(|_| {
+                Some(NodeRef {
+                    definition: w.view.active_part.clone()?,
+                    node: w.view.active_node.clone()?,
+                })
+            })
+        });
+    if let Some(flange) = explicit.as_ref().and_then(terminal) {
         return Some((flange.member.clone(), Some(flange.source.clone())));
     }
     sheet_base_members(w, stock)
@@ -251,21 +379,13 @@ pub fn preset(w: &mut Workspace, name: &str) {
         w.status = "Create or select a part first".into();
         return;
     };
-    let profile = part
+    let candidates = part
         .features
         .iter()
-        .find(|f| {
-            w.view.active_node.as_ref() == Some(&f.id)
-                && !f.suppressed
-                && matches!(f.operation, Operation::Profile { .. })
-        })
-        .or_else(|| {
-            part.features
-                .iter()
-                .rev()
-                .find(|f| !f.suppressed && matches!(f.operation, Operation::Profile { .. }))
-        })
-        .map(|f| part.reference(&f.id));
+        .filter(|f| !f.suppressed && matches!(f.operation, Operation::Profile { .. }))
+        .map(|f| part.reference(&f.id))
+        .collect::<Vec<_>>();
+    let profile = preferred_profile(w, &candidates, |source| closed_profile(w, source));
     let body = w
         .selected
         .as_ref()
@@ -715,7 +835,7 @@ pub(crate) fn source_sketch(w: &Workspace, profile: &NodeRef) -> Option<cad_core
             }
             Some(sketch)
         })?;
-    if !sketch.profile_order.is_empty() {
+    if sketch.members.is_empty() && !sketch.profile_order.is_empty() {
         for (index, (start, end)) in sketch
             .profile_order
             .iter()
@@ -734,7 +854,7 @@ pub(crate) fn source_sketch(w: &Workspace, profile: &NodeRef) -> Option<cad_core
                 },
             );
         }
-    } else {
+    } else if sketch.members.is_empty() {
         for (index, [start, end]) in sketch.segments.iter().enumerate() {
             sketch.members.insert(
                 format!("legacy-segment-{index}"),
@@ -761,36 +881,13 @@ fn closed_profile(w: &Workspace, profile: &NodeRef) -> bool {
             })
             .is_some_and(|output| !output.profile_order.is_empty() || !output.circles.is_empty());
     };
-    if !sketch.profile_order.is_empty() || !sketch.circles.is_empty() {
-        return true;
-    }
-    let mut degree = std::collections::BTreeMap::new();
-    for (id, _) in sketch
-        .members
-        .iter()
-        .filter(|(_, member)| !member.construction)
-    {
-        let Ok(curve) = cad_core::sketch_edit::effective_curve(&sketch, id) else {
-            return false;
-        };
-        let (start, end) = match &curve {
-            cad_core::SketchCurve::Circle { .. } | cad_core::SketchCurve::Ellipse { .. } => {
-                return true;
-            }
-            cad_core::SketchCurve::Line { start, end }
-            | cad_core::SketchCurve::Arc { start, end, .. } => (start, end),
-            cad_core::SketchCurve::Bezier { points }
-            | cad_core::SketchCurve::Nurbs { points, .. } => {
-                let (Some(start), Some(end)) = (points.first(), points.last()) else {
-                    return false;
-                };
-                (start, end)
-            }
-        };
-        *degree.entry(start.clone()).or_insert(0usize) += 1;
-        *degree.entry(end.clone()).or_insert(0usize) += 1;
-    }
-    !degree.is_empty() && degree.values().all(|degree| *degree == 2)
+    cad_core::sketch_topology::analyze(&sketch, cad_core::sketch_topology::DEFAULT_TOLERANCE_MM)
+        .is_ok_and(|topology| {
+            (!topology.contours.is_empty() || !sketch.circles.is_empty())
+                && topology.contours.iter().all(|contour| {
+                    contour.status == cad_core::sketch_topology::ContourStatus::Closed
+                })
+        })
 }
 
 pub(crate) fn path_members(w: &Workspace, profile: &NodeRef) -> Vec<(String, String)> {
@@ -1007,27 +1104,41 @@ fn weldment_preset(w: &mut Workspace, name: &str) {
         .map(|feature| part.reference(&feature.id))
         .collect::<Vec<_>>();
     let closed = |profile: &NodeRef| closed_profile(w, profile);
-    let profile = profiles
-        .iter()
-        .find(|profile| w.view.active_node.as_ref() == Some(&profile.node))
-        .or_else(|| profiles.iter().rev().find(|profile| closed(profile)))
-        .cloned();
+    let profile = preferred_profile(w, &profiles, closed);
     let operation = match name {
         "Structural Member Group" => {
-            let Some(section) = profiles.iter().find(|profile| closed(profile)).cloned() else {
+            // A selected open path (or an already-authored path sketch) keeps
+            // its path intent. A selected closed section otherwise has first
+            // priority; new groups never silently return to the oldest sketch.
+            let selected_path = selected_profile(w, &profiles).filter(|source| {
+                !structural_path_members(w, source).is_empty()
+                    && (!closed(source)
+                        || body.is_none()
+                            && profiles.last() == Some(source)
+                            && profiles
+                                .iter()
+                                .take_while(|earlier| *earlier != source)
+                                .any(closed)
+                        || part.features.iter().any(|feature| {
+                            !feature.suppressed
+                                && matches!(&feature.operation,
+                            Operation::Weldment {operation} if matches!(operation.as_ref(),
+                                WeldmentOperation::Members {path,..} if path == source))
+                        }))
+            });
+            let Some(section) = preferred_profile(w, &profiles, |source| {
+                closed(source) && selected_path.as_ref() != Some(source)
+            }) else {
                 w.status =
                     "Create a closed section sketch and a separate line/arc path sketch first"
                         .into();
                 return;
             };
-            let Some(path) = profiles
-                .iter()
-                .rev()
-                .find(|profile| {
-                    **profile != section && !structural_path_members(w, profile).is_empty()
+            let Some(path) = selected_path.or_else(|| {
+                preferred_profile(w, &profiles, |source| {
+                    *source != section && !structural_path_members(w, source).is_empty()
                 })
-                .cloned()
-            else {
+            }) else {
                 w.status = "Create a separate line/arc path sketch for the member section".into();
                 return;
             };
@@ -1183,8 +1294,10 @@ pub fn weldment_fields(
             joint_gap,
         } => {
             changed |= inherited_stock(ui, doc, current, body);
-            changed |= selector(ui, "Closed Section Sketch", section, profiles(doc, current));
-            changed |= selector(ui, "Path Sketch", path, profiles(doc, current));
+            let sections = section_choices(w, current, section);
+            changed |= selector(ui, "Closed Section Sketch", section, sections);
+            let paths = structural_path_choices(w, current, path, section);
+            changed |= selector(ui, "Path Sketch", path, paths);
             let mut all = members.is_empty();
             if ui.checkbox(&mut all, "All Path Members").changed() {
                 *members = if all {

@@ -915,7 +915,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/37;solver/tcad-native-lm/16"
+        "monstertruck/0.4.1+fc2306852a46;adapter/38;solver/tcad-native-lm/16"
     }
     fn clear_weld_joint_previews(&self) {
         self.weld_joints.borrow_mut().clear();
@@ -2297,6 +2297,35 @@ impl KernelAdapter for MonstertruckAdapter {
                     / pts.len().max(1) as f64;
                 let center = [center.x, center.y, center.z];
                 let mut area = 0.;
+                // Display normals belong to this native face only. Do not
+                // average across a model edge, even when adjacent triangles
+                // happen to share the same spatial position.
+                let unit_normal = |value: Vector3| {
+                    let scale = value.x.abs().max(value.y.abs()).max(value.z.abs());
+                    if ![value.x, value.y, value.z, scale]
+                        .iter()
+                        .all(|v| v.is_finite())
+                        || scale <= 0.
+                    {
+                        return None;
+                    }
+                    let scaled = value / scale;
+                    let length = scaled.magnitude();
+                    (length.is_finite() && length > 0.).then(|| scaled / length)
+                };
+                let mut fallback_normals = vec![Vector3::zero(); poly.positions().len()];
+                for tri in poly.tri_faces() {
+                    let p = tri.map(|v| poly.positions()[v.pos]);
+                    let normal = (p[1] - p[0]).cross(p[2] - p[0]);
+                    if [normal.x, normal.y, normal.z].iter().all(|v| v.is_finite()) {
+                        for vertex in tri {
+                            fallback_normals[vertex.pos] += normal;
+                        }
+                    }
+                }
+                let carrier = face.surface();
+                let carrier_side = if face.orientation() { 1. } else { -1. };
+                let mut carrier_normals = std::collections::HashMap::new();
                 for tri in poly.tri_faces() {
                     let p = tri.map(|v| poly.positions()[v.pos]);
                     let n = (p[1] - p[0]).cross(p[2] - p[0]);
@@ -2305,13 +2334,44 @@ impl KernelAdapter for MonstertruckAdapter {
                         mesh.volume_mm3 +=
                             p[0].to_vec().dot(p[1].to_vec().cross(p[2].to_vec())) / 6.;
                     }
-                    let normal = if n.magnitude2() > 1e-18 {
-                        n.normalize()
-                    } else {
-                        Vector3::unit_z()
-                    };
+                    let normal = unit_normal(n).unwrap_or_else(Vector3::unit_z);
                     for (vertex, p) in tri.iter().zip(p) {
-                        let n = vertex.nor.map(|idx| poly.normals()[idx]).unwrap_or(normal);
+                        // Monstertruck's mesh UVs parameterize face.surface(),
+                        // not its inverted oriented_surface(). Preserve that
+                        // parameter frame and apply the face orientation once.
+                        // The stored tessellation normal may be missing,
+                        // singular, unnormalized or reversed after inversion.
+                        let native = vertex.uv.and_then(|index| {
+                            *carrier_normals.entry(index).or_insert_with(|| {
+                                let uv = poly.uv_coords().get(index)?;
+                                if !uv.x.is_finite() || !uv.y.is_finite() {
+                                    return None;
+                                }
+                                unit_normal(carrier.normal(uv.x, uv.y) * carrier_side)
+                            })
+                        });
+                        let native = native.filter(|_| {
+                            vertex.uv.is_some_and(|index| {
+                                let uv = poly.uv_coords()[index];
+                                let expected = carrier.subs(uv.x, uv.y);
+                                expected.distance(p) <= (tolerance * 2.).max(1e-7)
+                            })
+                        });
+                        let stored = vertex
+                            .nor
+                            .and_then(|index| poly.normals().get(index))
+                            .and_then(unit_normal)
+                            .map(|value| {
+                                if value.dot(normal) < 0. {
+                                    -value
+                                } else {
+                                    value
+                                }
+                            });
+                        let n = native
+                            .or(stored)
+                            .or_else(|| unit_normal(fallback_normals[vertex.pos]))
+                            .unwrap_or(normal);
                         mesh.indices.push(mesh.positions.len() as u32);
                         mesh.positions.push([p.x, p.y, p.z]);
                         mesh.normals.push([n.x, n.y, n.z]);

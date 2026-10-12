@@ -1,6 +1,6 @@
 //! Sketch tools operate in the model viewport over the shared pending document.
 use crate::{Workspace, viewport};
-use bevy::math::{DVec3, Vec3};
+use bevy::math::DVec3;
 use bevy_egui::egui::{self, Color32, Stroke};
 use cad_core::{commands::Command, protocol::EvaluatedSketch, *};
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,6 +76,8 @@ pub struct EditingSketch {
     pub members: BTreeMap<Id, SketchMember>,
     pub chain: Vec<Id>,
     pub clicks: Vec<[f64; 2]>,
+    /// A multi-click tool only merges the endpoints explicitly snapped on that click.
+    pub click_join: Vec<bool>,
     pub construction: bool,
     pub conversions: BTreeMap<Id, cad_core::sketch_edit::Conversion>,
     pub offsets: BTreeMap<Id, cad_core::sketch_edit::Offset>,
@@ -234,78 +236,124 @@ pub(crate) fn hit_plane(
     ])
 }
 pub fn normal_to(w: &mut Workspace) {
-    if let Some(sketch) = &w.sketch {
-        let face_bounds = sketch
-            .reference
-            .as_ref()
-            .filter(|reference| reference.topology == "face")
-            .and_then(|reference| {
-                let evaluation = viewport::display_evaluation(w)?;
-                let instance = viewport::display_instances(w, evaluation)
-                    .into_iter()
-                    .find(|instance| {
-                        instance.definition == sketch.definition
-                            && w.edge_selection_path
-                                .as_ref()
-                                .is_none_or(|path| path == &instance.path)
-                            && w.view
-                                .active_instance
-                                .as_ref()
-                                .is_none_or(|id| instance.path.last() == Some(id))
-                    })?;
-                let mut min = DVec3::splat(f64::INFINITY);
-                let mut max = DVec3::splat(f64::NEG_INFINITY);
-                for mesh in viewport::display_meshes(w, evaluation, instance) {
-                    for face in mesh.faces.iter().filter(|face| {
-                        face.reference.producer == reference.producer
-                            && face.reference.role == reference.role
-                            && sketch
-                                .reference_body
-                                .as_ref()
-                                .is_none_or(|body| face.body.as_ref() == Some(body))
-                    }) {
-                        for index in mesh
-                            .indices
-                            .get(face.start..face.start.checked_add(face.count)?)?
-                        {
-                            let point = DVec3::from_array(viewport::placed(
-                                *mesh.positions.get(*index as usize)?,
-                                instance,
-                            ));
-                            min = min.min(point);
-                            max = max.max(point);
-                        }
-                    }
-                }
-                (min.is_finite() && max.is_finite()).then_some((min, max))
-            });
-        let normal = DVec3::from_array(transform(&sketch.matrix, sketch.plane.u, true))
-            .cross(DVec3::from_array(transform(
-                &sketch.matrix,
-                sketch.plane.v,
-                true,
-            )))
-            .normalize();
-        let render = Vec3::new(normal.x as f32, normal.z as f32, -normal.y as f32);
-        w.view.orbit = [render.x.atan2(render.z), render.y.clamp(-1., 1.).asin()];
-        let origin = DVec3::from_array(world(
-            &sketch.plane,
+    let Some(sketch) = &w.sketch else {
+        return;
+    };
+    let normal = DVec3::from_array(transform(&sketch.matrix, sketch.plane.u, true))
+        .cross(DVec3::from_array(transform(
             &sketch.matrix,
-            sketch.anchor.unwrap_or([0.; 2]),
-        ));
-        let center = if let Some((min, max)) = face_bounds {
-            let center = (min + max) * 0.5;
-            // Mesh bounds are disposable framing hints; sketch coordinates and references stay unchanged.
-            w.view.distance = ((max - min).length() as f32 * 0.014).max(0.08);
-            center - normal * (center - origin).dot(normal)
-        } else {
-            origin
-        };
-        w.view.target = viewport::render_point(center.to_array()).to_array();
-        w.view.roll = 0.;
-        w.pending_context_focus = false;
-        crate::navigation::stop(w);
+            sketch.plane.v,
+            true,
+        )))
+        .normalize();
+    if !normal.is_finite() {
+        return;
     }
+    let origin = DVec3::from_array(world(&sketch.plane, &sketch.matrix, [0.; 2]));
+    let mut pose = crate::camera_views_ui::current(w);
+    // Alignment preserves the useful point under the center of the viewport.
+    // The plane's modeling origin does not define the display's framing center.
+    let target = DVec3::from_array(pose.target_mm);
+    let center = target - normal * (target - origin).dot(normal);
+    pose.orbit_rad = [normal.x.atan2(-normal.y), normal.z.clamp(-1., 1.).asin()];
+    pose.target_mm = center.to_array();
+    pose.roll_rad = 0.;
+    let mut points = active_framing_points(w);
+    if points.is_empty() {
+        points = support_framing_points(w);
+    }
+    crate::camera_views_ui::set_current(w, pose);
+    viewport::frame_points(w, &points, Some(center.to_array()), true);
+    w.pending_context_focus = false;
+    crate::navigation::stop(w);
+}
+fn active_framing_points(w: &Workspace) -> Vec<[f64; 3]> {
+    let Some(sketch) = &w.sketch else {
+        return vec![];
+    };
+    cad_core::sketch_geometry::polylines(
+        w.session.visible(),
+        &sketch.definition,
+        &display_definition(sketch),
+    )
+    .unwrap_or_default()
+    .into_iter()
+    .flat_map(|path| path.points)
+    .chain(sketch.points.iter().copied())
+    .map(|point| world(&sketch.plane, &sketch.matrix, point))
+    .collect()
+}
+fn support_framing_points(w: &Workspace) -> Vec<[f64; 3]> {
+    let Some(sketch) = &w.sketch else {
+        return vec![];
+    };
+    let Some(reference) = sketch
+        .reference
+        .as_ref()
+        .filter(|reference| reference.topology == "face")
+    else {
+        return vec![];
+    };
+    viewport::occurrence_framing_points(
+        w,
+        &sketch.definition,
+        &sketch.matrix,
+        Some((reference, sketch.reference_body.as_ref())),
+    )
+}
+pub fn fit_active(w: &mut Workspace) {
+    let points = active_framing_points(w);
+    if points.is_empty() {
+        w.status = "The active sketch has no geometry to frame".into();
+        return;
+    }
+    viewport::frame_points(w, &points, None, false);
+    w.pending_context_focus = false;
+}
+pub fn fit_support(w: &mut Workspace) {
+    let points = support_framing_points(w);
+    if points.is_empty() {
+        w.status = "Select a face-supported sketch to frame its support".into();
+        return;
+    }
+    let target = sketch_plane_center(w, &points);
+    viewport::frame_points(w, &points, target, false);
+    w.pending_context_focus = false;
+}
+fn sketch_plane_center(w: &Workspace, points: &[[f64; 3]]) -> Option<[f64; 3]> {
+    let sketch = w.sketch.as_ref()?;
+    let min = points
+        .iter()
+        .map(|p| DVec3::from_array(*p))
+        .fold(DVec3::splat(f64::INFINITY), DVec3::min);
+    let max = points
+        .iter()
+        .map(|p| DVec3::from_array(*p))
+        .fold(DVec3::splat(f64::NEG_INFINITY), DVec3::max);
+    let normal = DVec3::from_array(transform(&sketch.matrix, sketch.plane.u, true))
+        .cross(DVec3::from_array(transform(
+            &sketch.matrix,
+            sketch.plane.v,
+            true,
+        )))
+        .normalize();
+    let origin = DVec3::from_array(world(&sketch.plane, &sketch.matrix, [0.; 2]));
+    let center = (min + max) * 0.5;
+    Some((center - normal * (center - origin).dot(normal)).to_array())
+}
+pub fn fit_part_context(w: &mut Workspace) {
+    let Some(sketch) = &w.sketch else {
+        return;
+    };
+    let mut points =
+        viewport::occurrence_framing_points(w, &sketch.definition, &sketch.matrix, None);
+    points.extend(active_framing_points(w));
+    if points.is_empty() {
+        return;
+    }
+    let target = sketch_plane_center(w, &points);
+    viewport::frame_points(w, &points, target, false);
+    w.pending_context_focus = false;
 }
 pub(crate) fn selected_plane(w: &Workspace, definition: &str) -> Option<(Plane, TopologyRef)> {
     let selected = w.selected.as_ref().filter(|s| s.definition == definition);
@@ -412,6 +460,7 @@ pub fn begin(w: &mut Workspace, existing: Option<Feature>) {
         members: BTreeMap::new(),
         chain: vec![],
         clicks: vec![],
+        click_join: vec![],
         construction: false,
         conversions: BTreeMap::new(),
         offsets: BTreeMap::new(),
@@ -719,6 +768,7 @@ pub fn set_tool(w: &mut Workspace, tool: Tool) {
         w.selection_popup = None;
         s.chain.clear();
         s.clicks.clear();
+        s.click_join.clear();
         s.anchor = None;
         w.manager_tree = false;
     }
@@ -766,6 +816,7 @@ pub(crate) fn restore(s: &mut EditingSketch, source: Sketch) {
     s.closed = !s.members.is_empty();
     s.chain.clear();
     s.clicks.clear();
+    s.click_join.clear();
     s.error = None;
     s.placement_error = None;
     s.degrees_of_freedom = None;
@@ -818,6 +869,7 @@ pub fn escape(w: &mut Workspace) -> bool {
     {
         s.chain.clear();
         s.clicks.clear();
+        s.click_join.clear();
         s.tool = Tool::Select;
         return true;
     }
@@ -1477,8 +1529,10 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     if crate::sketch_edit_ui::controls(ui, w) {
         return;
     }
-    crate::sketch_edit_ui::modifiers(ui, w);
     crate::sketch_ui::controls(ui, w);
+    crate::sketch_overlay::snap_controls(ui, w);
+    let evaluated_sizes = crate::sketch_ui::evaluated_member_values(w);
+    let settings = w.session.visible().settings.clone();
     let mut changed = false;
     let mut undo = false;
     let mut clicked_entity = None;
@@ -1490,10 +1544,10 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             "{} members · {}",
             s.members.len(),
             s.degrees_of_freedom
-                .map(|dof| format!("{dof} degrees of freedom"))
-                .unwrap_or_else(|| "degrees of freedom unavailable".into())
+                .map(|dof| format!("{dof} DOF"))
+                .unwrap_or_else(|| "DOF unavailable".into())
         ));
-        ui.checkbox(&mut s.construction, "Construction geometry for new members");
+        ui.checkbox(&mut s.construction, "Construction for new geometry");
         if s.tool == Tool::Polygon {
             ui.add(
                 egui::DragValue::new(&mut s.polygon_sides)
@@ -1508,7 +1562,14 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             ui.label("Rho (0–1; 0.5 is parabolic)");
             ui.text_edit_singleline(&mut s.conic_rho.0);
         }
-        ui.small(match s.tool {
+        crate::presentation_controls::collapsing(
+            ui,
+            &format!("{}::tool-help", s.sketch_id),
+            "sketch-secondary-section",
+            "Tool help",
+            false,
+            |ui| {
+                ui.small(match s.tool {
             Tool::Arc => "Arc: start, end, then a point on the arc.",
             Tool::ThreePointRectangle => "Rectangle: first corner, next corner along an edge, then height.",
             Tool::ThreePointCenterRectangle => "Rectangle: center, half-width axis point, then half-height.",
@@ -1532,10 +1593,12 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             Tool::Polygon => "Polygon: center, then a vertex.",
             Tool::Point => "Click to add a reference point.",
             Tool::Select => {
-                "Drag point handles to reshape. Select a curve for size/move handles. Alt bypasses grid snap; Esc cancels a drag. Shift-click adds a selection."
+                "Drag point handles to reshape. Select a curve for size/move handles. Alt bypasses snapping; Esc cancels a drag. Shift-click adds a selection."
             }
             _ => "Click to draw. Snap to existing points joins members. Esc stops the tool.",
         });
+            },
+        );
         if matches!(s.tool, Tool::InterpolatingSpline | Tool::Nurbs) {
             ui.add(
                 egui::DragValue::new(&mut s.spline_degree)
@@ -1561,10 +1624,30 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         let mut remove = None;
         let member_checkpoint = sketch_definition(s);
         let driven_points = cad_core::sketch_edit::driven_points(&member_checkpoint);
+        let mut member_order = s
+            .members
+            .keys()
+            .enumerate()
+            .map(|(index, key)| (index, key.clone()))
+            .collect::<Vec<_>>();
+        member_order.sort_by_key(|(_, key)| s.selected_member.as_ref() != Some(key));
+        let member_inspector = crate::sketch_ui::selected_inspector_open(
+            ui,
+            "sketch-member-inspector",
+            s.selected_member.as_deref(),
+        );
         egui::CollapsingHeader::new("Sketch Members")
+            .open(member_inspector)
             .default_open(true)
             .show(ui, |ui| {
-                for (index, (key, member)) in s.members.iter_mut().enumerate() {
+                let props = crate::presentation_controls::properties(&format!("{}::member-list", s.sketch_id), "sketch-member-list", &["compact"], "ready");
+                if props.get("display").is_some_and(|value| value == "none") { return; }
+                let height = crate::presentation_controls::number(&props, "max-height", 180.).max(24.);
+                egui::ScrollArea::vertical().id_salt(("sketch-member-list", &s.sketch_id)).max_height(height).show(ui, |ui| {
+                crate::presentation_controls::apply_properties(ui, &props);
+                for (index, member_key) in member_order {
+                    let key = &member_key;
+                    let Some(member) = s.members.get_mut(key) else { continue };
                     ui.push_id(key, |ui| {
                         let name = match member.curve {
                             SketchCurve::Line { .. } => "Line",
@@ -1593,26 +1676,31 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                             match &mut member.curve {
                                 SketchCurve::Circle { radius, .. } => {
                                     ui.label("Radius");
-                                    let driver = s.constraints.iter().find(|c| matches!(c.kind.as_str(), "radius" | "diameter") && c.entities.first() == Some(key));
+                                    let driver = s.constraints.iter().find(|c| !c.driven && matches!(c.kind.as_str(), "radius" | "diameter") && c.entities.first() == Some(key));
                                     let equal = s.constraints.iter().any(|c| c.kind == "equal_radius" && c.entities.get(1) == Some(key));
-                                    changed |= ui.add_enabled(driver.is_none() && !equal && !operation_driven, egui::TextEdit::singleline(&mut radius.0)).changed();
-                                    if driver.is_some() || equal { ui.small("Driven by a dimension or Equal Radius relation above."); }
+                                    if driver.is_some() || equal || operation_driven {
+                                        let value = evaluated_sizes.get(&(key.clone(), "radius".into())).map(String::as_str).unwrap_or("Awaiting solved size");
+                                        crate::presentation_controls::label(ui, &format!("{key}::radius.evaluated"), "sketch-evaluated-size", &[], value, if s.error.is_some() { "last-valid" } else { "evaluated" });
+                                        ui.small(if s.error.is_some() { "Last valid radius · correct the sketch to update" } else { "Controlled by dimension / relation" });
+                                    } else {
+                                        changed |= ui.text_edit_singleline(&mut radius.0).changed();
+                                    }
                                 }
-                                SketchCurve::Ellipse {
-                                    major,
-                                    minor,
-                                    angle,
-                                    ..
-                                } => {
+                                SketchCurve::Ellipse { major, minor, angle, .. } => {
                                     for (label, kind, value) in [
                                         ("Major radius", "major_radius", major),
                                         ("Minor radius", "minor_radius", minor),
                                         ("Rotation", "rotation", angle),
                                     ] {
                                         ui.label(label);
-                                        let driven = s.constraints.iter().any(|c| c.kind == kind && c.entities.first() == Some(key));
-                                        changed |= ui.add_enabled(!driven, egui::TextEdit::singleline(&mut value.0)).changed();
-                                        if driven { ui.small("Driven by the dimension above."); }
+                                        let driven = s.constraints.iter().any(|c| !c.driven && c.kind == kind && c.entities.first() == Some(key));
+                                        if driven || operation_driven {
+                                            let value = evaluated_sizes.get(&(key.clone(), kind.into())).map(String::as_str).unwrap_or("Awaiting solved size");
+                                            crate::presentation_controls::label(ui, &format!("{key}::{kind}.evaluated"), "sketch-evaluated-size", &[], value, if s.error.is_some() { "last-valid" } else { "evaluated" });
+                                            ui.small("Controlled by dimension / relation");
+                                        } else {
+                                            changed |= ui.text_edit_singleline(&mut value.0).changed();
+                                        }
                                     }
                                 }
                                 _ => {}
@@ -1620,6 +1708,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                         }
                     });
                 }
+                });
             });
         if let Some(key) = remove {
             s.history.push(sketch_definition(s));
@@ -1631,10 +1720,20 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             restore(s, source);
             changed = true;
         }
+        let selected_point = s
+            .selected
+            .and_then(|index| s.keys.get(index))
+            .map(String::as_str);
+        let point_inspector =
+            crate::sketch_ui::selected_inspector_open(ui, "sketch-point-inspector", selected_point);
+        let mut point_order = (0..s.points.len()).collect::<Vec<_>>();
+        point_order.sort_by_key(|index| s.selected != Some(*index));
         egui::CollapsingHeader::new("Point Coordinates")
+            .open(point_inspector)
             .default_open(s.selected.is_some())
             .show(ui, |ui| {
-                for (i, p) in s.points.iter_mut().enumerate() {
+                for i in point_order {
+                    let p = &mut s.points[i];
                     ui.push_id(&s.keys[i], |ui| {
                         let response =
                             ui.selectable_label(s.selection.iter().any(|e| matches!(e, cad_core::sketch_actions::SketchEntity::Point { point } if point == &s.keys[i])), format!("Point {}", i + 1));
@@ -1645,24 +1744,12 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                                 },
                             );
                         }
-                        ui.add_enabled_ui(!driven_points.contains(&s.keys[i]), |ui| { ui.horizontal(|ui| {
-                            changed |= ui
-                                .add(
-                                    egui::DragValue::new(&mut p[0])
-                                        .speed(0.1)
-                                        .prefix("X ")
-                                        .suffix(" mm"),
-                                )
-                                .changed();
-                            changed |= ui
-                                .add(
-                                    egui::DragValue::new(&mut p[1])
-                                        .speed(0.1)
-                                        .prefix("Y ")
-                                        .suffix(" mm"),
-                                )
-                                .changed();
-                        }); });
+                        ui.add_enabled_ui(!driven_points.contains(&s.keys[i]), |ui| {
+                            ui.horizontal(|ui| {
+                                changed |= crate::sketch_ui::coordinate(ui, "X", &mut p[0], &settings);
+                                changed |= crate::sketch_ui::coordinate(ui, "Y", &mut p[1], &settings);
+                            });
+                        });
                     });
                 }
             });
@@ -1888,6 +1975,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         }
         ui.small("Open members may define a sweep path. Closed contours define solids; nested contours define holes. Construction members never generate solid geometry.");
     }
+    crate::sketch_ui::secondary_controls(ui, w);
     if let Some(entity) = clicked_entity {
         let continue_dimension = w.fields.contains_key("smart-dimension-mode")
             && w.sketch.as_ref().is_some_and(|s| s.selection.len() == 1);
@@ -1949,6 +2037,7 @@ fn polyline_distance(
     points: &[[f64; 2]],
     closed: bool,
     pointer: egui::Pos2,
+    mut depth: Option<&mut usize>,
 ) -> f32 {
     polyline_segments(points, closed)
         .filter_map(|(a, b)| {
@@ -1956,6 +2045,12 @@ fn polyline_distance(
             let b = viewport::project(w, rect, world(frame.0, frame.1, b))?;
             let edge = b - a;
             let t = ((pointer - a).dot(edge) / edge.length_sq().max(1e-9)).clamp(0., 1.);
+            if let Some(remaining) = depth.as_deref_mut() {
+                let uv = hit_plane(w, rect, a + edge * t, frame.0, frame.1)?;
+                if !viewport::visible_at(w, rect, world(frame.0, frame.1, uv), remaining) {
+                    return None;
+                }
+            }
             Some(pointer.distance(a + edge * t))
         })
         .fold(f32::INFINITY, f32::min)
@@ -1977,16 +2072,28 @@ fn draw_geometry(
     r: egui::Rect,
     geometry: &EvaluatedSketch,
     matrix: &[[f64; 4]; 4],
-    color: Color32,
-    selected: bool,
+    display: (Color32, bool, bool, &mut usize),
 ) {
-    if !geometry.polylines.is_empty() {
-        for path in &geometry.polylines {
-            draw_polyline(
+    let (color, selected, xray, remaining) = display;
+    let mut draw = |points: &[[f64; 2]], closed, stroke| {
+        for (a, b) in polyline_segments(points, closed) {
+            crate::sketch_overlay::line(
                 w,
                 ui,
                 r,
-                (&geometry.plane, matrix),
+                [
+                    world(&geometry.plane, matrix, a),
+                    world(&geometry.plane, matrix, b),
+                ],
+                stroke,
+                xray,
+                remaining,
+            );
+        }
+    };
+    if !geometry.polylines.is_empty() {
+        for path in &geometry.polylines {
+            draw(
                 &path.points,
                 path.closed,
                 Stroke::new(
@@ -2012,22 +2119,14 @@ fn draw_geometry(
         .iter()
         .filter_map(|id| geometry.points.get(id).copied())
         .collect::<Vec<_>>();
-    draw_polyline(
-        w,
-        ui,
-        r,
-        (&geometry.plane, matrix),
+    draw(
         &points,
         true,
         Stroke::new(if selected { 3.5 } else { 2. }, color),
     );
     for circle in geometry.circles.values() {
         if let Some(center) = geometry.points.get(&circle.center) {
-            draw_polyline(
-                w,
-                ui,
-                r,
-                (&geometry.plane, matrix),
+            draw(
                 &circle_points(*center, circle.radius_mm),
                 false,
                 Stroke::new(if selected { 3.5 } else { 2. }, color),
@@ -2043,6 +2142,28 @@ fn draw_origin_plane(
     matrix: &[[f64; 4]; 4],
     color: Color32,
 ) {
+    if w.sketch.is_none()
+        && matches!(
+            crate::sketch_overlay::mode(w, false),
+            cad_core::presentation::OverlayVisibility::Hidden
+        )
+    {
+        return;
+    }
+    let props = crate::sketch_overlay::reference_properties(
+        w,
+        &format!("origin-plane:{name}"),
+        "plane",
+        true,
+    );
+    if crate::sketch_overlay::hidden(&props) {
+        return;
+    }
+    let color = props
+        .get("color")
+        .and_then(|value| crate::ui::color(value))
+        .unwrap_or(color);
+    let xray = w.sketch.is_some() || crate::sketch_overlay::xray(w, false, &props);
     let plane = plane(name);
     let size = (w.view.distance as f64 * 30.).max(20.);
     let points = [[-size, -size], [size, -size], [size, size], [-size, size]];
@@ -2050,7 +2171,7 @@ fn draw_origin_plane(
         .iter()
         .filter_map(|p| viewport::project(w, rect, world(&plane, matrix, *p)))
         .collect::<Vec<_>>();
-    if screen.len() == 4 {
+    if screen.len() == 4 && w.sketch.is_some() {
         ui.painter()
             .with_clip_rect(rect)
             .add(egui::Shape::convex_polygon(
@@ -2059,16 +2180,24 @@ fn draw_origin_plane(
                 Stroke::NONE,
             ));
     }
-    draw_polyline(
-        w,
-        ui,
-        rect,
-        (&plane, matrix),
-        &points,
-        true,
-        Stroke::new(1.4, color),
-    );
-    if let Some(p) = viewport::project(w, rect, world(&plane, matrix, [size, size])) {
+    let mut remaining = crate::sketch_overlay::DEPTH_WORK;
+    for (a, b) in polyline_segments(&points, true) {
+        crate::sketch_overlay::line(
+            w,
+            ui,
+            rect,
+            [world(&plane, matrix, a), world(&plane, matrix, b)],
+            Stroke::new(
+                crate::presentation_controls::number(&props, "stroke-width", 1.2),
+                color,
+            ),
+            xray,
+            &mut remaining,
+        );
+    }
+    if (xray || viewport::visible_at(w, rect, world(&plane, matrix, [size, size]), &mut remaining))
+        && let Some(p) = viewport::project(w, rect, world(&plane, matrix, [size, size]))
+    {
         ui.painter().with_clip_rect(rect).text(
             p,
             egui::Align2::CENTER_CENTER,
@@ -2098,6 +2227,12 @@ fn selected_sketch(w: &Workspace, instance: &PlacedPart, feature: &Feature) -> b
         && w.view.active_node.as_ref() == Some(&feature.id)
 }
 fn visible_sketch(w: &Workspace, instance: &PlacedPart, feature: &Feature) -> bool {
+    if matches!(
+        crate::sketch_overlay::mode(w, true),
+        cad_core::presentation::OverlayVisibility::Hidden
+    ) {
+        return false;
+    }
     if w.view.active_part.as_ref() != Some(&instance.definition)
         || w.view.active_instance.as_ref().is_some_and(|id| {
             !instance.path.contains(id) && !(instance.path.is_empty() && id == &instance.definition)
@@ -2119,19 +2254,11 @@ fn visible_sketch(w: &Workspace, instance: &PlacedPart, feature: &Feature) -> bo
             })
             .is_some_and(|s| s.sketches.contains(&feature.id));
     }
-    selected_sketch(w, instance, feature)
-        || w.session
-            .visible()
-            .parts
-            .get(&instance.definition)
-            .is_some_and(|p| {
-                !p.features.iter().any(|f| {
-                    !f.suppressed
-                        && p.feature_dependencies(f)
-                            .iter()
-                            .any(|n| n.definition == p.id && n.node == feature.id)
-                })
-            })
+    match crate::sketch_overlay::mode(w, true) {
+        cad_core::presentation::OverlayVisibility::Hidden => false,
+        cad_core::presentation::OverlayVisibility::All => true,
+        cad_core::presentation::OverlayVisibility::Auto => selected_sketch(w, instance, feature),
+    }
 }
 pub struct SketchHit {
     definition: Id,
@@ -2170,6 +2297,7 @@ pub fn pick(w: &Workspace, rect: egui::Rect, pointer: egui::Pos2) -> Option<Sket
     let evaluation = viewport::display_evaluation(w)?;
     let mut nearest = 7.;
     let mut hit = None;
+    let mut remaining = crate::sketch_overlay::DEPTH_WORK;
     for instance in viewport::display_instances(w, evaluation) {
         let Some(part) = w.session.visible().parts.get(&instance.definition) else {
             continue;
@@ -2186,6 +2314,21 @@ pub fn pick(w: &Workspace, rect: egui::Rect, pointer: egui::Pos2) -> Option<Sket
             let Some(geometry) = evaluation.sketches.get(&format!("{key}::{}", feature.id)) else {
                 continue;
             };
+            let props = crate::sketch_overlay::properties(
+                w,
+                &format!(
+                    "sketch-overlay:{}:{}:{}",
+                    instance.definition,
+                    feature.id,
+                    instance.path.join("/")
+                ),
+                "sketch-overlay",
+                selected_sketch(w, instance, feature),
+            );
+            if crate::sketch_overlay::hidden(&props) {
+                continue;
+            }
+            let xray = crate::sketch_overlay::xray(w, true, &props);
             let contours = if geometry.polylines.is_empty() {
                 std::iter::once((
                     geometry
@@ -2217,6 +2360,7 @@ pub fn pick(w: &Workspace, rect: egui::Rect, pointer: egui::Pos2) -> Option<Sket
                     &points,
                     closed,
                     pointer,
+                    (!xray).then_some(&mut remaining),
                 );
                 if distance < nearest {
                     nearest = distance;
@@ -2247,6 +2391,7 @@ pub fn overlay(
         .and_then(|v| crate::ui::color(v))
         .unwrap_or(Color32::from_rgb(45, 110, 210));
     if w.sketch.is_none() {
+        let mut remaining = crate::sketch_overlay::DEPTH_WORK;
         if let Some(name) = &w.active_plane
             && let Some(definition) = &w.view.active_part
         {
@@ -2266,14 +2411,40 @@ pub fn overlay(
                                 e.sketches.get(&format!("{key}::{}", feature.id))
                         {
                             let selected = selected_sketch(w, instance, feature);
+                            let props = crate::sketch_overlay::properties(
+                                w,
+                                &format!(
+                                    "sketch-overlay:{}:{}:{}",
+                                    instance.definition,
+                                    feature.id,
+                                    instance.path.join("/")
+                                ),
+                                "sketch-overlay",
+                                selected,
+                            );
+                            if crate::sketch_overlay::hidden(&props) {
+                                continue;
+                            }
+                            let color = props
+                                .get("color")
+                                .and_then(|value| crate::ui::color(value))
+                                .unwrap_or(if selected {
+                                    accent
+                                } else {
+                                    blue.gamma_multiply(0.6)
+                                });
                             draw_geometry(
                                 w,
                                 ui,
                                 r,
                                 geometry,
                                 &instance.matrix,
-                                if selected { accent } else { blue },
-                                selected,
+                                (
+                                    color,
+                                    selected,
+                                    crate::sketch_overlay::xray(w, true, &props),
+                                    &mut remaining,
+                                ),
                             );
                         }
                     }
@@ -2366,11 +2537,71 @@ pub fn overlay(
             .filter(|p| r.contains(*p))
     });
     let mut cursor = pointer.and_then(|p| hit_plane(w, r, p, &plane, &matrix));
+    let bypass_snap = ui.input(|i| i.modifiers.alt);
+    let entity_snap = w.view.sketch_entity_snap && !bypass_snap;
+    let snapped = if entity_snap {
+        w.sketch
+            .as_ref()
+            .filter(|s| s.tool != Tool::Select)
+            .and_then(|s| {
+                let suppressed =
+                    cad_core::sketch_transform::suppressed_points(&sketch_definition(s));
+                let pointer = pointer?;
+                s.points
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| !suppressed.contains(&s.keys[*index]))
+                    .filter_map(|(index, point)| {
+                        let pos = viewport::project(w, r, world(&plane, &matrix, *point))?;
+                        let distance = pointer.distance(pos);
+                        (distance < 9.).then_some((distance, index))
+                    })
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, index)| index)
+            })
+    } else {
+        None
+    };
     if let Some(s) = &w.sketch
         && s.snap
-        && !ui.input(|i| i.modifiers.alt)
+        && !bypass_snap
     {
         cursor = cursor.map(|p| p.map(|v| (v / s.grid).round() * s.grid));
+    }
+    if let Some((point, key)) = w
+        .sketch
+        .as_ref()
+        .and_then(|s| snapped.map(|index| (s.points[index], s.keys[index].clone())))
+    {
+        cursor = Some(point);
+        w.fields.insert("sketch-snap-target".into(), key);
+        let props =
+            crate::sketch_overlay::properties(w, "sketch.snap-target", "sketch-snap-target", true);
+        if !crate::sketch_overlay::hidden(&props)
+            && let Some(pos) = viewport::project(w, r, world(&plane, &matrix, point))
+        {
+            let color = props
+                .get("color")
+                .and_then(|value| crate::ui::color(value))
+                .unwrap_or(accent);
+            ui.painter().with_clip_rect(r).circle_stroke(
+                pos,
+                crate::presentation_controls::number(&props, "size", 8.).clamp(3., 30.),
+                Stroke::new(
+                    crate::presentation_controls::number(&props, "stroke-width", 2.).clamp(0.5, 6.),
+                    color,
+                ),
+            );
+            ui.painter().with_clip_rect(r).text(
+                pos + egui::vec2(12., -12.),
+                egui::Align2::LEFT_BOTTOM,
+                "Join endpoint · Alt for independent point",
+                egui::FontId::proportional(11.),
+                color,
+            );
+        }
+    } else {
+        w.fields.remove("sketch-snap-target");
     }
     if let Some(s) = &mut w.sketch {
         s.hover = cursor;
@@ -2695,6 +2926,7 @@ pub fn overlay(
                             &path.points,
                             path.closed,
                             pointer,
+                            None,
                         );
                         (distance < 7.).then_some((distance, path.member))
                     })
@@ -2702,7 +2934,6 @@ pub fn overlay(
                     .map(|(_, member)| member)
             })
         });
-    let mut snapped = None;
     for pair in crate::sketch_ui::model_dimension_highlight(w).windows(2) {
         if let (Some(a), Some(b)) = (
             viewport::project(w, r, pair[0]),
@@ -2717,7 +2948,6 @@ pub fn overlay(
     handle_clicked |= crate::sketch_handles::overlay(w, ui, r);
     let mut selection_click = None;
     let mut placed_hole_center = None;
-    let mut member_click = false;
     let suppressed_points = w
         .sketch
         .as_ref()
@@ -2731,9 +2961,6 @@ pub fn overlay(
             continue;
         }
         if let Some(pos) = viewport::project(w, r, world(&plane, &matrix, *p)) {
-            if pointer.is_some_and(|p| p.distance(pos) < 9.) {
-                snapped = Some(index);
-            }
             if w.sketch.as_ref().is_some_and(|s| s.tool == Tool::Select) {
                 continue;
             }
@@ -2750,45 +2977,10 @@ pub fn overlay(
                     blue
                 },
             );
-            let hit = ui.interact(
-                egui::Rect::from_center_size(pos, egui::vec2(14., 14.)),
-                egui::Id::new(("sketch-point", key)),
-                egui::Sense::click_and_drag(),
-            );
-            if hit.clicked() || hit.secondary_clicked() {
-                handle_clicked = true;
-                if let Some(s) = &mut w.sketch {
-                    if !matches!(s.tool, Tool::Select | Tool::Polyline) {
-                        member_click = true;
-                    }
-                    if s.tool == Tool::Select || hit.secondary_clicked() {
-                        s.selected = Some(index);
-                        selection_click = Some((
-                            Some(cad_core::sketch_actions::SketchEntity::Point {
-                                point: s.keys[index].clone(),
-                            }),
-                            hit.clone(),
-                        ));
-                    } else if s.tool == Tool::Polyline {
-                        let key = s.keys[index].clone();
-                        s.history.push(sketch_definition(s));
-                        if let Some(last) = s.chain.last().cloned() {
-                            line(s, last, key.clone());
-                            if s.chain.first() == Some(&key) {
-                                s.chain.clear();
-                            } else {
-                                s.chain.push(key);
-                            }
-                        } else {
-                            s.chain.push(key);
-                        }
-                        edited = true;
-                    }
-                }
-            }
         }
     }
-    if ((response.clicked() && !handle_clicked) || member_click)
+    if response.clicked()
+        && !handle_clicked
         && pointer.is_some_and(|p| !toolbar.contains(p))
         && let Some(cursor) = cursor
         && let Some(s) = &mut w.sketch
@@ -2807,13 +2999,17 @@ pub fn overlay(
                 selection_click = Some((entity, response.clone()));
             }
             Tool::Point => {
-                placed_hole_center = Some(add_point(s, cursor, false));
+                placed_hole_center = Some(
+                    snapped
+                        .map(|index| s.keys[index].clone())
+                        .unwrap_or_else(|| add_point(s, cursor, false)),
+                );
                 s.closed = true;
             }
             Tool::Polyline => {
                 let key = snapped
                     .map(|i| s.keys[i].clone())
-                    .unwrap_or_else(|| add_point(s, cursor, true));
+                    .unwrap_or_else(|| add_point(s, cursor, false));
                 if let Some(last) = s.chain.last().cloned() {
                     line(s, last, key.clone());
                 }
@@ -2833,14 +3029,16 @@ pub fn overlay(
                 {
                     let key = snapped
                         .map(|i| s.keys[i].clone())
-                        .unwrap_or_else(|| add_point(s, cursor, true));
+                        .unwrap_or_else(|| add_point(s, cursor, false));
                     if s.chain.last() != Some(&key) {
                         s.chain.push(key);
                     }
                 }
             }
             Tool::Conic | Tool::Parabola | Tool::EllipseArc | Tool::ArcSlot => {
+                s.click_join.resize(s.clicks.len(), false);
                 s.clicks.push(cursor);
+                s.click_join.push(snapped.is_some());
                 placed_conic = s.clicks.len() == if s.tool == Tool::ArcSlot { 4 } else { 3 };
             }
             Tool::Rectangle
@@ -2859,7 +3057,9 @@ pub fn overlay(
             | Tool::CenterSlot
             | Tool::MidpointLine
             | Tool::Centerline => {
+                s.click_join.resize(s.clicks.len(), false);
                 s.clicks.push(cursor);
+                s.click_join.push(snapped.is_some());
                 let required = if matches!(
                     s.tool,
                     Tool::Arc
@@ -2877,6 +3077,18 @@ pub fn overlay(
                     2
                 };
                 if s.clicks.len() == required {
+                    let joins = s
+                        .clicks
+                        .iter()
+                        .zip(&s.click_join)
+                        .filter(|(_, join)| **join)
+                        .map(|(point, _)| *point)
+                        .collect::<Vec<_>>();
+                    let join_existing = |point: [f64; 2]| {
+                        joins
+                            .iter()
+                            .any(|target| (point[0] - target[0]).hypot(point[1] - target[1]) < 1e-7)
+                    };
                     let a = s.clicks[0];
                     let b = s.clicks[1];
                     match s.tool {
@@ -2894,7 +3106,7 @@ pub fn overlay(
                                 )
                             };
                             let keys = [lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]]
-                                .map(|p| add_point(s, p, true));
+                                .map(|p| add_point(s, p, join_existing(p)));
                             for i in 0..4 {
                                 line(s, keys[i].clone(), keys[(i + 1) % 4].clone());
                             }
@@ -2915,7 +3127,7 @@ pub fn overlay(
                                 });
                             }
                             if s.tool == Tool::CenterRectangle {
-                                let center = add_point(s, a, false);
+                                let center = add_point(s, a, join_existing(a));
                                 let diagonal = id();
                                 s.members.insert(
                                     diagonal.clone(),
@@ -2949,7 +3161,7 @@ pub fn overlay(
                                 s.tool == Tool::Parallelogram,
                             ) {
                                 Ok(points) => {
-                                    let keys = points.map(|p| add_point(s, p, true));
+                                    let keys = points.map(|p| add_point(s, p, join_existing(p)));
                                     let mut members = Vec::new();
                                     for i in 0..4 {
                                         line(s, keys[i].clone(), keys[(i + 1) % 4].clone());
@@ -2989,7 +3201,7 @@ pub fn overlay(
                                             });
                                         }
                                         if s.tool == Tool::ThreePointCenterRectangle {
-                                            let center = add_point(s, a, false);
+                                            let center = add_point(s, a, join_existing(a));
                                             let diagonal = id();
                                             s.members.insert(
                                                 diagonal.clone(),
@@ -3022,8 +3234,8 @@ pub fn overlay(
                             } else {
                                 (a, b)
                             };
-                            let start = add_point(s, start, true);
-                            let end = add_point(s, end, true);
+                            let start = add_point(s, start, join_existing(start));
+                            let end = add_point(s, end, join_existing(end));
                             if start != end {
                                 let member = id();
                                 s.members.insert(
@@ -3036,7 +3248,7 @@ pub fn overlay(
                                 s.selected_member = Some(member.clone());
                                 s.closed = true;
                                 if s.tool == Tool::MidpointLine {
-                                    let midpoint = add_point(s, a, false);
+                                    let midpoint = add_point(s, a, join_existing(a));
                                     s.constraints.push(SketchConstraint {
                                         driven: false,
                                         distance_side: None,
@@ -3072,10 +3284,10 @@ pub fn overlay(
                                 s.clockwise,
                             ) {
                                 Ok(points) => {
-                                    let center = add_point(s, a, false);
-                                    let start = add_point(s, points[0], true);
+                                    let center = add_point(s, a, join_existing(a));
+                                    let start = add_point(s, points[0], join_existing(points[0]));
                                     let through = add_point(s, points[1], false);
-                                    let end = add_point(s, points[2], true);
+                                    let end = add_point(s, points[2], join_existing(points[2]));
                                     add_member(
                                         s,
                                         SketchCurve::Arc {
@@ -3127,9 +3339,10 @@ pub fn overlay(
                                     incident[0].1,
                                 ) {
                                     Ok(points) => {
-                                        let start = add_point(s, points[0], true);
+                                        let start =
+                                            add_point(s, points[0], join_existing(points[0]));
                                         let through = add_point(s, points[1], false);
-                                        let end = add_point(s, points[2], true);
+                                        let end = add_point(s, points[2], join_existing(points[2]));
                                         add_member(
                                             s,
                                             SketchCurve::Arc {
@@ -3157,7 +3370,7 @@ pub fn overlay(
                             }
                         }
                         Tool::Circle => {
-                            let center = add_point(s, a, false);
+                            let center = add_point(s, a, join_existing(a));
                             add_member(
                                 s,
                                 SketchCurve::Circle {
@@ -3179,7 +3392,10 @@ pub fn overlay(
                                     add_point(
                                         s,
                                         [a[0] + radius * t.cos(), a[1] + radius * t.sin()],
-                                        true,
+                                        join_existing([
+                                            a[0] + radius * t.cos(),
+                                            a[1] + radius * t.sin(),
+                                        ]),
                                     )
                                 })
                                 .collect::<Vec<_>>();
@@ -3188,8 +3404,8 @@ pub fn overlay(
                             }
                         }
                         Tool::Arc => {
-                            let start = add_point(s, a, true);
-                            let end = add_point(s, b, true);
+                            let start = add_point(s, a, join_existing(a));
+                            let end = add_point(s, b, join_existing(b));
                             let through = add_point(s, s.clicks[2], false);
                             add_member(
                                 s,
@@ -3207,7 +3423,7 @@ pub fn overlay(
                             let minor = (-(c[0] - a[0]) * rotation.sin()
                                 + (c[1] - a[1]) * rotation.cos())
                             .abs();
-                            let center = add_point(s, a, false);
+                            let center = add_point(s, a, join_existing(a));
                             add_member(
                                 s,
                                 SketchCurve::Ellipse {
@@ -3234,22 +3450,22 @@ pub fn overlay(
                                     add_point(
                                         s,
                                         [a[0] + n[0] * radius, a[1] + n[1] * radius],
-                                        true,
+                                        join_existing([a[0] + n[0] * radius, a[1] + n[1] * radius]),
                                     ),
                                     add_point(
                                         s,
                                         [b[0] + n[0] * radius, b[1] + n[1] * radius],
-                                        true,
+                                        join_existing([b[0] + n[0] * radius, b[1] + n[1] * radius]),
                                     ),
                                     add_point(
                                         s,
                                         [b[0] - n[0] * radius, b[1] - n[1] * radius],
-                                        true,
+                                        join_existing([b[0] - n[0] * radius, b[1] - n[1] * radius]),
                                     ),
                                     add_point(
                                         s,
                                         [a[0] - n[0] * radius, a[1] - n[1] * radius],
-                                        true,
+                                        join_existing([a[0] - n[0] * radius, a[1] - n[1] * radius]),
                                     ),
                                 ];
                                 line(s, k[0].clone(), k[1].clone());
@@ -3285,6 +3501,7 @@ pub fn overlay(
                         _ => {}
                     }
                     s.clicks.clear();
+                    s.click_join.clear();
                 }
             }
         }

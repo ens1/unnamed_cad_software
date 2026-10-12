@@ -436,6 +436,7 @@ fn begin_positions(w: &mut Workspace, mut pending: PendingHole, body: NodeRef) {
                 return;
             }
         }
+        crate::sketch::fit_part_context(w);
         w.status = format!(
             "{} — place and constrain centers, then Finish Positions to set the hole size",
             pending.name

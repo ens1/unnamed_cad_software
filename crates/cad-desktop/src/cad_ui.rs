@@ -219,6 +219,7 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "file.open",
             "file.save",
             "file.save-as",
+            "document.rename",
             "file.import",
             "file.export",
             "file.recover",
@@ -250,6 +251,17 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "viewport.orientation.isometric",
             "viewport.fit",
             "viewport.normal-sketch",
+            "viewport.fit-sketch",
+            "viewport.fit-support",
+            "viewport.fit-part-context",
+            "viewport.sketches.auto",
+            "viewport.sketches.all",
+            "viewport.sketches.hidden",
+            "viewport.sketch-xray",
+            "viewport.references.auto",
+            "viewport.references.all",
+            "viewport.references.hidden",
+            "viewport.reference-xray",
             "lighting",
             "camera-views",
             "camera-view.save",
@@ -481,6 +493,9 @@ fn sketch_tool_command(tool: sketch::Tool) -> String {
 /// The same presentation command route is used by native controls and arbitrary
 /// user-composed copies of them. Modeling continues through existing commands.
 pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
+    if crate::sketch_overlay::action(w, command) {
+        return true;
+    }
     if crate::contours_ui::action(w, command) {
         return true;
     }
@@ -557,15 +572,13 @@ pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
             w.selection_popup = None;
         }
         "document.undo" => {
-            if w.session.can_undo() {
-                w.session.undo();
-                w.requested = None;
+            if w.tool_checkpoint.is_some() || w.session.can_undo() {
+                ui::history_command(w, false);
             }
         }
         "document.redo" => {
-            if w.session.can_redo() {
-                w.session.redo();
-                w.requested = None;
+            if w.tool_checkpoint.is_some() || w.session.can_redo() {
+                ui::history_command(w, true);
             }
         }
         "presentation.compact" | "presentation.comfortable" => {
@@ -615,6 +628,10 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
         let enabled = match command {
             "draft.apply" => confirmation_available(w),
             "draft.cancel" => w.tool_checkpoint.is_some() || w.session.draft.is_some() || sketching,
+            "viewport.fit-sketch"
+            | "viewport.fit-support"
+            | "viewport.fit-part-context"
+            | "sketch.snap-entities" => sketching,
             _ => cad_core::modeling_tools::TOOLS
                 .iter()
                 .find(|tool| tool.command == command)
@@ -718,8 +735,18 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
         );
     }
     for (command, label, enabled, selected) in [
-        ("document.undo", "Undo", w.session.can_undo(), false),
-        ("document.redo", "Redo", w.session.can_redo(), false),
+        (
+            "document.undo",
+            "Undo",
+            w.tool_checkpoint.is_some() || w.session.can_undo(),
+            false,
+        ),
+        (
+            "document.redo",
+            "Redo",
+            w.tool_checkpoint.is_some() || w.session.can_redo(),
+            false,
+        ),
         (
             "presentation.compact",
             "Compact",
@@ -733,11 +760,20 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             w.view.ui_scale == 1.15,
         ),
         ("graph.arrange", "Arrange Graph", true, false),
-        ("assembly.isolate", "Edit in Place", true, w.view.isolation),
+        (
+            "assembly.isolate",
+            "Edit in Place",
+            w.session
+                .visible()
+                .properties
+                .get("document_kind")
+                .is_none_or(|kind| kind != "part"),
+            crate::workspace_controls::in_place(w),
+        ),
         (
             "presentation.ghost-others",
             "Ghost Others",
-            true,
+            crate::workspace_controls::in_place(w),
             w.view.ghost_others,
         ),
         (
@@ -914,6 +950,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::document_identity_ui::current_source_is_valid(w) {
+        return Some("Correct the document name before confirming");
+    }
     if !crate::camera_views_ui::current_source_is_valid(w) {
         return Some("Correct the current named-view fields before applying");
     }
@@ -1005,6 +1044,7 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
             return Some("A current validated preview is required");
         }
     } else if !(w.fields.contains_key("exploded-view-editor")
+        || crate::document_identity_ui::active(w)
         || w.fields.contains_key("assembly-inspection-editor")
         || w.fields.contains_key("assembly-weld-editor"))
     {
@@ -1026,6 +1066,7 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Open…  ⌘O", "file.open"),
                 ("Save  ⌘S", "file.save"),
                 ("Save As…", "file.save-as"),
+                ("Rename Document…", "document.rename"),
                 ("Import STEP…", "file.import"),
                 ("Export…", "file.export"),
                 ("Recover Local Work…", "file.recover"),
@@ -1065,14 +1106,26 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         });
         menu_button(ui, "Edit", |ui| {
-            if menu_action(ui, "document.undo", "Undo  ⌘Z", w.session.can_undo()).clicked() {
-                w.session.undo();
-                w.requested = None;
+            if menu_action(
+                ui,
+                "document.undo",
+                "Undo  ⌘Z",
+                w.tool_checkpoint.is_some() || w.session.can_undo(),
+            )
+            .clicked()
+            {
+                ui::history_command(w, false);
                 ui.close();
             }
-            if menu_action(ui, "document.redo", "Redo  ⇧⌘Z", w.session.can_redo()).clicked() {
-                w.session.redo();
-                w.requested = None;
+            if menu_action(
+                ui,
+                "document.redo",
+                "Redo  ⇧⌘Z",
+                w.tool_checkpoint.is_some() || w.session.can_redo(),
+            )
+            .clicked()
+            {
+                ui::history_command(w, true);
                 ui.close();
             }
             if menu_action(ui, "parameter.new", "Parameters…", true).clicked() {
@@ -1103,6 +1156,7 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
         menu_button(ui, "View", |ui| {
             view_controls(ui, w);
             crate::camera_views_ui::view_controls(ui, w);
+            crate::sketch_overlay::view_controls(ui, w);
         });
         menu_button(ui, "Tools", |ui| {
             for (label, command) in [
@@ -1722,6 +1776,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                     doc.active_configurations.get(&part.id).map(String::as_str),
                 )
                 .unwrap_or_else(|_| part.clone());
+                let body_counts = crate::body_inventory::counts(w, &part.id);
                 for (label, is_surface) in [("Solid Bodies", false), ("Surface Bodies", true)] {
                     let outputs = effective
                         .outputs
@@ -1735,11 +1790,28 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                             }
                         })
                         .collect::<Vec<_>>();
-                    if !is_surface || !outputs.is_empty() {
-                        egui::CollapsingHeader::new(format!("{label} ({})", outputs.len()))
+                    let count = body_counts.map(|counts| {
+                        if is_surface {
+                            counts.surfaces
+                        } else {
+                            counts.solids
+                        }
+                    });
+                    let heading = count
+                        .map(|count| format!("{label} ({count})"))
+                        .unwrap_or_else(|| {
+                            format!(
+                                "{} outputs ({})",
+                                if is_surface { "Surface" } else { "Solid" },
+                                outputs.len()
+                            )
+                        });
+                    if !is_surface || count.is_some_and(|count| count > 0) || !outputs.is_empty() {
+                        egui::CollapsingHeader::new(heading)
                             .id_salt(label)
                             .default_open(false)
                             .show(ui, |ui| {
+                                ui.small("Grouped by output feature");
                                 for feature in outputs {
                                     feature_row(ui, w, part, feature);
                                 }
@@ -2124,6 +2196,9 @@ pub fn properties(ui: &mut egui::Ui, w: &mut Workspace) {
         });
 }
 pub fn confirmation_label(w: &Workspace) -> String {
+    if crate::document_identity_ui::active(w) {
+        return "Rename Document".into();
+    }
     if w.sketch.is_some() {
         return crate::holes_ui::sketch_semantics(w)
             .iter()
@@ -2161,6 +2236,7 @@ pub fn confirmation_label(w: &Workspace) -> String {
     }
 }
 pub fn confirmation(ui: &mut egui::Ui, w: &mut Workspace) {
+    crate::operation_preview::status_control(ui, w);
     let label = confirmation_label(w);
     ui.horizontal(|ui| {
         let enabled = confirmation_available(w);

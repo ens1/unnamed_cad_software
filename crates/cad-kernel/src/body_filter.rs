@@ -19,7 +19,7 @@ pub(crate) fn operation(
     generated: &mut TopologyHistory,
 ) -> Result<Shape> {
     definition.validate()?;
-    let mut anchors: BTreeMap<(NodeRef, NodeRef, String), BTreeSet<usize>> = BTreeMap::new();
+    let mut anchors: BTreeMap<(NodeRef, String), BTreeSet<usize>> = BTreeMap::new();
     // An ancestor, suppressed modifier, or earlier filter can alias the same
     // exact native solid through another scoped output. Reject that overlap
     // before selection: filtering one alias cannot retain or double another.
@@ -54,7 +54,10 @@ pub(crate) fn operation(
                     && reference.topology == "face"
                 {
                     anchors
-                        .entry((source.clone(), reference.producer, reference.role))
+                        .entry((
+                            source.clone(),
+                            cad_core::provenance::canonical_key(&reference)?,
+                        ))
                         .or_default()
                         .insert(index);
                 }
@@ -65,8 +68,7 @@ pub(crate) fn operation(
     for anchor in &definition.selected {
         let Some(matches) = anchors.get(&(
             anchor.body.clone(),
-            anchor.face.producer.clone(),
-            anchor.face.role.clone(),
+            cad_core::provenance::canonical_key(&anchor.face)?,
         )) else {
             return Err(CadError::Invalid(
                 "Keep/Delete Bodies: A saved face anchor no longer belongs to a solid in its owning output; select an explicit replacement".into(),

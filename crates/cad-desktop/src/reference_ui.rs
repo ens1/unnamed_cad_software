@@ -1429,6 +1429,20 @@ fn visible(
     if reference.version != CONTRACT_VERSION || !viewport::visible(w, instance) {
         return false;
     }
+    match crate::sketch_overlay::mode(w, false) {
+        cad_core::presentation::OverlayVisibility::Hidden => return false,
+        cad_core::presentation::OverlayVisibility::Auto
+            if !(w
+                .sketch
+                .as_ref()
+                .is_some_and(|sketch| sketch.choosing_plane)
+                || (w.view.active_part.as_deref() == Some(&instance.definition)
+                    && w.view.active_node.as_deref() == Some(&reference.producer.node))) =>
+        {
+            return false;
+        }
+        _ => {}
+    }
     if w.view.isolation
         && !w.peek
         && w.view.active_part.as_deref() != Some(&instance.definition)
@@ -1461,10 +1475,7 @@ fn visible(
         classes: vec![reference.geometry.topology().into()],
         resizable: false,
     };
-    !w.theme
-        .properties(&region, &w.view.active_layout, "ready")
-        .get("display")
-        .is_some_and(|s| s == "none")
+    !crate::sketch_overlay::hidden(&w.theme.properties(&region, &w.view.active_layout, "ready"))
 }
 fn extent(w: &Workspace) -> f64 {
     (w.view.distance as f64 * 18.).max(12.)
@@ -1497,7 +1508,8 @@ pub fn picks(
     evaluation: &cad_core::protocol::Evaluation,
 ) -> Vec<viewport::Selection> {
     let mut hits = Vec::new();
-    let (origin, _) = viewport::ray(w, rect, pointer);
+    let (origin, ray_direction) = viewport::ray(w, rect, pointer);
+    let mut remaining = crate::sketch_overlay::DEPTH_WORK;
     for instance in viewport::display_instances(w, evaluation) {
         if !crate::display_states_ui::pickable(w, &instance.path) {
             continue;
@@ -1554,6 +1566,48 @@ pub fn picks(
                     Geometry::CoordinateSystem { .. } => false,
                 };
                 if near {
+                    let props = crate::sketch_overlay::reference_properties(
+                        w,
+                        &format!("reference:{}", reference.producer.node),
+                        geometry.topology(),
+                        true,
+                    );
+                    let xray = crate::sketch_overlay::xray(w, false, &props)
+                        || w.sketch
+                            .as_ref()
+                            .is_some_and(|sketch| sketch.choosing_plane);
+                    let visibility_point = match &geometry {
+                        Geometry::Plane { plane } => {
+                            crate::sketch::hit_plane(w, rect, pointer, plane, &instance.matrix)
+                                .map(|point| crate::sketch::world(plane, &instance.matrix, point))
+                                .unwrap_or(center)
+                        }
+                        Geometry::Axis { axis } => {
+                            let line_origin = DVec3::from_array(center);
+                            let endpoint = viewport::placed(
+                                std::array::from_fn(|index| {
+                                    axis.origin[index] + axis.direction[index]
+                                }),
+                                instance,
+                            );
+                            let direction = (DVec3::from_array(endpoint) - line_origin).normalize();
+                            let ray = DVec3::from_array(ray_direction);
+                            let delta = line_origin - DVec3::from_array(origin);
+                            let parallel = direction.dot(ray);
+                            let denominator = 1. - parallel * parallel;
+                            let parameter = if denominator > 1e-12 {
+                                ((parallel * ray.dot(delta) - direction.dot(delta)) / denominator)
+                                    .clamp(-pick_extent, pick_extent)
+                            } else {
+                                0.
+                            };
+                            (line_origin + direction * parameter).to_array()
+                        }
+                        _ => center,
+                    };
+                    if !xray && !viewport::visible_at(w, rect, visibility_point, &mut remaining) {
+                        continue;
+                    }
                     hits.push(viewport::Selection {
                         instance: instance
                             .path
@@ -1584,6 +1638,7 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
         return;
     };
     let painter = ui.painter().with_clip_rect(rect);
+    let mut remaining = crate::sketch_overlay::DEPTH_WORK;
     for instance in viewport::display_instances(w, evaluation) {
         let key = cad_core::history::mesh_key(instance);
         for (_, reference) in evaluation
@@ -1596,19 +1651,15 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
             }
             let selected = w.view.active_part.as_deref() == Some(&instance.definition)
                 && w.view.active_node.as_deref() == Some(&reference.producer.node);
-            let region = cad_core::presentation::Region {
-                id: format!("reference:{}", reference.producer.node),
-                role: "reference-geometry".into(),
-                component: None,
-                rect: [0.; 4],
-                classes: vec![reference.geometry.topology().into()],
-                resizable: false,
-            };
-            let props = w.theme.properties(
-                &region,
-                &w.view.active_layout,
-                if selected { "selected" } else { "ready" },
+            let props = crate::sketch_overlay::reference_properties(
+                w,
+                &format!("reference:{}", reference.producer.node),
+                reference.geometry.topology(),
+                selected,
             );
+            if crate::sketch_overlay::hidden(&props) {
+                continue;
+            }
             let color = props
                 .get("color")
                 .and_then(|s| ui::color(s))
@@ -1625,8 +1676,52 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                         ui.visuals().weak_text_color()
                     }
                 });
-            let stroke = egui::Stroke::new(if selected { 2. } else { 1. }, color);
-            let project = |p| viewport::project(w, rect, viewport::placed(p, instance));
+            let stroke = egui::Stroke::new(
+                crate::presentation_controls::number(
+                    &props,
+                    "stroke-width",
+                    if selected { 1.8 } else { 1. },
+                ),
+                color,
+            );
+            let xray = crate::sketch_overlay::xray(w, false, &props)
+                || w.sketch
+                    .as_ref()
+                    .is_some_and(|sketch| sketch.choosing_plane);
+            let project = |point| viewport::project(w, rect, viewport::placed(point, instance));
+            let visible_point = |point, remaining: &mut usize| {
+                xray || viewport::visible_at(w, rect, viewport::placed(point, instance), remaining)
+            };
+            let draw = |endpoints: [[f64; 3]; 2], stroke, remaining: &mut usize| {
+                crate::sketch_overlay::line(
+                    w,
+                    ui,
+                    rect,
+                    endpoints.map(|point| viewport::placed(point, instance)),
+                    stroke,
+                    xray,
+                    remaining,
+                );
+            };
+            let outline = |corners: [[f64; 3]; 4], stroke, remaining: &mut usize| {
+                for index in 0..4 {
+                    draw(
+                        [corners[index], corners[(index + 1) % 4]],
+                        stroke,
+                        remaining,
+                    );
+                }
+                if xray
+                    && let Some(points) =
+                        corners.into_iter().map(project).collect::<Option<Vec<_>>>()
+                {
+                    painter.add(egui::Shape::convex_polygon(
+                        points,
+                        color.gamma_multiply(0.05),
+                        egui::Stroke::NONE,
+                    ));
+                }
+            };
             match &reference.geometry {
                 Geometry::CoordinateSystem { frame } => {
                     let length = extent(w) * 0.3;
@@ -1636,20 +1731,27 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                         (OriginAxis::Z, "Z", "--coordinate-z"),
                     ] {
                         let axis = frame.axis(axis);
-                        let endpoints = [-length, length].map(|s| {
-                            std::array::from_fn(|i| axis.origin[i] + axis.direction[i] * s)
+                        let endpoints = [-length, length].map(|distance| {
+                            std::array::from_fn(|index| {
+                                axis.origin[index] + axis.direction[index] * distance
+                            })
                         });
                         let axis_color = w
                             .theme
                             .variables
                             .get(variable)
-                            .and_then(|v| ui::color(v))
+                            .and_then(|value| ui::color(value))
                             .unwrap_or(color);
-                        if let Some((a, b)) = project(endpoints[0]).zip(project(endpoints[1])) {
-                            painter
-                                .line_segment([a, b], egui::Stroke::new(stroke.width, axis_color));
+                        draw(
+                            endpoints,
+                            egui::Stroke::new(stroke.width, axis_color),
+                            &mut remaining,
+                        );
+                        if visible_point(endpoints[1], &mut remaining)
+                            && let Some(point) = project(endpoints[1])
+                        {
                             painter.text(
-                                b,
+                                point,
                                 egui::Align2::LEFT_BOTTOM,
                                 label,
                                 egui::FontId::proportional(11.),
@@ -1658,22 +1760,18 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                         }
                     }
                     for plane in [OriginPlane::Top, OriginPlane::Front, OriginPlane::Right] {
-                        if let Some(points) = plane_corners(&frame.plane(plane), length)
-                            .into_iter()
-                            .map(project)
-                            .collect::<Option<Vec<_>>>()
-                        {
-                            painter.add(egui::Shape::convex_polygon(
-                                points,
-                                color.gamma_multiply(if selected { 0.055 } else { 0.018 }),
-                                egui::Stroke::new(stroke.width, color.gamma_multiply(0.3)),
-                            ));
-                        }
+                        outline(
+                            plane_corners(&frame.plane(plane), length),
+                            egui::Stroke::new(stroke.width, color.gamma_multiply(0.3)),
+                            &mut remaining,
+                        );
                     }
-                    if let Some(p) = project(frame.origin) {
-                        painter.circle_stroke(p, 4., stroke);
+                    if visible_point(frame.origin, &mut remaining)
+                        && let Some(point) = project(frame.origin)
+                    {
+                        painter.circle_stroke(point, 4., stroke);
                         painter.text(
-                            p + egui::vec2(7., -7.),
+                            point + egui::vec2(7., -7.),
                             egui::Align2::LEFT_BOTTOM,
                             &reference.name,
                             egui::FontId::proportional(11.),
@@ -1682,38 +1780,44 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                     }
                 }
                 Geometry::Plane { plane } => {
-                    let points = plane_corners(plane, extent(w))
-                        .into_iter()
-                        .map(project)
-                        .collect::<Option<Vec<_>>>();
-                    if let Some(points) = points {
-                        painter.add(egui::Shape::convex_polygon(
-                            points.clone(),
-                            color.gamma_multiply(if selected { 0.1 } else { 0.035 }),
-                            stroke,
-                        ));
+                    let corners = plane_corners(plane, extent(w));
+                    outline(corners, stroke, &mut remaining);
+                    if visible_point(corners[0], &mut remaining)
+                        && let Some(point) = project(corners[0])
+                    {
                         painter.text(
-                            points[0],
+                            point,
                             egui::Align2::LEFT_BOTTOM,
                             &reference.name,
                             egui::FontId::proportional(11.),
                             color,
                         );
                     }
-                    if let Some(p) = project(plane.origin) {
-                        painter
-                            .line_segment([p - egui::vec2(5., 0.), p + egui::vec2(5., 0.)], stroke);
-                        painter
-                            .line_segment([p - egui::vec2(0., 5.), p + egui::vec2(0., 5.)], stroke);
+                    if visible_point(plane.origin, &mut remaining)
+                        && let Some(point) = project(plane.origin)
+                    {
+                        painter.line_segment(
+                            [point - egui::vec2(5., 0.), point + egui::vec2(5., 0.)],
+                            stroke,
+                        );
+                        painter.line_segment(
+                            [point - egui::vec2(0., 5.), point + egui::vec2(0., 5.)],
+                            stroke,
+                        );
                     }
                 }
                 Geometry::Axis { axis } => {
-                    let endpoints = [-extent(w), extent(w)]
-                        .map(|s| std::array::from_fn(|i| axis.origin[i] + axis.direction[i] * s));
-                    if let Some((a, b)) = project(endpoints[0]).zip(project(endpoints[1])) {
-                        painter.line_segment([a, b], stroke);
+                    let endpoints = [-extent(w), extent(w)].map(|distance| {
+                        std::array::from_fn(|index| {
+                            axis.origin[index] + axis.direction[index] * distance
+                        })
+                    });
+                    draw(endpoints, stroke, &mut remaining);
+                    if visible_point(endpoints[1], &mut remaining)
+                        && let Some(point) = project(endpoints[1])
+                    {
                         painter.text(
-                            b,
+                            point,
                             egui::Align2::LEFT_BOTTOM,
                             &reference.name,
                             egui::FontId::proportional(11.),
@@ -1722,10 +1826,12 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                     }
                 }
                 Geometry::Point { point } => {
-                    if let Some(p) = project(*point) {
-                        painter.circle_stroke(p, 4., stroke);
+                    if visible_point(*point, &mut remaining)
+                        && let Some(position) = project(*point)
+                    {
+                        painter.circle_stroke(position, 4., stroke);
                         painter.text(
-                            p + egui::vec2(7., -7.),
+                            position + egui::vec2(7., -7.),
                             egui::Align2::LEFT_BOTTOM,
                             &reference.name,
                             egui::FontId::proportional(11.),

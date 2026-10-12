@@ -77,9 +77,14 @@ fn source_path(
             return Err(unsupported("Select one available reference-curve path"));
         }
         let wire = &paths[0];
+        let identities = evaluated
+            .pieces
+            .iter()
+            .map(|piece| cad_core::provenance::canonical_key(&piece.reference))
+            .collect::<Result<std::collections::BTreeSet<_>>>()?;
         let origins = wire.iter().map(|edge| {
             let source = adapter.edge_source(reference, edge.id()).ok_or_else(|| invalid("Reference-curve path construction ancestry is unavailable"))?;
-            if !evaluated.pieces.iter().any(|piece| piece.reference.producer == source.producer && piece.reference.role == source.role) {
+            if !identities.contains(&cad_core::provenance::canonical_key(&source)?) {
                 return Err(invalid("The selected reference path does not match its current native construction identities"));
             }
             Ok(Member {sources:vec![source],purpose:serde_json::json!({"reference_path":"native_piece"})})

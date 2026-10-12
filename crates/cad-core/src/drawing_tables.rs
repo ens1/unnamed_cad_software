@@ -1365,29 +1365,13 @@ fn cut_list_content(
     let mut entries = vec![];
     for group in groups {
         let number = reservations[&group.key];
-        let mut cells = crate::cut_list::cells(
+        let cells = crate::cut_list::cells(
             &group,
             &table.cut_list_options.columns,
             number,
             *units,
             *precision,
         );
-        // Display authored profile names, retaining the portable source refs in
-        // the row contract rather than exposing opaque IDs as the primary UI.
-        for (index, column) in table.cut_list_options.columns.iter().enumerate() {
-            if *column == crate::cut_list::Column::Section
-                && let Some(section) = &group.row.section
-                && let Some(part) = doc.parts.get(&section.definition)
-                && let Some(name) = part
-                    .features
-                    .iter()
-                    .find(|f| f.id == section.node)
-                    .map(|f| &f.name)
-                    .or_else(|| part.sketches.get(&section.node).map(|s| &s.name))
-            {
-                cells[index] = name.clone();
-            }
-        }
         let position_mm = group
             .sources
             .first()

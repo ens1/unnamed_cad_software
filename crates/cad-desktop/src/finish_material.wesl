@@ -71,8 +71,12 @@ fn mapped_tangent(tangent: vec3<f32>, bitangent: vec3<f32>, normal: vec3<f32>) -
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr = pbr_input_from_standard_material(in, is_front);
     let point = (finish.world_to_part * in.world_position).xyz;
-    let local_n = normalize((finish.world_to_part * vec4<f32>(pbr.N, 0.0)).xyz);
-    let geometric_n = normalize((finish.world_to_part * vec4<f32>(in.world_normal, 0.0)).xyz);
+    // Normals are covectors. Using the position/vector inverse skews relief and
+    // reflections on scaled/sheared occurrences. UVs still use world_to_part.
+    let world_normal_to_part = transpose(finish.part_to_world);
+    let part_normal_to_world = transpose(finish.world_to_part);
+    let local_n = normalize((world_normal_to_part * vec4<f32>(pbr.N, 0.0)).xyz);
+    let geometric_n = normalize((world_normal_to_part * vec4<f32>(in.world_normal, 0.0)).xyz);
     var signs = select(vec3<f32>(-1.0), vec3<f32>(1.0), geometric_n >= vec3<f32>(0.0));
     var weights = pow(abs(geometric_n), vec3<f32>(4.0));
     weights /= max(dot(weights, vec3<f32>(1.0)), 0.00001);
@@ -129,12 +133,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let tangent_bump = bump - geometric_n * dot(bump, geometric_n);
     let facing = select(-1.0, 1.0, dot(local_n, geometric_n) >= 0.0);
     let mapped_n = normalize(local_n + tangent_bump * facing);
-    pbr.N = normalize((finish.part_to_world * vec4<f32>(mapped_n, 0.0)).xyz);
+    pbr.N = normalize((part_normal_to_world * vec4<f32>(mapped_n, 0.0)).xyz);
     // The coating follows the carrier and imported normal map, while the grayscale
     // machining relief belongs to the underlying finish. Keep its broad reflection smooth.
     let tangent_normal = normal_detail - geometric_n * dot(normal_detail, geometric_n);
     let coat_n = normalize(local_n + tangent_normal * facing);
-    pbr.clearcoat_N = normalize((finish.part_to_world * vec4<f32>(coat_n, 0.0)).xyz);
+    pbr.clearcoat_N = normalize((part_normal_to_world * vec4<f32>(coat_n, 0.0)).xyz);
     @if(STANDARD_MATERIAL_ANISOTROPY) {
         // Supply physical part-local directions directly: tessellation UVs and vertex
         // tangents do not define the appearance mapping and may be absent entirely.
@@ -157,12 +161,22 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             let axis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(mapped_n.x) > 0.8);
             tangent = cross(mapped_n, axis);
         }
-        pbr.anisotropy_T = normalize((finish.part_to_world * vec4<f32>(tangent, 0.0)).xyz);
+        let world_tangent = (finish.part_to_world * vec4<f32>(tangent, 0.0)).xyz;
+        pbr.anisotropy_T = normalize(world_tangent - pbr.N * dot(world_tangent, pbr.N));
         pbr.anisotropy_B = normalize(cross(pbr.N, pbr.anisotropy_T));
         pbr.anisotropy_strength = clamp(finish.surface.z, 0.0, 1.0);
     }
     pbr.material.base_color = vec4<f32>(pbr.material.base_color.rgb * color.rgb, pbr.material.base_color.a);
-    pbr.material.perceptual_roughness = clamp(pbr.material.perceptual_roughness * roughness, 0.045, 1.0);
+    let authored_roughness = clamp(pbr.material.perceptual_roughness * roughness, 0.045, 1.0);
+    // Mip-filtered heights retain the resolved grain direction, while rapidly
+    // varying bump slopes within one screen pixel need a broader reflection.
+    // Bound this display-only variance estimate; it never changes finish source
+    // roughness, bump depth or engineering surface-finish requirements.
+    let bump_dx = dpdx(tangent_bump);
+    let bump_dy = dpdy(tangent_bump);
+    let variance = min(0.1, 0.25 * (dot(bump_dx, bump_dx) + dot(bump_dy, bump_dy)));
+    let alpha = authored_roughness * authored_roughness;
+    pbr.material.perceptual_roughness = clamp(sqrt(sqrt(alpha * alpha + variance)), 0.045, 1.0);
     pbr.material.metallic *= metallic;
     pbr.diffuse_occlusion *= vec3<f32>(occlusion);
     pbr.specular_occlusion *= occlusion;

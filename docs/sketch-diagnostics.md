@@ -64,6 +64,33 @@ failed solves, Cancel or document replacement.
 
 ## Presentation contract
 
+The default sketch manager puts the active dimension expression and its
+Done/Cancel actions before reference choices, member properties and secondary
+editors. Tool help and dimension options fold separately. Dimensions & Relations
+is a secondary section below member inputs; its search, filters, annotation
+visibility and repair actions are grouped under Filters & display. These are
+presentation choices, not reductions in the available solver or repair commands.
+Selected members and point rows appear first, and selecting a different entity
+opens its inspector once while respecting subsequent user folding. The member
+and relation lists have theme-controlled maximum heights.
+
+Dimension-controlled circle and ellipse sizes show their evaluated values from
+the last successful solve. A diameter of 12 mm therefore presents a 6 mm radius,
+even if the saved source radius expression remains 8 mm. Source expressions
+remain in Advanced Source. Failed solves label previous sizes as last-valid;
+they do not display them as current geometry. Read-only quantities use the
+model's display units and length/angle precision. Coordinate fields edit in
+those display units and update canonical f64 millimeters only on an actual user
+edit; viewing or changing display precision does not round stored coordinates.
+
+Secondary group descriptors use the `sketch-secondary-section` role, evaluated
+sizes use `sketch-evaluated-size`, and list bounds use `sketch-member-list` and
+`sketch-relations-list`. Stable group, member and field identities keep layout,
+styling and input focus separate from sketch definitions. The shared completion
+control adapter supplies a `confirmation-control` class to Apply/Cancel roles in
+every layout. Bundled themes allow natural, bounded widths for full completion
+labels; imported themes still choose shape, size and elision independently.
+
 The sketch feedback descriptor publishes `motion_analysis`, `motion_error`,
 `show_motion`, `exact_duplicates` and each constraint's
 `local_equation_diagnostic`. Point descriptors use stable

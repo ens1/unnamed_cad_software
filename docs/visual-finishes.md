@@ -43,6 +43,14 @@ Height gradients perturb the lighting normal, so relief responds to studio refle
 
 Height gradients use a mip and finite-difference distance matched to the projected pixel footprint, then divide by that distance in physical millimetres. Fine relief filters away as the model recedes rather than retaining the full-resolution derivative at every zoom. **Directional reflections** (0–1) controls anisotropic specular response: 0 is isotropic, 1 is strongest. Its tangent follows the part-local texture U direction and remains independent of tessellation UVs. It defaults to 0.45 for clear/green anodized aluminum and 0.65 for bare aluminum. A separate imported roughness map can modulate surface response; the height map supplies surface relief.
 
+The renderer also broadens reflections for bump slopes that change rapidly
+within a screen pixel. This uses a bounded derivative variance estimate on the
+mapped bump contribution, in the same squared-roughness convention as the pinned
+Bevy BRDF. It is an antialiasing approximation, not a measured microfacet or
+manufacturing roughness value. Saved roughness, map pixels, scale and bump depth
+remain unchanged. Imported grayscale maps still supply the grain; filtering
+never adds substitute shader noise or another generated texture.
+
 Relief is a rendering effect. It does not move CAD surfaces, change silhouettes, create measurable geometry or alter volume, mass, tolerances, drawing geometry or STEP/STL output. There is no mesh displacement, parallax occlusion or volumetric texture contract in this implementation. Image alpha does not create surface transparency.
 
 ## Physical mapping and portable images
@@ -67,11 +75,43 @@ A portable library supports 1–1024 finish definitions, at most 1024 texture re
 
 Face assignments are part-owned and therefore shared by its occurrences, independently from component-wide overrides. They resolve against the current configured output's native faces. A face preserved by a downstream feature retains its finish; a removed face or nonunique descendant has no guessed substitute. Assignment diagnostics identify the retained source record and allow explicit removal or reattachment to the selected current face. A selected native face must be uniquely present in the current evaluation before it can be assigned. Component library links namespace part, face-assignment, producer, body, finish and texture identities; Make Unique remaps feature ownership while retaining the copied visual intent. Catalog/source metadata stays human-facing and is not remapped as document identity.
 
+Face-finish validation, resolution, selection capture and render batching compare
+the canonical application-owned topology source identity. Saved legacy source
+trees and current source-closure tables can identify the same face without
+rewriting saved assignments. Signatures, positions and mesh ordering never
+substitute for source identity. Each lookup memoizes canonical keys, shares
+their storage and bounds distinct references to 65,536 with 64 MiB each of
+source-role input and canonical output. Malformed, unsupported or budget-limited
+identities produce explicit diagnostics rather than being mislabeled missing.
+An unresolved native identity also prevents claiming a unique descendant for
+the affected producer/body. Such assignments remain recoverable and show the
+part finish until repaired; capture/reassignment commands propagate their
+provenance errors instead of committing a guessed target.
+
 ## Lighting
 
 **Studio Lighting** exposes environment rotation, exposure in stops, environment intensity, key/fill intensity and shadows. These are saved scene settings and share the finish editor's draft/Apply/Cancel path. Exposure accepts **−8 to +8 stops**; intensity multipliers accept **0–10**.
 
 The Bevy adapter generates a local studio environment with bright surrounding walls, five softbox reflection cards, cosine-filtered diffuse illumination and GGX-prefiltered specular mip levels. The environment supplies most metallic illumination; lower-intensity key/fill directional lights provide local highlights and cascaded key-light shadows. The studio uses 32-pixel diffuse faces and 128-pixel specular faces with eight roughness mip levels and 256 filter samples. A coarse studio is available at startup while full resources generate asynchronously. Cubemap handedness and environment rotation match direct-light directions. Disabling shadows also disables screen-space occlusion. Rendering uses an HDR camera, ACES fitted tone mapping, screen-space ambient occlusion and FXAA. Studio resources are generated locally; no network assets are needed. This is interactive rasterized PBR shading, not a ray-traced renderer. A pinned local .hdr/.exr panorama can replace the studio reflection lighting; see [HDR environments](hdr-environments.md). A render/export workbench is not implemented. Sharp modeled edges remain sharp; textures do not substitute for geometric fillets or chamfers.
+
+Display normals use each native face's parametric carrier and its tessellation
+UVs, with the original parameter frame and face orientation applied once. A UV
+normal is accepted only when finite, normalizable and consistent with its mesh
+position within the display tolerance. Missing or singular carrier normals
+fall back to normalized, outward stored mesh normals and then face-local
+area-weighted triangle normals. No averaging crosses a native model edge, so
+planar corners remain sharp. These normals affect shading only; positions,
+triangles, topology, volume and CAD exchange geometry are unchanged.
+
+Texture-space normal transforms use inverse-transpose matrices and restore
+world-space tangent orthogonality, including on nonuniform occurrence
+transforms. Smooth shading does not remove a faceted circular silhouette.
+Display tessellation still uses the model's saved evaluation/tessellation
+tolerance; lowering that setting increases display detail and worker cost.
+Automatic zoom-dependent remeshing is not implemented in this change. Singular
+or unavailable UV/carrier data can still require approximate face-local shading.
+Triplanar projection and repetitive marks in an imported image can also remain
+visible; TCAD does not silently alter the user's map scale, depth or pixels.
 
 ## Source and presentation contracts
 

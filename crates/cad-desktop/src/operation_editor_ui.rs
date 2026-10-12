@@ -1079,13 +1079,22 @@ fn weldment_fields(fields: &mut Fields<'_>, operation: &cad_core::weldment::Weld
             ..
         } => {
             fields.reference(&format!("{P}/body"), "Append to weldment", "weldment", true);
-            fields.reference(
-                &format!("{P}/section"),
-                "Closed section sketch",
-                "profile",
-                false,
-            );
-            fields.reference(&format!("{P}/path"), "Path sketch", "profile", false);
+            let sections =
+                crate::fabrication_ui::section_choices(fields.w, &fields.feature.id, section)
+                    .into_iter()
+                    .map(|(source, label)| choice(label, source))
+                    .collect();
+            fields.choice(&format!("{P}/section"), "Closed section sketch", sections);
+            let paths = crate::fabrication_ui::structural_path_choices(
+                fields.w,
+                &fields.feature.id,
+                path,
+                section,
+            )
+            .into_iter()
+            .map(|(source, label)| choice(label, source))
+            .collect();
+            fields.choice(&format!("{P}/path"), "Path sketch", paths);
             fields.group("members", "Path members");
             member_selection(
                 fields,

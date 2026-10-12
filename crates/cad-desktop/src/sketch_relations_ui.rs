@@ -580,34 +580,41 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
             "ready",
         );
     }
-    for element in browser_fields(w) {
-        crate::ui::semantic_field(ui, w, &element);
-    }
     let selected_filter = filter(w).to_string();
     let mut command = None;
-    ui.horizontal_wrapped(|ui| {
-        for (key, label) in [
-            ("selected", "Selection"),
-            ("all", "All"),
-            ("unsatisfied", "Unsatisfied"),
-            ("dependent", "Dependent"),
-        ] {
-            if controls::button(
-                ui,
-                &format!("{prefix}.filter.{key}"),
-                "sketch-feedback-filter",
-                &["compact"],
-                label,
-                true,
-                selected_filter == key,
-            )
-            .clicked()
-            {
-                command = Some(format!("sketch.feedback-filter-{key}"));
+    controls::collapsing(
+        ui,
+        &format!("{prefix}.filters"),
+        "sketch-secondary-section",
+        "Filters & display",
+        false,
+        |ui| {
+            for element in browser_fields(w) {
+                crate::ui::semantic_field(ui, w, &element);
             }
-        }
-    });
-    ui.horizontal_wrapped(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (key, label) in [
+                    ("selected", "Selection"),
+                    ("all", "All"),
+                    ("unsatisfied", "Unsatisfied"),
+                    ("dependent", "Dependent"),
+                ] {
+                    if controls::button(
+                        ui,
+                        &format!("{prefix}.filter.{key}"),
+                        "sketch-feedback-filter",
+                        &["compact"],
+                        label,
+                        true,
+                        selected_filter == key,
+                    )
+                    .clicked()
+                    {
+                        command = Some(format!("sketch.feedback-filter-{key}"));
+                    }
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
         for (index, key, label) in [
             (0, "dimensions", "Dimensions"),
             (1, "relations", "Relations"),
@@ -630,7 +637,7 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
             command = Some("sketch.feedback-toggle-motion".into());
         }
     });
-    ui.horizontal_wrapped(|ui| {
+            ui.horizontal_wrapped(|ui| {
         if controls::button(ui,&format!("{prefix}.clear-filters"),"sketch-feedback-filter",&["compact"],"Clear filters",true,false).clicked(){command=Some("sketch.feedback-clear-filters".into());}
         let duplicates = w.sketch.as_ref().map(|s| s.feedback.duplicates.len()).unwrap_or(0);
         let can_repair = editable(w).is_ok() && w.sketch.as_ref().is_some_and(|s| s.dimension.is_none() && s.dimension_pick.is_none());
@@ -641,6 +648,8 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
             command = Some("sketch.feedback-selected-reference".into());
         }
     });
+        },
+    );
     if let Some(command) = command {
         action(w, &command);
     }
@@ -668,7 +677,7 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
         .get("max-height")
         .and_then(|value| value.trim_end_matches("px").parse::<f32>().ok())
         .filter(|value| value.is_finite() && *value > 0.)
-        .unwrap_or(260.);
+        .unwrap_or(160.);
     let mut clicked = None;
     let mut deleted = None;
     egui::ScrollArea::vertical().id_salt(&prefix).max_height(height).show(ui, |ui| {

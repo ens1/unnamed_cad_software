@@ -1292,9 +1292,6 @@ pub(crate) fn table_placement(
     let placement = unique_placement(doc, evaluation, sheet, definition, path)?;
     Ok((placement.key, placement.matrix))
 }
-fn same_reference(a: &TopologyRef, b: &TopologyRef) -> bool {
-    a.producer == b.producer && a.topology == b.topology && a.role == b.role
-}
 fn body_matches(doc: &Document, actual: &Option<NodeRef>, required: &Option<NodeRef>) -> bool {
     let Some(required) = required else {
         return true;
@@ -1349,13 +1346,20 @@ fn resolve_edge<'a>(
         .meshes
         .get(&place.key)
         .ok_or_else(|| invalid("The referenced component has no current evaluated geometry"))?;
-    let candidates = mesh
-        .edges
-        .iter()
-        .filter(|edge| {
-            same_reference(&edge.reference, reference) && body_matches(doc, &edge.body, body)
-        })
-        .collect::<Vec<_>>();
+    if mesh.edges.len() > 1_048_576 {
+        return Err(CadError::Unsupported(
+            "Drawing edge source lookup exceeds 1048576 candidates".into(),
+        ));
+    }
+    let wanted = crate::provenance::normalized_reference(reference)?;
+    let mut candidates = Vec::new();
+    for edge in &mesh.edges {
+        if body_matches(doc, &edge.body, body)
+            && crate::provenance::matches_normalized(&edge.reference, reference, &wanted)?
+        {
+            candidates.push(edge);
+        }
+    }
     if candidates.len() != 1 {
         return Err(invalid(format!(
             "Edge reference is {} ({} candidates); select a replacement",
@@ -1456,11 +1460,20 @@ pub fn point(
                 .meshes
                 .get(&place.key)
                 .ok_or_else(|| invalid("No current geometry for face anchor"))?;
-            let faces = mesh
-                .faces
-                .iter()
-                .filter(|f| same_reference(&f.reference, face) && body_matches(doc, &f.body, body))
-                .collect::<Vec<_>>();
+            if mesh.faces.len() > 1_048_576 {
+                return Err(CadError::Unsupported(
+                    "Drawing face source lookup exceeds 1048576 candidates".into(),
+                ));
+            }
+            let wanted = crate::provenance::normalized_reference(face)?;
+            let mut faces = Vec::new();
+            for candidate in &mesh.faces {
+                if body_matches(doc, &candidate.body, body)
+                    && crate::provenance::matches_normalized(&candidate.reference, face, &wanted)?
+                {
+                    faces.push(candidate);
+                }
+            }
             if faces.len() != 1 {
                 return Err(invalid(
                     "Face anchor is missing or ambiguous; select a replacement",

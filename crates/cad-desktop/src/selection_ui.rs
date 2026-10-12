@@ -54,9 +54,104 @@ pub(crate) fn edge_selection(
 }
 
 pub(crate) fn same_edge(first: &cad_core::TopologyRef, second: &cad_core::TopologyRef) -> bool {
-    first.topology == second.topology
-        && first.producer == second.producer
-        && first.role == second.role
+    selection_sets::same_reference(first, second)
+}
+
+fn individual_edges(w: &Workspace, feature: &str) -> bool {
+    w.fields
+        .get(&format!("edge-selection-mode/{feature}"))
+        .is_some_and(|mode| mode == "individual")
+}
+
+/// Expand only a proven native circular carrier on one current occurrence.
+/// Rectangular loops and branching tangent chains remain explicit set actions.
+fn circular_rim(w: &Workspace, pick: &viewport::Selection) -> Option<Vec<viewport::Selection>> {
+    use cad_core::protocol::{EDGE_CENTER_VERSION, EdgeCenter};
+    let body = pick.body.as_ref()?;
+    let evaluation = viewport::selection_evaluation(w)?;
+    let instance = viewport::display_instances(w, evaluation)
+        .into_iter()
+        .find(|instance| instance.path == pick.path && instance.definition == pick.definition)?;
+    let meshes = viewport::selection_meshes(w, evaluation, instance);
+    let seed = meshes.iter().flat_map(|mesh| &mesh.edges).find(|edge| {
+        edge.body.as_ref() == Some(body) && same_edge(&edge.reference, &pick.reference)
+    })?;
+    let Some(EdgeCenter::Circle {
+        version,
+        center,
+        normal,
+        radius_mm,
+        ..
+    }) = &seed.center
+    else {
+        return None;
+    };
+    if *version != EDGE_CENTER_VERSION || !radius_mm.is_finite() || *radius_mm <= 0. {
+        return None;
+    }
+    let tolerance = (radius_mm.abs() * 1e-9).max(1e-7);
+    let picks = expansion(w, SetMode::ClosedLoop).ok()?;
+    let same_carrier = picks.iter().all(|candidate| {
+        meshes.iter().flat_map(|mesh| &mesh.edges).any(|edge| {
+            if edge.body.as_ref() != Some(body) || !same_edge(&edge.reference, &candidate.reference)
+            {
+                return false;
+            }
+            let Some(EdgeCenter::Circle {
+                version,
+                center: other,
+                normal: axis,
+                radius_mm: radius,
+                ..
+            }) = &edge.center
+            else {
+                return false;
+            };
+            *version == EDGE_CENTER_VERSION
+                && (radius - radius_mm).abs() <= tolerance
+                && center
+                    .iter()
+                    .zip(other)
+                    .all(|(a, b)| (a - b).abs() <= tolerance)
+                && normal
+                    .iter()
+                    .zip(axis)
+                    .map(|(a, b)| a * b)
+                    .sum::<f64>()
+                    .abs()
+                    >= 1. - 1e-10
+        })
+    });
+    same_carrier.then_some(picks)
+}
+
+pub(crate) fn preferred_edges(
+    w: &mut Workspace,
+    body: &cad_core::NodeRef,
+) -> Vec<cad_core::TopologyRef> {
+    let edges = viewport::preselected_edges(w, body);
+    if edges.len() != 1 {
+        return edges;
+    }
+    if let Some(picks) = w.selected.as_ref().and_then(|pick| circular_rim(w, pick)) {
+        let references = picks.iter().map(|pick| pick.reference.clone()).collect();
+        w.geometry_selection = picks;
+        return references;
+    }
+    edges
+}
+
+pub(crate) fn picked_edges(
+    w: &Workspace,
+    feature: &str,
+    pick: &viewport::Selection,
+) -> Vec<cad_core::TopologyRef> {
+    if !individual_edges(w, feature)
+        && let Some(picks) = circular_rim(w, pick)
+    {
+        return picks.into_iter().map(|pick| pick.reference).collect();
+    }
+    vec![pick.reference.clone()]
 }
 
 pub(crate) fn edge_key(feature: &str, edge: &cad_core::TopologyRef) -> String {
@@ -525,6 +620,7 @@ pub(crate) fn edge_controls(w: &Workspace) -> Vec<cad_core::presentation::Semant
             data:serde_json::json!({"presentation_control":true,"feature":feature.id,"input_body":body,"enabled":enabled,"classes":["property-control"]}),
         });
     }
+    out.extend(edge_granularity_controls(w, &feature.id, body));
     out.extend(edge_set_controls(w, &feature.id, body));
     for (index, edge) in edges.iter().enumerate() {
         let key = edge_key(&feature.id, edge);
@@ -691,6 +787,22 @@ pub(crate) fn edge_action(w: &mut Workspace, command: &str) -> bool {
     let Some(mut feature) = edge_feature(w) else {
         return true;
     };
+    if let Some(granularity) = control
+        .data
+        .get("granularity")
+        .and_then(serde_json::Value::as_str)
+    {
+        w.fields.insert(
+            format!("edge-selection-mode/{}", feature.id),
+            granularity.into(),
+        );
+        w.status = if granularity == "individual" {
+            "Circular picks select individual segments".into()
+        } else {
+            "Circular picks select complete native rims".into()
+        };
+        return true;
+    }
     if let Some(mode) = control
         .data
         .get("mode")
@@ -741,6 +853,30 @@ pub(crate) fn edge_action(w: &mut Workspace, command: &str) -> bool {
     true
 }
 
+fn edge_granularity_controls(
+    w: &Workspace,
+    feature: &str,
+    body: &cad_core::NodeRef,
+) -> Vec<cad_core::presentation::SemanticElement> {
+    [("rim", "Complete circular rims"), ("individual", "Individual edge segments")]
+        .into_iter()
+        .map(|(granularity, label)| {
+            let selected = individual_edges(w, feature) == (granularity == "individual");
+            let command = format!("selection.edge-mode-{granularity}/{feature}");
+            cad_core::presentation::SemanticElement {
+                id: command.clone(),
+                role: "edge-selection-action".into(),
+                label: label.into(),
+                value: Some("Controls subsequent picks; existing authored selections are retained".into()),
+                state: if selected { "selected" } else { "ready" }.into(),
+                commands: vec![command],
+                relationships: vec![feature.into(), body.node.clone()],
+                data: serde_json::json!({"presentation_control":true,"contract":"tcad.presentation.edge-picking","version":1,"feature":feature,"input_body":body,"granularity":granularity,"selected":selected,"shared_draft":true,"classes":["property-control","selection-granularity"]}),
+            }
+        })
+        .collect()
+}
+
 fn edge_set_controls(
     w: &Workspace,
     feature: &str,
@@ -766,6 +902,25 @@ pub(crate) fn edge_picker(
     edges: &mut Vec<cad_core::TopologyRef>,
 ) -> bool {
     let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        for control in edge_granularity_controls(w, feature, body) {
+            if controls::button(
+                ui,
+                &control.id,
+                &control.role,
+                &["property-control", "selection-granularity"],
+                &control.label,
+                true,
+                control.state == "selected",
+            )
+            .on_hover_text(control.value.as_deref().unwrap_or_default())
+            .clicked()
+                && let Some(command) = control.commands.first()
+            {
+                edge_action(w, command);
+            }
+        }
+    });
     ui.horizontal(|ui| {
         let selected = w
             .selected
@@ -1208,7 +1363,10 @@ pub(crate) fn feature_selected_at(
         w.view.active_instance = None;
         w.edge_selection_path = None;
     }
-    w.context_selection = None;
+    w.context_selection = Some(SelectionTarget::Feature {
+        definition: definition.into(),
+        feature: feature.id.clone(),
+    });
     w.view.active_part = Some(definition.into());
     w.view.active_node = Some(feature.id.clone());
     w.selected = None;

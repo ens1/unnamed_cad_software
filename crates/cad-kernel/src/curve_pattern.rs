@@ -74,9 +74,7 @@ fn source_path(
                     let source = adapter.edge_source(feature, edge.id()).ok_or_else(|| {
                         invalid("A reference-curve piece has no current construction ancestry")
                     })?;
-                    if source.producer != piece.reference.producer
-                        || source.role != piece.reference.role
-                    {
+                    if !cad_core::provenance::equivalent(&source, &piece.reference)? {
                         return Err(invalid(
                             "The reference-curve piece identity is stale or ambiguous",
                         ));

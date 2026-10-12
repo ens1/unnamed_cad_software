@@ -406,6 +406,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::finish_library_ui::semantics(w));
     elements.extend(crate::settings_ui::semantics(w));
     elements.extend(crate::operation_preview::semantics(w));
+    elements.extend(crate::sketch_overlay::semantics(w));
+    elements.extend(crate::body_inventory::semantics(w));
+    elements.extend(crate::document_identity_ui::semantics(w));
     elements.extend(crate::operation_editor_ui::semantics(w));
     elements.extend(crate::assembly_tools_ui::semantics(w));
     elements.extend(crate::assembly_welds_ui::semantics(w));
@@ -695,6 +698,11 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "document-identity",
+        crate::document_identity_ui::set_value,
+        crate::document_identity_ui::value,
+    );
     for setter in ["properties-ui", "model-property"] {
         adapters.register(
             setter,

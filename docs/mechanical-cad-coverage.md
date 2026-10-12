@@ -23,6 +23,10 @@ Do not count duplicate labels, dormant schema variants, primitive compatibility 
 
 **Current status labels:** `Partial` means an implementation exists with material limits; `Missing` means this audit found no usable implementation; `Audit` means a broader family needs a detailed mode/format/standard comparison. These labels do not imply interactive acceptance. This update did not run code tests, probes, or manual smoke tests; interactive acceptance belongs to the user.
 
+## October 12 reliability update
+
+The [saved-part review follow-up](usability-reliability-fixes-2026-10-12.md) records fixes for repeated sheet ancestry, circular endpoint classification in downstream prismatic cuts, and bounded local adjoining planar chamfers. It also records circular-rim selection, sketch controls/framing/snapping, readable fabrication sources, evaluated body counts, display normals, and presentation polish. These are implementation and compile/lint findings; the original saved parts remain available for user acceptance. Existing Partial labels and unsupported mixed/freeform geometry limits remain in force. Topology source closures, native body counts and fabrication source labels use independent version 1 contracts; backend cache identity is adapter 38.
+
 ## Sketch geometry and editing
 
 Reference: [SolidWorks 2026 Sketch toolbar](https://help.solidworks.com/2026/english/SolidWorks/sldworks/r_sketch_toolbar.htm?id=2.12.4.1.29). Separate spline and block tools also need auditing. TCAD evidence: [document definitions](../crates/cad-core/src/document.rs), [tool catalog](../crates/cad-core/src/modeling_tools.rs), [sketch actions](../crates/cad-core/src/sketch_actions.rs), [sketch edits](../crates/cad-core/src/sketch_edit.rs), and [handles](../crates/cad-core/src/sketch_handles.rs).

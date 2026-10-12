@@ -128,6 +128,8 @@ fn candidates(w: &Workspace) -> Vec<Candidate> {
         .chain(crate::sensors_ui::semantics(w))
         .chain(crate::tolerance_stacks_ui::semantics(w))
         .chain(crate::sketch_block_library_ui::elements(w))
+        .chain(crate::sketch_overlay::semantics(w))
+        .chain(crate::document_identity_ui::semantics(w))
     {
         let bound_record = matches!(
             source.role.as_str(),

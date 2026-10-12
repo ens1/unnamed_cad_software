@@ -7,6 +7,7 @@ mod assembly_tools_ui;
 mod assembly_welds_ui;
 mod background;
 mod body_filter_ui;
+mod body_inventory;
 mod cad_ui;
 mod camera_views_ui;
 mod command_palette;
@@ -17,6 +18,7 @@ mod contours_ui;
 mod curve_pattern_ui;
 mod direct_edit_ui;
 mod display_states_ui;
+mod document_identity_ui;
 mod drawing_dimension_groups_ui;
 mod drawing_editor_ui;
 mod drawing_gdt_ui;
@@ -67,6 +69,7 @@ mod sketch_dimensions_ui;
 mod sketch_edit_ui;
 mod sketch_equation_ui;
 mod sketch_handles;
+mod sketch_overlay;
 mod sketch_relations_ui;
 mod sketch_ui;
 mod split_ui;
@@ -98,7 +101,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/37;solver/tcad-native-lm/16";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/38;solver/tcad-native-lm/16";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -420,6 +423,15 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !document_identity_ui::ready_to_confirm(self) {
+            self.confirm_requested = false;
+            return;
+        }
+        if document_identity_ui::active(self) && self.session.draft.is_none() {
+            self.cancel_tool();
+            self.status = "Name unchanged; editor closed".into();
+            return;
+        }
         if !properties_ui::current_source_is_valid(self) {
             self.status = "Correct the current property fields before applying".into();
             self.confirm_requested = false;
@@ -568,6 +580,13 @@ impl Workspace {
                 }
                 reference_repair_ui::reset(self);
                 self.edge_selection_path = None;
+                self.selected_feature_path = None;
+                if matches!(
+                    self.context_selection,
+                    Some(cad_core::selection_actions::SelectionTarget::Feature { .. })
+                ) {
+                    self.context_selection = None;
+                }
                 self.tool_checkpoint = None;
                 self.dialog = None;
                 self.manager_tree = true;
@@ -586,6 +605,7 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        document_identity_ui::cancel(self);
         properties_ui::cancel(self);
         sensors_ui::cancel(self);
         camera_views_ui::cancel(self);
@@ -721,6 +741,7 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        document_identity_ui::cancel(self);
         properties_ui::cancel(self);
         sensors_ui::cancel(self);
         camera_views_ui::cancel(self);
@@ -799,6 +820,15 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn confirm_tool(&mut self) {
+        if !document_identity_ui::ready_to_confirm(self) {
+            self.confirm_requested = false;
+            return;
+        }
+        if document_identity_ui::active(self) && self.session.draft.is_none() {
+            self.cancel_tool();
+            self.status = "Name unchanged; editor closed".into();
+            return;
+        }
         if !properties_ui::current_source_is_valid(self) {
             self.status = "Correct the current property fields before applying".into();
             self.confirm_requested = false;

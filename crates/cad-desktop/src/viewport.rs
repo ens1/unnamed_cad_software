@@ -292,25 +292,24 @@ fn finish_batches<'a>(
     if assignments.is_empty() && face_finishes.resolved.is_empty() {
         return vec![(std::borrow::Cow::Borrowed(source), None)];
     }
+    let mut canonical = cad_core::appearance::FaceFinishIdentityCache::default();
     let overrides = face_finishes
         .resolved
         .iter()
-        .map(|assignment| {
-            (
-                (
-                    &assignment.body,
-                    &assignment.face.producer,
-                    assignment.face.role.as_str(),
-                ),
-                &assignment.finish,
-            )
+        .filter_map(|assignment| {
+            canonical
+                .key(&assignment.face)
+                .ok()
+                .map(|key| ((&assignment.body, key), &assignment.finish))
         })
         .collect::<BTreeMap<_, _>>();
     let mut groups: BTreeMap<Option<String>, Vec<&cad_core::protocol::FaceRange>> = BTreeMap::new();
     for face in &source.faces {
         let finish = face.body.as_ref().and_then(|body| {
-            overrides
-                .get(&(body, &face.reference.producer, face.reference.role.as_str()))
+            canonical
+                .key(&face.reference)
+                .ok()
+                .and_then(|key| overrides.get(&(body, key)))
                 .map(|finish| (*finish).clone())
                 .or_else(|| assignments.get(body.node.as_str()).cloned())
         });
@@ -460,7 +459,7 @@ pub(crate) fn ghost_neighbor(w: &Workspace, instance: &PlacedPart) -> bool {
             && !active_context(w, instance)
             && !w.view.pinned.iter().any(|id| instance.path.contains(id))
 }
-fn active_context(w: &Workspace, instance: &PlacedPart) -> bool {
+pub(crate) fn active_context(w: &Workspace, instance: &PlacedPart) -> bool {
     w.view.active_part.as_ref() == Some(&instance.definition)
         && w.edge_selection_path
             .as_ref()
@@ -1016,6 +1015,142 @@ pub fn fit(w: &mut Workspace, selection: bool) {
 }
 fn fit_context(w: &mut Workspace) {
     fit_region(w, FitScope::Context);
+}
+/// Disposable framing points for one explicitly placed editing occurrence.
+/// Matching a support reference narrows this to its face; it never selects a
+/// different occurrence of a shared part or fits the surrounding assembly.
+pub(crate) fn occurrence_framing_points(
+    w: &Workspace,
+    definition: &str,
+    matrix: &[[f64; 4]; 4],
+    support: Option<(&TopologyRef, Option<&cad_core::NodeRef>)>,
+) -> Vec<[f64; 3]> {
+    let Some(evaluation) = display_evaluation(w) else {
+        return vec![];
+    };
+    let mut points = Vec::new();
+    for instance in display_instances(w, evaluation)
+        .into_iter()
+        .filter(|instance| instance.definition == definition && &instance.matrix == matrix)
+    {
+        let mut meshes = display_meshes(w, evaluation, instance);
+        if let Some((_, Some(body))) = support
+            && let Some(mesh) = evaluation
+                .history
+                .get(cad_core::history::mesh_key(instance))
+                .filter(|history| history.version == cad_core::history::CONTRACT_VERSION)
+                .and_then(|history| history.meshes.get(&body.node))
+        {
+            // Existing face-supported sketches can refer to an earlier stock
+            // feature that is no longer a live output. Its disposable history
+            // mesh supplies framing without rebuilding or changing that reference.
+            meshes.push(mesh.as_ref());
+        }
+        for mesh in meshes {
+            if let Some((reference, body)) = support {
+                for face in &mesh.faces {
+                    if body.is_some_and(|body| face.body.as_ref() != Some(body))
+                        || !cad_core::provenance::equivalent(&face.reference, reference)
+                            .unwrap_or(false)
+                    {
+                        continue;
+                    }
+                    if let Some(indices) = face
+                        .start
+                        .checked_add(face.count)
+                        .and_then(|end| mesh.indices.get(face.start..end))
+                    {
+                        points.extend(indices.iter().filter_map(|index| {
+                            mesh.positions
+                                .get(*index as usize)
+                                .map(|point| placed(*point, instance))
+                        }));
+                    }
+                }
+            } else if !mesh.indices.is_empty() {
+                points.extend((0..8).map(|corner| {
+                    placed(
+                        std::array::from_fn(|axis| mesh.bounds[(corner >> axis) & 1][axis]),
+                        instance,
+                    )
+                }));
+            }
+        }
+    }
+    points
+}
+
+/// Frame renderer hints using the current application-owned f64 camera pose.
+/// `expand_only` preserves an intentional close view when the points already
+/// fit. Source sketches, placements and support references are never changed.
+pub(crate) fn frame_points(
+    w: &mut Workspace,
+    points: &[[f64; 3]],
+    target: Option<[f64; 3]>,
+    expand_only: bool,
+) {
+    let points = points
+        .iter()
+        .map(|point| DVec3::from_array(*point))
+        .filter(|point| point.is_finite())
+        .collect::<Vec<_>>();
+    if points.is_empty() {
+        return;
+    }
+    let mut pose = crate::camera_views_ui::current(w);
+    let target = target.map(DVec3::from_array).unwrap_or_else(|| {
+        let min = points
+            .iter()
+            .copied()
+            .fold(DVec3::splat(f64::INFINITY), DVec3::min);
+        let max = points
+            .iter()
+            .copied()
+            .fold(DVec3::splat(f64::NEG_INFINITY), DVec3::max);
+        (min + max) * 0.5
+    });
+    pose.target_mm = target.to_array();
+    let frame = pose.frame();
+    let right = DVec3::from_array(frame.right);
+    let up = DVec3::from_array(frame.up);
+    let forward = DVec3::from_array(frame.forward);
+    let aspect = f64::from(w.viewport_size[0].clamp(32, 4096))
+        / f64::from(w.viewport_size[1].clamp(32, 4096));
+    match &mut pose.projection {
+        cad_core::camera_views::Projection::Perspective { vertical_fov_deg } => {
+            let tangent = (vertical_fov_deg.to_radians() * 0.5).tan();
+            let distance = points.iter().fold(0.5_f64, |distance, point| {
+                let delta = *point - target;
+                let required = (delta.dot(up).abs().max(delta.dot(right).abs() / aspect) * 1.18
+                    / tangent)
+                    - delta.dot(forward);
+                distance.max(required).max(-delta.dot(forward) + 0.5)
+            });
+            pose.distance_mm = if expand_only {
+                pose.distance_mm.max(distance)
+            } else {
+                distance
+            }
+            .clamp(0.5, 1e6);
+        }
+        cad_core::camera_views::Projection::Orthographic { vertical_span_mm } => {
+            let span = points.iter().fold(0.1_f64, |span, point| {
+                let delta = *point - target;
+                span.max(2.36 * delta.dot(up).abs().max(delta.dot(right).abs() / aspect))
+            });
+            *vertical_span_mm = if expand_only {
+                vertical_span_mm.max(span)
+            } else {
+                span
+            }
+            .clamp(0.1, 1e8);
+            pose.distance_mm = points.iter().fold(pose.distance_mm, |distance, point| {
+                distance.max(-(*point - target).dot(forward) + 0.5)
+            });
+        }
+    }
+    crate::camera_views_ui::set_current(w, pose);
+    crate::navigation::stop(w);
 }
 fn in_fit_scope(w: &Workspace, instance: &PlacedPart, scope: FitScope) -> bool {
     match scope {

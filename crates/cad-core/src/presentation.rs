@@ -1218,6 +1218,22 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("draft.apply", "Apply preview"),
     ("draft.cancel", "Cancel preview"),
     ("viewport.fit", "Fit assembly"),
+    ("document.rename", "Rename Document…"),
+    ("viewport.fit-sketch", "Fit active sketch"),
+    ("viewport.fit-support", "Fit sketch support face"),
+    ("viewport.fit-part-context", "Fit editing part"),
+    (
+        "viewport.sketches.auto",
+        "Sketch outlines · selected / active",
+    ),
+    ("viewport.sketches.all", "Show all sketch outlines"),
+    ("viewport.sketches.hidden", "Hide sketch outlines"),
+    ("viewport.sketch-xray", "Sketch outlines · X-ray"),
+    ("viewport.references.auto", "References · selected / active"),
+    ("viewport.references.all", "Show all reference geometry"),
+    ("viewport.references.hidden", "Hide reference geometry"),
+    ("viewport.reference-xray", "Reference geometry · X-ray"),
+    ("sketch.snap-entities", "Snap sketch entities"),
     ("selection.isolate", "Isolate selection"),
 ];
 pub fn command_catalog() -> Vec<(&'static str, &'static str)> {
@@ -1432,6 +1448,31 @@ pub struct DrawingPaperView {
     pub zoom: f32,
     pub pan: [f32; 2],
 }
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayVisibility {
+    #[default]
+    Auto,
+    All,
+    Hidden,
+}
+impl OverlayVisibility {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::All => "all",
+            Self::Hidden => "hidden",
+        }
+    }
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "all" => Some(Self::All),
+            "hidden" => Some(Self::Hidden),
+            _ => None,
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PresentationState {
     /// Transient feature-history inspection. Saved projects reopen at Latest.
@@ -1445,6 +1486,17 @@ pub struct PresentationState {
     pub sketch_annotations: BTreeMap<Id, [f32; 2]>,
     #[serde(default = "default_sketch_annotation_visibility")]
     pub sketch_annotation_visibility: [bool; 2],
+    /// Optical sketch/reference display controls; they never suppress CAD features.
+    #[serde(default)]
+    pub sketch_overlay_mode: OverlayVisibility,
+    #[serde(default)]
+    pub reference_overlay_mode: OverlayVisibility,
+    #[serde(default)]
+    pub sketch_overlay_xray: bool,
+    #[serde(default)]
+    pub reference_overlay_xray: bool,
+    #[serde(default = "default_entity_snap")]
+    pub sketch_entity_snap: bool,
     pub active_layout: String,
     pub active_part: Option<Id>,
     pub active_node: Option<Id>,
@@ -1504,6 +1556,9 @@ fn default_ui_scale() -> f32 {
 fn default_sketch_annotation_visibility() -> [bool; 2] {
     [true, true]
 }
+fn default_entity_snap() -> bool {
+    true
+}
 fn default_toolbar_height() -> f32 {
     68.
 }
@@ -1515,6 +1570,11 @@ impl Default for PresentationState {
             display_state: None,
             sketch_annotations: BTreeMap::new(),
             sketch_annotation_visibility: default_sketch_annotation_visibility(),
+            sketch_overlay_mode: OverlayVisibility::Auto,
+            reference_overlay_mode: OverlayVisibility::Auto,
+            sketch_overlay_xray: false,
+            reference_overlay_xray: false,
+            sketch_entity_snap: true,
             active_layout: "instrument-rail".into(),
             active_part: None,
             active_node: None,

@@ -649,6 +649,20 @@ fn validate_variable_syntax(value: &str) -> Result<()> {
 }
 fn validate_property(name: &str, value: &str) -> Result<()> {
     validate_property_name(name)?;
+    if !value.contains("var(") && !matches!(value, "inherit" | "initial" | "unset") {
+        let valid = match name {
+            "renderer-sketch-display" | "renderer-reference-display" => {
+                matches!(value, "auto" | "all" | "hidden")
+            }
+            "renderer-overlay-depth" => matches!(value, "visible" | "xray"),
+            _ => true,
+        };
+        if !valid {
+            return Err(invalid(format!(
+                "Invalid overlay presentation value {value:?} for {name}"
+            )));
+        }
+    }
     if name.starts_with("--") || name.starts_with("renderer-") {
         return Ok(());
     }

@@ -106,9 +106,11 @@ fn target_face(w: &Workspace) -> Option<cad_core::appearance::FaceFinish> {
 fn face_assignment(w: &Workspace) -> Option<cad_core::appearance::FaceFinish> {
     let face = target_face(w)?;
     let part = w.session.visible().parts.get(&face.body.definition)?;
+    let mut canonical = cad_core::appearance::FaceFinishIdentityCache::default();
+    let target = canonical.key(&face.face).ok()?;
     if let Some(assignment) = part.face_finishes.iter().find(|assignment| {
         assignment.body == face.body
-            && cad_core::selection_sets::same_reference(&assignment.face, &face.face)
+            && canonical.key(&assignment.face).ok().as_ref() == Some(&target)
     }) {
         return Some(assignment.clone());
     }
@@ -120,7 +122,7 @@ fn face_assignment(w: &Workspace) -> Option<cad_core::appearance::FaceFinish> {
     let resolved = cad_core::appearance::resolve_face_finishes(part, &meshes);
     let assignment = resolved.resolved.iter().find(|assignment| {
         assignment.body == face.body
-            && cad_core::selection_sets::same_reference(&assignment.face, &face.face)
+            && canonical.key(&assignment.face).ok().as_ref() == Some(&target)
     })?;
     part.face_finishes
         .iter()
@@ -155,14 +157,18 @@ fn capture_face(w: &mut Workspace) -> Result<()> {
             CadError::Invalid("The selected component occurrence no longer exists".into())
         })?;
     let meshes = crate::viewport::display_meshes(w, evaluation, placed);
-    let matches = meshes
-        .iter()
-        .flat_map(|mesh| mesh.faces.iter())
-        .filter(|face| {
-            face.body.as_ref() == Some(&body)
-                && cad_core::selection_sets::same_reference(&face.reference, &selected.reference)
-        })
-        .count();
+    // Capturing a face is authoritative: malformed or exhausted provenance
+    // must produce its explicit error, not silently masquerade as a missing
+    // selection. The same canonical source identity accepts saved tree roles
+    // and current closure roles without looking at numerical signatures.
+    let mut canonical = cad_core::appearance::FaceFinishIdentityCache::default();
+    let selected_key = canonical.key(&selected.reference)?;
+    let mut matches = 0usize;
+    for face in meshes.iter().flat_map(|mesh| &mesh.faces) {
+        if face.body.as_ref() == Some(&body) && canonical.key(&face.reference)? == selected_key {
+            matches += 1;
+        }
+    }
     if matches != 1 {
         return Err(CadError::Invalid(
             "Face appearance needs one unambiguous native face in the current model".into(),
@@ -2778,7 +2784,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 elements.push(SemanticElement {
                     id: format!("command:{command}"),
                     role: "appearance-action".into(),
-                    label: format!("{label} · {}", texture_label(slot)),
+                    label: format!("{label} · {} · {}", texture_label(slot), finish.name),
                     value: None,
                     state: if finish_editable(w, &finish.id)
                         && (prefix == IMPORT || !resource.is_null())

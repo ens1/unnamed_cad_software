@@ -375,7 +375,14 @@ pub fn group(
     }
     let mut grouped: BTreeMap<String, Group> = BTreeMap::new();
     let mut binding_count = 0usize;
-    for row in rows {
+    for mut row in rows {
+        // Display labels are rebuilt from current names, including for legacy
+        // metadata whose optional label field was absent. They never enter
+        // production_values, stock_key, or source_key.
+        row.section_label = row
+            .section
+            .as_ref()
+            .and_then(|section| crate::manufacturing::section_label(doc, section));
         let configured =
             crate::configuration::variant(doc, &row.definition, row.configuration.as_deref())?;
         let part = configured
@@ -909,10 +916,17 @@ pub fn cells(
             Column::Item => number.to_string(),
             Column::Description => row.description.clone(),
             Column::Section => row
-                .section
+                .section_label
                 .as_ref()
-                .map(|source| format!("{}::{}", source.definition, source.node))
-                .unwrap_or_default(),
+                .filter(|label| label.version == crate::manufacturing::SOURCE_LABEL_VERSION)
+                .map(crate::manufacturing::SourceLabel::display)
+                .unwrap_or_else(|| {
+                    if row.section.is_some() {
+                        "Section unavailable".into()
+                    } else {
+                        String::new()
+                    }
+                }),
             Column::Length => length(row.length_mm),
             Column::StartCutAngle => angle(row.start_cut_angle_rad),
             Column::EndCutAngle => angle(row.end_cut_angle_rad),

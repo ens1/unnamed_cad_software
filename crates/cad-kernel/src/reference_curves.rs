@@ -134,7 +134,7 @@ fn model_piece(
     let source = adapter
         .edge_source(body, edge.id())
         .ok_or_else(|| invalid("The model edge has no construction ancestry"))?;
-    if source.producer != reference.producer || source.role != reference.role {
+    if !cad_core::provenance::equivalent(&source, reference)? {
         return Err(invalid(
             "Model edge must resolve by its saved construction identity",
         ));

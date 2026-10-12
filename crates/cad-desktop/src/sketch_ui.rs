@@ -1,5 +1,5 @@
 //! Selection and dimension presentation over the application-owned sketch contracts.
-use crate::{Workspace, selection_ui, sketch, viewport};
+use crate::{Workspace, presentation_controls as controls, selection_ui, sketch, viewport};
 use bevy_egui::egui::{self, Stroke};
 use cad_core::{
     sketch_actions::{self as a, DimensionChoice, SketchEntity},
@@ -40,6 +40,91 @@ fn ensure_dimension_checkpoint(w: &mut Workspace) {
             });
         }
     }
+}
+
+/// Read solved member sizes for presentation. Source expressions stay authored
+/// in the sketch draft; applying a Diameter or Equal Radius relation changes
+/// the evaluated curve, not the disabled source-size text field.
+pub fn evaluated_member_values(w: &Workspace) -> std::collections::BTreeMap<(Id, String), String> {
+    let Some(s) = &w.sketch else {
+        return Default::default();
+    };
+    let Some(source) = &s.last_valid else {
+        return Default::default();
+    };
+    let doc = w.session.visible();
+    source
+        .members
+        .iter()
+        .flat_map(|(key, member)| {
+            let fields: Vec<(&str, &Expr, Dimension)> = match &member.curve {
+                SketchCurve::Circle { radius, .. } => vec![("radius", radius, Dimension::Length)],
+                SketchCurve::Ellipse {
+                    major,
+                    minor,
+                    angle,
+                    ..
+                } => vec![
+                    ("major_radius", major, Dimension::Length),
+                    ("minor_radius", minor, Dimension::Length),
+                    ("rotation", angle, Dimension::Angle),
+                ],
+                _ => vec![],
+            };
+            fields
+                .into_iter()
+                .map(move |(field, expression, dimension)| {
+                    let value = expression::value(doc, &s.definition, expression, dimension)
+                        .map(|value| {
+                            if dimension == Dimension::Angle {
+                                doc.settings.format_angle_radians(value)
+                            } else {
+                                doc.settings.format_length(value)
+                            }
+                        })
+                        .unwrap_or_else(|error| format!("Unavailable: {error}"));
+                    ((key.clone(), field.to_owned()), value)
+                })
+        })
+        .collect()
+}
+
+/// Display coordinates in model-selected units without writing a rounded
+/// display value back until the user actually edits the field.
+pub fn coordinate(
+    ui: &mut egui::Ui,
+    label: &str,
+    millimeters: &mut f64,
+    settings: &settings::ModelSettings,
+) -> bool {
+    let scale = settings.display_length_unit.millimeters_per_unit();
+    let mut displayed = *millimeters / scale;
+    let response = ui.add(
+        egui::DragValue::new(&mut displayed)
+            .speed(0.1 / scale)
+            .max_decimals(settings.length_decimal_places as usize)
+            .prefix(format!("{label} "))
+            .suffix(format!(" {}", settings.display_length_unit.symbol())),
+    );
+    if response.changed() {
+        *millimeters = displayed * scale;
+        true
+    } else {
+        false
+    }
+}
+
+/// Open an inspector once when a different entity is selected. Subsequent
+/// frames respect the user's folding choice and retain focused field IDs.
+pub fn selected_inspector_open(ui: &egui::Ui, id: &str, selected: Option<&str>) -> Option<bool> {
+    let memory_id = ui.id().with((id, "last-selection"));
+    let current = selected.unwrap_or_default().to_owned();
+    let changed = ui.ctx().data_mut(|data| {
+        let previous = data.get_temp::<String>(memory_id);
+        data.insert_temp(memory_id, current.clone());
+        previous.as_ref() != Some(&current)
+    });
+    (changed && selected.is_some()).then_some(true)
 }
 /// Custom layouts target the same sketch entities as the native viewport.
 pub fn semantic_action(w: &mut Workspace, element: &presentation::SemanticElement, command: &str) {
@@ -649,14 +734,39 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
     let Some(s) = &w.sketch else {
         return vec![];
     };
+    let mut elements = [
+        ("relations-section", "Dimensions & Relations"),
+        ("tool-help", "Tool help"),
+        ("member-list", "Sketch members"),
+    ].into_iter().map(|(suffix, label)| presentation::SemanticElement {
+        id: format!("{}::{suffix}", s.sketch_id),
+        role: if suffix == "member-list" { "sketch-member-list" } else { "sketch-secondary-section" }.into(),
+        label: label.into(), value: None, state: "ready".into(), commands: vec![],
+        relationships: vec![s.sketch_id.clone()],
+        data: serde_json::json!({"sketch":s.sketch_id,"presentation_only":true,"default_collapsed":suffix != "member-list","layout_order":"active-tool-before-secondary-editors"}),
+    }).collect::<Vec<_>>();
+    if let Some(member) = &s.selected_member {
+        for ((key, field), value) in evaluated_member_values(w)
+            .into_iter()
+            .filter(|((key, _), _)| key == member)
+        {
+            elements.push(presentation::SemanticElement {
+                id: format!("{key}::{field}.evaluated"), role: "sketch-evaluated-size".into(),
+                label: a::label(&field).into(), value: Some(value),
+                state: if s.error.is_some() { "last-valid" } else { "evaluated" }.into(),
+                commands: vec![], relationships: vec![s.sketch_id.clone(), key.clone()],
+                data: serde_json::json!({"sketch":s.sketch_id,"member":key,"field":field,"editable":false,"geometry":"last-successful-solve","display_length_unit":w.session.visible().settings.display_length_unit,"display_length_precision":w.session.visible().settings.length_decimal_places,"display_angle_precision":w.session.visible().settings.angle_decimal_places,"authored_expressions":"advanced-source"}),
+            });
+        }
+    }
     if !w.fields.contains_key("smart-dimension-mode") && s.dimension.is_none() {
-        return vec![];
+        return elements;
     }
     let constraint = s
         .dimension
         .as_ref()
         .and_then(|editor| s.constraints.iter().find(|c| c.id == editor.constraint));
-    let mut elements = vec![presentation::SemanticElement {
+    elements.push(presentation::SemanticElement {
         id: format!("{}::smart-dimension", s.sketch_id),
         role: "sketch-dimension-editor".into(),
         label: "Smart Dimension".into(),
@@ -677,7 +787,7 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
             .chain(s.selection.iter().map(|entity| entity.key().to_string()))
             .collect(),
         data: serde_json::json!({"definition":s.definition,"sketch":s.sketch_id,"selection":s.selection,"pending_model_edge":s.dimension_model.as_ref().map(|selected|serde_json::json!({"body":selected.body,"reference":selected.reference,"path":selected.path})),"constraint":constraint,"mode":w.fields.get("smart-dimension-mode"),"unit":constraint.map(|c|a::dimension_unit(&c.kind)),"perpendicular_distance":constraint.is_some_and(|c|c.kind=="point_line_distance"),"current_error":s.error,"shared_draft":true,"requires_current_validation":true,"accepts_second_reference":s.dimension.as_ref().is_some_and(|editor|editor.extend_pick),"completion_label":"Done Dimension","completion_scope":"dimension","commit_command":"sketch.finish","actions":[{"command":"sketch.finish-dimension","label":"Done Dimension","enabled":constraint.is_some() && s.error.is_none(),"disabled_reason":"Enter a valid dimension before finishing"},{"command":"sketch.cancel-dimension","label":"Cancel Dimension","enabled":true}]}),
-    }];
+    });
     if let Some(constraint) = constraint {
         elements.push(dimension_value_element(w, s, constraint));
     }
@@ -1430,9 +1540,9 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                             a::measured_dimension(w.session.visible(), &s.definition, &source, c)
                                 .map(|value| {
                                     if a::dimension_unit(&c.kind) == Dimension::Angle {
-                                        format!("{} deg", value.to_degrees())
+                                        w.session.visible().settings.format_angle_radians(value)
                                     } else {
-                                        format!("{value} mm")
+                                        w.session.visible().settings.format_length(value)
                                     }
                                 }),
                         )
@@ -1444,40 +1554,19 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         let before = sketch::sketch_definition(s);
         let mut text_edit_started = false;
         ui.horizontal(|ui| {
-            ui.strong("Constraints & Dimensions");
+            ui.strong(if dimension_mode || s.dimension.is_some() {
+                "Smart Dimension"
+            } else {
+                "Selection"
+            });
             ui.small(format!(
                 "{} selected",
                 s.selection.len() + usize::from(s.dimension_model.is_some())
             ));
         });
-        ui.small("Pick a member in Smart Dimension to edit its size immediately. Pick a second reference for a distance or angle; Command-click or Shift-click also supports selection first.");
         if dimension_mode && s.dimension.is_none() {
-            ui.small("Pick a center / point and straight edge for perpendicular distance. Pick a circle for diameter or a line for length. Esc exits pick mode.");
+            ui.small("Pick a member for size, or two references for distance / angle.");
         }
-        if s.selection.len() >= 2 {
-            ui.small("For axis symmetry, select two points or matching members, then the straight member, X Axis, or Y Axis to reflect about.");
-        }
-        ui.horizontal(|ui| {
-            for (label, entity) in [
-                ("Origin", SketchEntity::Origin),
-                ("X Axis", SketchEntity::XAxis),
-                ("Y Axis", SketchEntity::YAxis),
-            ] {
-                let response = ui.selectable_label(s.selection.contains(&entity), label);
-                if response.clicked() {
-                    clicked_reference = Some(entity);
-                }
-            }
-        });
-        ui.horizontal_wrapped(|ui| {
-            for (kind, label) in a::RELATIONS {
-                if a::relation(&before, &s.selection, kind).is_ok()
-                    && ui.small_button(*label).clicked()
-                {
-                    relation_command = Some(format!("sketch.relation.{kind}"));
-                }
-            }
-        });
         if let Some(editor) = &mut s.dimension {
             let previous = editor.choice;
             egui::ComboBox::from_id_salt("smart-dimension-kind")
@@ -1495,11 +1584,6 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             }
             if let Some(c) = s.constraints.iter_mut().find(|c| c.id == editor.constraint) {
                 ui.label(a::label(&c.kind));
-                let mode = ui.checkbox(&mut c.driven, "Driven / reference measurement").on_hover_text("Reference measures the current geometry. Driving restores the saved dimension expression.");
-                changed |= mode.changed();
-                if mode.changed() {
-                    s.history.push(before.clone());
-                }
                 if c.driven {
                     ui.label(
                         measurements
@@ -1509,45 +1593,106 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                             })
                             .unwrap_or_else(|| "Awaiting current measurement".into()),
                     );
-                }
-                let response = ui.add_enabled(
-                    !c.driven,
-                    egui::TextEdit::singleline(&mut c.value.0)
-                        .id_salt(("smart-value", &c.id))
-                        .hint_text("25.4 mm, 1 in, or a parameter expression")
-                        .desired_width(f32::INFINITY),
-                );
-                if editor.focus_value {
-                    if !c.driven {
+                } else {
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut c.value.0)
+                            .id_salt(("smart-value", &c.id))
+                            .hint_text("25.4 mm, 1 in, or a parameter expression")
+                            .desired_width(f32::INFINITY),
+                    );
+                    if editor.focus_value {
                         response.request_focus();
                     }
-                    editor.focus_value = false;
+                    changed |= response.changed();
+                    text_edit_started |= response.gained_focus();
+                    if response.lost_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter))
+                    {
+                        finish_dimension_requested = true;
+                    }
                 }
-                changed |= response.changed();
-                text_edit_started |= response.gained_focus();
-                if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
-                    finish_dimension_requested = true;
-                }
-                ui.small("Live preview · remains pending until Apply Sketch");
-                if editor.extend_pick {
-                    ui.small("Choose a second reference to change this size preview into a distance or angle, or use Done Dimension to retain this size.");
-                }
-                if c.kind == "point_line_distance" {
-                    ui.small("Perpendicular distance to the exact oriented line; the saved side stays fixed, including through zero. Reference dimensions measure without driving.");
-                }
-                if ui
-                    .add_enabled(!c.driven, egui::Button::new("Create Named Parameter"))
+                editor.focus_value = false;
+                ui.horizontal_wrapped(|ui| {
+                    if controls::button(
+                        ui,
+                        &format!("{}.done", c.id),
+                        "sketch-dimension-action",
+                        &["compact"],
+                        "Done Dimension",
+                        true,
+                        false,
+                    )
                     .clicked()
-                {
-                    promote = Some((c.id.clone(), c.value.clone(), a::dimension_unit(&c.kind)));
+                    {
+                        finish_dimension_requested = true;
+                    }
+                    if controls::button(
+                        ui,
+                        &format!("{}.cancel", c.id),
+                        "sketch-dimension-action",
+                        &["compact"],
+                        "Cancel Dimension",
+                        true,
+                        false,
+                    )
+                    .clicked()
+                    {
+                        cancel_dimension_requested = true;
+                    }
+                });
+                if editor.extend_pick {
+                    ui.small("Pick a second reference for distance / angle, or finish this size.");
                 }
-                if ui.small_button("Done Dimension").clicked() {
-                    finish_dimension_requested = true;
-                }
-                if ui.small_button("Cancel Dimension").clicked() {
-                    cancel_dimension_requested = true;
-                }
+                controls::collapsing(
+                    ui,
+                    &format!("{}::dimension-options", c.id),
+                    "sketch-secondary-section",
+                    "Dimension options",
+                    false,
+                    |ui| {
+                        let mode = ui.checkbox(&mut c.driven, "Reference measurement")
+                        .on_hover_text("Reference measures geometry. Driving uses the saved dimension expression.");
+                        changed |= mode.changed();
+                        if mode.changed() {
+                            s.history.push(before.clone());
+                        }
+                        if ui
+                            .add_enabled(!c.driven, egui::Button::new("Create Named Parameter"))
+                            .clicked()
+                        {
+                            promote =
+                                Some((c.id.clone(), c.value.clone(), a::dimension_unit(&c.kind)));
+                        }
+                        ui.small("Edits preview live. Done Dimension retains the draft; Finish Sketch commits it.");
+                        if c.kind == "point_line_distance" {
+                            ui.small("Perpendicular distance to the oriented line. The saved side stays fixed through zero.");
+                        }
+                    },
+                );
             }
+        }
+        if dimension_mode || !s.selection.is_empty() || s.tool == sketch::Tool::Select {
+            ui.horizontal(|ui| {
+                for (label, entity) in [
+                    ("Origin", SketchEntity::Origin),
+                    ("X Axis", SketchEntity::XAxis),
+                    ("Y Axis", SketchEntity::YAxis),
+                ] {
+                    let response = ui.selectable_label(s.selection.contains(&entity), label);
+                    if response.clicked() {
+                        clicked_reference = Some(entity);
+                    }
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                for (kind, label) in a::RELATIONS {
+                    if a::relation(&before, &s.selection, kind).is_ok()
+                        && ui.small_button(*label).clicked()
+                    {
+                        relation_command = Some(format!("sketch.relation.{kind}"));
+                    }
+                }
+            });
         }
         if text_edit_started {
             s.history.push(before);
@@ -1622,12 +1767,29 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     if changed {
         sketch::solve(w);
     }
-    crate::sketch_relations_ui::panel(ui, w);
+}
+
+/// Less frequent editors sit below active tool and selected-member inputs.
+/// Custom layouts retain all of the underlying relation and parameter actions.
+pub fn secondary_controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    let Some(s) = &w.sketch else { return };
+    let id = format!("{}::relations-section", s.sketch_id);
+    let attention = s.error.is_some() || !s.feedback.unsatisfied.is_empty();
+    controls::collapsing(
+        ui,
+        &id,
+        "sketch-secondary-section",
+        "Dimensions & Relations",
+        attention,
+        |ui| {
+            crate::sketch_relations_ui::panel(ui, w);
+        },
+    );
+    crate::sketch_edit_ui::modifiers(ui, w);
     let open_parameters = w.fields.remove("graph-parameters").is_some();
     egui::CollapsingHeader::new("Named Parameters")
         .open(open_parameters.then_some(true))
         .show(ui, |ui| crate::ui::parameters(ui, w));
-    ui.separator();
 }
 
 fn anchor(source: &Sketch, c: &SketchConstraint) -> Option<[f64; 2]> {
