@@ -998,6 +998,11 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
     if !crate::operation_editor_ui::current_source_is_valid(w) {
         return Some("Correct the current operation fields before applying");
     }
+    if !crate::structural_member_ui::current_source_is_valid(w) {
+        return Some(
+            "Select sketch members and correct the current structural member fields before applying",
+        );
+    }
     if !crate::reference_repair_ui::current_source_is_valid(w) {
         return Some("Preview the current explicit reference repair before applying");
     }

@@ -18,6 +18,7 @@ fn native_preset(name: &str) -> bool {
             | "Flat Pattern"
             | "Formed Sheet"
             | "Structural Member Group"
+            | "Custom Section Along Path"
             | "Trim / Extend Member"
             | "Weldment End Cap"
             | "Sketch Gusset"
@@ -306,7 +307,11 @@ pub fn preset(w: &mut Workspace, name: &str) {
     }
     if matches!(
         name,
-        "Structural Member Group" | "Trim / Extend Member" | "Weldment End Cap" | "Sketch Gusset"
+        "Structural Member Group"
+            | "Custom Section Along Path"
+            | "Trim / Extend Member"
+            | "Weldment End Cap"
+            | "Sketch Gusset"
     ) {
         weldment_preset(w, name);
         return;
@@ -1089,7 +1094,7 @@ fn weldment_preset(w: &mut Workspace, name: &str) {
     let closed = |profile: &NodeRef| closed_profile(w, profile);
     let profile = preferred_profile(w, &profiles, closed);
     let operation = match name {
-        "Structural Member Group" => {
+        "Structural Member Group" | "Custom Section Along Path" => {
             // A selected open path (or an already-authored path sketch) keeps
             // its path intent. A selected closed section otherwise has first
             // priority; new groups never silently return to the oldest sketch.
@@ -1130,8 +1135,11 @@ fn weldment_preset(w: &mut Workspace, name: &str) {
                 section,
                 path,
                 members: vec![],
+                member_mode: cad_core::weldment::MemberMode::All,
                 roll: "0 deg".into(),
                 anchor: None,
+                profile_offset: ["0 mm".into(), "0 mm".into()],
+                library_profile: None,
                 start_offset: "0 mm".into(),
                 end_offset: "0 mm".into(),
                 corner: Corner::Miter,
@@ -1275,6 +1283,9 @@ pub fn weldment_fields(
             end_offset,
             corner,
             joint_gap,
+            profile_offset,
+            member_mode: _,
+            library_profile: _,
         } => {
             changed |= inherited_stock(ui, doc, current, body);
             let sections = section_choices(w, current, section);
@@ -1356,6 +1367,8 @@ pub fn weldment_fields(
                         .changed();
                 });
             changed |= expression(ui, "Joint Gap", joint_gap);
+            changed |= expression(ui, "Profile Offset X", &mut profile_offset[0]);
+            changed |= expression(ui, "Profile Offset Y", &mut profile_offset[1]);
             if *corner == Corner::ButtTrim {
                 let choices = structural_path_members(w, path);
                 let selected = members

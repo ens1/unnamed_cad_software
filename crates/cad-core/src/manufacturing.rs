@@ -536,6 +536,10 @@ pub struct CutListRow {
     pub section_label: Option<SourceLabel>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section_size: Option<crate::section_size::SectionSize>,
+    /// Saved catalog designation/provenance; native solved section_size remains
+    /// the only dimensional measurement supplied here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_profile: Option<crate::weldment::ProfileLabel>,
     #[serde(default)]
     pub start_cut_angle_rad: Option<f64>,
     #[serde(default)]
@@ -555,10 +559,15 @@ pub struct CutListRow {
 }
 pub fn section_display(row: &CutListRow, units: crate::drawing::Units, precision: usize) -> String {
     let name = row
-        .section_label
+        .library_profile
         .as_ref()
-        .filter(|label| label.version == SOURCE_LABEL_VERSION)
-        .map(SourceLabel::display)
+        .and_then(crate::weldment::ProfileLabel::display)
+        .or_else(|| {
+            row.section_label
+                .as_ref()
+                .filter(|label| label.version == SOURCE_LABEL_VERSION)
+                .map(SourceLabel::display)
+        })
         .unwrap_or_else(|| {
             if row.section.is_some() {
                 "Section unavailable".into()
@@ -631,6 +640,7 @@ pub fn cut_list(doc: &Document) -> Result<Vec<CutListRow>> {
                     section: None,
                     section_label: None,
                     section_size: None,
+                    library_profile: None,
                     start_cut_angle_rad: None,
                     end_cut_angle_rad: None,
                     bend_radius_mm: None,
@@ -825,6 +835,7 @@ fn append_native_cut_list(
                         &definition,
                         configuration.as_deref(),
                     ),
+                    library_profile: member.library_profile.clone(),
                     start_cut_angle_rad: Some(member.start_cut_angle_rad),
                     end_cut_angle_rad: Some(member.end_cut_angle_rad),
                     bend_radius_mm: member.bend_radius_mm,
@@ -890,6 +901,7 @@ fn append_native_cut_list(
                         &definition,
                         configuration.as_deref(),
                     ),
+                    library_profile: None,
                     start_cut_angle_rad: Some(0.),
                     end_cut_angle_rad: Some(0.),
                     bend_radius_mm: None,
@@ -907,7 +919,7 @@ fn append_native_cut_list(
 
 pub fn cut_list_csv_evaluated(doc: &Document, evaluation: &Evaluation) -> Result<String> {
     let escaped = |text: &str| format!("\"{}\"", text.replace('"', "\"\""));
-    let mut out = "Definition,Member,Material,Section,Centerline or stock length mm,Start cut angle deg,Finish cut angle deg,Quantity,Configuration,Member source,Bend radius mm,Bend sweep deg,Accessory,Stock width mm,Stock height mm,Thickness mm,Stock bounds exact,Section source\n".to_string();
+    let mut out = "Definition,Member,Material,Section,Centerline or stock length mm,Start cut angle deg,Finish cut angle deg,Quantity,Configuration,Member source,Bend radius mm,Bend sweep deg,Accessory,Stock width mm,Stock height mm,Thickness mm,Stock bounds exact,Section source,Profile catalog,Profile revision,Profile source SHA256,Nominal profile size\n".to_string();
     for row in cut_list_evaluated(doc, evaluation)? {
         let source = row
             .member_reference
@@ -931,7 +943,7 @@ pub fn cut_list_csv_evaluated(doc: &Document, evaluation: &Evaluation) -> Result
                 .unwrap_or_default()
         };
         out.push_str(&format!(
-            "{},{},{},{},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{:.6},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             escaped(&row.definition),
             escaped(&row.description),
             escaped(&row.material),
@@ -962,6 +974,30 @@ pub fn cut_list_csv_evaluated(doc: &Document, evaluation: &Evaluation) -> Result
                 .map(|v| v.to_string())
                 .unwrap_or_default(),
             escaped(&section_source),
+            escaped(
+                row.library_profile
+                    .as_ref()
+                    .map(|profile| profile.catalog_name.as_str())
+                    .unwrap_or_default()
+            ),
+            escaped(
+                row.library_profile
+                    .as_ref()
+                    .map(|profile| profile.profile_revision.as_str())
+                    .unwrap_or_default()
+            ),
+            escaped(
+                row.library_profile
+                    .as_ref()
+                    .map(|profile| profile.source_sha256.as_str())
+                    .unwrap_or_default()
+            ),
+            escaped(
+                row.library_profile
+                    .as_ref()
+                    .map(|profile| profile.nominal_size.as_str())
+                    .unwrap_or_default()
+            ),
         ));
     }
     Ok(out)

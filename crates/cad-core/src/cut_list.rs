@@ -572,6 +572,7 @@ fn stock_intent(
             if let WeldmentOperation::Members {
                 roll,
                 anchor,
+                profile_offset,
                 section,
                 corner,
                 ..
@@ -600,7 +601,27 @@ fn stock_intent(
                             })
                     })
                     .transpose()?;
+                let offset = [
+                    crate::expression::value(
+                        doc,
+                        &row.definition,
+                        &profile_offset[0],
+                        crate::Dimension::Length,
+                    )?,
+                    crate::expression::value(
+                        doc,
+                        &row.definition,
+                        &profile_offset[1],
+                        crate::Dimension::Length,
+                    )?,
+                ];
                 orientation = serde_json::json!({"roll_rad":crate::expression::value(doc,&row.definition,roll,crate::Dimension::Angle)?,"anchor":anchor_position});
+                // Zero remains byte-for-byte compatible with saved stock hashes.
+                // Offset affects oblique cap intersections and must participate
+                // in equivalence for nonzero placements.
+                if offset != [0.; 2] {
+                    orientation["profile_offset_mm"] = serde_json::to_value(offset)?;
+                }
                 // Scalar end angles cannot prove the clocking of oblique cuts or
                 // trimmed walls on asymmetric sections. Keep those members separate.
                 if *corner == Corner::ButtTrim
@@ -667,9 +688,11 @@ fn stock_intent(
         }
         _ => return Err(invalid("Unsupported source for equivalent stock grouping")),
     }
-    Ok(
-        serde_json::json!({"contract":CONTRACT_VERSION,"section":section,"orientation":orientation,"unproved_clocking_or_region":unproved,"material":material,"finish":finish,"length_mm":row.length_mm,"start_cut_angle_rad":row.start_cut_angle_rad,"end_cut_angle_rad":row.end_cut_angle_rad,"bend_radius_mm":row.bend_radius_mm,"sweep_angle_rad":row.sweep_angle_rad,"accessory":row.accessory,"blank_size_mm":row.blank_size_mm,"thickness_mm":row.thickness_mm,"blank_bounds_exact":row.blank_bounds_exact}),
-    )
+    let mut intent = serde_json::json!({"contract":CONTRACT_VERSION,"section":section,"orientation":orientation,"unproved_clocking_or_region":unproved,"material":material,"finish":finish,"length_mm":row.length_mm,"start_cut_angle_rad":row.start_cut_angle_rad,"end_cut_angle_rad":row.end_cut_angle_rad,"bend_radius_mm":row.bend_radius_mm,"sweep_angle_rad":row.sweep_angle_rad,"accessory":row.accessory,"blank_size_mm":row.blank_size_mm,"thickness_mm":row.thickness_mm,"blank_bounds_exact":row.blank_bounds_exact});
+    if let Some(profile) = &row.library_profile {
+        intent["profile_source_sha256"] = profile.source_sha256.clone().into();
+    }
+    Ok(intent)
 }
 fn production_values(row: &CutListRow) -> serde_json::Value {
     serde_json::json!({"length_mm":row.length_mm,"section":row.section,"start":row.start_cut_angle_rad,"end":row.end_cut_angle_rad,"radius":row.bend_radius_mm,"sweep":row.sweep_angle_rad,"accessory":row.accessory,"blank":row.blank_size_mm,"thickness":row.thickness_mm,"exact":row.blank_bounds_exact})

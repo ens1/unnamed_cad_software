@@ -127,6 +127,7 @@ struct Placement<'a> {
     n: Vector3,
     path_n: Vector3,
     roll: f64,
+    profile_offset: [f64; 2],
 }
 impl Placement<'_> {
     fn at(&self, position: Point3, axis: Vector3) -> Face {
@@ -137,6 +138,11 @@ impl Placement<'_> {
             u * vector.dot(self.u) + v * vector.dot(self.v) + axis * vector.dot(self.n)
         };
         let translation = position.to_vec() - map(self.origin.to_vec());
+        let translation = if self.profile_offset == [0.; 2] {
+            translation
+        } else {
+            translation + u * self.profile_offset[0] + v * self.profile_offset[1]
+        };
         builder::transformed(
             self.section,
             Matrix4::from_cols(
@@ -501,7 +507,13 @@ fn group(
         n: section_u.cross(section_v).normalize(),
         path_n,
         roll: definition.roll_rad,
+        profile_offset: definition.profile_offset_mm,
     };
+    let library_profile = definition
+        .library_profile
+        .as_ref()
+        .map(ProfileLabel::from_origin)
+        .transpose()?;
     let world = |point: [f64; 2]| {
         Point3::from(path_plane.origin)
             + Vector3::from(path_plane.u) * point[0]
@@ -836,6 +848,8 @@ fn group(
         let metadata = EvaluatedMember {
             reference: reference.clone(),
             section: definition.section.clone(),
+            profile_offset_mm: definition.profile_offset_mm,
+            library_profile: library_profile.clone(),
             start: a.into(),
             end: b.into(),
             centerline_length_mm: length,

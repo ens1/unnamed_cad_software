@@ -146,7 +146,7 @@ pub(crate) fn apply(doc: &mut Document, owner: &str, overrides: &Overrides) -> R
     };
     for feature in &mut part.features {
         if let Some(fields) = values.get(&feature.id) {
-            let mut operation = serde_json::to_value(&feature.operation)?;
+            let mut operation = dimensions::operation_source(&feature.operation)?;
             for (path, value) in fields {
                 let (pointer, _) = dimensions::resolve_pointer(&operation, path)?;
                 *operation.pointer_mut(&pointer).ok_or_else(|| {

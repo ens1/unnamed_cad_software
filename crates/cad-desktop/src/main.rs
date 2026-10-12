@@ -79,6 +79,7 @@ mod sketch_relations_ui;
 mod sketch_ui;
 mod split_ui;
 mod standard_parts_ui;
+mod structural_member_ui;
 mod surface_ui;
 mod texture_assets;
 mod theme_library;
@@ -106,7 +107,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/40;solver/tcad-native-lm/16";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/41;solver/tcad-native-lm/16";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -522,6 +523,11 @@ impl Workspace {
             self.confirm_requested = false;
             return;
         }
+        if !structural_member_ui::current_source_is_valid(self) {
+            self.status = "Select sketch members and correct the current structural member fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !reference_repair_ui::current_source_is_valid(self) {
             self.status = "Preview the current explicit reference repair before applying".into();
             self.confirm_requested = false;
@@ -809,7 +815,8 @@ impl Workspace {
         self.edge_selection_path = None;
         self.candidates.clear();
         self.fields.retain(|key, _| {
-            !key.starts_with("appearance-")
+            !key.starts_with("structural-member-")
+                && !key.starts_with("appearance-")
                 && !key.starts_with("configuration-pose-error:")
                 && !key.starts_with("lighting-")
                 && !key.starts_with("drawing-editor:")
@@ -937,6 +944,11 @@ impl Workspace {
         }
         if !operation_editor_ui::current_source_is_valid(self) {
             self.status = "Correct the current operation fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !structural_member_ui::current_source_is_valid(self) {
+            self.status = "Select sketch members and correct the current structural member fields before applying".into();
             self.confirm_requested = false;
             return;
         }

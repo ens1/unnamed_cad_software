@@ -302,6 +302,13 @@ pub const TOOLS: &[ModelingTool] = &[
         requires_body: true,
     },
     ModelingTool {
+        command: "weldment.custom-section-path",
+        label: "Custom Section Along Path",
+        group: "Weldments",
+        preset: "Custom Section Along Path",
+        requires_body: false,
+    },
+    ModelingTool {
         command: "weldment.cap",
         label: "End Cap",
         group: "Weldments",

@@ -1120,6 +1120,8 @@ fn weldment_fields(fields: &mut Fields<'_>, operation: &cad_core::weldment::Weld
             }
             fields.choice(&format!("{P}/anchor"), "Section locating point", points);
             fields.quantity(&format!("{P}/roll"), "Section rotation", "deg");
+            fields.quantity(&format!("{P}/profile_offset/0"), "Profile offset X", "mm");
+            fields.quantity(&format!("{P}/profile_offset/1"), "Profile offset Y", "mm");
             fields.quantity(
                 &format!("{P}/start_offset"),
                 "Start shortening (+) / extension (−)",
@@ -1532,6 +1534,9 @@ fn mold_fields(fields: &mut Fields<'_>, operation: &cad_core::mold::MoldOperatio
 }
 
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
+    if crate::structural_member_ui::active(w) {
+        return vec![];
+    }
     let Some((owner, feature)) = current(w) else {
         return vec![];
     };
@@ -2008,6 +2013,9 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
 /// The native property manager renders the descriptors as an ordinary compact
 /// composition. Users can replace it with repeated fields/actions in any layout.
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
+    if crate::structural_member_ui::show(ui, w) {
+        return true;
+    }
     if current(w).is_none() {
         return false;
     }
@@ -2165,6 +2173,18 @@ fn render_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement
 fn editable_source(feature: &Feature) -> Value {
     let mut source = json!(feature);
     common::normalize_source(&feature.operation, &mut source);
+    if let Operation::Weldment { operation } = &feature.operation
+        && let cad_core::weldment::WeldmentOperation::Members {
+            profile_offset,
+            member_mode,
+            ..
+        } = operation.as_ref()
+    {
+        // Default omission keeps saved legacy definitions compact. Controls
+        // still expose every typed placement field without rewriting source.
+        source["operation"]["operation"]["profile_offset"] = json!(profile_offset);
+        source["operation"]["operation"]["member_mode"] = json!(member_mode);
+    }
     if let Operation::WeldBead { definition } = &feature.operation {
         source["operation"]["definition"]["supports"] = json!(definition.supports);
         source["operation"]["definition"]["finish"] = json!(definition.finish);

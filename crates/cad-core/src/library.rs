@@ -425,6 +425,7 @@ fn remap_source_inner(
             "name"
                 | "metadata"
                 | "standard_part"
+                | "library_profile"
                 | "manufacturing"
                 | "description"
                 | "properties"

@@ -1888,6 +1888,7 @@ fn weld_guides(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
 pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
     weld_guides(w, ui, rect);
     crate::fabrication_sources_ui::overlay(w, ui, rect);
+    crate::structural_member_ui::overlay(w, ui, rect);
     crate::reference_ui::overlay(w, ui, rect);
     let painter = ui.painter().with_clip_rect(rect);
     let origin = rect.right_bottom() - egui::vec2(58., 66.);

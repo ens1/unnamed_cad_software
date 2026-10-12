@@ -112,3 +112,4 @@ pub mod surface;
 pub mod wall;
 pub mod weld_beads;
 pub mod weldment;
+pub mod weldment_profiles;

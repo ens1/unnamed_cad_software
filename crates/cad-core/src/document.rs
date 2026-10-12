@@ -1338,6 +1338,9 @@ impl Document {
                 if let Operation::PlacementPattern { definition } = &node.operation {
                     definition.validate()?;
                 }
+                if let Operation::Weldment { operation } = &node.operation {
+                    operation.validate_source()?;
+                }
                 if !ids.insert(&node.id) {
                     return Err(CadError::Invalid(format!(
                         "Duplicate feature identity {}",

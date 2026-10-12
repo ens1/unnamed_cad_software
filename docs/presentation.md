@@ -472,3 +472,9 @@ regions do not clear the pointer-owning region's cache.
 
 
 Drawing paper editing publishes `drawing-interaction-field` and `drawing-paper-item` descriptors and source-owned handles. `drawing.interact-*` commands and the `drawing-interaction` value adapter resolve current document/sheet/page/editor identity before mutating source. Production controls publish their own semantic values/actions, with configured BOM/stock content independent of widget placement. Paper camera zoom/pan and selection are disposable presentation state; paper dimensions, printed scales, alignment relationships and leader offsets are drawing intent. See [paper interaction](drawing-paper-interaction.md) and [production controls](drawing-production.md).
+
+### Guided structural members
+
+The `tcad.presentation.structural-member` v1 descriptors expose layout sketch, exact member selection, namespaced catalog/collection/type/size, locating point, rotation, signed section X/Y offsets and group/end controls. `structural-member` is the registered value adapter; `structural-member.action` handles picking, bulk selection, library import/export, restoration and explicit custom conversion. The default property manager groups these descriptors into Sketch entities, Pre-made profile, Locate profile and Group and ends. Users can compose the same fields/actions independently.
+
+`tcad.presentation.structural-profile-locator` v1 supplies contours, actual remapped point IDs and placement expressions. The `structural-member-locator` view adapter and semantic binding render its disposable diagram; the `structural-member-editor` adapter renders the complete default editor. Diagram and path roles consume CSS-like colors, sizes and stroke properties. They never supply kernel geometry or saved placement authority. See [structural member profiles](structural-member-profiles.md).

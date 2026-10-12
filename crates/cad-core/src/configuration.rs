@@ -356,7 +356,7 @@ fn validate_dimensions(
             .into_iter()
             .map(|field| (field.path.clone(), field))
             .collect::<BTreeMap<_, _>>();
-        let operation = serde_json::to_value(&feature.operation)?;
+        let operation = dimensions::operation_source(&feature.operation)?;
         for (path, expression) in fields {
             dimensions::resolve_pointer(&operation, path)
                 .map_err(|error| invalid(format!("{} {path}: {error}", feature.name)))?;
@@ -710,7 +710,7 @@ fn apply_part(part: &mut Part, o: &Overrides) -> Result<()> {
                 .into_iter()
                 .map(|field| (field.path.clone(), field))
                 .collect::<BTreeMap<_, _>>();
-            let mut operation = serde_json::to_value(&feature.operation)?;
+            let mut operation = dimensions::operation_source(&feature.operation)?;
             for (path, expression) in fields {
                 let field = available
                     .get(path)
@@ -1930,7 +1930,12 @@ pub fn check_geometry_context(
                 }
             }
             serde_json::Value::Object(o) => {
-                for v in o.values() {
+                for (field, v) in o {
+                    // Pinned library text and contour numbers are procurement
+                    // provenance, not expressions in the importing document.
+                    if field == "library_profile" {
+                        continue;
+                    }
                     strings(v, out);
                 }
             }

@@ -631,6 +631,17 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     registry.register("dependency-view", |ui, w, _| dependencies(ui, w));
     registry.register("parameter-instrument", |ui, w, _| property_manager(ui, w));
     registry.register("property-manager", |ui, w, _| property_manager(ui, w));
+    registry.register("structural-member-editor", |ui, w, _| {
+        crate::structural_member_ui::show(ui, w);
+    });
+    registry.register("structural-member-locator", |ui, w, _| {
+        if let Some(element) = crate::structural_member_ui::semantics(w)
+            .into_iter()
+            .find(|element| element.role == "structural-member-locator")
+        {
+            crate::structural_member_ui::locator(ui, w, &element);
+        }
+    });
     registry.register("preview-status", |ui, w, _| preview_status(ui, w));
     registry.register("project-location", |ui, w, _| {
         crate::document_identity_ui::location_control(ui, w)
@@ -817,6 +828,18 @@ pub(crate) fn semantic_element(
     if widget == "auto" && crate::selection_ui::render_edge_row(ui, w, element) {
         return;
     }
+    if widget == "auto"
+        && matches!(
+            element.role.as_str(),
+            "structural-member-field"
+                | "structural-member-action"
+                | "structural-member-note"
+                | "structural-member-locator"
+        )
+    {
+        crate::structural_member_ui::render_control(ui, w, element);
+        return;
+    }
     if matches!(
         element.role.as_str(),
         "production-field" | "production-action"
@@ -973,6 +996,7 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         return;
     }
     if crate::sketch_issues_ui::action(w, command, &element.data)
+        || crate::structural_member_ui::action(w, command, &element.data)
         || crate::fabrication_sources_ui::action(w, command, &element.data)
         || crate::weld_beads_ui::action(w, command, Some(&element.data))
         || crate::sketch_block_library_ui::action(w, command, Some(&element.data))
@@ -1174,6 +1198,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 || matches!(
                     setter,
                     "operation-editor"
+                        | "structural-member"
                         | "component-placement"
                         | "component-insert"
                         | "material-ui"
@@ -1495,6 +1520,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     || crate::components_ui::field_is_invalid(w, element)
                     || crate::assembly_welds_ui::field_is_invalid(w, element)
                     || crate::operation_editor_ui::field_is_invalid(w, element)
+                    || crate::structural_member_ui::field_is_invalid(w, element)
                     || crate::drawing_editor_ui::field_is_invalid(w, element)
                     || crate::drawing_interaction_ui::field_is_invalid(w, element)
                     || crate::configuration_ui::field_is_invalid(w, element)
@@ -1636,6 +1662,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         crate::assembly_tools_ui::field_error(w, element, error.clone());
         crate::assembly_welds_ui::field_error(w, element, error.clone());
         crate::operation_editor_ui::field_error(w, element, error.clone());
+        crate::structural_member_ui::field_error(w, element, error.clone());
         crate::drawing_editor_ui::field_error(w, element, error.clone());
         crate::drawing_interaction_ui::field_error(w, element, error.clone());
         crate::production_ui::record_field_error(w, element, error.clone());
@@ -1659,6 +1686,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::assembly_welds_ui::field_error(w, element, None);
                 crate::appearances_ui::field_error(w, element, None);
                 crate::operation_editor_ui::field_error(w, element, None);
+                crate::structural_member_ui::field_error(w, element, None);
                 crate::drawing_editor_ui::field_error(w, element, None);
                 crate::drawing_interaction_ui::field_error(w, element, None);
                 crate::production_ui::record_field_error(w, element, None);
@@ -1680,6 +1708,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 w.status = error.to_string();
                 crate::appearances_ui::field_error(w, element, Some(error.to_string()));
                 crate::operation_editor_ui::field_error(w, element, Some(error.to_string()));
+                crate::structural_member_ui::field_error(w, element, Some(error.to_string()));
                 crate::drawing_editor_ui::field_error(w, element, Some(error.to_string()));
                 crate::drawing_interaction_ui::field_error(w, element, Some(error.to_string()));
                 crate::production_ui::record_field_error(w, element, Some(error.to_string()));
@@ -1882,7 +1911,9 @@ fn model_view(
     {
         let p = response.interact_pointer_pos().unwrap_or(r.center());
         w.selection_popup = None;
-        let sketch_feature = if w.tool_checkpoint.is_none() {
+        let structural_pick =
+            crate::structural_member_ui::capture_click(w, r, p, ui.input(|input| input.modifiers));
+        let sketch_feature = if !structural_pick && w.tool_checkpoint.is_none() {
             crate::sketch::pick(w, r, p)
         } else {
             None
@@ -1895,7 +1926,7 @@ fn model_view(
                 w.status =
                     "Sketch selected. Choose an action; double-click to edit on the model".into();
             }
-        } else {
+        } else if !structural_pick {
             w.candidates = viewport::pick(w, r, p);
             w.candidate_index = 0;
             let toggle = ui.input(|input| {
@@ -1921,6 +1952,7 @@ fn model_view(
     }
     if w.sketch.is_none()
         && !motion_owned
+        && !crate::structural_member_ui::active(w)
         && response.hovered()
         && ui.input(|i| i.key_pressed(egui::Key::Tab))
         && !w.candidates.is_empty()
@@ -2713,6 +2745,14 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
         || w.fields.contains_key("assembly-weld-editor")
     {
         w.status = "Confirm or cancel the current operation before editing another feature".into();
+        return;
+    }
+    if crate::structural_member_ui::is_deferred(name) {
+        crate::structural_member_ui::resume(w, name);
+        return;
+    }
+    if matches!(name, "Structural Member Group" | "Structural Member") {
+        crate::structural_member_ui::begin(w);
         return;
     }
     if crate::rib_ui::is_preset(name) {

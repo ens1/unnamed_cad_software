@@ -3,7 +3,7 @@
 //! This adapter preserves the document's ordinary JSON representation. Serde's
 //! existing `Expr` newtype marker lets it distinguish expressions from names,
 //! references, modes and literal text without maintaining a second feature list.
-use crate::{CadError, Expr, Feature, Result};
+use crate::{CadError, Expr, Feature, Operation, Result};
 use serde::{Serialize, Serializer, ser};
 use serde_json::{Value, value::Serializer as JsonSerializer};
 use std::collections::{BTreeMap, BTreeSet};
@@ -43,9 +43,41 @@ pub struct DimensionField {
     pub maximum: Option<u64>,
 }
 
+/// Editable dimensional projection. Saved source still omits legacy default
+/// values; pointer resolution and overrides see the same typed defaults as
+/// direct feature editors.
+pub fn operation_source(operation: &Operation) -> Result<Value> {
+    let mut source = serde_json::to_value(operation)?;
+    if let Some(offset) = member_profile_offset(operation) {
+        project_profile_offset(&mut source, serde_json::to_value(offset)?)?;
+    }
+    Ok(source)
+}
+fn member_profile_offset(operation: &Operation) -> Option<&[Expr; 2]> {
+    let Operation::Weldment { operation } = operation else {
+        return None;
+    };
+    let crate::weldment::WeldmentOperation::Members { profile_offset, .. } = operation.as_ref()
+    else {
+        return None;
+    };
+    Some(profile_offset)
+}
+fn project_profile_offset(source: &mut Value, offset: Value) -> Result<()> {
+    let member = source
+        .pointer_mut("/operation")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| invalid("Structural member source projection is unavailable"))?;
+    member.insert("profile_offset".into(), offset);
+    Ok(())
+}
+
 pub fn fields(feature: &Feature) -> Result<Vec<DimensionField>> {
-    let tagged = feature.operation.serialize(ExpressionSerializer)?;
-    let operation = serde_json::to_value(&feature.operation)?;
+    let mut tagged = feature.operation.serialize(ExpressionSerializer)?;
+    if let Some(offset) = member_profile_offset(&feature.operation) {
+        project_profile_offset(&mut tagged, offset.serialize(ExpressionSerializer)?)?;
+    }
+    let operation = operation_source(&feature.operation)?;
     let mut expressions = BTreeMap::new();
     collect(&tagged, "", &mut expressions)?;
     let mut fields = expressions
