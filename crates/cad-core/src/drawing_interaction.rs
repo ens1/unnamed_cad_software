@@ -86,6 +86,9 @@ pub struct ReferenceCandidate {
     /// Exact world-space carrier, used solely for finding a pointer parameter.
     pub carrier: Option<crate::sketch_edit::Curve3>,
     pub projection: ViewProjection,
+    /// Proven affine projected control hull, never a sampled mesh-fit bound.
+    #[serde(default)]
+    pub bounds_mm: Option<[[f64; 2]; 2]>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReferenceHit {
@@ -274,6 +277,34 @@ fn label_location(primitives: &[Primitive]) -> Option<[f64; 2]> {
             None
         }
     })
+}
+fn carrier_bounds(
+    curve: &crate::sketch_edit::Curve3,
+    projection: &ViewProjection,
+    view: &str,
+) -> Result<Option<[[f64; 2]; 2]>> {
+    if curve.weights.len() != curve.control_points.len()
+        || curve
+            .weights
+            .iter()
+            .any(|weight| !weight.is_finite() || *weight <= 0.)
+    {
+        return Ok(None);
+    }
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    for point in &curve.control_points {
+        let point = projection.paper_point(view, *point)?;
+        for axis in 0..2 {
+            min[axis] = min[axis].min(point[axis]);
+            max[axis] = max[axis].max(point[axis]);
+        }
+    }
+    Ok(min
+        .iter()
+        .chain(max.iter())
+        .all(|value| value.is_finite())
+        .then_some([min, max]))
 }
 /// Build selection/handles from the same valid vectors which are painted/exported.
 pub fn build(
@@ -465,9 +496,14 @@ pub fn build(
             primitive_count: group.primitive_count,
             handles,
             diagnostic: match &group.target {
-                Target::Dimension { id } | Target::Annotation { id } => {
+                Target::Dimension { id } | Target::Annotation { id } | Target::Table { id } => {
                     rendered.diagnostics.get(id).cloned()
                 }
+                Target::TableSegment { segment, .. } => rendered.diagnostics.get(segment).cloned(),
+                Target::View { key } => rendered
+                    .diagnostics
+                    .get(&drawing::view_id(source, key))
+                    .cloned(),
                 _ => None,
             },
         });
@@ -561,6 +597,7 @@ pub fn build(
                             curve: Some(curve_reference.clone()),
                             carrier: None,
                             projection: projection.clone(),
+                            bounds_mm: Some([paper, paper]),
                         });
                     }
                     for parameter in [0., 0.5, 1.] {
@@ -586,6 +623,11 @@ pub fn build(
                             curve: Some(curve_reference.clone()),
                             carrier: (parameter == 0.5).then(|| carrier.clone()),
                             projection: projection.clone(),
+                            bounds_mm: if parameter == 0.5 {
+                                carrier_bounds(&carrier, projection, view)?
+                            } else {
+                                Some([paper, paper])
+                            },
                         });
                     }
                 }
@@ -625,6 +667,7 @@ pub fn build(
                             curve: None,
                             carrier: None,
                             projection: projection.clone(),
+                            bounds_mm: Some([paper, paper]),
                         });
                     }
                 }
@@ -740,6 +783,12 @@ pub fn nearest_reference(
     let mut best: Option<ReferenceHit> = None;
     for candidate in &scene.references {
         if view.is_some_and(|view| view != candidate.view) {
+            continue;
+        }
+        if candidate
+            .bounds_mm
+            .is_some_and(|bounds| !contains(expanded(bounds, tolerance_mm), paper_mm))
+        {
             continue;
         }
         let mut model = candidate.model_point;
@@ -967,6 +1016,35 @@ fn anchor_mut<'a>(
         _ => Err(invalid("This annotation has no selected point attachment")),
     }
 }
+fn diagnostic_position(
+    doc: &Document,
+    evaluation: &Evaluation,
+    source: &Drawing,
+    page: u32,
+    target: &Target,
+) -> Result<Option<[f64; 2]>> {
+    let key = match target {
+        Target::Table { id } => id,
+        Target::TableSegment { segment, .. } => segment,
+        _ => return Ok(None),
+    };
+    let rendered = drawing::build_sheet_preview(doc, evaluation, source, page)?;
+    if !rendered.diagnostics.contains_key(key) {
+        return Ok(None);
+    }
+    let group = rendered
+        .groups
+        .iter()
+        .find(|group| &group.target == target)
+        .ok_or_else(|| invalid("The diagnostic table is no longer on this page"))?;
+    let primitives = rendered
+        .primitives
+        .get(group.primitive_start..group.primitive_start + group.primitive_count)
+        .ok_or_else(|| invalid("Diagnostic table geometry is stale"))?;
+    let extent =
+        bounds(primitives).ok_or_else(|| invalid("The diagnostic table has no paper handles"))?;
+    Ok(Some(extent[0]))
+}
 /// Apply an edit to a clone, preserving source IDs and the caller's one-operation
 /// draft/checkpoint. No partial source mutation survives validation failure.
 pub fn apply(
@@ -987,7 +1065,7 @@ pub fn apply(
             finite(delta_mm)?;
             match target {
                 Target::View { key } => {
-                    let rendered = drawing::build_sheet_page(doc, evaluation, source, 0)?;
+                    let rendered = drawing::build_sheet_preview(doc, evaluation, source, 0)?;
                     let actual = rendered
                         .views
                         .get(key)
@@ -1005,7 +1083,7 @@ pub fn apply(
                     }
                 }
                 Target::Dimension { id } => {
-                    let rendered = drawing::build_sheet_page(doc, evaluation, source, 0)?;
+                    let rendered = drawing::build_sheet_preview(doc, evaluation, source, 0)?;
                     let dimension = source
                         .dimensions
                         .iter()
@@ -1038,16 +1116,19 @@ pub fn apply(
                     }
                 }
                 Target::Table { id } => {
+                    let position = diagnostic_position(doc, evaluation, source, page, target)?;
                     let table = sheet
                         .tables
                         .iter_mut()
                         .find(|table| &table.id == id)
                         .ok_or_else(|| invalid("The table no longer exists"))?;
+                    let position = position.unwrap_or(table.position_mm);
                     for (axis, delta) in delta_mm.iter().enumerate() {
-                        table.position_mm[axis] += delta;
+                        table.position_mm[axis] = position[axis] + delta;
                     }
                 }
                 Target::TableSegment { table, segment } => {
+                    let position = diagnostic_position(doc, evaluation, source, page, target)?;
                     let table = sheet
                         .tables
                         .iter_mut()
@@ -1060,8 +1141,9 @@ pub fn apply(
                         .ok_or_else(|| {
                             invalid("The selected table segment is no longer on this page")
                         })?;
+                    let position = position.unwrap_or(segment.position_mm);
                     for (axis, delta) in delta_mm.iter().enumerate() {
-                        segment.position_mm[axis] += delta;
+                        segment.position_mm[axis] = position[axis] + delta;
                     }
                 }
                 Target::TitleCell { id } => {
@@ -1081,7 +1163,7 @@ pub fn apply(
             finite(rect_mm)?;
             match target {
                 Target::View { key } => {
-                    let rendered = drawing::build_sheet_page(doc, evaluation, source, 0)?;
+                    let rendered = drawing::build_sheet_preview(doc, evaluation, source, 0)?;
                     let actual = rendered
                         .views
                         .get(key)
@@ -1294,15 +1376,9 @@ pub fn apply(
         }
     }
     drawing::validate_definition(&sheet)?;
-    if matches!(
-        action,
-        Action::ReattachPoint { .. } | Action::ReattachCurve { .. }
-    ) {
-        // Multiple broken anchors can be repaired one at a time in the shared
-        // draft; each new reference is proved above, and final Apply validates all.
-        drawing::build_sheet_preview(doc, evaluation, &sheet, page)?;
-    } else {
-        drawing::build_sheet_page(doc, evaluation, &sheet, page)?;
-    }
+    // Every gesture may repair one item while another still has a drawing
+    // diagnostic. Native reference proofs above stay strict; the worker must
+    // validate the complete drawing before final Apply or production export.
+    drawing::build_sheet_preview(doc, evaluation, &sheet, page)?;
     Ok(sheet)
 }

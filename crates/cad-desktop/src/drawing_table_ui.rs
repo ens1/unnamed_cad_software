@@ -7,11 +7,7 @@ use cad_core::{
 };
 
 pub(crate) fn evaluation(w: &Workspace) -> Option<&cad_core::protocol::Evaluation> {
-    w.session
-        .draft
-        .as_ref()
-        .and_then(|d| d.preview_evaluation())
-        .or(w.session.evaluation.as_ref())
+    crate::drawing_ui::evaluation(w)
 }
 pub(crate) fn scoped(w: &Workspace, sheet: &Drawing) -> Option<cad_core::Document> {
     evaluation(w).map(|e| cad_core::drawing::scoped_document(w.session.visible(), e, sheet))
@@ -329,9 +325,34 @@ pub(crate) fn production_fields(
             ],
         );
         cut_list_columns(f, table, path);
-        f.action(&format!("table/{}/balloons",table.id),"Auto cut-list balloons",json!({"kind":"cut-list-balloons","table":table.id,"view":cad_core::drawing::view_keys(f.sheet).first()}),evaluation(f.w).is_some(),"Wait for current evaluated fabrication metadata");
+        let views = cad_core::drawing::view_keys(f.sheet);
+        let view =
+            f.w.fields
+                .get("drawing-view")
+                .filter(|view| views.contains(view))
+                .cloned()
+                .or_else(|| views.first().cloned());
+        f.action(
+            &format!("table/{}/balloons", table.id),
+            "Auto cut-list balloons in selected view",
+            json!({"kind":"cut-list-balloons","table":table.id,"view":view}),
+            evaluation(f.w).is_some(),
+            "Wait for current evaluated fabrication metadata",
+        );
     }
     f.group("table-pagination", "Splits and continuation pages");
+    f.select(
+        &format!("{path}/pagination_start_page"),
+        "Pagination starts",
+        vec![
+            option(
+                "Automatic: preserve model view room",
+                serde_json::Value::Null,
+            ),
+            option("Original model page", 0),
+            option("First continuation page", 1),
+        ],
+    );
     f.action(
         &format!("table/{}/paginate", table.id),
         "Paginate complete table",
@@ -449,7 +470,15 @@ pub(crate) fn apply_action(
     match kind {
         "table-paginate" => {
             let e = evaluation(w).ok_or_else(|| fail("Wait for current model evaluation"))?;
-            paginate(w.session.visible(), e, &before, &mut sheet.tables[index], 0)?;
+            let first_page =
+                recommended_first_page(w.session.visible(), e, &before, &before.tables[index])?;
+            paginate(
+                w.session.visible(),
+                e,
+                &before,
+                &mut sheet.tables[index],
+                first_page,
+            )?;
         }
         "table-split" => {
             let e = evaluation(w).ok_or_else(|| fail("Wait for current model evaluation"))?;

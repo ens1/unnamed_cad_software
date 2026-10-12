@@ -114,6 +114,9 @@ pub struct Table {
     pub row_order: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub segments: Vec<Segment>,
+    /// None keeps the model page when the complete table leaves usable view room.
+    #[serde(default)]
+    pub pagination_start_page: Option<u32>,
     #[serde(default)]
     pub bom_options: crate::bom::Options,
     #[serde(default)]
@@ -141,6 +144,7 @@ impl Table {
             reserve_space: true,
             row_order: vec![],
             segments: vec![],
+            pagination_start_page: None,
             bom_options: Default::default(),
             cut_list_options: Default::default(),
         }
@@ -269,6 +273,11 @@ pub fn validate(table: &Table) -> Result<()> {
     {
         return Err(invalid(
             "Every saved source-row order entry needs a retained positive row-number reservation",
+        ));
+    }
+    if table.pagination_start_page.is_some_and(|page| page > 1) {
+        return Err(invalid(
+            "Pagination starts on the model page or its first continuation page",
         ));
     }
     if table.segments.len() > 1024
@@ -1545,7 +1554,7 @@ pub fn auto_cut_list_balloons(
     let content = content_for_sheet(doc, e, sheet, table)?;
     let mut balloons = vec![];
     for row in content.entries {
-        if sheet.entities.iter().any(|entity|matches!(&entity.kind,crate::drawing::AnnotationKind::CutListBalloon{table:existing,row_key,..} if existing==&table.id&&row_key==&row.key)) {continue;}
+        if sheet.entities.iter().any(|entity|entity.view==view&&matches!(&entity.kind,crate::drawing::AnnotationKind::CutListBalloon{table:existing,row_key,..} if existing==&table.id&&row_key==&row.key)) {continue;}
         let RowSource::StockGroup { sources, .. } = &row.source else {
             continue;
         };
@@ -1843,7 +1852,7 @@ fn line(out: &mut Vec<Primitive>, a: [f64; 2], b: [f64; 2]) {
     });
 }
 fn cell_lines(value: &str, width: f64, size: f64) -> Vec<String> {
-    let capacity = ((width - 2.) / (size * 0.62)).floor().max(1.) as usize;
+    let capacity = ((width - 2.) / size).floor().max(1.) as usize;
     let mut lines = Vec::new();
     let mut current = String::new();
     let mut length = 0;
@@ -1905,7 +1914,11 @@ pub fn paginate(
                 + 2.,
         )
     };
-    let overhead = table.row_height_mm + height(&content.headers);
+    let title_height = table.row_height_mm.max(
+        cell_lines(&table.title, width, table.text_size_mm).len() as f64 * table.text_size_mm * 1.4
+            + 2.,
+    );
+    let overhead = title_height + height(&content.headers);
     let available = max_y - position[1];
     if !available.is_finite() || overhead >= available {
         return Err(invalid(
@@ -1962,6 +1975,49 @@ pub fn paginate(
     table.segments = segments;
     Ok(())
 }
+/// Automatic paging preserves model interaction room instead of reserving a
+/// full-height table underneath model views. Explicit page choices remain saved.
+pub fn recommended_first_page(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    table: &Table,
+) -> Result<u32> {
+    if let Some(page) = table.pagination_start_page {
+        return Ok(page);
+    }
+    // Prove the full original-page layout, including saved/aligned view
+    // rectangles, other tables and the title block. A minimum cell-height
+    // estimate alone cannot prove that an edited view still has room.
+    let mut candidate = sheet.clone();
+    let current = candidate
+        .tables
+        .iter_mut()
+        .find(|item| item.id == table.id)
+        .ok_or_else(|| invalid("The table is no longer on this sheet"))?;
+    *current = table.clone();
+    current.segments.clear();
+    if crate::drawing::build_sheet(doc, e, &candidate).is_ok() {
+        return Ok(0);
+    }
+    // Automatic continuations use fresh pages. Explicit page choices can
+    // share paper, with normal collision validation and editable placement.
+    let page = sheet
+        .tables
+        .iter()
+        .filter(|other| other.id != table.id)
+        .flat_map(|other| &other.segments)
+        .map(|segment| segment.page)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| invalid("Table continuation page count overflow"))?;
+    if page > 1023 {
+        return Err(invalid("Table pagination exceeds 1024 pages"));
+    }
+    Ok(page)
+}
+
 pub fn page_count(sheet: &Drawing) -> u32 {
     sheet
         .tables
@@ -1970,7 +2026,8 @@ pub fn page_count(sheet: &Drawing) -> u32 {
         .map(|s| s.page)
         .max()
         .unwrap_or(0)
-        + 1
+        .saturating_add(1)
+        .min(1024)
 }
 fn validate_segments(table: &Table, rows: usize) -> Result<()> {
     if table.segments.is_empty() {
@@ -2049,6 +2106,57 @@ pub fn geometries_for_page(
         })
         .collect()
 }
+/// Explicit paper repair targets. These rectangles describe controls, not
+/// manufacturing rows, and are never returned by strict table geometry/export.
+pub fn repair_placeholders(sheet: &Drawing, table: &Table, page: u32) -> Vec<TableGeometry> {
+    let positions: Vec<_> = if table.segments.is_empty() {
+        if page == 0 {
+            vec![(table.position_mm, None)]
+        } else {
+            vec![]
+        }
+    } else {
+        table
+            .segments
+            .iter()
+            .filter(|segment| segment.page == page)
+            .map(|segment| (segment.position_mm, Some(segment.id.clone())))
+            .collect()
+    };
+    let bounds = crate::drawing::paper_bounds(sheet);
+    let width = (bounds[1][0] - bounds[0][0]).clamp(1., 80.);
+    let height = (bounds[1][1] - bounds[0][1]).clamp(1., 18.);
+    positions
+        .into_iter()
+        .map(|(position, segment)| {
+            let min = std::array::from_fn(|axis| {
+                position[axis].clamp(
+                    bounds[0][axis],
+                    (bounds[1][axis] - if axis == 0 { width } else { height }).max(bounds[0][axis]),
+                )
+            });
+            let max = [min[0] + width, min[1] + height];
+            let mut primitives = vec![Primitive::Polyline {
+                points: vec![min, [max[0], min[1]], max, [min[0], max[1]], min],
+                dashed: true,
+            }];
+            let size = 2.5_f64
+                .min((width - 2.).max(0.1) / 13.)
+                .min((height - 2.).max(0.1));
+            primitives.push(Primitive::Text {
+                at: [min[0] + 1., min[1] + height * 0.5 - size * 0.5],
+                size,
+                text: "TABLE: REPAIR".into(),
+            });
+            TableGeometry {
+                primitives,
+                bounds_mm: [min, max],
+                reserve_space: false,
+                segment,
+            }
+        })
+        .collect()
+}
 /// Compatibility aggregate: only the source page's split segments. Layout uses
 /// geometries_for_page so separate portions reserve separate rectangles.
 pub fn geometry(
@@ -2104,7 +2212,11 @@ fn geometry_rows(
     } else {
         sheet.paper_mm[1] - 16.
     };
-    let minimum_height = (rows.len() + 1) as f64 * table.row_height_mm;
+    let title_lines = cell_lines(&table.title, width, table.text_size_mm);
+    let title_height = table
+        .row_height_mm
+        .max(title_lines.len() as f64 * table.text_size_mm * 1.4 + 2.);
+    let minimum_height = rows.len() as f64 * table.row_height_mm + title_height;
     if !width.is_finite()
         || !minimum_height.is_finite()
         || min[0] < bounds[0][0]
@@ -2134,7 +2246,7 @@ fn geometry_rows(
             )
         })
         .collect::<Vec<_>>();
-    let height = heights.iter().sum::<f64>() + table.row_height_mm;
+    let height = heights.iter().sum::<f64>() + title_height;
     let max = [min[0] + width, min[1] + height];
     if !max.iter().all(|v| v.is_finite())
         || min[0] < bounds[0][0]
@@ -2152,16 +2264,18 @@ fn geometry_rows(
     line(&mut out, [max[0], min[1]], max);
     line(&mut out, max, [min[0], max[1]]);
     line(&mut out, [min[0], max[1]], min);
-    let mut y = max[1] - table.row_height_mm;
+    let mut y = max[1] - title_height;
     line(&mut out, [min[0], y], [max[0], y]);
-    out.push(Primitive::Text {
-        at: [
-            min[0] + 1.,
-            y + table.row_height_mm * 0.5 - table.text_size_mm * 0.3,
-        ],
-        size: table.text_size_mm,
-        text: table.title.clone(),
-    });
+    for (index, title) in title_lines.into_iter().enumerate() {
+        out.push(Primitive::Text {
+            at: [
+                min[0] + 1.,
+                max[1] - 1. - table.text_size_mm - index as f64 * table.text_size_mm * 1.4,
+            ],
+            size: table.text_size_mm,
+            text: title,
+        });
+    }
     let mut x = min[0];
     for column in &table.column_widths_mm[..table.column_widths_mm.len() - 1] {
         x += column;

@@ -89,6 +89,7 @@ pub struct State {
     snapping: bool,
     dimension_mode: DimensionMode,
     errors: BTreeMap<String, String>,
+    statuses: BTreeMap<String, (String, String)>,
 }
 fn invalid(message: &str) -> CadError {
     CadError::Invalid(format!("Drawing interaction: {message}"))
@@ -133,10 +134,21 @@ fn session_native(session: &Session) -> Option<&Evaluation> {
 }
 fn refresh(w: &Workspace, state: &mut State, source: &Drawing, page: u32) -> Result<()> {
     let current = current_native(w);
-    let can_reuse = state
-        .cache
-        .as_ref()
-        .is_some_and(|c| geometry_equal(&c.geometry, w.session.visible()));
+    if current.is_none()
+        && w.session
+            .draft
+            .as_ref()
+            .is_some_and(|draft| !draft.pending && draft.error.is_some())
+    {
+        return Err(invalid(
+            "Current native geometry failed validation; correct the model before picking drawing references",
+        ));
+    }
+    let can_reuse = state.cache.as_ref().is_some_and(|cache| {
+        cache.evaluation.identity.backend == w.session.backend
+            && cache.evaluation.identity.protocol == cad_core::protocol::PROTOCOL_VERSION
+            && geometry_equal(&cache.geometry, w.session.visible())
+    });
     if current.is_none() && !can_reuse {
         return Err(invalid(
             "Wait for current model geometry before interacting with the sheet",
@@ -846,6 +858,58 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             }
         }
     }
+    for (viewport, (message, status)) in &state.statuses {
+        let mut data = identity(w);
+        data["viewport"] = json!(viewport);
+        data["classes"] = json!(["viewport-overlay", "paper-status"]);
+        data["diagnostics"] = json!(if status == "error" {
+            vec![message.clone()]
+        } else {
+            vec![]
+        });
+        out.push(SemanticElement {
+            id: format!("drawing.paper-status:{viewport}"),
+            role: "drawing-paper-status".into(),
+            label: message.clone(),
+            value: None,
+            state: status.clone(),
+            commands: vec![],
+            relationships: vec![viewport.clone()],
+            data,
+        });
+    }
+    for (index, guide) in state.guides.iter().enumerate() {
+        let mut data = identity(w);
+        data["points_mm"] = json!(guide);
+        data["paper_units"] = json!("mm");
+        out.push(SemanticElement {
+            id: format!("drawing.snap-guide:{index}"),
+            role: "drawing-snap-guide".into(),
+            label: "Paper alignment guide".into(),
+            value: None,
+            state: "active".into(),
+            commands: vec![],
+            relationships: vec![],
+            data,
+        });
+    }
+    if let Tool::Dimension { first: Some(first) } = &state.tool {
+        let mut data = identity(w);
+        data["reference"] = json!(first.point);
+        data["point_mm"] = json!(first.paper_mm);
+        data["view"] = json!(first.view);
+        data["paper_units"] = json!("mm");
+        out.push(SemanticElement {
+            id: "drawing.pick-marker:first".into(),
+            role: "drawing-pick-marker".into(),
+            label: "First dimension reference".into(),
+            value: None,
+            state: "selected".into(),
+            commands: vec![],
+            relationships: vec![],
+            data,
+        });
+    }
     out.extend(selected_commands(w, state));
     for element in &mut out {
         if let Some(command) = element.commands.first() {
@@ -1293,6 +1357,49 @@ fn draw_primitive(
         }
     }
 }
+fn draw_status(
+    ui: &mut egui::Ui,
+    state: &mut State,
+    viewport: Rect,
+    viewport_id: &str,
+    message: &str,
+    status: &str,
+    centered: bool,
+) {
+    state
+        .statuses
+        .insert(viewport_id.into(), (message.into(), status.into()));
+    let id = format!("drawing.paper-status:{viewport_id}");
+    let size = egui::vec2(
+        (viewport.width() - 20.).max(0.),
+        if centered { 52. } else { 24. },
+    );
+    let default = if centered {
+        Rect::from_center_size(viewport.center(), size)
+    } else {
+        Rect::from_min_size(viewport.left_bottom() + egui::vec2(10., -size.y - 6.), size)
+    };
+    if let Some(rect) =
+        controls::overlay_rect_state(&id, "drawing-paper-status", status, viewport, default)
+    {
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        let properties = controls::properties(
+            &id,
+            "drawing-paper-status",
+            &["viewport-overlay", "paper-status"],
+            status,
+        );
+        controls::apply_properties(&mut child, &properties);
+        controls::label(
+            &mut child,
+            &id,
+            "drawing-paper-status",
+            &["viewport-overlay", "paper-status"],
+            message,
+            status,
+        );
+    }
+}
 pub fn frame(
     w: &mut Workspace,
     ui: &mut egui::Ui,
@@ -1336,26 +1443,27 @@ pub fn frame(
                 &format!("Drawing gesture restored: {error}"),
             );
         }
-        painter.text(
-            viewport.center(),
-            egui::Align2::CENTER_CENTER,
-            error.to_string(),
-            egui::FontId::proportional(13.),
-            ui.visuals().text_color(),
+        draw_status(
+            ui,
+            &mut state,
+            viewport,
+            viewport_id,
+            &error.to_string(),
+            "pending",
+            true,
         );
         w.drawing_interaction = state;
         return true;
     }
     let Some(cache) = state.cache.as_ref() else {
-        painter.text(
-            viewport.center(),
-            egui::Align2::CENTER_CENTER,
-            refresh_result
-                .err()
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "Preparing drawing geometry…".into()),
-            egui::FontId::proportional(13.),
-            ui.visuals().text_color(),
+        draw_status(
+            ui,
+            &mut state,
+            viewport,
+            viewport_id,
+            "Preparing drawing geometry…",
+            "pending",
+            true,
         );
         w.drawing_interaction = state;
         return true;
@@ -1812,18 +1920,52 @@ pub fn frame(
             }
         });
     }
-    for guide in &state.guides {
+    for (index, guide) in state.guides.iter().enumerate() {
+        let properties = controls::properties(
+            &format!("drawing.snap-guide:{index}"),
+            "drawing-snap-guide",
+            &["paper-guide"],
+            "active",
+        );
+        if properties
+            .get("display")
+            .is_some_and(|value| value == "none")
+        {
+            continue;
+        }
+        let color = properties
+            .get("color")
+            .and_then(|value| crate::ui::color(value))
+            .unwrap_or(accent.gamma_multiply(0.7));
         painter.line_segment(
             [at(paper, scale, guide[0]), at(paper, scale, guide[1])],
-            Stroke::new(1., accent.gamma_multiply(0.7)),
+            Stroke::new(controls::number(&properties, "stroke-width", 1.), color),
         );
     }
     if let Tool::Dimension { first: Some(first) } = &state.tool {
-        painter.circle_stroke(
-            at(paper, scale, first.paper_mm),
-            5.,
-            Stroke::new(2., accent),
+        let properties = controls::properties(
+            "drawing.pick-marker:first",
+            "drawing-pick-marker",
+            &["paper-reference"],
+            "selected",
         );
+        if !properties
+            .get("display")
+            .is_some_and(|value| value == "none")
+        {
+            let color = properties
+                .get("color")
+                .and_then(|value| crate::ui::color(value))
+                .unwrap_or(accent);
+            painter.circle_stroke(
+                at(paper, scale, first.paper_mm),
+                controls::number(&properties, "handle-size", 5.).max(0.),
+                Stroke::new(
+                    controls::number(&properties, "stroke-width", 2.).max(0.),
+                    color,
+                ),
+            );
+        }
     }
     let status = if let Some(capture) = &state.capture {
         if capture.viewport_id != viewport_id {
@@ -1846,16 +1988,24 @@ pub fn frame(
             }
         }
     };
-    painter.text(
-        viewport.left_bottom() + egui::vec2(10., -10.),
-        egui::Align2::LEFT_BOTTOM,
+    let message = status.to_owned();
+    let status = if state
+        .capture
+        .as_ref()
+        .is_some_and(|capture| capture.error.is_some())
+    {
+        "error"
+    } else {
+        "ready"
+    };
+    draw_status(
+        ui,
+        &mut state,
+        viewport,
+        viewport_id,
+        &message,
         status,
-        egui::FontId::proportional(11.),
-        if state.capture.as_ref().is_some_and(|c| c.error.is_some()) {
-            ui.visuals().error_fg_color
-        } else {
-            color
-        },
+        false,
     );
     w.drawing_interaction = state;
     true

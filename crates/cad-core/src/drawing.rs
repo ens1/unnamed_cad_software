@@ -703,23 +703,43 @@ pub fn linked_text(doc: &Document, sheet: &Drawing, value: &LinkedText) -> Resul
         }
         LinkedText::SheetName => sheet.name.clone(),
         LinkedText::SheetNumber => {
-            let (master, page) = sheet
-                .id
-                .rsplit_once("::continuation:")
-                .and_then(|(id, index)| index.parse::<u32>().ok().map(|page| (id, page)))
-                .unwrap_or((&sheet.id, 0));
-            let preceding: u32 = doc
+            // Exact saved identities take precedence over the derived-page suffix:
+            // Advanced Source may legitimately contain that text in a master ID.
+            let (master, page) = if doc.drawings.iter().any(|saved| saved.id == sheet.id) {
+                (sheet.id.as_str(), 0)
+            } else {
+                sheet
+                    .id
+                    .rsplit_once("::continuation:")
+                    .and_then(|(id, index)| {
+                        index
+                            .parse::<u32>()
+                            .ok()
+                            .filter(|page| {
+                                doc.drawings.iter().any(|saved| {
+                                    saved.id == id
+                                        && *page < crate::drawing_tables::page_count(saved)
+                                })
+                            })
+                            .map(|page| (id, page))
+                    })
+                    .unwrap_or((sheet.id.as_str(), 0))
+            };
+            let preceding: u64 = if doc.drawings.iter().any(|saved| saved.id == master) {
+                doc.drawings
+                    .iter()
+                    .take_while(|saved| saved.id != master)
+                    .map(|saved| u64::from(crate::drawing_tables::page_count(saved)))
+                    .sum()
+            } else {
+                0
+            };
+            let total: u64 = doc
                 .drawings
                 .iter()
-                .take_while(|d| d.id != master)
-                .map(crate::drawing_tables::page_count)
+                .map(|saved| u64::from(crate::drawing_tables::page_count(saved)))
                 .sum();
-            let total: u32 = doc
-                .drawings
-                .iter()
-                .map(crate::drawing_tables::page_count)
-                .sum();
-            format!("{} / {}", preceding + page + 1, total.max(1))
+            format!("{} / {}", preceding + u64::from(page) + 1, total.max(1))
         }
         LinkedText::SourceRevision => doc.revision.to_string(),
         LinkedText::SourceFingerprint => doc.fingerprint(),
@@ -733,6 +753,10 @@ pub fn linked_text(doc: &Document, sheet: &Drawing, value: &LinkedText) -> Resul
 }
 fn owned_ids(sheet: &Drawing) -> BTreeSet<Id> {
     std::iter::once(sheet.id.clone())
+        .chain(
+            (1..crate::drawing_tables::page_count(sheet))
+                .map(|page| format!("{}::continuation:{page}", sheet.id)),
+        )
         .chain(view_keys(sheet).iter().map(|key| view_id(sheet, key)))
         .chain(sheet.dimensions.iter().map(|d| d.id.clone()))
         .chain(sheet.entities.iter().map(|a| a.id.clone()))
@@ -1611,21 +1635,18 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
             }
         }
     }
-    let bounds = paper_bounds(sheet);
+    // Paper containment is evaluated against resolved views, title/table space
+    // and inherited scales. Source remains editable when that layout is invalid.
     for (key, layout) in &sheet.view_layouts {
-        let [x, y, width, height] = layout.rect_mm;
+        let [_, _, width, height] = layout.rect_mm;
         if !views.contains(key)
             || layout.rect_mm.iter().any(|v| !v.is_finite())
             || width < 8.
             || height < 8.
-            || x < bounds[0][0]
-            || y < bounds[0][1]
-            || x + width > bounds[1][0]
-            || y + height + 7. > bounds[1][1]
             || layout.scale.is_some_and(|v| !v.is_finite() || v <= 0.)
         {
             return Err(invalid(
-                "Saved view layouts need an existing view, a finite paper rectangle inside the border and a positive optional scale",
+                "Saved view layouts need an existing view, a finite paper rectangle at least 8 mm wide and high and a positive optional scale",
             ));
         }
     }
@@ -1697,6 +1718,11 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
         if d.id.is_empty()
             || !ids.insert(d.id.clone())
             || d.options.precision > 8
+            || d.first
+                .iter()
+                .chain(d.second.iter())
+                .any(|p| !p.is_finite())
+            || !d.offset_mm.is_finite()
             || d.options.third_point.iter().any(|p| !p.is_finite())
         {
             return Err(invalid(
@@ -3105,13 +3131,131 @@ pub fn build_sheet_page(
     if page >= crate::drawing_tables::page_count(sheet) {
         return Err(invalid("Requested continuation page is absent"));
     }
-    build_continuation_sheet(doc, e, sheet, page)
+    build_continuation_sheet(doc, e, sheet, page, false)
+}
+fn table_page_geometries(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    page: u32,
+    repair: bool,
+    diagnostics: &mut BTreeMap<Id, String>,
+) -> Result<Vec<(Id, crate::drawing_tables::TableGeometry)>> {
+    let mut tables = vec![];
+    for table in &sheet.tables {
+        let geometries =
+            match crate::drawing_tables::geometries_for_page(doc, e, sheet, table, page) {
+                Ok(geometries) => geometries,
+                Err(error) if repair => {
+                    let message = format!("{} / {}: {error}", sheet.name, table.title);
+                    diagnostics.insert(table.id.clone(), message.clone());
+                    for segment in table.segments.iter().filter(|segment| segment.page == page) {
+                        diagnostics.insert(segment.id.clone(), message.clone());
+                    }
+                    crate::drawing_tables::repair_placeholders(sheet, table, page)
+                }
+                Err(error) => return Err(error),
+            };
+        tables.extend(
+            geometries
+                .into_iter()
+                .map(|geometry| (table.id.clone(), geometry)),
+        );
+    }
+    let overlaps: Vec<_> = tables
+        .iter()
+        .enumerate()
+        .flat_map(|(index, (_, geometry))| {
+            tables
+                .iter()
+                .enumerate()
+                .skip(index + 1)
+                .filter(move |(_, (_, other))| {
+                    rectangles_overlap(geometry.bounds_mm, other.bounds_mm)
+                })
+                .map(move |(other, _)| (index, other))
+        })
+        .collect();
+    let title_overlaps: Vec<_> = title_bounds(sheet)
+        .map(|title| {
+            tables
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, geometry))| rectangles_overlap(title, geometry.bounds_mm))
+                .map(|(index, _)| index)
+                .collect()
+        })
+        .unwrap_or_default();
+    let large_reserved: Vec<_> = if page == 0 && repair {
+        let bounds = paper_bounds(sheet);
+        let names = view_keys(sheet);
+        let rows = names
+            .len()
+            .div_ceil(if names.len() == 1 { 1 } else { 2 })
+            .max(1);
+        let notes = 10. + (sheet.annotations.len() + sheet.title_block.len()) as f64 * 3.5;
+        let notes = if sheet.format.is_some() {
+            notes
+        } else {
+            notes.max(24.)
+        };
+        let maximum_footer = if sheet.format.is_some() {
+            bounds[1][1] - 16. - rows as f64 * 24.
+        } else {
+            sheet.paper_mm[1] - 28. - rows as f64 * 24.
+        };
+        tables
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, geometry))| {
+                geometry.reserve_space && geometry.bounds_mm[1][1] + notes > maximum_footer
+            })
+            .map(|(index, _)| index)
+            .collect()
+    } else {
+        vec![]
+    };
+    let mut mark = |index: usize, message: String| -> Result<()> {
+        if !repair {
+            return Err(invalid(message));
+        }
+        let (id, geometry) = &mut tables[index];
+        diagnostics.insert(id.clone(), message.clone());
+        if let Some(segment) = &geometry.segment {
+            diagnostics.insert(segment.clone(), message);
+        }
+        geometry.reserve_space = false;
+        Ok(())
+    };
+    for index in large_reserved {
+        mark(index,"This table leaves no room for model views; paginate it onto continuation pages or reduce/reposition it".into())?;
+    }
+    // Touching borders are harmless; rectangles_overlap excludes zero-area contact.
+    for (index, other) in overlaps {
+        mark(
+            index,
+            "Drawing table sections overlap; move one section to another position or page".into(),
+        )?;
+        mark(
+            other,
+            "Drawing table sections overlap; move one section to another position or page".into(),
+        )?;
+    }
+    for index in title_overlaps {
+        mark(
+            index,
+            "A drawing table overlaps the title block; move it above or beside the title block"
+                .into(),
+        )?;
+    }
+    Ok(tables)
 }
 fn build_continuation_sheet(
     doc: &Document,
     e: &Evaluation,
     sheet: &Drawing,
     page: u32,
+    repair: bool,
 ) -> Result<Sheet> {
     validate_definition(sheet)?;
     let mut page_definition = sheet.clone();
@@ -3146,29 +3290,24 @@ fn build_continuation_sheet(
             format!("Source {} | page {}", sheet.name, page + 1),
         );
     }
-    for table in &sheet.tables {
-        for geometry in crate::drawing_tables::geometries_for_page(doc, e, sheet, table, page)? {
-            let primitive_start = result.primitives.len();
-            let primitive_count = geometry.primitives.len();
-            result.primitives.extend(geometry.primitives);
-            result
-                .groups
-                .push(crate::drawing_interaction::PrimitiveGroup {
-                    target: if let Some(segment) = geometry.segment {
-                        crate::drawing_interaction::Target::TableSegment {
-                            table: table.id.clone(),
-                            segment,
-                        }
-                    } else {
-                        crate::drawing_interaction::Target::Table {
-                            id: table.id.clone(),
-                        }
-                    },
-                    view: None,
-                    primitive_start,
-                    primitive_count,
-                });
-        }
+    for (table, geometry) in
+        table_page_geometries(doc, e, sheet, page, repair, &mut result.diagnostics)?
+    {
+        let primitive_start = result.primitives.len();
+        let primitive_count = geometry.primitives.len();
+        result.primitives.extend(geometry.primitives);
+        result
+            .groups
+            .push(crate::drawing_interaction::PrimitiveGroup {
+                target: if let Some(segment) = geometry.segment {
+                    crate::drawing_interaction::Target::TableSegment { table, segment }
+                } else {
+                    crate::drawing_interaction::Target::Table { id: table }
+                },
+                view: None,
+                primitive_start,
+                primitive_count,
+            });
     }
     Ok(result)
 }
@@ -3186,7 +3325,10 @@ pub fn build_sheet_preview(
     if page == 0 {
         build_sheet_mode(doc, e, sheet, true)
     } else {
-        build_sheet_page(doc, e, sheet, page)
+        if page >= crate::drawing_tables::page_count(sheet) {
+            return Err(invalid("Requested continuation page is absent"));
+        }
+        build_continuation_sheet(doc, e, sheet, page, true)
     }
 }
 fn build_sheet_mode(
@@ -3221,30 +3363,7 @@ fn build_sheet_mode(
     }
     let bounds = paper_bounds(sheet);
     text(out, [bounds[0][0] + 4., bounds[1][1] - 8.], 5., &sheet.name);
-    let tables = sheet
-        .tables
-        .iter()
-        .map(|table| {
-            crate::drawing_tables::geometries_for_page(doc, e, sheet, table, 0).map(|geometries| {
-                geometries
-                    .into_iter()
-                    .map(|geometry| (table.id.clone(), geometry))
-                    .collect::<Vec<_>>()
-            })
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
-    if let Some(title) = title_bounds(sheet)
-        && tables
-            .iter()
-            .any(|(_, table)| rectangles_overlap(title, table.bounds_mm))
-    {
-        return Err(invalid(
-            "A drawing table overlaps the title block; move the table above or beside it",
-        ));
-    }
+    let tables = table_page_geometries(doc, e, sheet, 0, repair, &mut result.diagnostics)?;
     let instances = sheet_instances(doc, e, sheet)?;
     let exploded_lines = exploded_stage(doc, e, sheet)?
         .map(|s| s.lines.as_slice())
@@ -3421,9 +3540,11 @@ fn build_sheet_mode(
             view.at = [layout.rect_mm[0], layout.rect_mm[1]];
             view.size = [layout.rect_mm[2], layout.rect_mm[3]];
             if view.at[1] < footer_height + 6. {
-                return Err(invalid(format!(
-                    "View '{name}' overlaps reserved title/note/table space"
-                )));
+                let message = format!("View '{name}' overlaps reserved title/note/table space");
+                if !repair {
+                    return Err(invalid(message));
+                }
+                result.diagnostics.insert(view_id(sheet, name), message);
             }
             view.scale = layout.scale.unwrap_or_else(|| {
                 (view.size[0] / (max[0] - min[0]).max(1.))
@@ -3442,9 +3563,12 @@ fn build_sheet_mode(
                 && ((max[0] - min[0]) * view.scale > view.size[0]
                     || (max[1] - min[1]) * view.scale > view.size[1])
             {
-                return Err(invalid(format!(
-                    "View '{name}' does not fit its fixed scale and paper rectangle"
-                )));
+                let message =
+                    format!("View '{name}' does not fit its fixed scale and paper rectangle");
+                if !repair {
+                    return Err(invalid(message));
+                }
+                result.diagnostics.insert(view_id(sheet, name), message);
             }
         }
         if !view.scale.is_finite() || view.scale <= 0. || view.center.iter().any(|v| !v.is_finite())
@@ -3470,16 +3594,24 @@ fn build_sheet_mode(
             || x + width > bounds[1][0]
             || y + height + 7. > bounds[1][1]
         {
-            return Err(invalid(format!(
-                "Aligned view '{name}' falls outside its drawable paper area; move or resize the parent/child view"
-            )));
+            let message = format!(
+                "View '{name}' falls outside its drawable paper area; move or resize the parent/child view"
+            );
+            if !repair {
+                return Err(invalid(message));
+            }
+            result.diagnostics.insert(view_id(sheet, name), message);
         }
         if name != "detail-front"
             && ((max[0] - min[0]) * view.scale > width || (max[1] - min[1]) * view.scale > height)
         {
-            return Err(invalid(format!(
-                "View '{name}' does not fit its inherited scale; enlarge its paper rectangle or release shared scale"
-            )));
+            let message = format!(
+                "View '{name}' does not fit its scale; enlarge its paper rectangle or release shared scale"
+            );
+            if !repair {
+                return Err(invalid(message));
+            }
+            result.diagnostics.insert(view_id(sheet, name), message);
         }
         result.views.insert(
             name.clone(),
@@ -3500,6 +3632,12 @@ fn build_sheet_mode(
                 scale: view.scale,
             },
         );
+        let layout_invalid = result.diagnostics.contains_key(&view_id(sheet, name));
+        let note = if layout_invalid {
+            format!("LAYOUT NEEDS REPAIR · preview wireframe clipped to saved rectangle · {note}")
+        } else {
+            note
+        };
         let view_start = out.len();
         text(out, [view.at[0], view.at[1] + view.size[1] + 4.], 3.5, name);
         text(
@@ -3525,6 +3663,11 @@ fn build_sheet_mode(
                 ..
             } = &table.kind
                 && coordinate_view == name
+                && !result.diagnostics.contains_key(&table.id)
+                && !table
+                    .segments
+                    .iter()
+                    .any(|segment| result.diagnostics.contains_key(&segment.id))
             {
                 let content = crate::drawing_tables::content_for_sheet(doc, e, sheet, table)?;
                 let origin = view.screen(crate::drawing_tables::hole_datum_position(
@@ -3584,6 +3727,7 @@ fn build_sheet_mode(
                 })
                 .transpose()?;
             if name != "detail-front"
+                && !layout_invalid
                 && let Some(curve) = curve
             {
                 crate::sketch_edit::validate_nurbs(&curve)?;
