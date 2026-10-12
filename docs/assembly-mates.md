@@ -73,3 +73,30 @@ Component patterns solve seeds first, expand stable driven occurrences, and vali
 Evaluations publish aggregate convergence/residual, per-mate maximum residual and local equation rank/redundancy, inequality counts, and solved free carrier parameters. A projected equality-Jacobian nullspace describes each seed component's translational/rotational motion directions and geometric DOF. Coupled components may share DOF, so per-component counts must not be summed. Travel bounds are excluded from the equality rank; zero-width Limit Distance, Limit Angle, and Hinge ranges remain equality constraints. Their restrictions still participate in solve/validation. These diagnostics describe local infinitesimal freedom, not finite reachability, a minimal conflict set, collision freedom, or dynamics. Nonconvergent results identify the unresolved mate records and block Apply. Angular residuals use 100 mm/radian alongside millimeter positional residuals and the solver's 1e-6 maximum residual tolerance.
 
 Remaining assembly engineering includes general curved/spherical tangency, composite and 3D paths, broader automatic mating and repair, continuous multi-turn coordinates, simultaneous multi-component manipulation, flexible subassembly scopes, assembly features, broader native interference/clearance validation and large-assembly sparse performance. Compilation/formatting/linting provide the available implementation checks; no code tests, probes or manual/UI smoke exercises were written or run. Interactive acceptance remains with the user.
+
+## Rigid groups and simultaneous movement
+
+Saved rigid groups retain an anchor and captured f64 relative component poses.
+Group construction requires current validated solved placements and 2–128 ordinary
+direct components. The adapter projects active participants into the existing
+lock-mate equations; those generated constraints are derived, and never written
+as separately editable source mates. External mates and grounding remain active.
+Named configurations can suppress groups and components; remaining active
+participants rebase to a surviving anchor. Group diagnostics expose actual
+solver link errors and component freedoms. Dissolve a group before deleting one
+of its source components. A component belongs to at most one saved group.
+
+Move/Rotate accepts multiple direct components, including whole rigid
+subassemblies. Command/Ctrl/Shift geometry preselection and the docked component
+selector establish the moving cohort. A shared picked point or primary-component
+origin defines the rotation pivot. The native solver handles all movement goals
+in one solve, keeps engineering mates active, and preserves the selected
+components' captured relative poses with temporary cohort equations. Those
+movement equations never become saved mates. Fixed, pattern-generated and
+expression-driven participants are guarded; the assembly's grounded reference
+must stay available. Current validated configured pose updates apply as one
+undoable operation, and Cancel restores the starting checkpoint.
+
+Flexible per-occurrence subassembly solves, continuous multi-turn mechanical
+winding and collision-stopped drag remain gaps. Nested subassemblies move as
+rigid direct participants; these controls do not edit shared nested definitions.

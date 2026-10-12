@@ -886,6 +886,7 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         || crate::operation_editor_ui::action(w, command, Some(&element.data))
         || crate::drawing_editor_ui::action(w, command, Some(&element.data))
         || crate::assembly_motion_ui::action(w, command, Some(&element.data))
+        || crate::assembly_tools_ui::action(w, command, Some(&element.data))
         || crate::assembly_welds_ui::action(w, command, Some(&element.data))
     {
         return;
@@ -1047,6 +1048,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                         | "drawing-editor"
                         | "configuration-dimension"
                         | "assembly-weld"
+                        | "assembly-copy"
+                        | "assembly-group"
                 )
         }) {
         element.role.as_str()
@@ -1240,7 +1243,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     .map(str::to_string)
                     .unwrap_or_else(|| value.to_string());
                 let key = format!("presentation-field:{}:{editor_generation}", element.id);
-                let keep_invalid_text = crate::assembly_welds_ui::field_is_invalid(w, element)
+                let keep_invalid_text = crate::assembly_tools_ui::field_is_invalid(w, element)
+                    || crate::assembly_welds_ui::field_is_invalid(w, element)
                     || crate::operation_editor_ui::field_is_invalid(w, element)
                     || crate::drawing_editor_ui::field_is_invalid(w, element)
                     || crate::configuration_ui::field_is_invalid(w, element);
@@ -1314,6 +1318,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         draw(ui)
     };
     if let Some(error) = appearance_error {
+        crate::assembly_tools_ui::field_error(w, element, error.clone());
         crate::assembly_welds_ui::field_error(w, element, error.clone());
         crate::operation_editor_ui::field_error(w, element, error.clone());
         crate::drawing_editor_ui::field_error(w, element, error.clone());
@@ -1323,6 +1328,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     if let Some(next) = next {
         match crate::presentation_composition::set_value(w, element, next) {
             Ok(()) => {
+                crate::assembly_tools_ui::field_error(w, element, None);
                 crate::assembly_welds_ui::field_error(w, element, None);
                 crate::appearances_ui::field_error(w, element, None);
                 crate::operation_editor_ui::field_error(w, element, None);
@@ -1330,6 +1336,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::configuration_ui::field_error(w, element, None);
             }
             Err(error) => {
+                crate::assembly_tools_ui::field_error(w, element, Some(error.to_string()));
                 crate::assembly_welds_ui::field_error(w, element, Some(error.to_string()));
                 w.status = error.to_string();
                 crate::appearances_ui::field_error(w, element, Some(error.to_string()));
@@ -1669,6 +1676,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || crate::operation_editor_ui::action(w, cmd, None)
         || crate::drawing_editor_ui::action(w, cmd, None)
         || crate::assembly_motion_ui::action(w, cmd, None)
+        || crate::assembly_tools_ui::action(w, cmd, None)
         || crate::assembly_welds_ui::action(w, cmd, None)
     {
         return;
@@ -1694,7 +1702,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
     if crate::navigation::action(w, cmd, None) {
         return;
     }
-    if (w.assembly_motion.is_some()
+    if (crate::assembly_tools_ui::active(w)
+        || w.assembly_motion.is_some()
         || w.fields.contains_key("appearance-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
@@ -2117,7 +2126,8 @@ fn new_part(w: &mut Workspace) {
     crate::sketch::begin(w, None);
 }
 pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
-    if w.assembly_motion.is_some()
+    if crate::assembly_tools_ui::active(w)
+        || w.assembly_motion.is_some()
         || w.fields.contains_key("appearance-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
@@ -2184,7 +2194,8 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
         }
         return;
     }
-    if w.fields.contains_key("appearance-tool")
+    if crate::assembly_tools_ui::active(w)
+        || w.fields.contains_key("appearance-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -2779,6 +2790,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         ) && !w.fields.contains_key("mate-editor")
             && !w.fields.contains_key("component-pattern-editor")
             && !w.fields.contains_key("assembly-weld-editor")
+            && !crate::assembly_tools_ui::active(w)
             && ui.small_button("Close").clicked()
         {
             w.dialog = None;
@@ -3166,6 +3178,10 @@ fn presentation_editor(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::presentation_resources::show(ui, w);
 }
 fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
+    if crate::assembly_tools_ui::active(w) {
+        crate::assembly_tools_ui::show(ui, w);
+        return;
+    }
     if w.assembly_motion.is_some() {
         crate::assembly_motion_ui::show(ui, w);
         return;
@@ -3251,6 +3267,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                     exploded_views: BTreeMap::new(),
                     inspections: BTreeMap::new(),
                     weld_beads: BTreeMap::new(),
+                    rigid_groups: BTreeMap::new(),
                     parameters: BTreeMap::new(),
                 },
             );

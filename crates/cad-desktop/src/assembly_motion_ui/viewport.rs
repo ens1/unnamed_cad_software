@@ -72,6 +72,13 @@ pub(super) fn preview(state: &mut State, w: &Workspace, outcome: &Outcome) {
     let Some(preview) = state.placement_preview.as_mut() else {
         return;
     };
+    // Assembly-owned deposits depend on the moved joint, not only an instance
+    // transform. Hide their old native display caches until full evaluation
+    // rebuilds and validates the current source/support contact.
+    for key in preview.assembly_welds.keys() {
+        preview.meshes.remove(key);
+    }
+    preview.assembly_welds.clear();
     let key = cad_core::configuration::key(
         &outcome.assembly,
         state
@@ -84,9 +91,11 @@ pub(super) fn preview(state: &mut State, w: &Workspace, outcome: &Outcome) {
         return;
     };
     assembly.placements = outcome.placements.clone();
-    assembly.report = Some(outcome.solution.report.clone());
-    assembly.diagnostics = outcome.solution.diagnostics.clone();
-    assembly.component_motion = outcome.solution.component_motion.clone();
+    // Transient cohort locks are cursor interaction constraints. They must not
+    // appear as saved-mate rank/DOF diagnostics on this pose-only display cache.
+    assembly.report = None;
+    assembly.diagnostics.clear();
+    assembly.component_motion.clear();
     if let Ok(instances) =
         cad_core::configuration::placed_parts(w.session.visible(), Some(&preview.assemblies))
     {
@@ -582,7 +591,14 @@ pub(super) fn interact(
             .find(|s| !s.path.is_empty())
             && movement_reason(w, &selection.path[0]).is_none()
         {
+            let selected = w.geometry_selection.clone();
+            let cohort = selected
+                .iter()
+                .any(|pick| pick.path.first() == selection.path.first());
             scene::select(w, selection.clone());
+            if cohort {
+                w.geometry_selection = selected;
+            }
             begin(w, selection.path, Mode::Translate);
         }
     }
@@ -631,9 +647,11 @@ pub(super) fn interact(
     {
         let shapes = glyphs(w, &state, rect);
         let handle = hit(&shapes, origin);
-        let selected = scene::pick(w, rect, origin)
-            .into_iter()
-            .find(|s| s.path.first() == state.path.first());
+        let selected = scene::pick(w, rect, origin).into_iter().find(|s| {
+            s.path
+                .first()
+                .is_some_and(|component| state.values.components.contains(component))
+        });
         if handle.is_some() || selected.is_some() {
             let chosen = handle.map(|glyph| glyph.handle).unwrap_or_else(|| {
                 if state.values.mode == Mode::Rotate {

@@ -144,19 +144,26 @@ pub fn summary(w: &Workspace) -> Option<(String, String)> {
     let added = preview
         .changes
         .values()
+        .chain(preview.occurrence_changes.values())
         .any(|change| change.added.is_some());
     let removed = preview
         .changes
         .values()
+        .chain(preview.occurrence_changes.values())
         .any(|change| change.removed.is_some());
     let approximate = preview
         .changes
         .values()
+        .chain(preview.occurrence_changes.values())
         .any(|change| change.representation == PreviewRepresentation::Tessellated);
     let missing = !preview.diagnostics.is_empty()
-        || preview.changes.values().any(|change| {
-            change.added.is_none() && change.removed.is_none() && !change.diagnostics.is_empty()
-        });
+        || preview
+            .changes
+            .values()
+            .chain(preview.occurrence_changes.values())
+            .any(|change| {
+                change.added.is_none() && change.removed.is_none() && !change.diagnostics.is_empty()
+            });
     let unavailable = !added && !removed && missing;
     let state = if unavailable {
         "unavailable"
@@ -200,6 +207,7 @@ pub fn tooltip(w: &Workspace) -> String {
                     preview
                         .changes
                         .values()
+                        .chain(preview.occurrence_changes.values())
                         .flat_map(|change| &change.diagnostics),
                 )
                 .map(|diagnostic| diagnostic.message.as_str()),
@@ -236,8 +244,10 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "baseline_kind":preview.map(|preview|preview.baseline_kind),
             "baseline_identity":preview.map(|preview|&preview.baseline_identity),
             "tolerance_mm":preview.map(|preview|preview.tolerance_mm),"retained":retained,
-            "added":preview.is_some_and(|preview|preview.changes.values().any(|change|change.added.is_some())),
-            "removed":preview.is_some_and(|preview|preview.changes.values().any(|change|change.removed.is_some())),
+            "added":preview.is_some_and(|preview|preview.changes.values().chain(preview.occurrence_changes.values()).any(|change|change.added.is_some())),
+            "removed":preview.is_some_and(|preview|preview.changes.values().chain(preview.occurrence_changes.values()).any(|change|change.removed.is_some())),
+            "placement_changes_valid":preview.is_some_and(|preview|preview.placement_changes_valid),
+            "occurrence_changes":preview.map(|preview|preview.occurrence_changes.iter().map(|(path,change)|serde_json::json!({"path":path,"added":change.added.is_some(),"removed":change.removed.is_some(),"representation":change.representation})).collect::<Vec<_>>()),
             "diagnostic":tooltip(w),
             "display_only":true,"apply_eligible":false}),
     }];

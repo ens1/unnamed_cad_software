@@ -391,6 +391,7 @@ impl<K: KernelAdapter> Resolver<'_, K> {
             .ok_or_else(|| CadError::Invalid("Missing configured assembly".into()))?;
         let generated = cad_core::component_pattern::generated(&assembly);
         assembly.instances.retain(|id, _| !generated.contains(id));
+        assembly = cad_core::assembly_groups::prepared(&assembly)?;
         for instance in assembly.instances.values() {
             if scoped.assemblies.contains_key(&instance.definition) {
                 let config = configuration::selected(

@@ -322,6 +322,7 @@ pub fn import_structure(doc: &mut Document, resource: &str, root: &Path) -> Resu
                 exploded_views: BTreeMap::new(),
                 inspections: BTreeMap::new(),
                 weld_beads: BTreeMap::new(),
+                rigid_groups: BTreeMap::new(),
                 parameters: BTreeMap::new(),
             };
             if has_geometry {
@@ -430,6 +431,7 @@ pub fn import_structure(doc: &mut Document, resource: &str, root: &Path) -> Resu
         exploded_views: BTreeMap::new(),
         inspections: BTreeMap::new(),
         weld_beads: BTreeMap::new(),
+        rigid_groups: BTreeMap::new(),
         parameters: BTreeMap::new(),
     };
     for definition in roots {

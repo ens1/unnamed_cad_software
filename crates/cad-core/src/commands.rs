@@ -41,6 +41,20 @@ pub enum Command {
         assembly: Id,
         weld: Id,
     },
+    PutAssemblyGroup {
+        assembly: Id,
+        group: Box<crate::assembly_groups::Definition>,
+    },
+    DeleteAssemblyGroup {
+        assembly: Id,
+        group: Id,
+    },
+    SuppressAssemblyGroup {
+        assembly: Id,
+        group: Id,
+        suppressed: bool,
+        scope: crate::configuration::PlacementScope,
+    },
     DeleteAssemblyInspection {
         assembly: Id,
         inspection: Id,
@@ -228,6 +242,20 @@ impl Command {
             Self::DeleteAssemblyWeld { assembly, weld } => {
                 crate::assembly_welds::remove(document, &assembly, &weld)?
             }
+            Self::PutAssemblyGroup { assembly, group } => {
+                crate::assembly_groups::put(document, &assembly, *group)?
+            }
+            Self::DeleteAssemblyGroup { assembly, group } => {
+                crate::assembly_groups::remove(document, &assembly, &group)?
+            }
+            Self::SuppressAssemblyGroup {
+                assembly,
+                group,
+                suppressed,
+                scope,
+            } => crate::assembly_groups::set_suppressed(
+                document, &assembly, &group, suppressed, &scope,
+            )?,
             Self::DeleteAssemblyInspection {
                 assembly,
                 inspection,
@@ -420,6 +448,12 @@ impl Command {
             }
             Self::DeleteInstance { assembly, instance } => {
                 let a = document.assemblies.get_mut(&assembly).ok_or_else(missing)?;
+                if a.rigid_groups
+                    .values()
+                    .any(|group| group.members.contains_key(&instance))
+                {
+                    return Err(CadError::Invalid("Remove this component from its saved rigid group or dissolve that group before deleting it".into()));
+                }
                 if crate::component_pattern::generated(a).contains(&instance) {
                     return Err(CadError::Invalid("Suppress this driven occurrence in a configuration, or edit/delete its component pattern".into()));
                 }

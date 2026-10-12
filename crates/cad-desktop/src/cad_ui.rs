@@ -258,6 +258,8 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "assembly.move",
             "assembly.rotate",
             "assembly.pattern",
+            "assembly.group-new",
+            "assembly.copy-with-mates",
             "assembly.exploded-new",
             "assembly.inspection-new",
             "configurations",
@@ -878,6 +880,9 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
     if !crate::drawing_editor_ui::current_source_is_valid(w) {
         return Some("Correct the current drawing fields before applying");
     }
+    if !crate::assembly_tools_ui::valid(w) {
+        return Some("Validate the current assembly group or copy before applying");
+    }
     if !crate::assembly_welds_ui::current_source_is_valid(w) {
         return Some("Correct the current assembly weld source before applying");
     }
@@ -1036,6 +1041,8 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Move Component", "assembly.move"),
                 ("Rotate Component", "assembly.rotate"),
                 ("Component Pattern…", "assembly.pattern"),
+                ("Rigid Group…", "assembly.group-new"),
+                ("Copy With Mates…", "assembly.copy-with-mates"),
                 ("Exploded View…", "assembly.exploded-new"),
                 ("Interference / Clearance…", "assembly.inspection-new"),
                 ("Configurations…", "configurations"),
@@ -1577,6 +1584,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                     }
                 }
             }
+            crate::assembly_groups_ui::tree(ui, w);
             crate::assembly_welds_ui::tree(ui, w);
             if ui.button("Insert Component").clicked() {
                 ui::action(w, "part.new");
@@ -1584,6 +1592,33 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
         });
         return;
     };
+    if doc.assemblies.contains_key(&doc.root)
+        && controls::button(
+            ui,
+            "feature-tree/assembly-root",
+            "assembly-breadcrumb",
+            &["feature-tree-row"],
+            &format!("← {}", doc.name),
+            w.tool_checkpoint.is_none(),
+            false,
+        )
+        .clicked()
+    {
+        w.view.active_part = None;
+        w.view.active_instance = None;
+        w.view.active_node = None;
+        w.selected = None;
+        w.geometry_selection.clear();
+        w.selection_popup = None;
+        w.rendered_key.clear();
+        w.context_selection = None;
+        w.selected_feature_path = None;
+        w.edge_selection_path = None;
+        w.active_plane = None;
+        w.candidates.clear();
+        crate::navigation::stop(w);
+        return;
+    }
     if w.view.mode == "Flow" {
         crate::ui::graph(ui, w, part);
         return;

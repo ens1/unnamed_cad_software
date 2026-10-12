@@ -14,7 +14,11 @@ Normal Cut accepts a closed sketch on a plane parallel to the original blank, in
 
 Structural member groups accept authored planar lines, circular arcs and circles, including construction paths. Curved stock uses native revolution and tangent section frames. End offsets and planar trims determine actual developed centerline lengths. Joint Gap and Trim to Primary Member apply to supported straight stock joints; member ordering defines priority. End caps offer filled outer or hollow inset contours, edge allowance, terminal gap and bounded recessed placement. Curved member ends use their tangent frames.
 
-Cut lists and drawing cut-list tables include curved radius/sweep and associated cap/gusset rows. Accessories retain feature/stock identities, thickness, blank size and whether those bounds are exact or conservative. General spatial/spline members, branch miters, arbitrary body/tool trimming, profile standards libraries and general longest-blank optimization remain gaps.
+Cut lists and drawing cut-list tables include curved radius/sweep and associated cap/gusset rows. Accessories retain feature/stock identities, thickness, blank size and whether those bounds are exact or conservative. Prioritized butt coping is limited to convex straight-sided primary contours;
+circular or concave wall coping is unsupported. Circular trims require
+tangent-normal planes, and recessed caps require square straight ends. Later
+generic Boolean/fillet outputs do not yet remeasure manufacturing stock lineage.
+General spatial/spline members, branch miters, arbitrary body/tool trimming, profile standards libraries and general longest-blank optimization remain gaps.
 
 ## Weld beads
 

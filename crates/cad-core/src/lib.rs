@@ -69,6 +69,8 @@ pub mod sketch_actions;
 
 pub mod modeling_tools;
 
+pub mod assembly_copy;
+pub mod assembly_groups;
 pub mod assembly_welds;
 pub mod mold;
 pub mod navigation;

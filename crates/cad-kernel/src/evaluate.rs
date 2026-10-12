@@ -20,6 +20,37 @@ impl std::io::Write for PreviewByteBudget {
         Ok(())
     }
 }
+fn occurrence_highlight(
+    path: &str,
+    mesh: &MeshData,
+    added: bool,
+    budget: &mut PreviewByteBudget,
+) -> Option<OperationPreviewChange> {
+    #[derive(serde::Serialize)]
+    struct BorrowedChange<'a> {
+        added: Option<&'a MeshData>,
+        removed: Option<&'a MeshData>,
+        representation: PreviewRepresentation,
+        diagnostics: &'a [Diagnostic],
+    }
+    let borrowed = BorrowedChange {
+        added: added.then_some(mesh),
+        removed: (!added).then_some(mesh),
+        representation: PreviewRepresentation::ExactBrep,
+        diagnostics: &[],
+    };
+    let start = budget.remaining;
+    if serde_json::to_writer(&mut *budget, &(path, borrowed)).is_err() {
+        budget.remaining = start;
+        return None;
+    }
+    Some(OperationPreviewChange {
+        added: added.then(|| mesh.clone()),
+        removed: (!added).then(|| mesh.clone()),
+        representation: PreviewRepresentation::ExactBrep,
+        diagnostics: vec![],
+    })
+}
 pub struct Evaluator<K: KernelAdapter = MonstertruckAdapter> {
     pub adapter: K,
     pub shapes: BTreeMap<NodeRef, Shape>,
@@ -203,6 +234,8 @@ impl<K: KernelAdapter> Evaluator<K> {
             focus: request.focus.clone(),
             tolerance_mm: tolerance,
             changes: BTreeMap::new(),
+            placement_changes_valid: false,
+            occurrence_changes: BTreeMap::new(),
             baseline_instances: Vec::new(),
             diagnostics: Vec::new(),
         };
@@ -210,6 +243,7 @@ impl<K: KernelAdapter> Evaluator<K> {
             && request.baseline_identity.backend == self.fingerprint()
             && request.baseline_identity.source == request.baseline.fingerprint();
         let mut baseline = None;
+        let mut baseline_meshes = None;
         if !baseline_valid {
             preview.diagnostics.push(crate::operation_preview::warning(
                 request.focus.as_ref(),
@@ -224,7 +258,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                     tolerance,
                 )
             })) {
-                Ok(Ok(evaluated)) => {
+                Ok(Ok(evaluated)) if evaluated.valid => {
                     preview.baseline_instances = evaluated
                         .instances
                         .iter()
@@ -232,6 +266,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                         .cloned()
                         .collect();
                     baseline = Some((self.body_sets.clone(), self.surface_sets.clone()));
+                    baseline_meshes = Some(evaluated.meshes);
                 }
                 failed => {
                     let reason = match failed {
@@ -240,7 +275,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                             self.last_source.clear();
                             "baseline display evaluation failed internally".into()
                         }
-                        Ok(Ok(_)) => unreachable!(),
+                        Ok(Ok(_)) => "baseline native geometry validation did not succeed".into(),
                     };
                     preview.diagnostics.push(crate::operation_preview::warning(
                         None,
@@ -263,7 +298,8 @@ impl<K: KernelAdapter> Evaluator<K> {
                     "The selected feature has no current solid/surface output for a localized operation preview",
                 ));
             }
-        } else if let Some((before_bodies, before_surfaces)) = baseline {
+        } else if let Some((before_bodies, before_surfaces)) = baseline.filter(|_| evaluated.valid)
+        {
             let keys = before_bodies
                 .keys()
                 .chain(before_surfaces.keys())
@@ -314,13 +350,102 @@ impl<K: KernelAdapter> Evaluator<K> {
                 }
             }
         }
-        let mut budget = PreviewByteBudget {
+        let mut occurrence_budget = PreviewByteBudget {
             remaining: 16 * 1024 * 1024,
         };
         let mut omitted = false;
-        preview.changes.retain(|_, change| {
+        if evaluated.valid
+            && let Some(before_meshes) = baseline_meshes
+        {
+            let before = preview
+                .baseline_instances
+                .iter()
+                .map(|instance| (instance.path.join("/"), instance))
+                .collect::<BTreeMap<_, _>>();
+            let after_instances = evaluated
+                .instances
+                .iter()
+                .chain(
+                    evaluated
+                        .assembly_welds
+                        .values()
+                        .map(|weld| &weld.placement),
+                )
+                .collect::<Vec<_>>();
+            let after = after_instances
+                .iter()
+                .map(|instance| (instance.path.join("/"), *instance))
+                .collect::<BTreeMap<_, _>>();
+            if before.len() != preview.baseline_instances.len()
+                || after.len() != after_instances.len()
+            {
+                preview.diagnostics.push(crate::operation_preview::warning(None,"Occurrence highlights require unique complete component paths; ambiguous membership remains neutral"));
+            } else {
+                preview.placement_changes_valid = true;
+                // Local deltas only serve occurrences present on both sides.
+                // New/removed occurrences already carry their complete native
+                // mesh; do not serialize another full-body delta for that key.
+                let retained_keys = after
+                    .iter()
+                    .filter_map(|(path, instance)| {
+                        before.get(path).map(|old| {
+                            [
+                                cad_core::history::mesh_key(instance).to_string(),
+                                cad_core::history::mesh_key(old).to_string(),
+                            ]
+                        })
+                    })
+                    .flatten()
+                    .collect::<std::collections::BTreeSet<_>>();
+                preview.changes.retain(|key, _| retained_keys.contains(key));
+                for (path, instance) in &after {
+                    if !before.contains_key(path)
+                        && let Some(mesh) =
+                            evaluated.meshes.get(cad_core::history::mesh_key(instance))
+                    {
+                        if let Some(change) =
+                            occurrence_highlight(path, mesh, true, &mut occurrence_budget)
+                        {
+                            preview.occurrence_changes.insert(path.clone(), change);
+                        } else {
+                            omitted = true;
+                        }
+                    }
+                }
+                for (path, instance) in &before {
+                    if !after.contains_key(path)
+                        && let Some(mesh) = before_meshes.get(cad_core::history::mesh_key(instance))
+                    {
+                        if let Some(change) =
+                            occurrence_highlight(path, mesh, false, &mut occurrence_budget)
+                        {
+                            preview.occurrence_changes.insert(path.clone(), change);
+                        } else {
+                            omitted = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !evaluated.valid && request.focus.is_none() {
+            preview.diagnostics.push(crate::operation_preview::warning(None,"The current native geometry did not validate; checkpoint material and occurrence highlights remain neutral"));
+        }
+        let mut budget = PreviewByteBudget {
+            remaining: 16 * 1024 * 1024,
+        };
+        preview.occurrence_changes.retain(|key, change| {
             let start = budget.remaining;
-            if serde_json::to_writer(&mut budget, change).is_err() {
+            if serde_json::to_writer(&mut budget, &(key, change)).is_err() {
+                budget.remaining = start;
+                omitted = true;
+                false
+            } else {
+                true
+            }
+        });
+        preview.changes.retain(|key, change| {
+            let start = budget.remaining;
+            if serde_json::to_writer(&mut budget, &(key, change)).is_err() {
                 budget.remaining = start;
                 omitted = true;
                 false

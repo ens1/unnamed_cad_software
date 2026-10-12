@@ -6,7 +6,7 @@ use std::{
 };
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME: usize = 256 * 1024 * 1024;
-pub const OPERATION_PREVIEW_VERSION: u32 = 1;
+pub const OPERATION_PREVIEW_VERSION: u32 = 2;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RequestIdentity {
     pub protocol: u32,
@@ -162,6 +162,13 @@ pub struct OperationPreview {
     pub tolerance_mm: f64,
     /// Mesh-keyed local material changes, shared across matching occurrences.
     pub changes: BTreeMap<Id, OperationPreviewChange>,
+    /// Checkpoint occurrence membership was compared from validated native
+    /// evaluations. Older display caches must not infer per-instance context.
+    #[serde(default)]
+    pub placement_changes_valid: bool,
+    /// Added/removed complete native occurrences, keyed by full stable path.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub occurrence_changes: BTreeMap<String, OperationPreviewChange>,
     /// Placement context for a completely removed body or occurrence.
     pub baseline_instances: Vec<PlacedPart>,
     #[serde(default)]
@@ -253,7 +260,7 @@ pub enum WorkerRequest {
         identity: RequestIdentity,
         document: Document,
         assemblies: BTreeMap<Id, crate::assembly_geometry::EvaluatedAssembly>,
-        intent: crate::assembly_motion::Intent,
+        intent: Box<crate::assembly_motion::Intent>,
     },
     Evaluate {
         identity: RequestIdentity,

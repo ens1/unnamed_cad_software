@@ -81,6 +81,21 @@ pub trait ConstraintSolver {
             "This solver does not support constraint-respecting assembly movement".into(),
         ))
     }
+    fn manipulate_assembly_group(
+        &self,
+        doc: &Document,
+        assembly: &mut Assembly,
+        frames: &BTreeMap<Id, [crate::assembly_geometry::Frame; 2]>,
+        auxiliary: &BTreeMap<Id, Vec<crate::assembly_geometry::ResolvedEndpoint>>,
+        goals: &[crate::assembly_motion::Goal],
+    ) -> Result<crate::assembly_geometry::AssemblySolution> {
+        match goals {
+            [goal] => self.manipulate_assembly(doc, assembly, frames, auxiliary, goal),
+            _ => Err(CadError::Unsupported(
+                "This solver does not implement simultaneous component manipulation".into(),
+            )),
+        }
+    }
 }
 pub struct NativeSolver;
 const RESIDUAL_TOLERANCE: f64 = 1e-6;
@@ -333,7 +348,7 @@ fn axis_residual(a: Vector3<f64>, b: Vector3<f64>) -> Vector3<f64> {
 }
 impl ConstraintSolver for NativeSolver {
     fn fingerprint(&self) -> &str {
-        "tcad-native-lm/14"
+        "tcad-native-lm/15"
     }
     fn solve_sketch(&self, doc: &Document, part: &str, sketch: &mut Sketch) -> Result<SolveReport> {
         if sketch.points.keys().chain(sketch.members.keys()).any(|id| {
@@ -534,7 +549,7 @@ impl ConstraintSolver for NativeSolver {
         frames: &BTreeMap<Id, [crate::assembly_geometry::Frame; 2]>,
         auxiliary: &BTreeMap<Id, Vec<crate::assembly_geometry::ResolvedEndpoint>>,
     ) -> Result<crate::assembly_geometry::AssemblySolution> {
-        solve_assembly_geometry(doc, assembly, frames, auxiliary, None)
+        solve_assembly_geometry(doc, assembly, frames, auxiliary, &[])
     }
     fn manipulate_assembly(
         &self,
@@ -545,7 +560,33 @@ impl ConstraintSolver for NativeSolver {
         goal: &crate::assembly_motion::Goal,
     ) -> Result<crate::assembly_geometry::AssemblySolution> {
         goal.validate()?;
-        solve_assembly_geometry(doc, assembly, frames, auxiliary, Some(goal))
+        solve_assembly_geometry(doc, assembly, frames, auxiliary, std::slice::from_ref(goal))
+    }
+    fn manipulate_assembly_group(
+        &self,
+        doc: &Document,
+        assembly: &mut Assembly,
+        frames: &BTreeMap<Id, [crate::assembly_geometry::Frame; 2]>,
+        auxiliary: &BTreeMap<Id, Vec<crate::assembly_geometry::ResolvedEndpoint>>,
+        goals: &[crate::assembly_motion::Goal],
+    ) -> Result<crate::assembly_geometry::AssemblySolution> {
+        if goals.is_empty()
+            || goals.len() > crate::assembly_motion::MAX_COMPONENTS
+            || goals
+                .iter()
+                .map(|goal| &goal.instance)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != goals.len()
+        {
+            return Err(CadError::Invalid(
+                "Simultaneous movement needs 1–128 distinct component goals".into(),
+            ));
+        }
+        for goal in goals {
+            goal.validate()?;
+        }
+        solve_assembly_geometry(doc, assembly, frames, auxiliary, goals)
     }
 }
 
@@ -554,7 +595,7 @@ fn solve_assembly_frames(
     assembly: &mut Assembly,
     frames: &BTreeMap<Id, [crate::assembly_geometry::Frame; 2]>,
 ) -> Result<SolveReport> {
-    Ok(solve_assembly_geometry(doc, assembly, frames, &BTreeMap::new(), None)?.report)
+    Ok(solve_assembly_geometry(doc, assembly, frames, &BTreeMap::new(), &[])?.report)
 }
 fn matrix_rank(j: &DMatrix<f64>) -> usize {
     if j.nrows() == 0 || j.ncols() == 0 || j.amax() < 1e-9 {
@@ -579,7 +620,7 @@ fn solve_assembly_geometry(
     assembly: &mut Assembly,
     frames: &BTreeMap<Id, [crate::assembly_geometry::Frame; 2]>,
     auxiliary: &BTreeMap<Id, Vec<crate::assembly_geometry::ResolvedEndpoint>>,
-    goal: Option<&crate::assembly_motion::Goal>,
+    goals: &[crate::assembly_motion::Goal],
 ) -> Result<crate::assembly_geometry::AssemblySolution> {
     use crate::assembly_geometry::{
         AssemblySolution, ComponentMotion, CurvePosition, MateDiagnostic, Relationship,
@@ -726,29 +767,31 @@ fn solve_assembly_geometry(
     let start = DVector::from_vec(start);
     let mut seed = start.clone();
     let mut drive_iterations = 0;
-    if let Some(goal) = goal {
-        if !index.contains_key(&goal.instance) {
-            return Err(CadError::Invalid(
-                "The selected component is grounded".into(),
-            ));
-        }
-        // Start at the requested pure translation/rotation, with the selected
-        // anchor retained. For an unconstrained component this is already the
-        // exact goal, so Move cannot turn into an accidental rotation about a
-        // distant picked point. Remaining freedom prefers this requested pose.
-        let i = index[&goal.instance];
-        let baseline = &base.instances[&goal.instance].placement;
-        let preferred = goal.preference(baseline);
-        for axis in 0..3 {
-            seed[i * 6 + axis] = preferred.translation[axis];
-        }
-        let baseline_matrix = baseline.matrix();
-        let preferred_matrix = preferred.matrix();
-        let relative = preferred_matrix.fixed_view::<3, 3>(0, 0)
-            * baseline_matrix.fixed_view::<3, 3>(0, 0).transpose();
-        let increment = Rotation3::from_matrix_unchecked(relative).scaled_axis();
-        for axis in 0..3 {
-            seed[i * 6 + 3 + axis] = increment[axis];
+    if !goals.is_empty() {
+        for goal in goals {
+            if !index.contains_key(&goal.instance) {
+                return Err(CadError::Invalid(
+                    "The selected component is grounded".into(),
+                ));
+            }
+            // Start at the requested pure translation/rotation, with the selected
+            // anchor retained. For an unconstrained component this is already the
+            // exact goal, so Move cannot turn into an accidental rotation about a
+            // distant picked point. Remaining freedom prefers this requested pose.
+            let i = index[&goal.instance];
+            let baseline = &base.instances[&goal.instance].placement;
+            let preferred = goal.preference(baseline);
+            for axis in 0..3 {
+                seed[i * 6 + axis] = preferred.translation[axis];
+            }
+            let baseline_matrix = baseline.matrix();
+            let preferred_matrix = preferred.matrix();
+            let relative = preferred_matrix.fixed_view::<3, 3>(0, 0)
+                * baseline_matrix.fixed_view::<3, 3>(0, 0).transpose();
+            let increment = Rotation3::from_matrix_unchecked(relative).scaled_axis();
+            for axis in 0..3 {
+                seed[i * 6 + 3 + axis] = increment[axis];
+            }
         }
         let preference = seed.clone();
         // Engineering mates and travel bounds dominate transient cursor/dial
@@ -759,7 +802,9 @@ fn solve_assembly_geometry(
             for value in &mut residual {
                 *value *= 10_000.;
             }
-            residual.extend(goal.residual(&assembly_matrix(&base, &index, x, &goal.instance)?));
+            for goal in goals {
+                residual.extend(goal.residual(&assembly_matrix(&base, &index, x, &goal.instance)?));
+            }
             residual.extend(
                 x.iter()
                     .zip(preference.iter())

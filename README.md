@@ -134,3 +134,14 @@ with colors, widths and hover targets also exposed to user themes. See
 [part edges and hover guides](docs/presentation.md#part-edges-and-hover-center-guides).
 
 **Edit → Settings…** (or **Cmd+,**) opens a compact, searchable dialog for model preferences and application preferences. Model units, precision, evaluation tolerance, new-part finish and lighting travel with the CAD file. Interface scale, navigation, recovery and new-model defaults are saved for the current user. **Application → Themes** picks or loads a complete presentation package or CSS/JSON stylesheet, with live preview, Apply persistence, and Cancel restoration. The bundled [Nocturne example](docs/theme-example.md) moves the inspector right and tools below the viewport, with dark colors and larger circular and pill controls. Apply/OK/Cancel preserve the shared validated draft and undo behavior. The dialog and its fields expose semantic bindings and CSS-like style targets. See [settings](docs/settings.md).
+
+Assembly continuation adds **Rigid Group**, simultaneous **Move / Rotate** and
+**Copy With Mates**. Groups preserve captured relative component positions while
+keeping external mates active. Modified geometry clicks retain selections across
+components; moving selections share one pivot and mate solve. Copy With Mates
+creates ordinary editable occurrences and mates, with explicit external-endpoint
+rebinding. The docked editors expose semantic fields/actions to themes and share
+current validation, checkpoint Cancel and one undoable Apply. See
+[assembly mates](docs/assembly-mates.md) and
+[assembly copying](docs/assembly-copying.md) for source/configuration scope and
+remaining solver limits.

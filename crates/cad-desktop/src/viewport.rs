@@ -398,6 +398,7 @@ pub(crate) fn display_meshes<'a>(
 pub(crate) fn visible(w: &Workspace, i: &PlacedPart) -> bool {
     !w.view.isolation
         || w.peek
+        || crate::assembly_motion_ui::component_selected(w, &i.path)
         || w.view.active_part.as_deref() == Some(&i.definition)
         || w.view.pinned.iter().any(|p| i.path.contains(p))
         || w.view.ghost_others
@@ -405,6 +406,7 @@ pub(crate) fn visible(w: &Workspace, i: &PlacedPart) -> bool {
 pub(crate) fn ghost_neighbor(w: &Workspace, instance: &PlacedPart) -> bool {
     w.view.isolation
         && !w.peek
+        && !crate::assembly_motion_ui::component_selected(w, &instance.path)
         && w.view.active_part.as_ref() != Some(&instance.definition)
         && !w.view.pinned.iter().any(|id| instance.path.contains(id))
 }
@@ -443,13 +445,20 @@ fn preview_meshes(w: &Workspace) -> Vec<PreviewMesh<'_>> {
         .iter()
         .map(|instance| (&instance.path, cad_core::history::mesh_key(instance)))
         .collect::<std::collections::BTreeSet<_>>();
+    let change_for = |instance: &PlacedPart| {
+        preview
+            .placement_changes_valid
+            .then(|| preview.occurrence_changes.get(&instance.path.join("/")))
+            .flatten()
+            .or_else(|| preview.changes.get(cad_core::history::mesh_key(instance)))
+    };
     let mut meshes = vec![];
     for instance in instances
         .iter()
         .copied()
         .filter(|instance| visible(w, instance))
     {
-        let Some(change) = preview.changes.get(cad_core::history::mesh_key(instance)) else {
+        let Some(change) = change_for(instance) else {
             continue;
         };
         for (source, kind) in [
@@ -474,9 +483,7 @@ fn preview_meshes(w: &Workspace) -> Vec<PreviewMesh<'_>> {
         visible(w, instance)
             && !displayed.contains(&(&instance.path, cad_core::history::mesh_key(instance)))
     }) {
-        if let Some(mesh) = preview
-            .changes
-            .get(cad_core::history::mesh_key(instance))
+        if let Some(mesh) = change_for(instance)
             .and_then(|change| change.removed.as_ref())
             .filter(|mesh| !mesh.positions.is_empty() && !mesh.indices.is_empty())
         {
@@ -828,13 +835,44 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
     crate::navigation::stop(w);
     true
 }
-/// Command/Shift preselection accumulates edges on one body occurrence. During
-/// feature editing the authored edge vector is handled by its draft capture.
+/// Assembly preselection retains distinct component geometry. Part edge tools
+/// filter the retained picks to their input body and occurrence.
 pub fn select_modified(w: &mut Workspace, s: Selection, toggle: bool) -> bool {
     let prior = w.geometry_selection.clone();
     let editing = w.tool_checkpoint.is_some();
     if !select(w, s.clone()) {
         return false;
+    }
+    if toggle
+        && !editing
+        && w.session
+            .visible()
+            .assemblies
+            .contains_key(&w.session.visible().root)
+        && w.session.visible().parts.contains_key(&s.definition)
+        && !s.path.is_empty()
+        && matches!(s.reference.topology.as_str(), "edge" | "face")
+    {
+        let mut selected = prior
+            .into_iter()
+            .filter(|pick| {
+                !pick.path.is_empty()
+                    && matches!(pick.reference.topology.as_str(), "edge" | "face")
+                    && w.session.visible().parts.contains_key(&pick.definition)
+            })
+            .collect::<Vec<_>>();
+        if let Some(index) = selected.iter().position(|pick| {
+            pick.path == s.path
+                && pick.definition == s.definition
+                && selected_topology(pick, &s.reference, &s.body)
+        }) {
+            selected.remove(index);
+            w.selected = selected.last().cloned();
+        } else if selected.len() < 1024 {
+            selected.push(s);
+        }
+        w.geometry_selection = selected;
+        return true;
     }
     if toggle && !editing && s.reference.topology == "edge" {
         let mut selected = prior
@@ -902,6 +940,10 @@ pub fn fit(w: &mut Workspace, selection: bool) {
     let props = style(w);
     for i in display_instances(w, e).iter().filter(|i| visible(w, i)) {
         if selection
+            && !w
+                .geometry_selection
+                .iter()
+                .any(|pick| selected_instance(pick, i))
             && w.selected.as_ref().map_or_else(
                 || w.view.active_part.as_ref() != Some(&i.definition),
                 |selected| selected.path != i.path,
@@ -1091,8 +1133,19 @@ pub fn sync_scene(
         ))
     );
     let key = format!(
-        "{key}:{:?}",
-        display_evaluation(&w).map(|e| (&e.identity, e.valid))
+        "{key}:{:?}:{:?}",
+        display_evaluation(&w).map(|e| (&e.identity, e.valid)),
+        w.geometry_selection
+            .iter()
+            .map(|s| (
+                &s.definition,
+                &s.path,
+                &s.body,
+                &s.reference.producer,
+                &s.reference.role,
+                &s.reference.topology
+            ))
+            .collect::<Vec<_>>()
     );
     if w.rendered_key == key {
         return;
@@ -1175,7 +1228,20 @@ pub fn sync_scene(
                         &root,
                         &mut appearance,
                         render_appearance::SurfaceStyle {
-                            tint: ghost.then_some(base_color),
+                            tint: if ghost {
+                                Some(base_color)
+                            } else if crate::assembly_motion_ui::component_selected(
+                                &w,
+                                &instance.path,
+                            ) {
+                                Some(style_color(
+                                    &props,
+                                    "selection-color",
+                                    Color::srgb(1., 0.38, 0.055),
+                                ))
+                            } else {
+                                None
+                            },
                             translucent: ghost,
                             two_sided: ghost || has_surfaces,
                         },
@@ -1233,86 +1299,101 @@ pub fn sync_scene(
             },
         ));
     }
+    let mut selected_faces = w
+        .geometry_selection
+        .iter()
+        .filter(|s| s.reference.topology == "face")
+        .collect::<Vec<_>>();
     if let Some(selection) = w
         .selected
         .as_ref()
-        .filter(|selection| selection.reference.topology == "face")
-        && let Some(evaluation) = selection_evaluation(&w)
-        && let Some(instance) = display_instances(&w, evaluation)
-            .into_iter()
-            .find(|instance| selected_instance(selection, instance) && visible(&w, instance))
+        .filter(|s| s.reference.topology == "face")
+        && !selected_faces.iter().any(|s| {
+            s.path == selection.path
+                && s.definition == selection.definition
+                && selected_topology(s, &selection.reference, &selection.body)
+        })
     {
-        let faces = selection_meshes(&w, evaluation, instance)
-            .into_iter()
-            .flat_map(|mesh| {
-                mesh.faces
+        selected_faces.push(selection);
+    }
+    for selection in selected_faces {
+        if let Some(evaluation) = selection_evaluation(&w)
+            && let Some(instance) = display_instances(&w, evaluation)
+                .into_iter()
+                .find(|instance| selected_instance(selection, instance) && visible(&w, instance))
+        {
+            let faces = selection_meshes(&w, evaluation, instance)
+                .into_iter()
+                .flat_map(|mesh| {
+                    mesh.faces
+                        .iter()
+                        .filter(|face| selected_topology(selection, &face.reference, &face.body))
+                        .map(move |face| (mesh, face))
+                })
+                .collect::<Vec<_>>();
+            if let [(source, face)] = faces.as_slice() {
+                let indices = &source.indices[face.start..face.start + face.count];
+                let positions = indices
                     .iter()
-                    .filter(|face| selected_topology(selection, &face.reference, &face.body))
-                    .map(move |face| (mesh, face))
-            })
-            .collect::<Vec<_>>();
-        if let [(source, face)] = faces.as_slice() {
-            let indices = &source.indices[face.start..face.start + face.count];
-            let positions = indices
-                .iter()
-                .map(|index| {
-                    render_point(placed(source.positions[*index as usize], instance)).to_array()
-                })
-                .collect::<Vec<_>>();
-            let normals = indices
-                .iter()
-                .map(|index| {
-                    let normal = source.normals[*index as usize];
-                    let normal: [f64; 3] = std::array::from_fn(|axis| {
-                        instance.matrix[axis][0] * normal[0]
-                            + instance.matrix[axis][1] * normal[1]
-                            + instance.matrix[axis][2] * normal[2]
-                    });
-                    render_point(normal).normalize_or_zero().to_array()
-                })
-                .collect::<Vec<_>>();
-            let mesh = meshes.add(
-                Mesh::new(
-                    PrimitiveTopology::TriangleList,
-                    RenderAssetUsages::default(),
-                )
-                .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-                .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals),
-            );
-            let [r, g, b, alpha] = selection_color(&w).to_srgba_unmultiplied();
-            let opacity = props
-                .get("selection-opacity")
-                .and_then(|value| value.parse::<f32>().ok())
-                .filter(|value| value.is_finite())
-                .unwrap_or(0.32)
-                .clamp(0., 1.)
-                * alpha as f32
-                / 255.;
-            let material = materials.add(StandardMaterial {
-                base_color: Color::srgba(
-                    r as f32 / 255.,
-                    g as f32 / 255.,
-                    b as f32 / 255.,
-                    opacity,
-                ),
-                unlit: true,
-                alpha_mode: AlphaMode::Blend,
-                depth_bias: 2.,
-                double_sided: true,
-                cull_mode: None,
-                ..default()
-            });
-            commands.spawn((
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(material.clone()),
-                RenderLayers::layer(1),
-                bevy::light::NotShadowCaster,
-                bevy::light::NotShadowReceiver,
-                CadBody {
-                    mesh,
-                    material: CadMaterial::Standard(material),
-                },
-            ));
+                    .map(|index| {
+                        render_point(placed(source.positions[*index as usize], instance)).to_array()
+                    })
+                    .collect::<Vec<_>>();
+                let normals = indices
+                    .iter()
+                    .map(|index| {
+                        let normal = source.normals[*index as usize];
+                        let normal: [f64; 3] = std::array::from_fn(|axis| {
+                            instance.matrix[axis][0] * normal[0]
+                                + instance.matrix[axis][1] * normal[1]
+                                + instance.matrix[axis][2] * normal[2]
+                        });
+                        render_point(normal).normalize_or_zero().to_array()
+                    })
+                    .collect::<Vec<_>>();
+                let mesh = meshes.add(
+                    Mesh::new(
+                        PrimitiveTopology::TriangleList,
+                        RenderAssetUsages::default(),
+                    )
+                    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+                    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals),
+                );
+                let [r, g, b, alpha] = selection_color(&w).to_srgba_unmultiplied();
+                let opacity = props
+                    .get("selection-opacity")
+                    .and_then(|value| value.parse::<f32>().ok())
+                    .filter(|value| value.is_finite())
+                    .unwrap_or(0.32)
+                    .clamp(0., 1.)
+                    * alpha as f32
+                    / 255.;
+                let material = materials.add(StandardMaterial {
+                    base_color: Color::srgba(
+                        r as f32 / 255.,
+                        g as f32 / 255.,
+                        b as f32 / 255.,
+                        opacity,
+                    ),
+                    unlit: true,
+                    alpha_mode: AlphaMode::Blend,
+                    depth_bias: 2.,
+                    double_sided: true,
+                    cull_mode: None,
+                    ..default()
+                });
+                commands.spawn((
+                    Mesh3d(mesh.clone()),
+                    MeshMaterial3d(material.clone()),
+                    RenderLayers::layer(1),
+                    bevy::light::NotShadowCaster,
+                    bevy::light::NotShadowReceiver,
+                    CadBody {
+                        mesh,
+                        material: CadMaterial::Standard(material),
+                    },
+                ));
+            }
         }
     }
 }
@@ -1513,12 +1594,15 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                                 crate::selection_ui::same_edge(reference, &edge.reference)
                             })
                     })
-                }) || w.selected.as_ref().is_some_and(|primary| {
-                    selected_instance(primary, i)
-                        && w.geometry_selection.iter().any(|pick| {
-                            selected_instance(pick, i)
-                                && selected_topology(pick, &edge.reference, &edge.body)
-                        })
+                }) || w.geometry_selection.iter().any(|pick| {
+                    selected_instance(pick, i)
+                        && (selected_topology(pick, &edge.reference, &edge.body)
+                            || pick.reference.topology == "face"
+                                && pick.body == edge.body
+                                && edge.faces.iter().any(|face| {
+                                    face.producer == pick.reference.producer
+                                        && face.role == pick.reference.role
+                                }))
                 });
                 if active || m.indices.is_empty() {
                     let curve_color = props

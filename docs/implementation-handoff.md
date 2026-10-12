@@ -904,3 +904,30 @@ Completed: `cargo check --workspace --locked`, `cargo fmt --all --check`,
 No tests, probes, app launches or UI smoke checks. Packaging will follow the
 requested assembly continuation. The existing dependency future-incompatibility
 notice for proc-macro-error2 remains.
+
+## 2026-10-11 assembly authoring continuation
+
+Rigid-group contract v1 stores captured f64 relative poses for 2–128 ordinary
+direct components and expands into source-owned native lock equations during
+solving. Actual link residual/rank and component DOF diagnostics remain derived.
+Configuration contract v6 adds inherited group suppression; source namespaces,
+reserved identities, deletion and current-evaluation capture are guarded.
+Motion contract v2/NativeSolver15 handles all selected component goals jointly
+with temporary relative-pose equations and shared picked/origin pivot transforms;
+pose-only display caches omit assembly welds until current joint geometry has
+been reevaluated. Copy With Mates v1 creates ordinary editable occurrences and
+mates from validated poses, with internal/group constraints and explicit outside
+endpoint/native-reference rebinding. Insertions are shared source; initial named
+pose hints and later suppression retain their explicit scopes. All editors use
+semantic fields/actions, protected shared source, validated Apply, checkpoint
+Cancel and one undo. Component preselection/highlighting/fit and assembly
+breadcrumbs retain consistent source context. Operation Preview v2 adds bounded
+native-derived occurrence addition/removal caches so copied/patterned components
+highlight without recoloring their originals. Backend adapter revision is 33.
+
+Completed: `cargo check --workspace --locked`, `cargo fmt --all --check`,
+`cargo clippy --workspace --locked -- -D warnings`, and `git diff --check`.
+No tests, probes, model exercises or UI launches. Flexible occurrence solves,
+continuous mechanical winding and collision-stopped movement remain gaps.
+Source review repaired competing-command/source-style/editor-close/unchanged
+confirmation and stale breadcrumb-context issues before the final checks.

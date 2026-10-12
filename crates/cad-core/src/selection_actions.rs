@@ -676,6 +676,18 @@ pub fn project(
             "Component",
             component_reason,
         );
+        add(
+            "assembly.group-new",
+            "Rigid Group…",
+            "Component",
+            component_reason,
+        );
+        add(
+            "assembly.copy-with-mates",
+            "Copy With Mates…",
+            "Component",
+            component_reason,
+        );
     }
     out
 }

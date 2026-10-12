@@ -7,7 +7,7 @@ use std::{
 };
 pub mod dimensions;
 pub use dimensions::{DimensionField, FIELD_CONTRACT_VERSION};
-pub const CONTRACT_VERSION: u32 = 5;
+pub const CONTRACT_VERSION: u32 = 6;
 fn supported_version(value: u32) -> bool {
     (1..=CONTRACT_VERSION).contains(&value)
 }
@@ -51,6 +51,9 @@ pub struct Overrides {
     /// Owning-assembly deposited weld IDs. True suppresses, false restores.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub assembly_welds: BTreeMap<Id, bool>,
+    /// Saved rigid-group IDs. True releases its locks; false restores them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rigid_groups: BTreeMap<Id, bool>,
     #[serde(default)]
     pub component_configurations: BTreeMap<Id, Option<Id>>,
     /// Stable owning-assembly occurrence IDs. Each omitted coordinate inherits.
@@ -234,6 +237,7 @@ fn merge(target: &mut Overrides, next: &Overrides) {
         .extend(next.component_patterns.clone());
     target.mates.extend(next.mates.clone());
     target.assembly_welds.extend(next.assembly_welds.clone());
+    target.rigid_groups.extend(next.rigid_groups.clone());
     target
         .component_configurations
         .extend(next.component_configurations.clone());
@@ -427,6 +431,7 @@ pub fn validate(doc: &Document) -> Result<()> {
                 )?;
                 if !o.components.is_empty()
                     || !o.assembly_welds.is_empty()
+                    || !o.rigid_groups.is_empty()
                     || !o.mates.is_empty()
                     || !o.component_configurations.is_empty()
                     || !o.component_patterns.is_empty()
@@ -451,6 +456,11 @@ pub fn validate(doc: &Document) -> Result<()> {
                     o.assembly_welds.keys(),
                     |id| a.weld_beads.contains_key(id),
                     "assembly weld",
+                )?;
+                require_keys(
+                    o.rigid_groups.keys(),
+                    |id| a.rigid_groups.contains_key(id),
+                    "rigid group",
                 )?;
                 require_keys(
                     o.parameters.keys(),
@@ -794,6 +804,13 @@ fn apply_assembly(assembly: &mut Assembly, o: &Overrides) -> Result<()> {
             .ok_or_else(|| invalid("Configured assembly weld is missing"))?
             .suppressed = *suppressed;
     }
+    for (id, suppressed) in &o.rigid_groups {
+        assembly
+            .rigid_groups
+            .get_mut(id)
+            .ok_or_else(|| invalid("Configured rigid group is missing"))?
+            .suppressed = *suppressed;
+    }
     assembly
         .instances
         .retain(|id, _| !o.components.get(id).copied().unwrap_or(false));
@@ -964,6 +981,9 @@ pub fn csv(table: &Table) -> Result<String> {
         for key in c.overrides.assembly_welds.keys() {
             keys.insert(format!("weld:{key}"));
         }
+        for key in c.overrides.rigid_groups.keys() {
+            keys.insert(format!("group:{key}"));
+        }
         for key in c.overrides.component_configurations.keys() {
             keys.insert(format!("configuration:{key}"));
         }
@@ -1082,6 +1102,11 @@ fn cell(c: &Definition, h: &str) -> Result<String> {
                     .assembly_welds
                     .get(key)
                     .map(|s| s.to_string())
+                    .unwrap_or_default(),
+                "group" => o
+                    .rigid_groups
+                    .get(key)
+                    .map(|value| value.to_string())
                     .unwrap_or_default(),
                 "configuration" => o
                     .component_configurations
@@ -1313,6 +1338,9 @@ fn set_cell(c: &mut Definition, h: &str, value: &str) -> Result<()> {
                 "weld" => {
                     o.assembly_welds.insert(key.into(), boolean(value)?);
                 }
+                "group" => {
+                    o.rigid_groups.insert(key.into(), boolean(value)?);
+                }
                 "configuration" => {
                     o.component_configurations.insert(
                         key.into(),
@@ -1505,6 +1533,14 @@ fn import_into(doc: &mut Document, mut table: Table, replace: bool) -> Result<()
                     .map(|bead| (bead.id.clone(), bead.name.clone()))
                     .collect::<Vec<_>>(),
                 "assembly weld",
+            )?;
+            normalize_map(
+                &mut o.rigid_groups,
+                &a.rigid_groups
+                    .values()
+                    .map(|group| (group.id.clone(), group.name.clone()))
+                    .collect::<Vec<_>>(),
+                "rigid group",
             )?;
             normalize_map(&mut o.component_configurations, &instances, "component")?;
             normalize_map(

@@ -33,6 +33,14 @@ struct Values {
     pivot: Pivot,
     translation: [Expr; 3],
     rotation: [Expr; 3],
+    #[serde(default)]
+    components: Vec<Id>,
+}
+struct Component {
+    path: Vec<Id>,
+    name: String,
+    placement: Placement,
+    reason: Option<String>,
 }
 pub struct State {
     token: Id,
@@ -44,6 +52,7 @@ pub struct State {
     path: Vec<Id>,
     name: String,
     placement: Placement,
+    components: BTreeMap<Id, Component>,
     picked_anchor: Option<[f64; 3]>,
     placement_scope: cad_core::configuration::PlacementScope,
     preferred_placement: Option<Placement>,
@@ -168,6 +177,10 @@ fn begin(w: &mut Workspace, path: Vec<Id>, mode: Mode) {
         w.status = "Finish or cancel the current operation before moving a component".into();
         return;
     }
+    if w.view.exploded_view.is_some() {
+        w.status="Return to the assembled view before moving components; exploded step positions belong to the Exploded View editor".into();
+        return;
+    }
     let Some(component) = path.first() else {
         w.status = "Select an assembly component first".into();
         return;
@@ -218,6 +231,55 @@ fn begin(w: &mut Workspace, path: Vec<Id>, mode: Mode) {
         return;
     };
     let name = instance.name.clone();
+    let current = &evaluation.assemblies[&key];
+    let generated =
+        cad_core::component_pattern::generated(&expression_context.assemblies[&baseline.root]);
+    let mut components = BTreeMap::new();
+    for instance in baseline.assemblies[&baseline.root].instances.values() {
+        let Some(placement) = current.placements.get(&instance.id).cloned() else {
+            continue;
+        };
+        let saved_path = w
+            .geometry_selection
+            .iter()
+            .chain(w.selected.iter())
+            .find(|selection| selection.path.first() == Some(&instance.id))
+            .map(|selection| selection.path.clone())
+            .unwrap_or_else(|| vec![instance.id.clone()]);
+        components.insert(
+            instance.id.clone(),
+            Component {
+                path: saved_path,
+                name: instance.name.clone(),
+                placement,
+                reason: component_reason(
+                    &expression_context.assemblies[&baseline.root],
+                    Some(current),
+                    &generated,
+                    &instance.id,
+                ),
+            },
+        );
+    }
+    let mut selected_components = vec![component.clone()];
+    for selection in &w.geometry_selection {
+        if let Some(id) = selection
+            .path
+            .first()
+            .filter(|id| components.contains_key(*id))
+            && !selected_components.contains(id)
+        {
+            if let Some(reason) = &components[id].reason {
+                w.status = format!("{}: {reason}", components[id].name);
+                return;
+            }
+            if selected_components.len() >= assembly_motion::MAX_COMPONENTS {
+                w.status = "Select at most 128 direct components for one movement".into();
+                return;
+            }
+            selected_components.push(id.clone());
+        }
+    }
     let assemblies = evaluation.assemblies.clone();
     let placement_scope =
         cad_core::configuration::PlacementScope::selected(&baseline, &baseline.root);
@@ -256,6 +318,7 @@ fn begin(w: &mut Workspace, path: Vec<Id>, mode: Mode) {
         },
         translation: std::array::from_fn(|_| Expr("0 mm".into())),
         rotation: std::array::from_fn(|_| Expr("0 deg".into())),
+        components: selected_components,
     };
     w.geometry_selection.clear();
     w.edge_selection_path = None;
@@ -270,6 +333,7 @@ fn begin(w: &mut Workspace, path: Vec<Id>, mode: Mode) {
         path,
         name,
         placement,
+        components,
         picked_anchor,
         placement_scope,
         preferred_placement: None,
@@ -349,11 +413,44 @@ fn intent(state: &State) -> Result<Intent> {
     );
     goal.preferred_placement = state.preferred_placement.clone();
     goal.validate()?;
+    let pivot = drag::anchor(&state.placement, anchor);
+    let mut additional_goals = vec![];
+    let mut additional_paths = vec![];
+    for id in state
+        .values
+        .components
+        .iter()
+        .filter(|id| *id != &state.path[0])
+    {
+        let component = state.components.get(id).ok_or_else(|| {
+            CadError::Invalid("A selected movement component is no longer available".into())
+        })?;
+        if let Some(reason) = &component.reason {
+            return Err(CadError::Invalid(format!("{}: {reason}", component.name)));
+        }
+        let local = assembly_motion::local_anchor(&component.placement, pivot)?;
+        let mut target = Goal::from_offsets(
+            id.clone(),
+            &component.placement,
+            local,
+            translation,
+            rotation,
+        );
+        target.preferred_placement = state
+            .outcome
+            .as_ref()
+            .and_then(|outcome| outcome.placements.get(id))
+            .cloned();
+        additional_goals.push(target);
+        additional_paths.push(component.path.clone());
+    }
     Ok(Intent {
         version: assembly_motion::CONTRACT_VERSION,
         assembly: state.baseline.root.clone(),
         path: state.path.clone(),
         goal,
+        additional_goals,
+        additional_paths,
     })
 }
 fn changed(state: &mut State) {
@@ -369,6 +466,113 @@ fn changed(state: &mut State) {
     }
     if state.values.mode == Mode::Translate && state.selected_handle.rotation() {
         state.selected_handle = Handle::ViewPlane;
+    }
+}
+fn toggle_component(state: &mut State, component: &str) -> Result<()> {
+    if state.capture.is_some() {
+        return Err(CadError::Invalid(
+            "Release the movement handle before changing its component selection".into(),
+        ));
+    }
+    if component == state.path[0] {
+        return Err(CadError::Invalid(
+            "The primary movement component remains selected; begin another movement to change it"
+                .into(),
+        ));
+    }
+    let entry = state
+        .components
+        .get(component)
+        .ok_or_else(|| CadError::Invalid("The movement component no longer exists".into()))?;
+    if let Some(reason) = &entry.reason {
+        return Err(CadError::Invalid(reason.clone()));
+    }
+    if state.values.components.iter().any(|id| id == component) {
+        state.values.components.retain(|id| id != component);
+    } else {
+        if state.values.components.len() >= assembly_motion::MAX_COMPONENTS {
+            return Err(CadError::Invalid(
+                "Select at most 128 direct components for one movement".into(),
+            ));
+        }
+        state.values.components.push(component.into());
+    }
+    changed(state);
+    Ok(())
+}
+fn component_selection(ui: &mut egui::Ui, state: &mut State) {
+    let identity = id(state, "components");
+    let properties = controls::properties(
+        &identity,
+        "assembly-motion-components",
+        &["selection-list"],
+        "draft",
+    );
+    if properties
+        .get("display")
+        .is_some_and(|value| value == "none")
+    {
+        return;
+    }
+    controls::label(
+        ui,
+        &format!("{identity}.label"),
+        "field-label",
+        &[],
+        &format!("Components · {} selected", state.values.components.len()),
+        "ready",
+    );
+    let choices = state.components.keys().cloned().collect::<Vec<_>>();
+    egui::ScrollArea::vertical()
+        .id_salt(&identity)
+        .max_height(controls::number(&properties, "max-height", 140.))
+        .show_rows(
+            ui,
+            controls::number(&properties, "height", 24.),
+            choices.len(),
+            |ui, rows| {
+                for row in rows {
+                    let component = &choices[row];
+                    let selected = state.values.components.contains(component);
+                    let entry = &state.components[component];
+                    let enabled = component != &state.path[0]
+                        && entry.reason.is_none()
+                        && state.capture.is_none()
+                        && (selected
+                            || state.values.components.len() < assembly_motion::MAX_COMPONENTS);
+                    let response = controls::button(
+                        ui,
+                        &format!("{identity}.{component}"),
+                        "assembly-motion-component-action",
+                        &["selection-choice"],
+                        &entry.name,
+                        enabled,
+                        selected,
+                    );
+                    if let Some(reason) = &entry.reason {
+                        response.clone().on_hover_text(reason);
+                    } else if component == &state.path[0] {
+                        response.clone().on_hover_text(
+                            "Primary component · shared pivot belongs to this occurrence",
+                        );
+                    }
+                    if response.clicked()
+                        && let Err(error) = toggle_component(state, component)
+                    {
+                        state.error = Some(error.to_string());
+                    }
+                }
+            },
+        );
+}
+fn title(state: &State) -> String {
+    if state.values.components.len() > 1 {
+        format!(
+            "Move / Rotate · {} components",
+            state.values.components.len()
+        )
+    } else {
+        format!("Move Component · {}", state.name)
     }
 }
 fn rebase_values(state: &mut State) {
@@ -472,7 +676,7 @@ pub fn poll(w: &mut Workspace) {
                     identity: identity.clone(),
                     document: state.baseline.clone(),
                     assemblies: state.assemblies.clone(),
-                    intent,
+                    intent: Box::new(intent),
                 });
                 state.submitted = state.values.clone();
                 state.needs_solve = false;
@@ -574,6 +778,12 @@ pub fn dragging(w: &Workspace) -> bool {
     w.assembly_motion
         .as_ref()
         .is_some_and(|state| state.capture.is_some() || state.blocked_owner.is_some())
+}
+pub(crate) fn component_selected(w: &Workspace, path: &[Id]) -> bool {
+    w.assembly_motion.as_ref().is_some_and(|state| {
+        path.first()
+            .is_some_and(|component| state.values.components.contains(component))
+    })
 }
 pub fn cancel_drag(w: &mut Workspace) -> bool {
     viewport::cancel(w)
@@ -756,13 +966,31 @@ fn movement_status(state: &State) -> String {
         "Solving the current movement…".into()
     } else if let Some(outcome) = &state.outcome {
         let mut message = format!(
-            "{} remaining DOF · mate residual {:.3e}",
-            outcome.solution.report.degrees_of_freedom, outcome.solution.report.residual
+            "{} {} DOF · mate residual {:.3e}",
+            outcome.solution.report.degrees_of_freedom,
+            if state.values.components.len() > 1 {
+                "transient cohort"
+            } else {
+                "remaining"
+            },
+            outcome.solution.report.residual
         );
-        if let Some(error) = outcome.position_error_mm.filter(|e| *e > 1e-6) {
+        let position_error = outcome
+            .goal_errors
+            .values()
+            .filter_map(|error| error.position_error_mm)
+            .max_by(f64::total_cmp)
+            .or(outcome.position_error_mm);
+        let rotation_error = outcome
+            .goal_errors
+            .values()
+            .filter_map(|error| error.rotation_error_deg)
+            .max_by(f64::total_cmp)
+            .or(outcome.rotation_error_deg);
+        if let Some(error) = position_error.filter(|e| *e > 1e-6) {
             message.push_str(&format!(" · requested point limited by {error:.4} mm"));
         }
-        if let Some(error) = outcome.rotation_error_deg.filter(|e| *e > 1e-6) {
+        if let Some(error) = rotation_error.filter(|e| *e > 1e-6) {
             message.push_str(&format!(" · requested rotation limited by {error:.4}°"));
         }
         message
@@ -838,16 +1066,17 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         &id(&state, "title"),
         "tool-title",
         &[],
-        &format!("Move Component · {}", state.name),
+        &title(&state),
         "ready",
     );
     modes(ui, &mut state);
+    component_selection(ui, &mut state);
     controls::label(
         ui,
         &id(&state, "guidance"),
         "tool-guidance",
         &[],
-        "Offsets use assembly axes. Mates and travel limits constrain the requested movement.",
+        "Selected components move together about the primary component's origin or picked point. Offsets use assembly axes; mates and travel limits remain enforced.",
         "ready",
     );
     if state.path.len() > 1 {
@@ -947,6 +1176,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     }
     if state.values != before {
         w.confirm_requested = false;
+        w.rendered_key.clear();
     }
     w.assembly_motion = Some(state);
     if cancel {
@@ -1057,6 +1287,22 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>
             w.confirm_requested = false;
             true
         }
+        "assembly.motion-component" => {
+            let component = data
+                .and_then(|data| data.get("component"))
+                .and_then(serde_json::Value::as_str);
+            if let Some(component) = component
+                && let Some(state) = w.assembly_motion.as_mut()
+            {
+                if let Err(error) = toggle_component(state, component) {
+                    w.status = error.to_string();
+                } else {
+                    w.confirm_requested = false;
+                    w.rendered_key.clear();
+                }
+            }
+            true
+        }
         "assembly.motion-retry" => {
             if let Some(state) = w.assembly_motion.as_mut() {
                 changed(state);
@@ -1145,11 +1391,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         return elements;
     };
     for (key, role, text) in [
-        (
-            "title",
-            "tool-title",
-            format!("Move Component · {}", state.name),
-        ),
+        ("title", "tool-title", title(state)),
         (
             "guidance",
             "tool-guidance",
@@ -1173,6 +1415,30 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         data:serde_json::json!({"contract":"tcad.assembly_motion","version":assembly_motion::CONTRACT_VERSION,"token":state.token,"scope":state.placement_scope,"editable":false,"base_requires_active_base_configuration":true}),
     });
     elements.extend(viewport::semantics(w, state));
+    if let Some(outcome) = &state.outcome {
+        for (component, error) in &outcome.goal_errors {
+            elements.push(SemanticElement {id:format!("{}.{}",id(state,"goal-error"),component),role:"assembly-motion-goal-status".into(),label:state.components.get(component).map(|entry|entry.name.clone()).unwrap_or_else(||component.clone()),value:Some(format!("Point {:.6} mm · rotation {:.6}°",error.position_error_mm.unwrap_or(0.),error.rotation_error_deg.unwrap_or(0.))),state:if error.position_error_mm.is_some_and(|error|error>1e-6) || error.rotation_error_deg.is_some_and(|error|error>1e-6){"limited"}else{"reached"}.into(),commands:vec![],relationships:vec![component.clone()],data:serde_json::json!({"contract":"tcad.assembly_motion","version":assembly_motion::CONTRACT_VERSION,"goal_error":error,"selected":state.values.components.contains(component),"shared_pivot":true,"temporary_relative_locks":state.values.components.len()>1})});
+        }
+    }
+    elements.push(SemanticElement {id:id(state,"components"),role:"assembly-motion-components".into(),label:format!("Components · {} selected",state.values.components.len()),value:None,state:"draft".into(),commands:vec![],relationships:state.values.components.clone(),data:serde_json::json!({"contract":"tcad.assembly_motion","version":assembly_motion::CONTRACT_VERSION,"token":state.token,"selection":state.values.components,"shared_pivot":true,"maximum":assembly_motion::MAX_COMPONENTS})});
+    for (component, entry) in &state.components {
+        let selected = state.values.components.contains(component);
+        let reason = entry
+            .reason
+            .clone()
+            .or_else(|| (component == &state.path[0]).then(|| "Primary movement component".into()))
+            .or_else(|| {
+                state
+                    .capture
+                    .is_some()
+                    .then(|| "Release the movement handle first".into())
+            })
+            .or_else(|| {
+                (!selected && state.values.components.len() >= assembly_motion::MAX_COMPONENTS)
+                    .then(|| "Maximum movement selection reached".into())
+            });
+        elements.push(SemanticElement {id:format!("{}.{}",id(state,"components"),component),role:"assembly-motion-component-action".into(),label:entry.name.clone(),value:Some(selected.to_string()),state:if selected {"selected"}else if reason.is_some(){"disabled"}else{"ready"}.into(),commands:vec!["assembly.motion-component".into()],relationships:vec![state.baseline.root.clone(),component.clone()],data:serde_json::json!({"contract":"tcad.assembly_motion","version":assembly_motion::CONTRACT_VERSION,"token":state.token,"component":component,"path":entry.path,"selected":selected,"actions":[{"command":"assembly.motion-component","label":"Toggle movement component","enabled":reason.is_none(),"disabled_reason":reason,"arguments":{"token":state.token,"component":component}}]})});
+    }
     if state.path.len() > 1 {
         elements.push(SemanticElement {
             id:id(state,"scope"), role:"tool-guidance".into(), label:"The selected nested occurrence moves with its rigid top-level subassembly.".into(), value:None, state:"ready".into(), commands:vec![], relationships:vec![state.path[0].clone()],

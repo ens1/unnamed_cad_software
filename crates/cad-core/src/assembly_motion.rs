@@ -7,10 +7,11 @@ use crate::{
 };
 use nalgebra::{Matrix4, Rotation3, Vector3, Vector4};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 pub mod drag;
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
+pub const MAX_COMPONENTS: usize = 128;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Goal {
@@ -127,6 +128,70 @@ pub struct Intent {
     /// one direct participant; this never edits a shared nested definition.
     pub path: Vec<Id>,
     pub goal: Goal,
+    /// Additional distinct direct participants, requested in one shared solve.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_goals: Vec<Goal>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_paths: Vec<Vec<Id>>,
+}
+impl Intent {
+    pub fn participants(&self) -> impl Iterator<Item = (&[Id], &Goal)> {
+        std::iter::once((self.path.as_slice(), &self.goal)).chain(
+            self.additional_paths
+                .iter()
+                .map(Vec::as_slice)
+                .zip(&self.additional_goals),
+        )
+    }
+    pub fn validate(&self) -> Result<()> {
+        if !(1..=CONTRACT_VERSION).contains(&self.version)
+            || self.additional_goals.len() != self.additional_paths.len()
+            || self.additional_goals.len() >= MAX_COMPONENTS
+            || self.version == 1 && !self.additional_goals.is_empty()
+        {
+            return Err(CadError::Invalid(
+                "Movement needs a supported contract and 1–128 complete component goals".into(),
+            ));
+        }
+        let mut distinct = BTreeSet::new();
+        for (path, goal) in self.participants() {
+            goal.validate()?;
+            if path.first() != Some(&goal.instance)
+                || path.len() > 64
+                || !distinct.insert(&goal.instance)
+            {
+                return Err(CadError::Invalid("Movement component paths must be complete and direct participants must be distinct".into()));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GoalError {
+    pub position_error_mm: Option<f64>,
+    pub rotation_error_deg: Option<f64>,
+}
+fn goal_error(goal: &Goal, placement: &Placement) -> GoalError {
+    let residual = goal.residual(&placement.matrix());
+    GoalError {
+        position_error_mm: goal.position.map(|_| {
+            residual
+                .iter()
+                .take(3)
+                .fold(0_f64, |length, value| length.hypot(*value))
+        }),
+        rotation_error_deg: goal
+            .rotation_deg
+            .map(|_| {
+                residual
+                    .iter()
+                    .skip(if goal.position.is_some() { 3 } else { 0 })
+                    .fold(0_f64, |length, value| length.hypot(*value))
+                    / 100.
+            })
+            .map(f64::to_degrees),
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -141,6 +206,10 @@ pub struct Outcome {
     pub solution: AssemblySolution,
     pub position_error_mm: Option<f64>,
     pub rotation_error_deg: Option<f64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub goal_errors: BTreeMap<Id, GoalError>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_paths: Vec<Vec<Id>>,
 }
 
 fn source_parameter(
@@ -172,11 +241,8 @@ pub fn solve(
     intent: &Intent,
 ) -> Result<Outcome> {
     doc.validate()?;
-    intent.goal.validate()?;
-    if intent.version != CONTRACT_VERSION
-        || intent.assembly != doc.root
-        || intent.path.first() != Some(&intent.goal.instance)
-    {
+    intent.validate()?;
+    if intent.assembly != doc.root {
         return Err(CadError::Invalid(
             "Movement needs a current root assembly occurrence and supported contract".into(),
         ));
@@ -198,46 +264,80 @@ pub fn solve(
             CadError::Invalid("Component movement is available in an assembly".into())
         })?;
     let generated = crate::component_pattern::generated(&assembly);
-    if generated.contains(&intent.goal.instance) {
-        return Err(CadError::Invalid(
-            "This occurrence follows a component pattern; move its seed instead".into(),
-        ));
-    }
-    let selected = assembly
-        .instances
-        .get(&intent.goal.instance)
-        .ok_or_else(|| {
+    let occurrences = configuration::placed_parts(doc, Some(evaluated))?;
+    for (path, goal) in intent.participants() {
+        if generated.contains(&goal.instance) {
+            return Err(CadError::Invalid(
+                "This occurrence follows a component pattern; move its seed instead".into(),
+            ));
+        }
+        let selected = assembly.instances.get(&goal.instance).ok_or_else(|| {
             CadError::Invalid("The selected component is suppressed or missing".into())
         })?;
-    if selected.fixed || selected.translation_expressions.is_some() {
-        return Err(CadError::Invalid(
-            "Release the component's fixed or expression-driven placement before moving it".into(),
-        ));
-    }
-    let occurrences = configuration::placed_parts(doc, Some(evaluated))?;
-    if !occurrences.iter().any(|i| i.path.starts_with(&intent.path)) {
-        return Err(CadError::Invalid(
-            "The complete selected occurrence is no longer active".into(),
-        ));
-    }
-    let motion = current
-        .component_motion
-        .get(&intent.goal.instance)
-        .ok_or_else(|| {
-            CadError::Invalid("Current component motion information is unavailable".into())
-        })?;
-    if motion.grounded || motion.degrees_of_freedom == 0 {
-        return Err(CadError::Invalid(if motion.grounded {
+        if selected.fixed || selected.translation_expressions.is_some() {
+            return Err(CadError::Invalid(
+                "Release the component's fixed or expression-driven placement before moving it"
+                    .into(),
+            ));
+        }
+        if !occurrences.iter().any(|i| i.path.starts_with(path)) {
+            return Err(CadError::Invalid(
+                "The complete selected occurrence is no longer active".into(),
+            ));
+        }
+        let motion = current
+            .component_motion
+            .get(&goal.instance)
+            .ok_or_else(|| {
+                CadError::Invalid("Current component motion information is unavailable".into())
+            })?;
+        if motion.grounded || motion.degrees_of_freedom == 0 {
+            return Err(CadError::Invalid(if motion.grounded {
             "This component is grounded by the assembly. Fix another reference component before moving it."
         } else {
             "This component has no remaining mate freedom; edit its driving mate instead."
         }.into()));
+        }
     }
     assembly.instances.retain(|id, _| !generated.contains(id));
     for (id, instance) in &mut assembly.instances {
         instance.placement = current.placements.get(id).cloned().ok_or_else(|| {
             CadError::Invalid("The movement baseline is missing a component placement".into())
         })?;
+    }
+    assembly = crate::assembly_groups::prepared(&assembly)?;
+    // A selection moves as one transient rigid cohort. These relative locks
+    // never enter saved definitions, undo records or authored mate lists.
+    let primary = &current.placements[&intent.goal.instance];
+    for goal in &intent.additional_goals {
+        let relative = crate::assembly_geometry::relative_placement(
+            primary,
+            &current.placements[&goal.instance],
+        )?;
+        let id = format!("movement-cohort-{}-{}", intent.goal.instance, goal.instance);
+        if assembly.mates.iter().any(|mate| mate.id == id) {
+            return Err(CadError::Invalid(
+                "A saved mate collides with the transient movement identity".into(),
+            ));
+        }
+        assembly.mates.push(crate::Mate {
+            id,
+            kind: "lock".into(),
+            first: intent.goal.instance.clone(),
+            second: goal.instance.clone(),
+            first_origin: [0.; 3],
+            second_origin: [0.; 3],
+            first_axis: [0., 0., 1.],
+            second_axis: [0., 0., 1.],
+            offset: "0 mm".into(),
+            first_reference: None,
+            second_reference: None,
+            alignment: Default::default(),
+            lock_rotation: false,
+            rotation_offset: "0 deg".into(),
+            lock_placement: Some(relative),
+            relationship: None,
+        });
     }
     for mate in &mut assembly.mates {
         if let Some(parameter) = current
@@ -257,30 +357,41 @@ pub fn solve(
             *seed = source_parameter(parameter, current.frames.get(&mate.id))?;
         }
     }
-    let solution = NativeSolver.manipulate_assembly(
+    let goals = intent
+        .participants()
+        .map(|(_, goal)| goal.clone())
+        .collect::<Vec<_>>();
+    let solution = NativeSolver.manipulate_assembly_group(
         &scoped,
         &mut assembly,
         &current.frames,
         &current.auxiliary_frames,
-        &intent.goal,
+        &goals,
     )?;
-    let placement = &assembly.instances[&intent.goal.instance].placement;
-    let residual = intent.goal.residual(&placement.matrix());
-    let position_error_mm = intent
-        .goal
-        .position
-        .map(|_| residual.iter().take(3).map(|v| v * v).sum::<f64>().sqrt());
-    let rotation_error_deg = intent.goal.rotation_deg.map(|_| {
-        let offset = if intent.goal.position.is_some() { 3 } else { 0 };
-        (residual
-            .iter()
-            .skip(offset)
-            .map(|v| v * v)
-            .sum::<f64>()
-            .sqrt()
-            / 100.)
-            .to_degrees()
-    });
+    let mut goal_errors = BTreeMap::new();
+    let actual_primary = &assembly.instances[&intent.goal.instance].placement;
+    for goal in &goals {
+        let actual = &assembly.instances[&goal.instance].placement;
+        goal_errors.insert(goal.instance.clone(), goal_error(goal, actual));
+        if goal.instance != intent.goal.instance {
+            let before = crate::assembly_geometry::relative_placement(
+                primary,
+                &current.placements[&goal.instance],
+            )?;
+            let after = crate::assembly_geometry::relative_placement(actual_primary, actual)?;
+            let translation = Vector3::from(after.translation) - Vector3::from(before.translation);
+            let rotation = after.matrix().fixed_view::<3, 3>(0, 0)
+                * before.matrix().fixed_view::<3, 3>(0, 0).transpose();
+            if translation.norm() > 1e-5
+                || Rotation3::from_matrix_unchecked(rotation).angle() > 1e-7
+            {
+                return Err(CadError::Invalid("The selected movement cohort could not retain its captured relative poses within its mates".into()));
+            }
+        }
+    }
+    let primary_error = &goal_errors[&intent.goal.instance];
+    let position_error_mm = primary_error.position_error_mm;
+    let rotation_error_deg = primary_error.rotation_error_deg;
     let curve_parameters = solution
         .diagnostics
         .iter()
@@ -303,6 +414,8 @@ pub fn solve(
         solution,
         position_error_mm,
         rotation_error_deg,
+        goal_errors,
+        additional_paths: intent.additional_paths.clone(),
     })
 }
 

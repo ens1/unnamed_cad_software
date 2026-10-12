@@ -1,6 +1,9 @@
 mod appearances_ui;
+mod assembly_copy_ui;
+mod assembly_groups_ui;
 mod assembly_inspection_ui;
 mod assembly_motion_ui;
+mod assembly_tools_ui;
 mod assembly_welds_ui;
 mod background;
 mod body_filter_ui;
@@ -76,7 +79,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/32;solver/tcad-native-lm/14";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/33;solver/tcad-native-lm/15";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -89,6 +92,7 @@ pub struct Workspace {
     pub settings: Option<settings::State>,
     pub reference_repair: Option<reference_repair_ui::State>,
     pub assembly_motion: Option<assembly_motion_ui::State>,
+    pub assembly_copy: Option<assembly_copy_ui::State>,
     pub sketch_analysis: sketch_analysis_ui::State,
     pub jobs: background::Jobs,
     pub worker: worker::WorkerClient,
@@ -228,6 +232,7 @@ impl Workspace {
             settings: None,
             reference_repair: None,
             assembly_motion: None,
+            assembly_copy: None,
             sketch_analysis: sketch_analysis_ui::State::default(),
             jobs: background::Jobs::new(),
             worker: worker::WorkerClient::new(),
@@ -325,6 +330,11 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !assembly_tools_ui::valid(self) {
+            self.status = "Validate the current assembly group or copy before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !assembly_welds_ui::current_source_is_valid(self) {
             self.status = "Correct the current assembly weld source before applying".into();
             self.confirm_requested = false;
@@ -409,6 +419,7 @@ impl Workspace {
         let editing_edges = selection_ui::edge_feature(self).is_some();
         match self.session.apply() {
             Ok(()) => {
+                assembly_tools_ui::cancel(self);
                 assembly_motion_ui::cancel(self);
                 if editing_edges {
                     self.selected = None;
@@ -432,6 +443,7 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        assembly_tools_ui::cancel(self);
         assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
         assembly_motion_ui::cancel(self);
@@ -549,6 +561,7 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        assembly_tools_ui::cancel(self);
         assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
         assembly_motion_ui::cancel(self);
@@ -611,6 +624,11 @@ impl Workspace {
         self.status = "Operation cancelled".into();
     }
     pub fn confirm_tool(&mut self) {
+        if !assembly_tools_ui::valid(self) {
+            self.status = "Validate the current assembly group or copy before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !assembly_welds_ui::current_source_is_valid(self) {
             self.status = "Correct the current assembly weld source before applying".into();
             self.confirm_requested = false;
@@ -701,13 +719,15 @@ impl Workspace {
             return;
         }
 
-        if (self.assembly_motion.is_some()
+        if (assembly_tools_ui::active(self)
+            || self.assembly_motion.is_some()
             || self.fields.contains_key("assembly-weld-editor")
             || self.fields.contains_key("exploded-view-editor")
             || self.fields.contains_key("assembly-inspection-editor")
             || self.fields.contains_key("appearance-tool"))
             && self.session.draft.is_none()
         {
+            assembly_tools_ui::cancel(self);
             assembly_motion_ui::cancel(self);
             self.tool_checkpoint = None;
             self.dialog = None;

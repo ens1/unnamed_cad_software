@@ -897,6 +897,8 @@ pub struct Assembly {
     pub inspections: BTreeMap<Id, crate::assembly_inspection::Definition>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub weld_beads: BTreeMap<Id, crate::weld_beads::Definition>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rigid_groups: BTreeMap<Id, crate::assembly_groups::Definition>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Sketch {
@@ -1248,6 +1250,7 @@ impl Document {
             )));
         }
         crate::library::validate_pins(self)?;
+        crate::assembly_groups::validate(self)?;
         let mut ids = BTreeSet::new();
         for (key, part) in &self.parts {
             if key != &part.id || !ids.insert(key) {
@@ -1608,6 +1611,7 @@ impl Document {
             exploded_views: BTreeMap::new(),
             inspections: BTreeMap::new(),
             weld_beads: BTreeMap::new(),
+            rigid_groups: BTreeMap::new(),
             parameters: BTreeMap::new(),
         };
         let root = a.id.clone();

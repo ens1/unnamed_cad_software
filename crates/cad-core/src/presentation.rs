@@ -1097,6 +1097,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("assembly.move", "Move Component"),
     ("assembly.rotate", "Rotate Component"),
     ("assembly.pattern", "Component Pattern"),
+    ("assembly.group-new", "Rigid Component Group"),
+    ("assembly.copy-with-mates", "Copy With Mates"),
     ("configurations", "Configurations and design tables"),
     ("equations", "Equations and named dimensions"),
     ("parameter.new", "Named parameter"),
