@@ -37,6 +37,9 @@ pub struct Preferences {
     pub recovery_enabled: bool,
     pub recovery_interval_seconds: u64,
     pub default_model: ModelSettings,
+    /// Portable engineering snapshot copied into new documents, outside project identity scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_material: Option<cad_core::Material>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub library_favorites: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -56,6 +59,7 @@ impl Default for Preferences {
             recovery_enabled: true,
             recovery_interval_seconds: 2,
             default_model: ModelSettings::default(),
+            default_material: None,
             library_favorites: vec![],
             library_recent: vec![],
         }
@@ -100,11 +104,20 @@ impl Preferences {
             }
         }
         self.default_model.validate_values()?;
-        if !cad_core::Document::blank_part("Part1")
+        if let Some(material) = &self.default_material {
+            cad_core::materials::validate(material)?;
+            if material.id != self.default_model.default_new_part_material {
+                return Err(CadError::Invalid(
+                    "The portable default material must match the new-part preference".into(),
+                ));
+            }
+        } else if !cad_core::Document::blank_part("Part1")
             .materials
             .contains_key(&self.default_model.default_new_part_material)
         {
-            return Err(CadError::Invalid("Application defaults require a built-in engineering material; project materials stay in their document".into()));
+            return Err(CadError::Invalid(
+                "A custom new-part material requires its portable engineering snapshot".into(),
+            ));
         }
         if !appearance::default_finishes().contains_key(&self.default_model.default_new_part_finish)
         {
@@ -114,6 +127,18 @@ impl Preferences {
             ));
         }
         Ok(())
+    }
+    pub fn apply_new_document_defaults(&self, document: &mut cad_core::Document) {
+        if let Some(material) = &self.default_material {
+            document
+                .materials
+                .insert(material.id.clone(), material.clone());
+        }
+        document.settings = self.default_model.clone();
+        for part in document.parts.values_mut() {
+            part.material = document.settings.default_new_part_material.clone();
+            part.finish = document.settings.default_new_part_finish.clone();
+        }
     }
 }
 

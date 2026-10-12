@@ -394,6 +394,8 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::presentation_resources::semantics(w));
     elements.extend(crate::appearances_ui::semantics(w));
     elements.extend(crate::materials_ui::semantics(w));
+    elements.extend(crate::display_states_ui::elements(w));
+    elements.extend(crate::sensors_ui::semantics(w));
     elements.extend(crate::finish_library_ui::semantics(w));
     elements.extend(crate::settings_ui::semantics(w));
     elements.extend(crate::operation_preview::semantics(w));
@@ -680,6 +682,30 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "sensor-editor",
+        crate::sensors_ui::set_value,
+        crate::sensors_ui::current_value,
+    );
+    for setter in [
+        "display-state-field",
+        "display-state-source",
+        "display-state-selection",
+    ] {
+        adapters.register(
+            setter,
+            |w, element, value| {
+                if crate::display_states_ui::set_semantic(w, element, value)
+                    && crate::display_states_ui::current_source_is_valid(w)
+                {
+                    Ok(())
+                } else {
+                    Err(cad_core::CadError::Invalid(w.status.clone()))
+                }
+            },
+            crate::display_states_ui::current_value,
+        );
+    }
     adapters.register(
         "material-ui",
         crate::materials_ui::set_value,

@@ -263,22 +263,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         Some([0., 8.]),
     ));
     let editable = editing(w) && available(w) && current_source_is_valid(w) && !w.confirm_requested;
-    let bom_columns = [
-        bom::Column::Item,
-        bom::Column::PartNumber,
-        bom::Column::Description,
-        bom::Column::Quantity,
-        bom::Column::Material,
-        bom::Column::Finish,
-        bom::Column::Configuration,
-        bom::Column::Definition,
-        bom::Column::ComponentType,
-        bom::Column::Depth,
-        bom::Column::Property {
-            key: "part_number".into(),
-            label: "Custom property".into(),
-        },
-    ];
+    let bom_columns = bom::column_choices();
     for (index, column) in w
         .session
         .visible()
@@ -331,27 +316,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         json!({"kind":"column-add","scope":"bom"}),
         editable && w.session.visible().settings.production.bom.columns.len() < 32,
     ));
-    let stock_columns = [
-        cut_list::Column::Item,
-        cut_list::Column::Description,
-        cut_list::Column::Section,
-        cut_list::Column::Length,
-        cut_list::Column::StartCutAngle,
-        cut_list::Column::EndCutAngle,
-        cut_list::Column::Quantity,
-        cut_list::Column::Material,
-        cut_list::Column::Finish,
-        cut_list::Column::Configuration,
-        cut_list::Column::Definition,
-        cut_list::Column::Source,
-        cut_list::Column::BendRadius,
-        cut_list::Column::BendSweep,
-        cut_list::Column::Accessory,
-        cut_list::Column::StockWidth,
-        cut_list::Column::StockHeight,
-        cut_list::Column::Thickness,
-        cut_list::Column::StockBounds,
-    ];
+    let stock_columns = cut_list::column_choices();
     for (index, _) in w
         .session
         .visible()

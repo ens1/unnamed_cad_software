@@ -120,6 +120,47 @@ pub struct FinishMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catalog_id: Option<Id>,
 }
+/// Explicit authored manufacturing requirements, separate from optical shader
+/// values. An optical library preset does not establish a coating specification.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ManufacturingFinish {
+    pub process: String,
+    pub specification: String,
+    pub designation: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coating_thickness_um: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_roughness_ra_um: Option<f64>,
+    pub notes: String,
+}
+impl ManufacturingFinish {
+    pub fn validate(&self) -> Result<()> {
+        if [&self.process, &self.specification, &self.designation]
+            .iter()
+            .any(|value| value.len() > 512 || value.chars().any(char::is_control))
+            || self.notes.len() > 4096
+            || self
+                .notes
+                .chars()
+                .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+        {
+            return Err(invalid(
+                "Manufacturing finish requirements exceed their supported text bounds",
+            ));
+        }
+        if [self.coating_thickness_um, self.surface_roughness_ra_um]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.is_finite() || !(0.0..=1_000_000.0).contains(&value))
+        {
+            return Err(invalid(
+                "Coating thickness and specified surface Ra must be finite, nonnegative micrometre values",
+            ));
+        }
+        Ok(())
+    }
+}
 /// Contract v2 adds a built-in grayscale bump selection and directional reflection controls.
 /// Older serialized finishes use these fields' default values without changing their existing
 /// tint, texture resources or other explicitly stored surface properties.
@@ -144,6 +185,8 @@ pub struct Finish {
     pub mapping: TextureMapping,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<FinishMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manufacturing: Option<ManufacturingFinish>,
 }
 impl Default for Finish {
     fn default() -> Self {
@@ -162,6 +205,7 @@ impl Default for Finish {
             textures: TextureMaps::default(),
             mapping: TextureMapping::default(),
             metadata: None,
+            manufacturing: None,
         }
     }
 }
@@ -241,6 +285,9 @@ fn valid_id(id: &str) -> bool {
             .any(|c| c.is_control() || matches!(c, '/' | '\\' | ':'))
 }
 pub fn validate_finish(doc: &Document, finish: &Finish) -> Result<()> {
+    if let Some(manufacturing) = &finish.manufacturing {
+        manufacturing.validate()?;
+    }
     if !valid_id(&finish.id) || finish.name.trim().is_empty() || finish.name.len() > 256 {
         return Err(invalid(
             "Finishes require a portable ID and a name of at most 256 bytes",
@@ -462,6 +509,11 @@ pub fn resolved_finishes(doc: &Document) -> Result<BTreeMap<Vec<Id>, Id>> {
         .collect()
 }
 pub fn delete_reason(doc: &Document, id: &str) -> Option<&'static str> {
+    if crate::library::finish_is_pinned(doc, id) {
+        return Some(
+            "This finish belongs to an immutable component snapshot; duplicate its pinned source before editing",
+        );
+    }
     if id == DEFAULT_FINISH {
         return Some("The default clear anodized aluminum finish is required for new parts");
     }
@@ -469,6 +521,7 @@ pub fn delete_reason(doc: &Document, id: &str) -> Option<&'static str> {
         return Some("Choose another default new-part finish in model settings before deleting it");
     }
     if doc.parts.values().any(|p| p.finish == id)
+        || crate::display_states::finish_is_used(doc, id)
         || doc
             .parts
             .values()

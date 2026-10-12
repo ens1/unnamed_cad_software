@@ -8,6 +8,10 @@ pub enum Command {
     ReplaceDocument {
         document: Document,
     },
+    ReplaceLinkedComponentSnapshots {
+        document: Document,
+        snapshots: Vec<crate::library::SnapshotProof>,
+    },
     RepairReferences {
         repairs: Vec<crate::reference_repair::Repair>,
     },
@@ -28,6 +32,14 @@ pub enum Command {
     DeleteExplodedView {
         assembly: Id,
         view: Id,
+    },
+    PutDisplayState {
+        assembly: Id,
+        state: Box<crate::display_states::Definition>,
+    },
+    DeleteDisplayState {
+        assembly: Id,
+        state: Id,
     },
     PutAssemblyInspection {
         assembly: Id,
@@ -136,6 +148,12 @@ pub enum Command {
     PutMaterial {
         material: Material,
     },
+    PutSensor {
+        sensor: Box<crate::sensors::Definition>,
+    },
+    DeleteSensor {
+        sensor: Id,
+    },
     ImportMaterialLibrary {
         catalog: Box<crate::material_library::Catalog>,
         collision: crate::material_library::CollisionPolicy,
@@ -206,6 +224,16 @@ impl Command {
                 crate::reference_repair::repair(document, &repairs)?;
             }
             Self::ReplaceDocument { document: d } => {
+                crate::library::validate_replacement(document, &d)?;
+                let revision = document.revision;
+                *document = d;
+                document.revision = revision;
+            }
+            Self::ReplaceLinkedComponentSnapshots {
+                document: d,
+                snapshots,
+            } => {
+                crate::library::validate_verified_replacement(document, &d, &snapshots)?;
                 let revision = document.revision;
                 *document = d;
                 document.revision = revision;
@@ -250,6 +278,12 @@ impl Command {
             }
             Self::DeleteExplodedView { assembly, view } => {
                 crate::exploded_views::remove(document, &assembly, &view)?
+            }
+            Self::PutDisplayState { assembly, state } => {
+                crate::display_states::put(document, &assembly, *state)?
+            }
+            Self::DeleteDisplayState { assembly, state } => {
+                crate::display_states::remove(document, &assembly, &state)?
             }
             Self::PutAssemblyInspection {
                 assembly,
@@ -523,6 +557,10 @@ impl Command {
             Self::PutMaterial { material } => {
                 crate::materials::put_edited(document, material)?;
             }
+            Self::PutSensor { sensor } => crate::sensors::put(document, *sensor)?,
+            Self::DeleteSensor { sensor } => {
+                document.sensors.remove(&sensor).ok_or_else(missing)?;
+            }
             Self::ImportMaterialLibrary { catalog, collision } => {
                 let plan = crate::material_library::plan_import(document, &catalog, collision)?;
                 crate::material_library::apply_import(document, plan)?;
@@ -535,6 +573,11 @@ impl Command {
                 material,
             } => crate::materials::assign(document, &definition, &material)?,
             Self::PutFinish { finish } => {
+                if crate::library::finish_is_pinned(document, &finish.id)
+                    && document.finishes.get(&finish.id) != Some(finish.as_ref())
+                {
+                    return Err(CadError::Invalid("This finish belongs to an immutable component snapshot; duplicate it before editing a unique component".into()));
+                }
                 crate::appearance::validate_finish(document, &finish)?;
                 document.finishes.insert(finish.id.clone(), *finish);
             }
@@ -1289,6 +1332,12 @@ fn retarget_drawing_occurrence(
         }
         for annotation in &mut sheet.entities {
             match &mut annotation.kind {
+                AnnotationKind::DimensionGroup { group } => {
+                    point(&mut group.datum.reference, &reaches, &ids)?;
+                    for target in &mut group.targets {
+                        point(&mut target.anchor.reference, &reaches, &ids)?;
+                    }
+                }
                 AnnotationKind::Balloon {
                     target,
                     table,

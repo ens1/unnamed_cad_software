@@ -13,7 +13,10 @@ const SOURCE: &str = "material-source";
 const ERROR_PREFIX: &str = "material-field-invalid:";
 
 fn available(w: &Workspace) -> bool {
-    w.sketch.is_none() && (w.tool_checkpoint.is_none() || w.fields.contains_key(TOOL))
+    w.sketch.is_none()
+        && (w.tool_checkpoint.is_none()
+            || w.fields.contains_key(TOOL)
+            || w.fields.contains_key("appearance-tool"))
 }
 fn target(w: &Workspace) -> Option<Id> {
     w.fields
@@ -66,7 +69,21 @@ fn selected(w: &Workspace) -> Option<Material> {
     }
 }
 fn editable(w: &Workspace) -> bool {
-    key(w).is_some_and(|key| key.starts_with("project:")) && available(w)
+    key(w).is_some_and(|key| key.starts_with("project:")) && available(w) && !pinned(w)
+}
+fn pinned(w: &Workspace) -> bool {
+    key(w)
+        .and_then(|key| key.strip_prefix("project:").map(str::to_owned))
+        .is_some_and(|id| cad_core::library::material_is_pinned(w.session.visible(), &id))
+}
+fn readonly_reason(w: &Workspace) -> &'static str {
+    if pinned(w) {
+        "This material is pinned by a linked component. Duplicate it to customize a unique component."
+    } else if !available(w) {
+        "Apply or cancel the active operation before editing materials."
+    } else {
+        "Catalog records are read only. Add to project or duplicate to customize."
+    }
 }
 fn choose(w: &mut Workspace, key: String) {
     w.fields.insert(SELECTED.into(), key);
@@ -76,6 +93,12 @@ fn choose(w: &mut Workspace, key: String) {
     });
 }
 pub fn begin(w: &mut Workspace) {
+    if w.fields.contains_key("appearance-tool")
+        && !crate::appearances_ui::current_source_is_valid(w)
+    {
+        w.status="Correct the current appearance fields and finish loading texture resources before switching to materials".into();
+        return;
+    }
     if !available(w) {
         w.status =
             "Apply or cancel the current operation before editing engineering materials".into();
@@ -294,6 +317,9 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
     }
     if !w.fields.contains_key(TOOL) {
         begin(w);
+        if !w.fields.contains_key(TOOL) {
+            return true;
+        }
     }
     let result = (|| -> Result<()> {
         match command {
@@ -302,6 +328,15 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                 put(w, material.clone())?;
                 recent(w, &material);
                 choose(w, format!("project:{}", material.id));
+            }
+            "material.open-appearance" => {
+                if !current_source_is_valid(w) {
+                    return Err(CadError::Invalid(
+                        "Correct the current material fields before switching to appearances"
+                            .into(),
+                    ));
+                }
+                crate::appearances_ui::begin(w, false);
             }
             "material.assign" => assign(w, false)?,
             "material.use-for-new-parts" => {
@@ -585,6 +620,12 @@ fn property_fields(w: &Workspace) -> Vec<SemanticElement> {
         element.data["property_detail"] = json!(true);
         out.push(element);
     }
+    if !edit {
+        for element in &mut out {
+            element.data["diagnostics"] = json!([readonly_reason(w)]);
+            element.data["disabled_reason"] = json!(readonly_reason(w));
+        }
+    }
     out
 }
 fn property_presentation(key: cad_core::materials::PropertyKey) -> (&'static str, f64) {
@@ -721,6 +762,9 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
     }
     if !w.fields.contains_key(TOOL) {
         begin(w);
+        if !w.fields.contains_key(TOOL) {
+            return Err(CadError::Invalid(w.status.clone()));
+        }
     }
     let mut material =
         selected(w).ok_or_else(|| CadError::Invalid("Choose a project material".into()))?;
@@ -947,6 +991,9 @@ fn action_element(command: &str, label: &str, enabled: bool, reason: &str) -> Se
 fn actions(w: &Workspace) -> Vec<SemanticElement> {
     let has = selected(w).is_some();
     let edit = editable(w);
+    let target_pinned = target(w).is_some_and(|definition| {
+        cad_core::library::is_definition_pinned(w.session.visible(), &definition)
+    });
     let delete_reason = selected(w).and_then(|material| {
         let mut document = w.session.visible().clone();
         cad_core::material_library::delete_material(&mut document, &material.id)
@@ -960,19 +1007,27 @@ fn actions(w: &Workspace) -> Vec<SemanticElement> {
         (
             "material.assign",
             "Assign material",
-            available(w) && has && target(w).is_some(),
-            "Choose a material and a target part",
+            available(w) && has && target(w).is_some() && !target_pinned,
+            if target_pinned {
+                "Make the linked component unique before changing its material"
+            } else {
+                "Choose a material and a target part"
+            },
         ),
         (
             "material.inherit",
             "Use inherited material",
-            available(w) && configuration(w).is_some(),
-            "Choose a named configuration",
+            available(w) && configuration(w).is_some() && !target_pinned,
+            if target_pinned {
+                "Make the linked component unique before changing its configuration material"
+            } else {
+                "Choose a named configuration"
+            },
         ),
         (
             "material.add",
             "Add to project",
-            available(w) && has && !edit,
+            available(w) && has && key(w).is_some_and(|key| key.starts_with("catalog:")),
             "Choose a catalog entry",
         ),
         (
@@ -994,6 +1049,12 @@ fn actions(w: &Workspace) -> Vec<SemanticElement> {
             reason,
         ),
         ("material.favorite", "Favorite", has, "Choose a material"),
+        (
+            "material.open-appearance",
+            "Visual finishes…",
+            available(w),
+            "Finish the current geometry operation first",
+        ),
         (
             "material.use-for-new-parts",
             "Use for new parts",
@@ -1273,7 +1334,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     );
     if controls::button(
         ui,
-        "material:appearance",
+        "command:material.open-appearance",
         "material-action",
         &["semantic-control"],
         "Visual finishes…",
@@ -1282,8 +1343,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     )
     .clicked()
     {
-        w.status =
-            "Apply or cancel this material edit, then open Appearance to choose a finish".into();
+        action(w, "material.open-appearance", None);
     }
     for element in target_fields(w) {
         crate::ui::semantic_field(ui, w, &element);
@@ -1418,10 +1478,10 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                 if !editable(w) {
                     controls::label(
                         ui,
-                        "material:catalog-readonly",
+                        "material:readonly",
                         "material-description",
                         &[],
-                        "Catalog records are read only. Add to project or duplicate to customize.",
+                        readonly_reason(w),
                         "readonly",
                     );
                 }

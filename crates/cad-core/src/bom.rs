@@ -36,7 +36,13 @@ pub enum Column {
     Definition,
     ComponentType,
     Depth,
-    Property { key: String, label: String },
+    Manufacturing {
+        field: crate::manufacturing_columns::Column,
+    },
+    Property {
+        key: String,
+        label: String,
+    },
 }
 impl Column {
     pub fn label(&self) -> &str {
@@ -51,6 +57,7 @@ impl Column {
             Self::Definition => "Definition",
             Self::ComponentType => "Type",
             Self::Depth => "Level",
+            Self::Manufacturing { field } => field.label(),
             Self::Property { label, .. } => label,
         }
     }
@@ -63,6 +70,30 @@ pub fn default_columns() -> Vec<Column> {
         Column::Quantity,
         Column::Material,
     ]
+}
+pub fn column_choices() -> Vec<Column> {
+    let mut columns = vec![
+        Column::Item,
+        Column::PartNumber,
+        Column::Description,
+        Column::Quantity,
+        Column::Material,
+        Column::Finish,
+        Column::Configuration,
+        Column::Definition,
+        Column::ComponentType,
+        Column::Depth,
+    ];
+    columns.extend(
+        crate::manufacturing_columns::Column::choices()
+            .into_iter()
+            .map(|field| Column::Manufacturing { field }),
+    );
+    columns.push(Column::Property {
+        key: "part_number".into(),
+        label: "Custom property".into(),
+    });
+    columns
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Options {
@@ -105,6 +136,8 @@ pub struct Row {
     pub definition: Id,
     pub configuration: Option<Id>,
     pub kind: SourceKind,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub configuration_name: String,
     /// The root's immediate children have level zero.
     pub depth: usize,
     pub parent_key: Option<String>,
@@ -117,6 +150,11 @@ pub struct Row {
     pub finish: String,
     pub finish_id: Option<Id>,
     pub properties: BTreeMap<String, String>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::manufacturing_columns::Data::is_empty"
+    )]
+    pub manufacturing: crate::manufacturing_columns::Data,
 }
 
 fn invalid(message: impl ToString) -> CadError {
@@ -265,6 +303,21 @@ pub fn rows_with_placements(
                 .finish
                 .clone()
                 .or_else(|| part.map(|p| p.finish.clone()));
+            let manufacturing = if self
+                .options
+                .columns
+                .iter()
+                .any(|column| matches!(column, Column::Manufacturing { .. }))
+            {
+                crate::manufacturing_columns::Data::from_definitions(
+                    &scoped,
+                    crate::manufacturing_columns::project_material(&scoped, material_id.as_ref()),
+                    crate::manufacturing_columns::project_finish(&scoped, finish_id.as_ref()),
+                    part,
+                )
+            } else {
+                Default::default()
+            };
             let include = match self.options.mode {
                 Mode::PartsOnly => kind == SourceKind::Part,
                 Mode::TopLevel => !placement.root || kind == SourceKind::Part,
@@ -321,6 +374,10 @@ pub fn rows_with_placements(
                     definition: definition.into(),
                     configuration: configuration.clone(),
                     kind,
+                    configuration_name: configured
+                        .as_ref()
+                        .map(|configuration| configuration.name.clone())
+                        .unwrap_or_default(),
                     depth: placement.depth,
                     parent_key: if self.options.mode == Mode::Indented {
                         parent.clone()
@@ -349,6 +406,7 @@ pub fn rows_with_placements(
                         .unwrap_or_else(|| finish_id.clone().unwrap_or_default()),
                     finish_id: finish_id.clone(),
                     properties,
+                    manufacturing: manufacturing.clone(),
                 });
                 row.quantity = row
                     .quantity
@@ -358,6 +416,7 @@ pub fn rows_with_placements(
                     row.finish_id = None;
                     row.finish = "Multiple finishes".into();
                 }
+                row.manufacturing.merge_finish(&manufacturing);
                 row.occurrences.push(occurrence);
                 parent = Some(key);
             }
@@ -485,7 +544,13 @@ pub fn cells(row: &Row, columns: &[Column], number: u32) -> Vec<String> {
             Column::Quantity => row.quantity.to_string(),
             Column::Material => row.material.clone(),
             Column::Finish => row.finish.clone(),
-            Column::Configuration => row.configuration.clone().unwrap_or_default(),
+            Column::Configuration => {
+                if row.configuration_name.is_empty() {
+                    row.configuration.clone().unwrap_or_default()
+                } else {
+                    row.configuration_name.clone()
+                }
+            }
             Column::Definition => row.definition.clone(),
             Column::ComponentType => match row.kind {
                 SourceKind::Part => "Part",
@@ -493,6 +558,7 @@ pub fn cells(row: &Row, columns: &[Column], number: u32) -> Vec<String> {
             }
             .into(),
             Column::Depth => (row.depth + 1).to_string(),
+            Column::Manufacturing { field } => row.manufacturing.cell(field),
             Column::Property { key, .. } => row.properties.get(key).cloned().unwrap_or_default(),
         })
         .collect()

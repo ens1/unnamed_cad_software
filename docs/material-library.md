@@ -31,7 +31,7 @@ Density and engineering properties use `f64`. Numeric local edits cannot retain 
 
 Assignments reference local material identities. Deletion is refused while a material is assigned to a part, referenced by a named configuration, or selected as the new-part default. A material used by a pinned component snapshot cannot be edited in place; make the component unique and duplicate the material first.
 
-`ModelSettings.default_new_part_material` and `default_new_part_finish` affect subsequently created parts. They do not rescale geometry or change existing assignments. The unchanged engineering default is `aluminum`.
+`ModelSettings.default_new_part_material` and `default_new_part_finish` affect subsequently created parts. They do not rescale geometry or change existing assignments. The unchanged engineering default is `aluminum`. In application Settings, the new-model default picker accepts a built-in, bundled catalog entry, or current-project material. Catalog/project choices save a complete portable snapshot with a fresh identity in personal preferences. New documents receive that snapshot before assignments are created; later edits to the source project or catalog do not silently change the saved default. Selecting a built-in clears the snapshot. Existing files retain their own definitions.
 
 ## Portable libraries
 
@@ -44,6 +44,24 @@ Import policies are explicit:
 - **Replace existing** replaces matching local definitions subject to pinned-component guards.
 
 Imports are planned and validated against a cloned document, then committed as one command. An invalid record cannot leave a partially imported library. Export includes the copied metadata and citation snapshot, allowing local catalogs to travel independently of the bundled library.
+
+## Linked component snapshot integrity
+
+New component links pin their exact imported definitions, engineering materials, and visual finishes. Their source JSON is saved as an immutable, hashed project resource. Updating or locating a component uses that exact JSON as evidence: source document, revision, canonical fingerprint, namespaced identities, materials, finishes, and imported resource records must agree before the document command is accepted. Changing a linked texture's resource record while leaving the finish unchanged is also rejected.
+
+Ordinary Advanced Source edits cannot remove links, rewrite pin evidence, replace a pinned material or finish, or redirect a linked finish's texture. The materials and appearance editors expose pinned records as read only and retain duplication for local customization. Make the component unique before changing its assignments, then duplicate the material or finish to edit its properties.
+
+Legacy links omit the new material/finish evidence fields. Opening a file enriches those fields only when the original saved snapshot bytes, source identity, fingerprint, imported definitions, and current material/finish/resource records can be verified. Loading does not rewrite files. A normal subsequent save persists verified enrichment. If evidence is missing, changed, or incompatible, the link keeps a visible diagnostic and its source assignments remain protected; no guessed hash or migration is substituted. The user can restore the original resource or perform an explicit verified source update. Runtime availability diagnostics do not alter authoritative document hashes.
+
+Snapshot evidence is bounded to 64 MiB per link and 128 MiB per replacement command. Verified updates remain one ordinary undoable document operation; cancelling an operation retains committed definitions.
+
+## Manufacturing tables and finish requirements
+
+BOM and cut-list column selectors expose material family, grade, condition, density, and optional engineering properties. They derive these values from the configured part's local material snapshot. Engineering-property headings state their display units; value cells retain their typical, minimum, maximum, or user-defined basis. Configuration columns show authored names while source bindings retain stable configuration IDs.
+
+A finish may also carry an explicitly authored manufacturing requirement: process, specification, designation, coating thickness in micrometres, specified surface Ra in micrometres, and notes. These fields remain separate from optical roughness and bump-map height. They are available as associative BOM/cut-list columns, along with informational finish category/description and authored face-finish names. A visual preset supplies no manufacturing requirement by default. Empty requirements stay blank; grouped occurrences with different requirements show `Multiple requirements` and can be split using definition/configuration/finish grouping.
+
+Manufacturing requirements record design intent. They do not add coating solids, alter native surfaces, certify a process, or add coating mass to material-based mass calculations. A named display state can change viewport appearance without rewriting these manufacturing-table assignments.
 
 ## Data ownership and limits
 

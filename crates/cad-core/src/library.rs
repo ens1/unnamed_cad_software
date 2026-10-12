@@ -9,6 +9,11 @@ use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
+mod snapshot_integrity;
+pub use snapshot_integrity::{
+    SnapshotProof, finish_is_pinned, hydrate_pins, material_is_pinned, replace_command, semantic,
+    validate_replacement, validate_verified_replacement,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ComponentLink {
@@ -22,6 +27,13 @@ pub struct ComponentLink {
     pub snapshot_resource: Id,
     pub definition: Id,
     pub pinned_definitions: BTreeMap<Id, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_materials: Option<BTreeMap<Id, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_finishes: Option<BTreeMap<Id, String>>,
+    /// Runtime source availability, never part of authoritative hashes.
+    #[serde(skip)]
+    pub pin_diagnostic: Option<String>,
 }
 fn hash(bytes: impl AsRef<[u8]>) -> String {
     format!("{:x}", Sha256::digest(bytes.as_ref()))
@@ -50,9 +62,20 @@ pub fn available_update(link: &ComponentLink, root: &Path) -> Result<Option<(u64
     Ok((source.fingerprint() != link.source_sha256)
         .then(|| (source.revision, source.fingerprint())))
 }
+pub fn is_definition_pinned(doc: &Document, definition: &str) -> bool {
+    doc.libraries
+        .values()
+        .any(|link| link.pinned_definitions.contains_key(definition))
+}
 pub fn validate_pins(doc: &Document) -> Result<()> {
+    if doc.libraries.len() > 4096 {
+        return Err(CadError::Invalid(
+            "At most 4096 component snapshot links are supported".into(),
+        ));
+    }
     for (key, link) in &doc.libraries {
-        if key != &link.id || !doc.resources.contains_key(&link.snapshot_resource) {
+        snapshot_integrity::validate_link_record(doc, link)?;
+        if key != &link.id {
             return Err(CadError::Invalid(
                 "Broken component library snapshot".into(),
             ));
@@ -74,9 +97,144 @@ pub fn validate_pins(doc: &Document) -> Result<()> {
                 )));
             }
         }
+        snapshot_integrity::validate_material_finish_pins(doc, link)?;
     }
     Ok(())
 }
+pub(crate) fn namespace_snapshot(
+    src: &Document,
+    link_id: &str,
+) -> Result<(Document, BTreeMap<Id, Id>)> {
+    let mut mapping = BTreeMap::new();
+    for key in src
+        .parts
+        .keys()
+        .chain(src.assemblies.keys())
+        .chain(src.materials.keys())
+        .chain(src.finishes.keys())
+        .chain(src.resources.keys())
+    {
+        mapping.insert(key.clone(), mapped(link_id, key));
+    }
+    for part in src.parts.values() {
+        for assignment in &part.face_finishes {
+            mapping.insert(assignment.id.clone(), mapped(link_id, &assignment.id));
+        }
+        for f in &part.features {
+            mapping.insert(f.id.clone(), mapped(link_id, &f.id));
+            if let crate::Operation::ReferenceCurve { definition } = &f.operation {
+                for key in definition.source_ids() {
+                    mapping.insert(key.clone(), mapped(link_id, key));
+                }
+            }
+            if let crate::Operation::Surface {
+                operation: crate::surface::SurfaceOperation::Ruled { sources, .. },
+            } = &f.operation
+            {
+                for source in sources {
+                    mapping.insert(source.id.clone(), mapped(link_id, &source.id));
+                }
+            }
+            if let crate::Operation::PlacementPattern { definition } = &f.operation {
+                for record in &definition.placements {
+                    mapping.insert(record.id.clone(), mapped(link_id, &record.id));
+                }
+            }
+        }
+        for sketch in part.sketches.values() {
+            mapping.insert(sketch.id.clone(), mapped(link_id, &sketch.id));
+            for key in sketch.points.keys() {
+                mapping.insert(key.clone(), mapped(link_id, key));
+            }
+            for key in sketch.members.keys() {
+                mapping.insert(key.clone(), mapped(link_id, key));
+            }
+            for key in sketch.circles.keys() {
+                mapping.insert(key.clone(), mapped(link_id, key));
+            }
+            for c in &sketch.constraints {
+                mapping.insert(c.id.clone(), mapped(link_id, &c.id));
+            }
+            for key in sketch
+                .offsets
+                .keys()
+                .chain(sketch.fillets.keys())
+                .chain(sketch.chamfers.keys())
+                .chain(sketch.transforms.keys())
+                .chain(sketch.texts.keys())
+                .chain(sketch.equations.keys())
+                .chain(sketch.blocks.keys())
+                .chain(sketch.block_instances.keys())
+                .chain(sketch.dimension_groups.keys())
+            {
+                mapping.insert(key.clone(), mapped(link_id, key));
+            }
+            for block in sketch.blocks.values() {
+                for key in block.points.keys().chain(block.members.keys()) {
+                    mapping.insert(key.clone(), mapped(link_id, key));
+                }
+                for constraint in &block.constraints {
+                    mapping.insert(constraint.id.clone(), mapped(link_id, &constraint.id));
+                }
+            }
+        }
+    }
+    for assembly in src.assemblies.values() {
+        for state in assembly.display_states.values() {
+            mapping.insert(state.id.clone(), mapped(link_id, &state.id));
+            for target in &state.overrides {
+                mapping.insert(target.id.clone(), mapped(link_id, &target.id));
+            }
+        }
+        for i in assembly.instances.values() {
+            mapping.insert(i.id.clone(), mapped(link_id, &i.id));
+        }
+        for m in &assembly.mates {
+            mapping.insert(m.id.clone(), mapped(link_id, &m.id));
+        }
+        for view in assembly.exploded_views.values() {
+            mapping.insert(view.id.clone(), mapped(link_id, &view.id));
+            for step in &view.steps {
+                mapping.insert(step.id.clone(), mapped(link_id, &step.id));
+            }
+        }
+        for inspection in assembly.inspections.values() {
+            mapping.insert(inspection.id.clone(), mapped(link_id, &inspection.id));
+        }
+        for weld in assembly.weld_beads.values() {
+            mapping.insert(weld.id.clone(), mapped(link_id, &weld.id));
+        }
+        for group in assembly.rigid_groups.values() {
+            mapping.insert(group.id.clone(), mapped(link_id, &group.id));
+        }
+        for pattern in assembly.component_patterns.values() {
+            mapping.insert(pattern.id.clone(), mapped(link_id, &pattern.id));
+            for mate in &pattern.mates {
+                mapping.insert(mate.mate.clone(), mapped(link_id, &mate.mate));
+            }
+        }
+    }
+    for owner in src.parts.keys().chain(src.assemblies.keys()) {
+        for key in crate::configuration::names(src, owner).keys() {
+            mapping.insert(key.clone(), mapped(link_id, key));
+        }
+    }
+    let mut json = serde_json::to_value(src)?;
+    // Default finishes are omitted from ordinary source to preserve legacy hashes.
+    // A linked snapshot must still namespace them and every default assignment.
+    json["finishes"] = serde_json::to_value(&src.finishes)?;
+    for part in src.parts.values() {
+        json["parts"][&part.id]["finish"] = serde_json::Value::String(part.finish.clone());
+    }
+    // Drawings and review state are not part of the component dependency closure.
+    json["drawings"] = serde_json::json!([]);
+    json["comments"] = serde_json::json!([]);
+    json["libraries"] = serde_json::json!({});
+    remap_source(&mut json, &mapping, "")?;
+    let imported: Document = serde_json::from_value(json)?;
+    Ok((imported, mapping))
+}
+
 /// Copies a complete source snapshot, preserving its dependency closure and immutable resource bytes.
 /// Stable IDs are namespaced by the link identity, so updates retain instance and feature references.
 pub fn link(
@@ -115,127 +273,7 @@ pub fn link(
         ));
     }
     let link_id = old.as_ref().map(|l| l.id.clone()).unwrap_or_else(id);
-    let mut mapping = BTreeMap::new();
-    for key in src
-        .parts
-        .keys()
-        .chain(src.assemblies.keys())
-        .chain(src.materials.keys())
-        .chain(src.finishes.keys())
-        .chain(src.resources.keys())
-    {
-        mapping.insert(key.clone(), mapped(&link_id, key));
-    }
-    for part in src.parts.values() {
-        for assignment in &part.face_finishes {
-            mapping.insert(assignment.id.clone(), mapped(&link_id, &assignment.id));
-        }
-        for f in &part.features {
-            mapping.insert(f.id.clone(), mapped(&link_id, &f.id));
-            if let crate::Operation::ReferenceCurve { definition } = &f.operation {
-                for key in definition.source_ids() {
-                    mapping.insert(key.clone(), mapped(&link_id, key));
-                }
-            }
-            if let crate::Operation::Surface {
-                operation: crate::surface::SurfaceOperation::Ruled { sources, .. },
-            } = &f.operation
-            {
-                for source in sources {
-                    mapping.insert(source.id.clone(), mapped(&link_id, &source.id));
-                }
-            }
-            if let crate::Operation::PlacementPattern { definition } = &f.operation {
-                for record in &definition.placements {
-                    mapping.insert(record.id.clone(), mapped(&link_id, &record.id));
-                }
-            }
-        }
-        for sketch in part.sketches.values() {
-            mapping.insert(sketch.id.clone(), mapped(&link_id, &sketch.id));
-            for key in sketch.points.keys() {
-                mapping.insert(key.clone(), mapped(&link_id, key));
-            }
-            for key in sketch.members.keys() {
-                mapping.insert(key.clone(), mapped(&link_id, key));
-            }
-            for key in sketch.circles.keys() {
-                mapping.insert(key.clone(), mapped(&link_id, key));
-            }
-            for c in &sketch.constraints {
-                mapping.insert(c.id.clone(), mapped(&link_id, &c.id));
-            }
-            for key in sketch
-                .offsets
-                .keys()
-                .chain(sketch.fillets.keys())
-                .chain(sketch.chamfers.keys())
-                .chain(sketch.transforms.keys())
-                .chain(sketch.texts.keys())
-                .chain(sketch.equations.keys())
-                .chain(sketch.blocks.keys())
-                .chain(sketch.block_instances.keys())
-                .chain(sketch.dimension_groups.keys())
-            {
-                mapping.insert(key.clone(), mapped(&link_id, key));
-            }
-            for block in sketch.blocks.values() {
-                for key in block.points.keys().chain(block.members.keys()) {
-                    mapping.insert(key.clone(), mapped(&link_id, key));
-                }
-                for constraint in &block.constraints {
-                    mapping.insert(constraint.id.clone(), mapped(&link_id, &constraint.id));
-                }
-            }
-        }
-    }
-    for assembly in src.assemblies.values() {
-        for i in assembly.instances.values() {
-            mapping.insert(i.id.clone(), mapped(&link_id, &i.id));
-        }
-        for m in &assembly.mates {
-            mapping.insert(m.id.clone(), mapped(&link_id, &m.id));
-        }
-        for view in assembly.exploded_views.values() {
-            mapping.insert(view.id.clone(), mapped(&link_id, &view.id));
-            for step in &view.steps {
-                mapping.insert(step.id.clone(), mapped(&link_id, &step.id));
-            }
-        }
-        for inspection in assembly.inspections.values() {
-            mapping.insert(inspection.id.clone(), mapped(&link_id, &inspection.id));
-        }
-        for weld in assembly.weld_beads.values() {
-            mapping.insert(weld.id.clone(), mapped(&link_id, &weld.id));
-        }
-        for group in assembly.rigid_groups.values() {
-            mapping.insert(group.id.clone(), mapped(&link_id, &group.id));
-        }
-        for pattern in assembly.component_patterns.values() {
-            mapping.insert(pattern.id.clone(), mapped(&link_id, &pattern.id));
-            for mate in &pattern.mates {
-                mapping.insert(mate.mate.clone(), mapped(&link_id, &mate.mate));
-            }
-        }
-    }
-    for owner in src.parts.keys().chain(src.assemblies.keys()) {
-        for key in crate::configuration::names(&src, owner).keys() {
-            mapping.insert(key.clone(), mapped(&link_id, key));
-        }
-    }
-    let mut json = serde_json::to_value(&src)?;
-    // Default finishes are omitted from ordinary source to preserve legacy hashes.
-    // A linked snapshot must still namespace them and every default assignment.
-    json["finishes"] = serde_json::to_value(&src.finishes)?;
-    for part in src.parts.values() {
-        json["parts"][&part.id]["finish"] = serde_json::Value::String(part.finish.clone());
-    }
-    // Drawings and review state are not part of the component dependency closure.
-    json["drawings"] = serde_json::json!([]);
-    json["comments"] = serde_json::json!([]);
-    json["libraries"] = serde_json::json!({});
-    remap_source(&mut json, &mapping, "")?;
-    let mut imported: Document = serde_json::from_value(json)?;
+    let (mut imported, mapping) = namespace_snapshot(&src, &link_id)?;
     let source_root = project_root(&source);
     for resource in imported.resources.values_mut() {
         let bytes = std::fs::read(safe_join(&source_root, &resource.path)?)?;
@@ -282,6 +320,16 @@ pub fn link(
         pins.insert(key.clone(), hash(serde_json::to_vec(&assembly)?));
         doc.assemblies.insert(key, assembly);
     }
+    let pinned_materials = imported
+        .materials
+        .iter()
+        .map(|(id, material)| Ok((id.clone(), hash(serde_json::to_vec(material)?))))
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let pinned_finishes = imported
+        .finishes
+        .iter()
+        .map(|(id, finish)| Ok((id.clone(), hash(serde_json::to_vec(finish)?))))
+        .collect::<Result<BTreeMap<_, _>>>()?;
     doc.materials.extend(imported.materials);
     doc.finishes.extend(imported.finishes);
     doc.resources.extend(imported.resources);
@@ -314,6 +362,9 @@ pub fn link(
             snapshot_resource: snapshot,
             definition: definition.clone(),
             pinned_definitions: pins,
+            pinned_materials: Some(pinned_materials),
+            pinned_finishes: Some(pinned_finishes),
+            pin_diagnostic: None,
         },
     );
     if old.is_none() {
@@ -442,6 +493,7 @@ fn remap_source_inner(
                 | "mate_curve_seeds"
                 | "component_patterns"
                 | "exploded_views"
+                | "display_states"
                 | "inspections"
                 | "weld_beads"
                 | "assembly_welds"

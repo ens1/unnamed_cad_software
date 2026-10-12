@@ -27,6 +27,7 @@ const SECTION_TOGGLE: &str = "appearance.section.toggle/";
 const SECTIONS: &[(&str, &str, bool)] = &[
     ("shared-library", "Shared finish library", false),
     ("library-details", "Library description and tags", false),
+    ("manufacturing", "Manufacturing finish requirements", false),
     ("color-values", "Color values", false),
     ("surface", "Surface response", true),
     ("textures", "Textures · import images", true),
@@ -137,7 +138,10 @@ fn capture_face(w: &mut Workspace) -> Result<()> {
         CadError::Invalid("The selected face has no native output body reference".into())
     })?;
     let evaluation = crate::viewport::display_evaluation(w)
-        .filter(|evaluation| evaluation.valid && evaluation.identity == w.session.identity())
+        .filter(|evaluation| {
+            (evaluation.valid || evaluation.geometry_valid)
+                && evaluation.identity == w.session.identity()
+        })
         .ok_or_else(|| {
             CadError::Invalid(
                 "Wait for the current model evaluation before assigning a face finish".into(),
@@ -269,9 +273,48 @@ fn load(w: &mut Workspace, id: &str) {
     });
 }
 fn available(w: &Workspace) -> bool {
-    w.sketch.is_none() && (w.tool_checkpoint.is_none() || w.fields.contains_key(TOOL))
+    w.sketch.is_none()
+        && (w.tool_checkpoint.is_none()
+            || w.fields.contains_key(TOOL)
+            || w.fields.contains_key("material-tool"))
+}
+fn finish_editable(w: &Workspace, id: &str) -> bool {
+    available(w) && !cad_core::library::finish_is_pinned(w.session.visible(), id)
+}
+fn protect_finish_field(w: &Workspace, element: &mut SemanticElement) {
+    let setter = element.data.get("setter").and_then(Value::as_str);
+    let finish = if setter == Some("appearance-finish") {
+        element
+            .data
+            .get("finish")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    } else if setter == Some("appearance-ui")
+        && element.data.get("field").and_then(Value::as_str) == Some("source")
+    {
+        selected(w)
+    } else {
+        None
+    };
+    if finish
+        .as_ref()
+        .is_some_and(|id| cad_core::library::finish_is_pinned(w.session.visible(), id))
+    {
+        element.data["editable"] = false.into();
+        element.data["disabled_reason"] = json!(
+            "This finish is pinned by a linked component. Duplicate it to customize a unique component."
+        );
+        element.data["diagnostics"] = json!([
+            "This finish is pinned by a linked component. Duplicate it to customize a unique component."
+        ]);
+        element.state = "readonly".into();
+    }
 }
 pub fn begin(w: &mut Workspace, lighting: bool) {
+    if w.fields.contains_key("material-tool") && !crate::materials_ui::current_source_is_valid(w) {
+        w.status = "Correct the current material fields before switching to appearances".into();
+        return;
+    }
     if !available(w) {
         w.status = "Apply or cancel the current operation before editing visual finishes".into();
         return;
@@ -284,6 +327,7 @@ pub fn begin(w: &mut Workspace, lighting: bool) {
         && let Err(error) = capture_face(w)
     {
         w.status = error.to_string();
+        return;
     }
     w.start_tool();
     w.fields.insert(TOOL.into(), "true".into());
@@ -359,6 +403,11 @@ fn checked_dispatch(
     Ok(())
 }
 fn put(w: &mut Workspace, finish: Finish) -> Result<()> {
+    if cad_core::library::finish_is_pinned(w.session.visible(), &finish.id)
+        && w.session.visible().finishes.get(&finish.id) != Some(&finish)
+    {
+        return Err(CadError::Invalid("This finish is pinned by a linked component. Duplicate it to customize a unique component.".into()));
+    }
     let id = finish.id.clone();
     let expected = serde_json::to_value(&finish)?;
     checked_dispatch(
@@ -493,10 +542,19 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
     }
     if !w.fields.contains_key(TOOL) {
         begin(w, false);
+        if !w.fields.contains_key(TOOL) {
+            return true;
+        }
     }
     let finish = choose_id(w, arguments);
     let result = (|| -> Result<()> {
         match command {
+            "appearance.open-materials" => {
+                if !current_source_is_valid(w) {
+                    return Err(CadError::Invalid("Correct the current appearance fields and finish loading texture resources before switching to materials".into()));
+                }
+                crate::materials_ui::begin(w);
+            }
             "appearance.edit" => {
                 if let Some(id) = &finish {
                     load(w, id);
@@ -562,6 +620,19 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                     }
                 }
                 reset_target_editor(w);
+            }
+            "appearance.clear-manufacturing" => {
+                let id =
+                    finish.ok_or_else(|| CadError::Invalid("Choose a visual finish".into()))?;
+                let mut source = w
+                    .session
+                    .visible()
+                    .finishes
+                    .get(&id)
+                    .cloned()
+                    .ok_or_else(|| CadError::Invalid("The finish no longer exists".into()))?;
+                source.manufacturing = None;
+                put(w, source)?;
             }
             "appearance.new" | "appearance.duplicate" => {
                 let source = finish
@@ -794,6 +865,9 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
     true
 }
 fn texture(w: &mut Workspace, finish_id: &str, slot: &str, import: bool) -> Result<()> {
+    if cad_core::library::finish_is_pinned(w.session.visible(), finish_id) {
+        return Err(CadError::Invalid("This finish is pinned by a linked component. Duplicate it before importing or clearing textures.".into()));
+    }
     if ![
         "base_color",
         "normal",
@@ -916,7 +990,28 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
                 .finishes
                 .get(element.data.get("finish")?.as_str()?)?;
             let field = element.data.get("field")?.as_str()?;
-            if field == "/metadata/tags" {
+            if let Some(field) = field.strip_prefix("/manufacturing/") {
+                let source = finish.manufacturing.clone().unwrap_or_default();
+                Some(match field {
+                    "process" => json!(source.process),
+                    "specification" => json!(source.specification),
+                    "designation" => json!(source.designation),
+                    "notes" => json!(source.notes),
+                    "coating_thickness_um" => json!(
+                        source
+                            .coating_thickness_um
+                            .map(|value| value.to_string())
+                            .unwrap_or_default()
+                    ),
+                    "surface_roughness_ra_um" => json!(
+                        source
+                            .surface_roughness_ra_um
+                            .map(|value| value.to_string())
+                            .unwrap_or_default()
+                    ),
+                    _ => return None,
+                })
+            } else if field == "/metadata/tags" {
                 Some(json!(
                     finish
                         .metadata
@@ -964,6 +1059,23 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
         .get("setter")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let edited_finish = if setter == "appearance-finish" {
+        element
+            .data
+            .get("finish")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    } else if setter == "appearance-ui"
+        && element.data.get("field").and_then(Value::as_str) == Some("source")
+    {
+        selected(w)
+    } else {
+        None
+    };
+    if edited_finish.is_some_and(|id| cad_core::library::finish_is_pinned(w.session.visible(), &id))
+    {
+        return Err(CadError::Invalid("This finish is pinned by a linked component. Duplicate it to customize a unique component.".into()));
+    }
     if setter == "appearance-ui" {
         match element.data.get("field").and_then(Value::as_str) {
             Some("library") => {
@@ -1048,6 +1160,9 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
     }
     if !w.fields.contains_key(TOOL) {
         begin(w, false);
+        if !w.fields.contains_key(TOOL) {
+            return Err(CadError::Invalid(w.status.clone()));
+        }
     }
     match setter {
         "appearance-ui" => match element.data.get("field").and_then(Value::as_str) {
@@ -1091,6 +1206,55 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                 .get("finish")
                 .and_then(Value::as_str)
                 .ok_or_else(|| CadError::Invalid("Missing finish identity".into()))?;
+            if let Some(field) = element
+                .data
+                .get("field")
+                .and_then(Value::as_str)
+                .and_then(|pointer| pointer.strip_prefix("/manufacturing/"))
+            {
+                let mut finish = w
+                    .session
+                    .visible()
+                    .finishes
+                    .get(id)
+                    .cloned()
+                    .ok_or_else(|| CadError::Invalid("The finish no longer exists".into()))?;
+                let mut requirements = finish.manufacturing.clone().unwrap_or_default();
+                let text = value.as_str().ok_or_else(|| {
+                    CadError::Invalid("Enter a manufacturing finish value".into())
+                })?;
+                match field {
+                    "process" => requirements.process = text.into(),
+                    "specification" => requirements.specification = text.into(),
+                    "designation" => requirements.designation = text.into(),
+                    "notes" => requirements.notes = text.into(),
+                    "coating_thickness_um" | "surface_roughness_ra_um" => {
+                        let number = if text.trim().is_empty() {
+                            None
+                        } else {
+                            Some(text.trim().parse::<f64>().map_err(|_|CadError::Invalid("Enter a finite micrometre value, or clear the field to leave it unspecified".into()))?)
+                        };
+                        if field == "coating_thickness_um" {
+                            requirements.coating_thickness_um = number;
+                        } else {
+                            requirements.surface_roughness_ra_um = number;
+                        }
+                    }
+                    _ => {
+                        return Err(CadError::Invalid(
+                            "Unknown manufacturing finish requirement".into(),
+                        ));
+                    }
+                }
+                requirements.validate()?;
+                finish.manufacturing = if requirements == Default::default() {
+                    None
+                } else {
+                    Some(requirements)
+                };
+                put(w, finish)?;
+                return Ok(());
+            }
             let mut source =
                 finish_source(w.session.visible().finishes.get(id).ok_or_else(|| {
                     CadError::Invalid("The visual finish no longer exists".into())
@@ -1199,6 +1363,11 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
 }
 
 fn button(ui: &mut egui::Ui, w: &mut Workspace, command: &str, label: &str, enabled: bool) {
+    let modifies_finish = command.starts_with(IMPORT)
+        || command.starts_with(CLEAR)
+        || command == "appearance.clear-manufacturing";
+    let enabled =
+        enabled && (!modifies_finish || selected(w).is_some_and(|id| finish_editable(w, &id)));
     if controls::button(
         ui,
         &format!("command:{command}"),
@@ -1276,6 +1445,13 @@ impl Fields {
                     elements.insert(field.into(), element);
                 }
             }
+        }
+        for element in elements.values_mut() {
+            if !available(w) {
+                element.data["editable"] = false.into();
+                element.state = "disabled".into();
+            }
+            protect_finish_field(w, element);
         }
         Self { elements }
     }
@@ -1544,6 +1720,13 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
         lighting_controls(ui, w);
         return;
     }
+    button(
+        ui,
+        w,
+        "appearance.open-materials",
+        "Engineering materials…",
+        available(w),
+    );
     target_controls(ui, w);
     let selected_id = selected(w);
     crate::finish_library_ui::show(ui, w);
@@ -1655,12 +1838,41 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
     let Some(id) = selected(w) else {
         return;
     };
+    let finish_editable = finish_editable(w, &id);
+    if !finish_editable {
+        description(
+            ui,
+            "appearance:pinned-readonly",
+            "This finish is pinned by a linked component. Duplicate it to customize a unique component.",
+        );
+    }
     let fields = Fields::new(w, &id, false);
     field(ui, w, &fields, "/name", "Finish name", json!([]));
     section(ui, w, "library-details", |ui, w| {
         for element in metadata_elements(w, &id) {
             crate::ui::semantic_field(ui, w, &element);
         }
+    });
+    section(ui, w, "manufacturing", |ui, w| {
+        description(
+            ui,
+            "appearance:manufacturing-help",
+            "Explicit manufacturing requirements are separate from visual roughness and bump relief. Leave optional micrometre fields blank when unspecified; optical presets do not imply a coating specification.",
+        );
+        for element in manufacturing_elements(w, &id) {
+            crate::ui::semantic_field(ui, w, &element);
+        }
+        button(
+            ui,
+            w,
+            "appearance.clear-manufacturing",
+            "Clear manufacturing requirements",
+            w.session
+                .visible()
+                .finishes
+                .get(&id)
+                .is_some_and(|finish| finish.manufacturing.is_some()),
+        );
     });
     if let Some(finish) = w.session.visible().finishes.get(&id) {
         let mut color = finish.base_color.map(|value| value as f32);
@@ -1683,6 +1895,7 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
                 && !props
                     .get("visibility")
                     .is_some_and(|value| value == "hidden")
+                && finish_editable
                 && ui
                     .scope(|ui| {
                         controls::apply_properties(ui, &props);
@@ -1985,6 +2198,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(target_elements(w));
     if let Some(id) = selected(w) {
         elements.extend(metadata_elements(w, &id));
+        elements.extend(manufacturing_elements(w, &id));
     }
     elements.extend(face_diagnostics(w));
     for (section, label, _) in SECTIONS {
@@ -2117,6 +2331,20 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ),
         ("appearance.new", "New visual finish", available(w)),
         (
+            "appearance.open-materials",
+            "Engineering materials…",
+            available(w),
+        ),
+        (
+            "appearance.clear-manufacturing",
+            "Clear manufacturing finish requirements",
+            available(w)
+                && selected(w)
+                    .filter(|id| finish_editable(w, id))
+                    .and_then(|id| w.session.visible().finishes.get(&id))
+                    .is_some_and(|finish| finish.manufacturing.is_some()),
+        ),
+        (
             "appearance.duplicate",
             "Duplicate visual finish",
             available(w) && selected(w).is_some(),
@@ -2206,6 +2434,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         swatch.id = format!("finish:{}::swatch", finish.id);
         swatch.role = "appearance-swatch".into();
         swatch.data["value_type"] = "color-srgb".into();
+        protect_finish_field(w, &mut swatch);
         elements.push(swatch);
         for slot in [
             "base_color",
@@ -2249,7 +2478,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                     role: "appearance-action".into(),
                     label: format!("{label} · {}", texture_label(slot)),
                     value: None,
-                    state: if available(w) && (prefix == IMPORT || !resource.is_null()) {
+                    state: if finish_editable(w, &finish.id)
+                        && (prefix == IMPORT || !resource.is_null())
+                    {
                         "ready"
                     } else {
                         "disabled"
@@ -2266,6 +2497,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
 }
 pub fn reconcile_semantics(w: &Workspace, elements: &mut [SemanticElement]) {
     for element in elements {
+        protect_finish_field(w, element);
         if element
             .data
             .get("setter")
@@ -2300,7 +2532,7 @@ fn library_element(w: &Workspace) -> SemanticElement {
     }
 }
 fn source_element(w: &Workspace) -> SemanticElement {
-    SemanticElement {
+    let mut element = SemanticElement {
         id: "appearance:source".into(),
         role: "appearance-source".into(),
         label: "Finish JSON".into(),
@@ -2314,7 +2546,9 @@ fn source_element(w: &Workspace) -> SemanticElement {
         commands: vec![],
         relationships: selected(w).into_iter().collect(),
         data: json!({"setter":"appearance-ui","field":"source","json":w.fields.get(SOURCE).cloned().unwrap_or_default(),"editable":available(w)&&selected(w).is_some(),"multiline":true,"accessibility_label":"Advanced visual finish source"}),
-    }
+    };
+    protect_finish_field(w, &mut element);
+    element
 }
 
 /// Catalog/browser actions share the appearance tool checkpoint and assignment path.
@@ -2334,6 +2568,9 @@ pub fn add_named_finish(w: &mut Workspace, finish: Finish, assign: bool) -> Resu
     }
     if !w.fields.contains_key(TOOL) {
         begin(w, false);
+        if !w.fields.contains_key(TOOL) {
+            return Err(CadError::Invalid(w.status.clone()));
+        }
     }
     let id = finish.id.clone();
     let mut document = w.session.visible().clone();
@@ -2401,7 +2638,8 @@ fn metadata_elements(w: &Workspace, id: &str) -> Vec<SemanticElement> {
             json!([]),
             None,
         );
-        element.data["editable"] = json!(available(w));
+        element.data["editable"] = json!(finish_editable(w, id));
+        protect_finish_field(w, &mut element);
         element
     })
     .collect()
@@ -2426,4 +2664,59 @@ fn face_diagnostics(w: &Workspace) -> Vec<SemanticElement> {
         let assignment=part.face_finishes.iter().find(|assignment|assignment.id==diagnostic.assignment);
         SemanticElement{id:format!("appearance:face-diagnostic:{}",diagnostic.assignment),role:"appearance-face-diagnostic".into(),label:format!("Face finish · {} · {}",diagnostic.state,diagnostic.message),value:Some(diagnostic.assignment.clone()),state:"warning".into(),commands:vec!["appearance.remove-face-override".into(),"appearance.repair-face".into()],relationships:vec![part.id.clone()],data:json!({"definition":part.id,"assignment_id":diagnostic.assignment,"assignment":assignment,"diagnostic":diagnostic,"fallback":"part-finish","blocks_apply":false})}
     }).collect()
+}
+
+fn manufacturing_elements(w: &Workspace, id: &str) -> Vec<SemanticElement> {
+    let Some(finish) = w.session.visible().finishes.get(id) else {
+        return vec![];
+    };
+    let source = finish.manufacturing.clone().unwrap_or_default();
+    [
+        ("process", "Process", source.process, None),
+        ("specification", "Specification", source.specification, None),
+        (
+            "designation",
+            "Designation / color code",
+            source.designation,
+            None,
+        ),
+        (
+            "coating_thickness_um",
+            "Coating thickness",
+            source
+                .coating_thickness_um
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            Some("µm"),
+        ),
+        (
+            "surface_roughness_ra_um",
+            "Specified surface Ra",
+            source
+                .surface_roughness_ra_um
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            Some("µm"),
+        ),
+        ("notes", "Manufacturing notes", source.notes, None),
+    ]
+    .into_iter()
+    .map(|(name, label, value, unit)| {
+        let mut element = field_element(
+            id,
+            &format!("/manufacturing/{name}"),
+            label,
+            json!(value),
+            false,
+            json!([]),
+            unit,
+        );
+        element.data["manufacturing_requirement"] = true.into();
+        element.data["optical_property"] = false.into();
+        element.data["optional"] = json!(unit.is_some());
+        element.data["editable"] = json!(finish_editable(w, id));
+        protect_finish_field(w, &mut element);
+        element
+    })
+    .collect()
 }

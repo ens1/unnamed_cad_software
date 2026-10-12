@@ -93,6 +93,7 @@ impl ProjectStore for FileStore {
             let a = serde_json::from_slice(&fs::read(safe_join(&root, &file)?)?)?;
             manifest.document.assemblies.insert(id, a);
         }
+        crate::library::hydrate_pins(&mut manifest.document, &root);
         manifest.document.validate()?;
         Ok(manifest.document)
     }

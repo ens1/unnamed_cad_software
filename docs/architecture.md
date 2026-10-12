@@ -168,3 +168,28 @@ its checkpoint and targets the intended owning assembly. Drawing navigation,
 selection and workspace visibility are presentation preferences; rendering
 fidelity/source metadata are excluded from paper primitives. See
 [P2 implementation details](usability-p2-fixes.md).
+
+## Engineering libraries and design monitors
+
+Material metadata and engineering properties use application-owned f64 SI
+contracts; catalog copies and visual finish assignments remain separate. Native
+face finish references resolve exact producer/body ancestry or remain explicit
+orphans. Portable library import validates candidates atomically. Linked source
+snapshots pin engineering materials, finishes and texture evidence; ordinary
+document replacement cannot erase that evidence, while explicit update commands
+validate bounded snapshot proofs. Personal new-model material defaults retain
+portable copies outside project identity scopes.
+
+Display-state contract 1 retains saved full occurrence paths and independent
+visibility/finish channels. Active state selection belongs to presentation and
+does not solve mates or rebuild geometry. Optional drawing state references
+control shared projected hidden/ghost output. Drawing dimension-group contract 1
+uses stable native point references, source target identities and common f64
+preview/PDF/DXF vectors.
+
+Design monitors retain native parameter or evaluated property targets and
+inclusive f64 limits in optional document source. Their persistent background
+worker receives lightweight property snapshots, coalesces pending updates, limits
+configuration scratch caching and rejects stale source/evaluation stamps. The
+viewport never waits on monitor calculation. Unknown values remain unavailable;
+alerts do not authorize invalid geometry or replace engineering validation.

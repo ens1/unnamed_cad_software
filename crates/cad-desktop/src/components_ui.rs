@@ -134,7 +134,8 @@ fn publish(w: &mut Workspace, document: Document, owner: &str, component: &str) 
         .and_then(|assembly| assembly.instances.get(component))
         .cloned()
         .ok_or_else(|| error("The insertion has no preview component"))?;
-    w.dispatch(Command::ReplaceDocument { document });
+    let command = library::replace_command(w.session.visible(), document, &w.root())?;
+    w.dispatch(command);
     if w.session
         .visible()
         .assemblies

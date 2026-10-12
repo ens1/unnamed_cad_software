@@ -899,6 +899,8 @@ pub struct Assembly {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub exploded_views: BTreeMap<Id, crate::exploded_views::Definition>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub display_states: BTreeMap<Id, crate::display_states::Definition>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inspections: BTreeMap<Id, crate::assembly_inspection::Definition>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub weld_beads: BTreeMap<Id, crate::weld_beads::Definition>,
@@ -1162,6 +1164,9 @@ pub struct Drawing {
     pub view_layouts: BTreeMap<String, crate::drawing::ViewLayout>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exploded_view: Option<Id>,
+    /// Explicit drawing-only arrangement, relative to this sheet's model scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_state: Option<crate::display_states::Selection>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Document {
@@ -1197,6 +1202,8 @@ pub struct Document {
     pub libraries: BTreeMap<Id, crate::library::ComponentLink>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub active_configurations: BTreeMap<Id, Id>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sensors: BTreeMap<Id, crate::sensors::Definition>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlacedPart {
@@ -1223,9 +1230,11 @@ impl Document {
     }
     pub fn validate(&self) -> Result<()> {
         self.settings.validate(self)?;
+        crate::sensors::validate(self)?;
         crate::appearance::validate(self)?;
         crate::weld_beads::validate_parts(self)?;
         crate::exploded_views::validate(self)?;
+        crate::display_states::validate(self)?;
         crate::assembly_inspection::validate(self)?;
         crate::assembly_welds::validate(self)?;
         crate::drawing::validate_document(self)?;
@@ -1265,6 +1274,7 @@ impl Document {
         crate::library::validate_pins(self)?;
         crate::assembly_groups::validate(self)?;
         let mut ids = BTreeSet::new();
+        ids.extend(self.sensors.keys());
         for (key, part) in &self.parts {
             if key != &part.id || !ids.insert(key) {
                 return Err(CadError::Invalid("Invalid part identity".into()));
@@ -1617,6 +1627,7 @@ impl Document {
             configurations: BTreeMap::new(),
             component_patterns: BTreeMap::new(),
             exploded_views: BTreeMap::new(),
+            display_states: BTreeMap::new(),
             inspections: BTreeMap::new(),
             weld_beads: BTreeMap::new(),
             rigid_groups: BTreeMap::new(),
@@ -1666,6 +1677,7 @@ impl Document {
             properties: BTreeMap::new(),
             libraries: BTreeMap::new(),
             active_configurations: BTreeMap::new(),
+            sensors: BTreeMap::new(),
         }
     }
     /// Create a part with this model's finish preference, without inserting an occurrence.

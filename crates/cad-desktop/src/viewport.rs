@@ -411,6 +411,11 @@ pub(crate) fn display_meshes<'a>(
     meshes
 }
 pub(crate) fn visible(w: &Workspace, i: &PlacedPart) -> bool {
+    if crate::display_states_ui::effect(w, &i.path).visibility
+        == Some(cad_core::display_states::Visibility::Hidden)
+    {
+        return false;
+    }
     !w.view.isolation
         || w.peek
         || crate::assembly_motion_ui::component_selected(w, &i.path)
@@ -419,11 +424,13 @@ pub(crate) fn visible(w: &Workspace, i: &PlacedPart) -> bool {
         || w.view.ghost_others
 }
 pub(crate) fn ghost_neighbor(w: &Workspace, instance: &PlacedPart) -> bool {
-    w.view.isolation
-        && !w.peek
-        && !crate::assembly_motion_ui::component_selected(w, &instance.path)
-        && !active_context(w, instance)
-        && !w.view.pinned.iter().any(|id| instance.path.contains(id))
+    crate::display_states_ui::effect(w, &instance.path).visibility
+        == Some(cad_core::display_states::Visibility::Ghost)
+        || w.view.isolation
+            && !w.peek
+            && !crate::assembly_motion_ui::component_selected(w, &instance.path)
+            && !active_context(w, instance)
+            && !w.view.pinned.iter().any(|id| instance.path.contains(id))
 }
 fn active_context(w: &Workspace, instance: &PlacedPart) -> bool {
     w.view.active_part.as_ref() == Some(&instance.definition)
@@ -714,7 +721,7 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
     let (o, d) = ray(w, rect, p);
     let mut hits = vec![];
     for instance in display_instances(w, e) {
-        if !visible(w, instance) {
+        if !visible(w, instance) || !crate::display_states_ui::pickable(w, &instance.path) {
             continue;
         }
         for mesh in selection_meshes(w, e, instance) {
@@ -1205,7 +1212,11 @@ pub fn sync_scene(
             .map(|e| e.identity.source.as_str())
             .unwrap_or(""),
         props,
-        (w.view.history_cursor.clone(), w.view.exploded_view.clone()),
+        (
+            w.view.history_cursor.clone(),
+            w.view.exploded_view.clone(),
+            w.view.display_state.clone()
+        ),
         w.selected.as_ref().map(|selection| (
             &selection.definition,
             &selection.path,
@@ -1292,6 +1303,7 @@ pub fn sync_scene(
                 continue;
             }
             let sources = display_meshes(&w, e, instance);
+            let display_effect = crate::display_states_ui::effect(&w, &instance.path);
             let has_overrides = doc.parts.get(&instance.definition).is_some_and(|part| {
                 !part.face_finishes.is_empty() || part.features.iter().any(|feature| matches!(
                     &feature.operation, cad_core::Operation::WeldBead { definition } if definition.finish.is_some()
@@ -1326,6 +1338,7 @@ pub fn sync_scene(
                     let mesh = meshes.add(render_mesh(m, instance));
                     let finish = assigned_finish
                         .as_ref()
+                        .or(display_effect.finish.as_ref())
                         .or_else(|| resolved_finishes.get(&instance.path))
                         .or(instance.finish.as_ref())
                         .and_then(|id| doc.finishes.get(id))

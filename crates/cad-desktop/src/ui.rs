@@ -941,7 +941,12 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         }
         return;
     }
+    if command.starts_with("assembly.display-state-") {
+        crate::display_states_ui::semantic_action(w, element, command);
+        return;
+    }
     if crate::reference_repair_ui::action(w, command, Some(&element.data))
+        || crate::sensors_ui::action(w, command, Some(&element.data))
         || crate::materials_ui::action(w, command, Some(&element.data))
         || crate::finish_library_ui::action(w, command, Some(&element.data))
         || crate::drawing_ui::semantic_action(w, element, command)
@@ -1114,6 +1119,10 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                         | "component-insert"
                         | "material-ui"
                         | "finish-library"
+                        | "display-state-field"
+                        | "display-state-source"
+                        | "display-state-selection"
+                        | "sensor-editor"
                         | "material-editor"
                         | "drawing-editor"
                         | "drawing-interaction"
@@ -1384,6 +1393,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     .unwrap_or_else(|| value.to_string());
                 let key = format!("presentation-field:{}:{editor_generation}", element.id);
                 let keep_invalid_text = crate::assembly_tools_ui::field_is_invalid(w, element)
+                    || crate::sensors_ui::field_is_invalid(w, element)
                     || crate::materials_ui::field_is_invalid(w, element)
                     || crate::components_ui::field_is_invalid(w, element)
                     || crate::assembly_welds_ui::field_is_invalid(w, element)
@@ -1481,6 +1491,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         draw(ui)
     };
     if let Some(error) = appearance_error {
+        crate::sensors_ui::field_error(w, element, error.clone());
         crate::materials_ui::field_error(w, element, error.clone());
         crate::components_ui::field_error(w, element, error.clone());
         crate::assembly_tools_ui::field_error(w, element, error.clone());
@@ -1495,6 +1506,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     if let Some(next) = next {
         match crate::presentation_composition::set_value(w, element, next) {
             Ok(()) => {
+                crate::sensors_ui::field_error(w, element, None);
                 crate::materials_ui::field_error(w, element, None);
                 crate::components_ui::field_error(w, element, None);
                 crate::assembly_tools_ui::field_error(w, element, None);
@@ -1507,6 +1519,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::configuration_ui::field_error(w, element, None);
             }
             Err(error) => {
+                crate::sensors_ui::field_error(w, element, Some(error.to_string()));
                 crate::materials_ui::field_error(w, element, Some(error.to_string()));
                 crate::components_ui::field_error(w, element, Some(error.to_string()));
                 crate::assembly_tools_ui::field_error(w, element, Some(error.to_string()));
@@ -1866,6 +1879,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         return;
     }
     if crate::workspace_controls::action(w, cmd)
+        || crate::sensors_ui::action(w, cmd, None)
+        || crate::display_states_ui::handle_command(w, cmd, None)
         || crate::materials_ui::action(w, cmd, None)
         || crate::finish_library_ui::action(w, cmd, None)
         || crate::drawing_ui::action(w, cmd)
@@ -1908,6 +1923,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || w.assembly_motion.is_some()
         || w.fields.contains_key("appearance-tool")
         || w.fields.contains_key("material-tool")
+        || w.fields.contains_key("display-state-editor")
+        || w.fields.contains_key("sensor-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -2356,6 +2373,8 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
         || w.assembly_motion.is_some()
         || w.fields.contains_key("appearance-tool")
         || w.fields.contains_key("material-tool")
+        || w.fields.contains_key("display-state-editor")
+        || w.fields.contains_key("sensor-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -2424,6 +2443,8 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
     if crate::assembly_tools_ui::active(w)
         || w.fields.contains_key("appearance-tool")
         || w.fields.contains_key("material-tool")
+        || w.fields.contains_key("display-state-editor")
+        || w.fields.contains_key("sensor-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -3010,6 +3031,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "parameter" => "Named parameter",
             "bom" => "Bill of materials",
             "inspection" => "Mass Properties",
+            "sensors" => "Design Monitors",
             _ => "Command search",
         });
         if !matches!(
@@ -3019,6 +3041,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 | "configurations"
                 | "appearances"
                 | "materials"
+                | "sensors"
                 | "reference-repair"
                 | "feature-order"
                 | "assembly-motion"
@@ -3046,6 +3069,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             }
             "configurations" => crate::configuration_ui::show(ui, w),
             "inspection" => crate::inspection_ui::controls(ui, w),
+            "sensors" => crate::sensors_ui::show(ui, w),
             "feature" => feature_editor(ui, w),
             "sketch" => crate::sketch::controls(ui, w),
             "source" => {
@@ -3452,6 +3476,10 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
         crate::exploded_views_ui::show(ui, w, &assembly_id);
         return;
     }
+    if w.fields.contains_key("display-state-editor") {
+        crate::display_states_ui::show(ui, w, &assembly_id);
+        return;
+    }
     if w.fields.contains_key("assembly-inspection-editor") {
         crate::assembly_inspection_ui::show(ui, w, &assembly_id);
         return;
@@ -3468,6 +3496,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
         crate::mate_ui::show(ui, w, &assembly_id);
         return;
     }
+    crate::display_states_ui::show(ui, w, &assembly_id);
     ui.horizontal_wrapped(|ui| {
         if ui.button("Insert Existing…").clicked() {
             crate::components_ui::begin_insert(w);
@@ -3486,6 +3515,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                     configurations: BTreeMap::new(),
                     component_patterns: BTreeMap::new(),
                     exploded_views: BTreeMap::new(),
+                    display_states: BTreeMap::new(),
                     inspections: BTreeMap::new(),
                     weld_beads: BTreeMap::new(),
                     rigid_groups: BTreeMap::new(),
@@ -3929,7 +3959,12 @@ fn library_editor(ui: &mut egui::Ui, w: &mut Workspace) {
     {
         let mut document = w.session.visible().clone();
         match cad_core::library::link(&mut document, &w.root(), &source, None, None) {
-            Ok(_) => w.dispatch(Command::ReplaceDocument { document }),
+            Ok(_) => {
+                match cad_core::library::replace_command(w.session.visible(), document, &w.root()) {
+                    Ok(command) => w.dispatch(command),
+                    Err(e) => w.status = e.to_string(),
+                }
+            }
             Err(e) => w.status = e.to_string(),
         }
     }
@@ -3951,6 +3986,19 @@ fn library_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                     &link.source_sha256[..link.source_sha256.len().min(16)]
                 ));
                 ui.small(&link.source_path);
+                if let Some(element) = cad_core::library::semantic(w.session.visible())
+                    .into_iter()
+                    .find(|element| element.relationships.contains(&link.id))
+                {
+                    crate::presentation_controls::label(
+                        ui,
+                        &element.id,
+                        &element.role,
+                        &[],
+                        &element.state,
+                        element.value.as_deref().unwrap_or_default(),
+                    );
+                }
                 ui.horizontal(|ui| {
                     if ui.button("Check update").clicked() {
                         w.status = match cad_core::library::available_update(&link, &w.root()) {
@@ -3970,7 +4018,14 @@ fn library_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                             None,
                             Some(&link.id),
                         ) {
-                            Ok(_) => w.dispatch(Command::ReplaceDocument { document }),
+                            Ok(_) => match cad_core::library::replace_command(
+                                w.session.visible(),
+                                document,
+                                &w.root(),
+                            ) {
+                                Ok(command) => w.dispatch(command),
+                                Err(e) => w.status = e.to_string(),
+                            },
                             Err(e) => w.status = e.to_string(),
                         }
                     }
@@ -3987,7 +4042,14 @@ fn library_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                             None,
                             Some(&link.id),
                         ) {
-                            Ok(_) => w.dispatch(Command::ReplaceDocument { document }),
+                            Ok(_) => match cad_core::library::replace_command(
+                                w.session.visible(),
+                                document,
+                                &w.root(),
+                            ) {
+                                Ok(command) => w.dispatch(command),
+                                Err(e) => w.status = e.to_string(),
+                            },
                             Err(e) => w.status = e.to_string(),
                         }
                     }

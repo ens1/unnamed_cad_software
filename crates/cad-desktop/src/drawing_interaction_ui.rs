@@ -419,6 +419,23 @@ fn capture_action(capture: &Capture, delta: [f64; 2]) -> Result<Action> {
                 rect_mm: [min[0], min[1], max[0] - min[0], max[1] - min[1]],
             }
         }
+        HandleKind::GroupLabel { target } => {
+            let Target::Annotation { id } = &capture.target else {
+                return Err(invalid("Only dimension groups have target label handles"));
+            };
+            let annotation = capture
+                .source
+                .entities
+                .iter()
+                .find(|annotation| &annotation.id == id)
+                .ok_or_else(|| invalid("The dimension group no longer exists"))?;
+            let original = crate::drawing_dimension_groups_ui::group_target(annotation, target)?;
+            Action::MoveGroupLabel {
+                id: id.clone(),
+                target: target.clone(),
+                offset_mm: [original[0] + delta[0], original[1] + delta[1]],
+            }
+        }
         HandleKind::LeaderBend { index } => {
             let Target::Annotation { id } = &capture.target else {
                 return Err(invalid("Only annotations have elbow handles"));
@@ -1325,6 +1342,7 @@ fn handle_class(kind: &HandleKind) -> &'static str {
         HandleKind::DimensionOffset => "dimension-offset",
         HandleKind::Anchor { .. } => "anchor",
         HandleKind::LeaderBend { .. } => "leader-elbow",
+        HandleKind::GroupLabel { .. } => "dimension-group-label",
     }
 }
 fn dimension_label(action: &Action) -> &'static str {
@@ -1499,23 +1517,13 @@ fn draw_primitive(
 ) {
     match primitive {
         Primitive::Polyline { points, dashed } => {
-            for pair in points.windows(2) {
-                let a = at(paper, scale, pair[0]);
-                let b = at(paper, scale, pair[1]);
-                if *dashed {
-                    let length = a.distance(b);
-                    if length <= 0.001 {
-                        continue;
-                    }
-                    let count = (length / (5. * scale).max(2.)).ceil().min(4096.) as usize;
-                    for i in 0..count {
-                        let s = i as f32 / count as f32;
-                        let e = ((i as f32 + 0.65) / count as f32).min(1.);
-                        painter.line_segment([a.lerp(b, s), a.lerp(b, e)], stroke);
-                    }
-                } else {
-                    painter.line_segment([a, b], stroke);
-                }
+            let segments = if *dashed {
+                cad_core::drawing_strokes::reference_segments(points).unwrap_or_default()
+            } else {
+                points.windows(2).map(|pair| [pair[0], pair[1]]).collect()
+            };
+            for [a, b] in segments {
+                painter.line_segment([at(paper, scale, a), at(paper, scale, b)], stroke);
             }
         }
         Primitive::Text {
@@ -1531,13 +1539,15 @@ fn draw_primitive(
                 stroke.color,
             );
         }
-        Primitive::Spline { curve } => {
+        Primitive::Spline { curve, dashed } => {
             if let Ok(points) = cad_core::drawing::display_curve(curve) {
-                for pair in points.windows(2) {
-                    painter.line_segment(
-                        [at(paper, scale, pair[0]), at(paper, scale, pair[1])],
-                        stroke,
-                    );
+                let segments = if *dashed {
+                    cad_core::drawing_strokes::reference_segments(&points).unwrap_or_default()
+                } else {
+                    points.windows(2).map(|pair| [pair[0], pair[1]]).collect()
+                };
+                for [a, b] in segments {
+                    painter.line_segment([at(paper, scale, a), at(paper, scale, b)], stroke);
                 }
             }
         }

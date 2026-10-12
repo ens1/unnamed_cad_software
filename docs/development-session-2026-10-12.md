@@ -28,9 +28,9 @@ orphan diagnostics. Legacy project defaults remain unchanged unless edited.
 
 Configuration contract 7 adds native unsigned repetition-count overrides and
 stable sketch driving-dimension columns, with per-field inheritance, design-table
-CSV/JSON interchange and library namespace remapping. Reference measurements,
-dimension-group targets and other literal numeric fields are outside this
-checkpoint. The document draft still requires current worker validation.
+CSV/JSON interchange and library namespace remapping. Reference measurements and other literal numeric fields are outside this
+checkpoint. Saved dimension-group entries share the same native constraint
+authority; follow-up metadata makes their group identity explicit. The document draft still requires current worker validation.
 
 The sketch relation browser adds text/type/status filtering and sorting, plus
 view-only focus of referenced native sketch geometry. This does not modify
@@ -38,3 +38,22 @@ constraints or solving behavior.
 
 Validation: `cargo check --workspace`, `cargo clippy --workspace -- -D warnings`,
 `cargo fmt --all --check`, and `git diff --check`. No tests or interactive runs.
+
+## Second checkpoint
+
+Saved assembly display states retain native full occurrence paths, per-channel
+visibility/finish inheritance and optional configuration scope. Drawing state
+associations share hidden/ghost projection with preview, PDF and DXF while
+mechanical placements, tables and properties remain independent.
+
+Production tables expose sourced grade, condition, family, density and optional
+engineering values, plus authored process/specification/coating/Ra requirements.
+Engineering defaults can use portable personal material snapshots. Linked
+materials, finishes and source texture records are protected by verified snapshots,
+with conservative legacy guards and explicit source availability diagnostics.
+
+Drawing contract 8 adds native associative ordinate, baseline and chain groups,
+common/per-target tolerances, stable target ordering, paper label dragging and
+reattachment, all sharing vector output. Design monitor contract 1 adds parameter
+and evaluated property limits, current-source JSON/CLI reports and a coalescing
+persistent background worker. No code tests or interactive runs.

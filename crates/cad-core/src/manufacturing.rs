@@ -381,8 +381,12 @@ pub fn drawing_pdf(doc: &Document, e: &Evaluation, path: &Path) -> Result<()> {
                         pdf_escape(&text)?
                     ));
                 }
-                crate::drawing::Primitive::Spline { curve } => {
-                    content.push_str("[] 0 d\n");
+                crate::drawing::Primitive::Spline { curve, dashed } => {
+                    content.push_str(if dashed {
+                        "[11.34 2.83 2.83 2.83] 0 d\n"
+                    } else {
+                        "[] 0 d\n"
+                    });
                     for (i, p) in crate::drawing::display_curve(&curve)?.iter().enumerate() {
                         content.push_str(&format!(
                             "{:.6} {:.6} {}\n",

@@ -905,6 +905,12 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::sensors_ui::current_source_is_valid(w) {
+        return Some("Correct the current design monitor fields before applying");
+    }
+    if !crate::display_states_ui::current_source_is_valid(w) {
+        return Some("Correct the current display state before applying");
+    }
     if !crate::materials_ui::current_source_is_valid(w) {
         return Some("Correct the current material library fields before applying");
     }
@@ -2100,10 +2106,16 @@ pub fn confirmation_label(w: &Workspace) -> String {
         "OK Component".into()
     } else if w.fields.contains_key("mate-editor") {
         "OK Mate".into()
+    } else if w.fields.contains_key("sensor-tool") {
+        "Apply Design Monitors".into()
+    } else if w.fields.contains_key("display-state-editor") {
+        "Apply Display State".into()
     } else if w.dialog.as_deref() == Some("assembly") {
         "Apply Assembly".into()
     } else if crate::drawing_ui::is_workspace(w) {
         "Apply Drawing".into()
+    } else if w.fields.contains_key("material-tool") && w.fields.contains_key("appearance-tool") {
+        "Apply Properties".into()
     } else if w.fields.contains_key("material-tool") {
         "Apply Materials".into()
     } else if w.fields.contains_key("appearance-tool") {
@@ -3625,6 +3637,7 @@ pub fn measure(w: &mut Workspace) {
     }
 }
 pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    crate::display_states_ui::view_controls(ui, w);
     crate::exploded_views_ui::view_controls(ui, w);
     for (label, orbit) in [
         ("Front", [0., 0.]),

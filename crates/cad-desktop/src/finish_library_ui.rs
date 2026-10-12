@@ -36,7 +36,10 @@ fn preference_key(finish: &Finish) -> String {
     )
 }
 fn available(w: &Workspace) -> bool {
-    w.sketch.is_none() && (w.tool_checkpoint.is_none() || w.fields.contains_key("appearance-tool"))
+    w.sketch.is_none()
+        && (w.tool_checkpoint.is_none()
+            || w.fields.contains_key("appearance-tool")
+            || w.fields.contains_key("material-tool"))
 }
 fn recent(w: &mut Workspace, finish: &Finish) {
     let key = preference_key(finish);
@@ -157,6 +160,9 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
     }
     if !w.fields.contains_key("appearance-tool") {
         crate::appearances_ui::begin(w, false);
+        if !w.fields.contains_key("appearance-tool") {
+            return true;
+        }
     }
     let result = (|| -> Result<()> {
         match command {

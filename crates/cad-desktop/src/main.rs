@@ -14,6 +14,8 @@ mod configuration_ui;
 mod contours_ui;
 mod curve_pattern_ui;
 mod direct_edit_ui;
+mod display_states_ui;
+mod drawing_dimension_groups_ui;
 mod drawing_editor_ui;
 mod drawing_interaction_ui;
 mod drawing_table_ui;
@@ -45,6 +47,7 @@ mod render_appearance;
 mod rib_ui;
 mod sections_ui;
 mod selection_ui;
+mod sensors_ui;
 mod settings;
 mod settings_preferences;
 mod settings_ui;
@@ -120,6 +123,8 @@ pub struct Workspace {
     pub selected: Option<viewport::Selection>,
     pub hover_guide: Option<viewport_guides::Guide>,
     pub hover_cache: viewport_guides::Cache,
+    pub display_state_cache: std::sync::Mutex<display_states_ui::Cache>,
+    pub sensor_cache: std::sync::Mutex<sensors_ui::Cache>,
     pub hover_viewport_seen: bool,
     /// View-only preselection; authored edge sets belong to their feature draft.
     pub geometry_selection: Vec<viewport::Selection>,
@@ -173,11 +178,7 @@ impl Workspace {
             status = "Existing navigation preferences imported into application settings".into();
         }
         let application_preferences = loaded_preferences.preferences;
-        doc.settings = application_preferences.default_model.clone();
-        for part in doc.parts.values_mut() {
-            part.finish = doc.settings.default_new_part_finish.clone();
-            part.material = doc.settings.default_new_part_material.clone();
-        }
+        application_preferences.apply_new_document_defaults(&mut doc);
         for arg in std::env::args().skip(1).filter(|a| !a.starts_with("--")) {
             let path = PathBuf::from(arg);
             match FileStore.load(&path) {
@@ -267,6 +268,8 @@ impl Workspace {
             selected: None,
             hover_guide: None,
             hover_cache: viewport_guides::Cache::default(),
+            display_state_cache: Default::default(),
+            sensor_cache: Default::default(),
             hover_viewport_seen: false,
             geometry_selection: vec![],
             edge_selection_path: None,
@@ -402,6 +405,14 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !sensors_ui::current_source_is_valid(self) {
+            self.status = "Correct the current design monitor fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !display_states_ui::ready_to_confirm(self) {
+            return;
+        }
         if !materials_ui::current_source_is_valid(self) {
             self.status = "Correct the current material library fields before applying".into();
             self.confirm_requested = false;
@@ -541,6 +552,8 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        sensors_ui::cancel(self);
+        display_states_ui::cancel(self);
         materials_ui::cancel(self);
         components_ui::cancel(self);
         assembly_tools_ui::cancel(self);
@@ -667,6 +680,8 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        sensors_ui::cancel(self);
+        display_states_ui::cancel(self);
         materials_ui::cancel(self);
         components_ui::cancel(self);
         assembly_tools_ui::cancel(self);
@@ -739,6 +754,14 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn confirm_tool(&mut self) {
+        if !sensors_ui::current_source_is_valid(self) {
+            self.status = "Correct the current design monitor fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !display_states_ui::ready_to_confirm(self) {
+            return;
+        }
         if !materials_ui::current_source_is_valid(self) {
             self.status = "Correct the current material library fields before applying".into();
             self.confirm_requested = false;

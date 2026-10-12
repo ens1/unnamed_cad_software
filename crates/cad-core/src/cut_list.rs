@@ -39,6 +39,9 @@ pub enum Column {
     StockHeight,
     Thickness,
     StockBounds,
+    Manufacturing {
+        field: crate::manufacturing_columns::Column,
+    },
 }
 impl Column {
     pub fn label(&self) -> &'static str {
@@ -62,6 +65,7 @@ impl Column {
             Self::StockHeight => "Stock height",
             Self::Thickness => "Thickness",
             Self::StockBounds => "Stock bounds",
+            Self::Manufacturing { field } => field.label(),
         }
     }
 }
@@ -76,6 +80,35 @@ pub fn default_columns() -> Vec<Column> {
         Column::Quantity,
         Column::Material,
     ]
+}
+pub fn column_choices() -> Vec<Column> {
+    let mut columns = vec![
+        Column::Item,
+        Column::Description,
+        Column::Section,
+        Column::Length,
+        Column::StartCutAngle,
+        Column::EndCutAngle,
+        Column::Quantity,
+        Column::Material,
+        Column::Finish,
+        Column::Configuration,
+        Column::Definition,
+        Column::Source,
+        Column::BendRadius,
+        Column::BendSweep,
+        Column::Accessory,
+        Column::StockWidth,
+        Column::StockHeight,
+        Column::Thickness,
+        Column::StockBounds,
+    ];
+    columns.extend(
+        crate::manufacturing_columns::Column::choices()
+            .into_iter()
+            .map(|field| Column::Manufacturing { field }),
+    );
+    columns
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Options {
@@ -110,6 +143,13 @@ pub struct Group {
     pub finish: String,
     pub material_id: Id,
     pub finish_id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configuration_names: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::manufacturing_columns::Data::is_empty"
+    )]
+    pub manufacturing: crate::manufacturing_columns::Data,
 }
 fn invalid(message: impl ToString) -> CadError {
     CadError::Invalid(format!("Cut list: {}", message.to_string()))
@@ -342,6 +382,14 @@ pub fn group(
             .parts
             .get(&row.definition)
             .ok_or_else(|| invalid("Manufacturing part is missing"))?;
+        let configuration_name = row
+            .configuration
+            .as_deref()
+            .map(|id| {
+                crate::configuration::resolve(doc, &row.definition, id)
+                    .map(|configuration| configuration.name)
+            })
+            .transpose()?;
         let matching = occurrence_groups
             .get(&(row.definition.clone(), row.configuration.clone()))
             .map(Vec::as_slice)
@@ -383,6 +431,20 @@ pub fn group(
                 .get(&finish_id)
                 .map(|finish| finish.name.clone())
                 .unwrap_or_else(|| finish_id.clone());
+            let manufacturing = if options
+                .columns
+                .iter()
+                .any(|column| matches!(column, Column::Manufacturing { .. }))
+            {
+                crate::manufacturing_columns::Data::from_definitions(
+                    &configured,
+                    configured.materials.get(&part.material),
+                    configured.finishes.get(&finish_id),
+                    Some(part),
+                )
+            } else {
+                Default::default()
+            };
             let key = match options.grouping {
                 Grouping::BySource => source_key(&source)?,
                 Grouping::EquivalentStock => {
@@ -419,6 +481,8 @@ pub fn group(
                 finish: finish.clone(),
                 material_id: part.material.clone(),
                 finish_id: Some(finish_id.clone()),
+                configuration_names: configuration_name.clone().into_iter().collect(),
+                manufacturing: manufacturing.clone(),
             });
             group.quantity = group
                 .quantity
@@ -428,6 +492,12 @@ pub fn group(
             if group.finish_id.as_deref() != Some(&finish_id) {
                 group.finish_id = None;
                 group.finish = "Multiple finishes".into();
+            }
+            group.manufacturing.merge_finish(&manufacturing);
+            if let Some(name) = &configuration_name
+                && !group.configuration_names.contains(name)
+            {
+                group.configuration_names.push(name.clone());
             }
             group.sources.push(source);
         }
@@ -849,12 +919,19 @@ pub fn cells(
             Column::Quantity => group.quantity.to_string(),
             Column::Material => row.material.clone(),
             Column::Finish => group.finish.clone(),
-            Column::Configuration => distinct(
-                group
-                    .sources
-                    .iter()
-                    .map(|source| source.configuration.as_deref().unwrap_or_default()),
-            ),
+            Column::Manufacturing { field } => group.manufacturing.cell(field),
+            Column::Configuration => {
+                if group.configuration_names.is_empty() {
+                    distinct(
+                        group
+                            .sources
+                            .iter()
+                            .map(|source| source.configuration.as_deref().unwrap_or_default()),
+                    )
+                } else {
+                    distinct(group.configuration_names.iter().map(String::as_str))
+                }
+            }
             Column::Definition => distinct(
                 group
                     .sources

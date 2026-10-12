@@ -375,7 +375,7 @@ fn validation_key(w: &Workspace) -> String {
             .as_ref()
             .map(|draft| (&draft.id, draft.edit)),
         w.root(),
-        w.fields.contains_key("appearance-tool")
+        w.fields.contains_key("appearance-tool") || w.fields.contains_key("display-state-editor")
     )
 }
 pub(crate) fn resources_are_current(w: &Workspace) -> bool {
@@ -421,7 +421,8 @@ pub fn poll_assets(
         }
         runtime.retain_sources(&sources, &root, &mut images);
     }
-    let validating = w.fields.contains_key("appearance-tool");
+    let validating =
+        w.fields.contains_key("appearance-tool") || w.fields.contains_key("display-state-editor");
     let finishes = if validating {
         w.session.visible().finishes.values().collect::<Vec<_>>()
     } else {

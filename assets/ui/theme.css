@@ -610,3 +610,22 @@
 [role=configuration-sketch-dimension-field][state=inherited] {
   color: var(--reference);
 }
+
+[role=design-monitor-entry], [role=display-state-name] {
+  width: 100%;
+  text-align: left;
+  height: 23px;
+}
+[role=design-monitor-action], [role=display-state-action] {
+  height: 22px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+[role=design-monitor-field], [role=display-state-field] {
+  display: flex;
+  flex-direction: row;
+  gap: 3px;
+}
+[role=design-monitor][state=within-limits] { color: var(--valid); }
+[role=design-monitor][state=limit-exceeded], [role=design-monitor-field][state=invalid] { color: var(--error); }
+[role=design-monitor][state=unavailable], [role=display-state-diagnostic] { color: var(--warning); }

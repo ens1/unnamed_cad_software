@@ -448,7 +448,8 @@ fn query(
     let mut candidates = Vec::new();
     let mut remaining_segments = 200_000;
     for instance in viewport::display_instances(w, evaluation) {
-        if !viewport::visible(w, instance) {
+        if !viewport::visible(w, instance) || !crate::display_states_ui::pickable(w, &instance.path)
+        {
             continue;
         }
         for mesh in viewport::selection_meshes(w, evaluation, instance) {

@@ -13,6 +13,8 @@ pub struct DimensionField {
     pub expression: Expr,
     pub entities: Vec<Id>,
     pub angular: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<Id>,
 }
 pub fn fields(part: &Part) -> Vec<DimensionField> {
     part.sketches
@@ -25,19 +27,29 @@ pub fn fields(part: &Part) -> Vec<DimensionField> {
                 .filter(|(_, constraint)| {
                     !constraint.driven && crate::sketch_actions::is_dimension(&constraint.kind)
                 })
-                .map(|(index, constraint)| DimensionField {
-                    sketch: sketch.id.clone(),
-                    constraint: constraint.id.clone(),
-                    label: format!(
-                        "{} · {} {}",
-                        sketch.name,
-                        crate::sketch_actions::label(&constraint.kind),
-                        index + 1
-                    ),
-                    kind: constraint.kind.clone(),
-                    expression: constraint.value.clone(),
-                    entities: constraint.entities.clone(),
-                    angular: matches!(constraint.kind.as_str(), "angle" | "rotation" | "arc_angle"),
+                .map(|(index, constraint)| {
+                    let group =
+                        crate::sketch_dimensions::group_for_constraint(sketch, &constraint.id);
+                    DimensionField {
+                        sketch: sketch.id.clone(),
+                        constraint: constraint.id.clone(),
+                        label: format!(
+                            "{} · {} {}",
+                            sketch.name,
+                            group
+                                .map(|(_, group)| group.kind.label())
+                                .unwrap_or_else(|| crate::sketch_actions::label(&constraint.kind)),
+                            index + 1
+                        ),
+                        kind: constraint.kind.clone(),
+                        expression: constraint.value.clone(),
+                        entities: constraint.entities.clone(),
+                        angular: matches!(
+                            constraint.kind.as_str(),
+                            "angle" | "rotation" | "arc_angle"
+                        ),
+                        group: group.map(|(id, _)| id.clone()),
+                    }
                 })
         })
         .collect()

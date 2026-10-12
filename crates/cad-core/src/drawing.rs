@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod symbols;
 pub use symbols::*;
 
-pub const CONTRACT_VERSION: u32 = 7;
+pub const CONTRACT_VERSION: u32 = 8;
 pub const FORMAT_VERSION: u32 = 2;
 pub const VIEW_KEYS: [&str; 6] = [
     "front",
@@ -345,6 +345,9 @@ pub enum MaterialCondition {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AnnotationKind {
+    DimensionGroup {
+        group: Box<crate::drawing_dimension_groups::Group>,
+    },
     SurfaceFinish {
         target: Anchor,
         symbol: SurfaceFinish,
@@ -404,6 +407,7 @@ pub enum AnnotationKind {
 impl AnnotationKind {
     pub fn label(&self) -> &'static str {
         match self {
+            Self::DimensionGroup { .. } => "Dimension group",
             Self::SurfaceFinish { .. } => "Surface finish",
             Self::WeldSymbol { .. } => "Weld symbol",
             Self::Leader { .. } => "Leader note",
@@ -436,6 +440,8 @@ pub enum Primitive {
     },
     Spline {
         curve: crate::sketch_edit::Curve2,
+        #[serde(default)]
+        dashed: bool,
     },
     Text {
         at: [f64; 2],
@@ -502,6 +508,8 @@ pub struct Sheet {
     pub view_fidelity: BTreeMap<String, ViewFidelity>,
     #[serde(default)]
     pub source_info: DrawingSourceInfo,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_state: Option<crate::drawing_display_states::Info>,
     #[serde(default)]
     pub groups: Vec<crate::drawing_interaction::PrimitiveGroup>,
     /// Preview-only diagnostics; production export still rejects these source errors.
@@ -869,6 +877,9 @@ pub fn validate_document(doc: &Document) -> Result<()> {
                 "Exploded sheet source must be a saved view on the current root assembly",
             ));
         }
+        if sheet.display_state.is_some() {
+            crate::drawing_display_states::scope(doc, sheet)?;
+        }
         if !names.insert(sheet.name.trim().to_lowercase())
             || owned_ids(sheet).iter().any(|id| !ids.insert(id.clone()))
         {
@@ -916,6 +927,7 @@ pub fn new_sheet(doc: &Document, definition: &str, name: String) -> Result<Drawi
         format: Some(SheetFormat::default()),
         view_layouts: BTreeMap::new(),
         exploded_view: None,
+        display_state: None,
     };
     validate_definition(&sheet)?;
     Ok(sheet)
@@ -973,6 +985,11 @@ pub fn duplicate_sheet(doc: &mut Document, key: &str, name: String) -> Result<Id
     }
     for annotation in &mut sheet.entities {
         annotation.id = crate::id();
+        if let AnnotationKind::DimensionGroup { group } = &mut annotation.kind {
+            for target in &mut group.targets {
+                target.id = crate::id();
+            }
+        }
         if let AnnotationKind::Balloon { table, .. }
         | AnnotationKind::CutListBalloon { table, .. } = &mut annotation.kind
         {
@@ -1064,6 +1081,7 @@ impl SheetTemplate {
             format: Some(self.format.clone()),
             view_layouts: self.view_layouts.clone(),
             exploded_view: None,
+            display_state: None,
         };
         validate_definition(&sheet)
     }
@@ -1190,6 +1208,17 @@ pub fn sheet_instances(
         }
         Ok(instances)
     }
+}
+pub fn sheet_display_instances(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+) -> Result<Vec<crate::drawing_display_states::DisplayInstance>> {
+    let scope = crate::drawing_display_states::scope(doc, sheet)?;
+    Ok(crate::drawing_display_states::apply(
+        scope.as_ref(),
+        sheet_instances(doc, e, sheet)?,
+    ))
 }
 fn placements(
     doc: &Document,
@@ -1973,6 +2002,7 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
             ));
         }
         match &annotation.kind {
+            AnnotationKind::DimensionGroup { group } => group.validate()?,
             AnnotationKind::SurfaceFinish { symbol, .. } => symbol.validate()?,
             AnnotationKind::WeldSymbol { symbol, .. } => symbol.validate()?,
             AnnotationKind::CutListBalloon {
@@ -2034,6 +2064,9 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
             return Err(invalid("Datum identifiers must be unique on a sheet"));
         }
         let anchors: Vec<&Anchor> = match &annotation.kind {
+            AnnotationKind::DimensionGroup { group } => std::iter::once(&group.datum)
+                .chain(group.targets.iter().map(|target| &target.anchor))
+                .collect(),
             AnnotationKind::Leader { target, .. }
             | AnnotationKind::Datum { target, .. }
             | AnnotationKind::Balloon { target, .. }
@@ -2071,6 +2104,7 @@ type PreparedView = (
     String,
     [f64; 2],
     [f64; 2],
+    Vec<bool>,
 );
 fn validate_view_relationships(sheet: &Drawing) -> Result<()> {
     let keys = view_keys(sheet);
@@ -2428,7 +2462,7 @@ fn owner_parameter(doc: &Document, d: &DrawingDimension) -> Result<Option<(f64, 
         p.dimension,
     )))
 }
-fn label(
+pub(crate) fn label(
     doc: &Document,
     sheet: &Drawing,
     d: &DrawingDimension,
@@ -2659,7 +2693,10 @@ fn cosmetic_thread_mark(view: &View, circle: &CircularGeometry) -> Result<Primit
         degree: 2,
     };
     crate::sketch_edit::validate_nurbs(&curve)?;
-    Ok(Primitive::Spline { curve })
+    Ok(Primitive::Spline {
+        curve,
+        dashed: false,
+    })
 }
 
 fn dimension(
@@ -3071,6 +3108,23 @@ fn annotation(
     out: &mut Vec<Primitive>,
 ) -> Result<()> {
     match &entity.kind {
+        AnnotationKind::DimensionGroup { group } => {
+            let projection = ViewProjection {
+                rect_mm: [view.at[0], view.at[1], view.size[0], view.size[1]],
+                model_center: view.center,
+                scale: view.scale,
+            };
+            let (_, primitives) = crate::drawing_dimension_groups::render(
+                doc,
+                e,
+                sheet,
+                &view.name,
+                &projection,
+                group,
+                entity.offset_mm,
+            )?;
+            out.extend(primitives);
+        }
         AnnotationKind::SurfaceFinish { target, symbol } => {
             let target = view.screen(anchor(doc, e, sheet, target)?)?;
             let configured = crate::configuration::effective(doc)?;
@@ -3399,6 +3453,7 @@ pub fn sheets(doc: &Document, e: &Evaluation) -> Result<Vec<Sheet>> {
             format: None,
             view_layouts: BTreeMap::new(),
             exploded_view: None,
+            display_state: None,
         }]
     } else {
         doc.drawings.clone()
@@ -3570,6 +3625,7 @@ fn build_continuation_sheet(
         projections: BTreeMap::new(),
         view_fidelity: BTreeMap::new(),
         source_info: DrawingSourceInfo::current(doc, e),
+        display_state: None,
         groups: vec![],
         diagnostics: BTreeMap::new(),
     };
@@ -3652,6 +3708,7 @@ fn build_sheet_mode(
         projections: BTreeMap::new(),
         view_fidelity: BTreeMap::new(),
         source_info: DrawingSourceInfo::current(doc, e),
+        display_state: None,
         groups: vec![],
         diagnostics: BTreeMap::new(),
     };
@@ -3668,14 +3725,38 @@ fn build_sheet_mode(
     let bounds = paper_bounds(sheet);
     text(out, [bounds[0][0] + 4., bounds[1][1] - 8.], 5., &sheet.name);
     let tables = table_page_geometries(doc, e, sheet, 0, repair, &mut result.diagnostics)?;
-    let instances = sheet_instances(doc, e, sheet)?;
+    let display_scope = crate::drawing_display_states::scope(doc, sheet)?;
+    let instances = crate::drawing_display_states::apply(
+        display_scope.as_ref(),
+        sheet_instances(doc, e, sheet)?,
+    );
+    result.display_state = display_scope
+        .as_ref()
+        .map(|scope| crate::drawing_display_states::info(scope, &instances));
     let exploded_lines = exploded_stage(doc, e, sheet)?
-        .map(|s| s.lines.as_slice())
+        .map(|s| {
+            s.lines
+                .iter()
+                .filter(|line| {
+                    display_scope.as_ref().is_none_or(|scope| {
+                        crate::display_states::effect(scope, &line.path).visibility
+                            != Some(crate::display_states::Visibility::Hidden)
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
     let mut world = Vec::new();
     let mut curves = Vec::new();
     let mut triangles = Vec::new();
-    for instance in &instances {
+    let mut line_dashes = Vec::new();
+    let mut triangle_dashes = Vec::new();
+    for displayed in &instances {
+        if displayed.effect.visibility == Some(crate::display_states::Visibility::Hidden) {
+            continue;
+        }
+        let ghost = displayed.effect.visibility == Some(crate::display_states::Visibility::Ghost);
+        let instance = &displayed.placement;
         let key = if !instance.mesh_key.is_empty() {
             instance.mesh_key.clone()
         } else if let Some(config) = &instance.configuration {
@@ -3687,6 +3768,7 @@ fn build_sheet_mode(
             continue;
         };
         for edge in &mesh.edges {
+            line_dashes.push(ghost);
             world.push(
                 edge.points
                     .iter()
@@ -3704,6 +3786,7 @@ fn build_sheet_mode(
                 }
             }));
         }
+        triangle_dashes.extend(std::iter::repeat_n(ghost, mesh.indices.len() / 3));
         triangles.extend(
             mesh.indices
                 .as_chunks::<3>()
@@ -3804,6 +3887,7 @@ fn build_sheet_mode(
     for (index, name) in names.iter().enumerate() {
         let mut lines = world.clone();
         let mut view_curves = curves.clone();
+        let mut view_dashes = line_dashes.clone();
         let mut note = if curves.iter().any(Option::is_none) {
             "Wireframe (unsupported curve types sampled)".to_string()
         } else {
@@ -3820,9 +3904,14 @@ fn build_sheet_mode(
                 .flatten()
                 .map(|p| p[2])
                 .fold(f64::NEG_INFINITY, f64::max);
-            let z = (lo + hi) / 2.;
+            let z = if lo.is_finite() && hi.is_finite() {
+                (lo + hi) / 2.
+            } else {
+                0.
+            };
             lines.clear();
-            for tri in &triangles {
+            view_dashes.clear();
+            for (tri, ghost) in triangles.iter().zip(&triangle_dashes) {
                 let mut points = vec![];
                 for i in 0..3 {
                     let a = tri[i];
@@ -3834,10 +3923,15 @@ fn build_sheet_mode(
                 }
                 if points.len() == 2 {
                     lines.push(points);
+                    view_dashes.push(*ghost);
                 }
             }
             view_curves = vec![None; lines.len()];
-            note = format!("Tessellated section Z={z:.3} mm");
+            note = if triangles.is_empty() {
+                "Section · no displayed bodies".into()
+            } else {
+                format!("Tessellated section Z={z:.3} mm")
+            };
         }
         let mut min = [f64::INFINITY; 2];
         let mut max = [f64::NEG_INFINITY; 2];
@@ -3978,7 +4072,13 @@ fn build_sheet_mode(
                 "A drawing view produced a nonfinite or nonpositive projection scale",
             ));
         }
-        prepared.insert(name.clone(), (view, lines, view_curves, note, min, max));
+        if view_dashes.iter().any(|ghost| *ghost) {
+            note.push_str("; ghost components use dashed reference strokes");
+        }
+        prepared.insert(
+            name.clone(),
+            (view, lines, view_curves, note, min, max, view_dashes),
+        );
     }
     validate_view_relationships(&effective)?;
     for name in &names {
@@ -4006,7 +4106,7 @@ fn build_sheet_mode(
                 }
                 key == name
             })
-            .map(|(_, (view, _, _, _, min, max))| {
+            .map(|(_, (view, _, _, _, min, max, _))| {
                 (view.size[0] / (max[0] - min[0]).max(1.))
                     .min(view.size[1] / (max[1] - min[1]).max(1.))
                     * 0.78
@@ -4021,7 +4121,7 @@ fn build_sheet_mode(
         resolve_view_alignment(&effective, name, &mut prepared, &mut resolved)?;
     }
     for name in &names {
-        let (view, lines, view_curves, note, min, max) = prepared
+        let (view, lines, view_curves, note, min, max, view_dashes) = prepared
             .remove(name)
             .ok_or_else(|| invalid("Missing prepared view"))?;
         let [x, y] = view.at;
@@ -4098,7 +4198,7 @@ fn build_sheet_mode(
                 }
             ),
         );
-        for connector in exploded_lines {
+        for connector in &exploded_lines {
             let a = view.screen(connector.start_mm)?;
             let b = view.screen(connector.end_mm)?;
             if let Some([a, b]) = clipped_segment(a, b, &view) {
@@ -4163,7 +4263,7 @@ fn build_sheet_mode(
                 }
             }
         }
-        for (line, curve) in lines.into_iter().zip(view_curves) {
+        for ((line, curve), dashed) in lines.into_iter().zip(view_curves).zip(view_dashes) {
             let curve = curve
                 .map(|curve| {
                     Ok::<_, CadError>(crate::sketch_edit::Curve2 {
@@ -4183,7 +4283,7 @@ fn build_sheet_mode(
                 && let Some(curve) = curve
             {
                 crate::sketch_edit::validate_nurbs(&curve)?;
-                out.push(Primitive::Spline { curve });
+                out.push(Primitive::Spline { curve, dashed });
             } else {
                 let points = if let Some(curve) = curve {
                     display_curve(&curve)?
@@ -4196,7 +4296,7 @@ fn build_sheet_mode(
                     if let Some([a, b]) = clipped_segment(pair[0], pair[1], &view) {
                         out.push(Primitive::Polyline {
                             points: vec![a, b],
-                            dashed: false,
+                            dashed,
                         });
                     }
                 }
@@ -4305,7 +4405,7 @@ fn build_sheet_mode(
     }
     if out.iter().any(|p| match p {
         Primitive::Polyline { points, .. } => points.iter().flatten().any(|v| !v.is_finite()),
-        Primitive::Spline { curve } => curve
+        Primitive::Spline { curve, .. } => curve
             .control_points
             .iter()
             .flatten()
@@ -4328,31 +4428,26 @@ fn build_sheet_mode(
 
 pub fn dxf(doc: &Document, e: &Evaluation) -> Result<String> {
     let sheets = sheets(doc, e)?;
-    let mut out="0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n".to_string();
+    let mut out="0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLTYPE\n70\n1\n0\nLTYPE\n2\nTCAD_REFERENCE\n70\n0\n3\nTCAD reference geometry\n72\n65\n73\n4\n40\n7\n49\n4\n74\n0\n49\n-1\n74\n0\n49\n1\n74\n0\n49\n-1\n74\n0\n0\nENDTAB\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n".to_string();
     let mut offset = 0.;
     for sheet in sheets {
         let layer = sheet.name.replace(['\n', '\r'], " ");
         for primitive in sheet.primitives {
             match primitive {
                 Primitive::Polyline { points, dashed } => {
-                    for pair in points.windows(2) {
-                        let a = [pair[0][0] + offset, pair[0][1]];
-                        let b = [pair[1][0] + offset, pair[1][1]];
-                        if dashed {
-                            let delta = [b[0] - a[0], b[1] - a[1]];
-                            let length = delta[0].hypot(delta[1]);
-                            let mut start = 0.;
-                            let mut index = 0;
-                            while start < length {
-                                let size = if index % 2 == 0 { 4. } else { 1. };
-                                let end = (start + size).min(length);
-                                out.push_str(&format!("0\nLINE\n8\n{layer}\n10\n{}\n20\n{}\n30\n0\n11\n{}\n21\n{}\n31\n0\n",a[0]+delta[0]*start/length,a[1]+delta[1]*start/length,a[0]+delta[0]*end/length,a[1]+delta[1]*end/length));
-                                start = end + 1.;
-                                index += 1;
-                            }
-                        } else {
-                            out.push_str(&format!("0\nLINE\n8\n{layer}\n10\n{}\n20\n{}\n30\n0\n11\n{}\n21\n{}\n31\n0\n",a[0],a[1],b[0],b[1]));
-                        }
+                    let segments = if dashed {
+                        crate::drawing_strokes::reference_segments(&points)?
+                    } else {
+                        points.windows(2).map(|pair| [pair[0], pair[1]]).collect()
+                    };
+                    for [a, b] in segments {
+                        out.push_str(&format!(
+                            "0\nLINE\n8\n{layer}\n10\n{}\n20\n{}\n30\n0\n11\n{}\n21\n{}\n31\n0\n",
+                            a[0] + offset,
+                            a[1],
+                            b[0] + offset,
+                            b[1]
+                        ));
                     }
                 }
                 Primitive::Text { at, size, text } => out.push_str(&format!(
@@ -4361,8 +4456,9 @@ pub fn dxf(doc: &Document, e: &Evaluation) -> Result<String> {
                     at[1],
                     text.replace(['\n', '\r'], " ")
                 )),
-                Primitive::Spline { curve } => {
-                    out.push_str(&format!("0\nSPLINE\n8\n{layer}\n70\n12\n71\n{}\n72\n{}\n73\n{}\n74\n0\n210\n0\n220\n0\n230\n1\n",curve.degree,curve.knots.len(),curve.control_points.len()));
+                Primitive::Spline { curve, dashed } => {
+                    let linetype = if dashed { "6\nTCAD_REFERENCE\n" } else { "" };
+                    out.push_str(&format!("0\nSPLINE\n8\n{layer}\n{linetype}70\n12\n71\n{}\n72\n{}\n73\n{}\n74\n0\n210\n0\n220\n0\n230\n1\n",curve.degree,curve.knots.len(),curve.control_points.len()));
                     for knot in curve.knots {
                         out.push_str(&format!("40\n{knot}\n"));
                     }

@@ -33,6 +33,7 @@ pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> 
         data: serde_json::Value::Null,
     }];
     let doc = session.visible();
+    out.extend(crate::library::semantic(doc));
     out.extend(crate::appearance::semantic(
         doc,
         active,
@@ -1098,6 +1099,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("feature.loft", "Loft"),
     ("feature.sweep", "Sweep"),
     ("assembly.edit", "Assembly and mates"),
+    ("inspection.sensors", "Design Monitors"),
+    ("assembly.display-state-new", "New Assembly Display State"),
+    ("assembly.display-state-normal", "Normal Assembly Display"),
     ("assembly.move", "Move Component"),
     ("assembly.rotate", "Rotate Component"),
     ("assembly.pattern", "Component Pattern"),
@@ -1372,6 +1376,8 @@ pub struct PresentationState {
     pub history_cursor: Option<crate::NodeRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exploded_view: Option<crate::exploded_views::Selection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_state: Option<crate::display_states::Selection>,
     #[serde(default)]
     pub sketch_annotations: BTreeMap<Id, [f32; 2]>,
     #[serde(default = "default_sketch_annotation_visibility")]
@@ -1435,6 +1441,7 @@ impl Default for PresentationState {
         Self {
             history_cursor: None,
             exploded_view: None,
+            display_state: None,
             sketch_annotations: BTreeMap::new(),
             sketch_annotation_visibility: default_sketch_annotation_visibility(),
             active_layout: "instrument-rail".into(),

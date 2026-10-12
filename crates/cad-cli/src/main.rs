@@ -53,6 +53,18 @@ enum Action {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    Sensors {
+        project: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Read parameter monitors without rebuilding geometry; property monitors report unavailable"
+        )]
+        source_only: bool,
+        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        tolerance: Option<f64>,
+    },
     Diff {
         before: PathBuf,
         after: PathBuf,
@@ -213,6 +225,31 @@ fn run() -> Result<()> {
                 atomic_write(&path, csv.as_bytes())?;
             } else {
                 print!("{csv}");
+            }
+        }
+        Action::Sensors {
+            project,
+            output,
+            source_only,
+            tolerance,
+        } => {
+            let document = FileStore.load(&project)?;
+            let evaluation = if source_only {
+                None
+            } else {
+                Some(checked(
+                    &mut evaluator,
+                    &document,
+                    &project_root(&project),
+                    tolerance,
+                )?)
+            };
+            let report = cad_core::sensors::evaluate(&document, evaluation.as_ref());
+            let data = serde_json::to_vec_pretty(&report)?;
+            if let Some(path) = output {
+                atomic_write(&path, &data)?;
+            } else {
+                println!("{}", String::from_utf8_lossy(&data));
             }
         }
         Action::Diff { before, after } => {

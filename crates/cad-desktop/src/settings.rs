@@ -353,11 +353,8 @@ pub fn new_document(w: &Workspace, assembly: bool) -> Document {
     } else {
         Document::blank_part("Part1")
     };
-    document.settings = w.application_preferences.default_model.clone();
-    for part in document.parts.values_mut() {
-        part.finish = document.settings.default_new_part_finish.clone();
-        part.material = document.settings.default_new_part_material.clone();
-    }
+    w.application_preferences
+        .apply_new_document_defaults(&mut document);
     document
 }
 

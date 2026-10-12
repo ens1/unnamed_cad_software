@@ -447,6 +447,9 @@ pub fn delete_material(document: &mut Document, material: &str) -> Result<()> {
     if material == document.settings.default_new_part_material {
         return Err(CadError::Invalid("This material is the default for new parts. Choose another default in model settings before deleting it".into()));
     }
+    if crate::library::material_is_pinned(document, material) {
+        return Err(CadError::Invalid("This engineering material belongs to an immutable component snapshot; duplicate it rather than deleting the pinned source".into()));
+    }
     let uses = usages(document, material);
     if !uses.is_empty() {
         return Err(CadError::Invalid(format!(
@@ -460,12 +463,7 @@ pub fn delete_material(document: &mut Document, material: &str) -> Result<()> {
 pub fn put(document: &mut Document, material: Material) -> Result<()> {
     validate(&material)?;
     if document.materials.get(&material.id) != Some(&material) {
-        let pinned = usages(document, &material.id).into_iter().any(|usage| {
-            document
-                .libraries
-                .values()
-                .any(|link| link.pinned_definitions.contains_key(&usage.definition))
-        });
+        let pinned = crate::library::material_is_pinned(document, &material.id);
         if pinned {
             return Err(CadError::Invalid("This material belongs to a pinned component snapshot. Duplicate the material and make the linked component unique before changing it".into()));
         }

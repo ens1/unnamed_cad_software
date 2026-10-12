@@ -247,7 +247,13 @@ impl<'a> Fields<'a> {
             data,
         });
     }
-    fn field(&mut self, path: &str, label: &str, options: Vec<Value>, unit: Option<&str>) {
+    pub(crate) fn field(
+        &mut self,
+        path: &str,
+        label: &str,
+        options: Vec<Value>,
+        unit: Option<&str>,
+    ) {
         let value = self.source.pointer(path).cloned().unwrap_or(Value::Null);
         self.emit(path, label, value, options, unit);
     }
@@ -302,7 +308,7 @@ impl<'a> Fields<'a> {
             e.data["optional_factory"] = json!(factory);
         }
     }
-    fn transient(&mut self, key: &str, label: &str, value: Value, options: Vec<Value>) {
+    pub(crate) fn transient(&mut self, key: &str, label: &str, value: Value, options: Vec<Value>) {
         let empty = options.is_empty() && key != "preview";
         self.emit(
             &format!("/{key}"),
@@ -446,7 +452,7 @@ impl<'a> Fields<'a> {
             }
         }
     }
-    fn anchor(&mut self, path: &str, label: &str) {
+    pub(crate) fn anchor(&mut self, path: &str, label: &str) {
         self.point(
             &format!("{path}/point"),
             &format!("{path}/reference"),
@@ -730,6 +736,47 @@ fn sheet_fields(f: &mut Fields<'_>) {
     }
     f.group("projection", "Projection");
     f.select("/exploded_view", "Assembly state", exploded);
+    let mut display_states = vec![choice("Normal display", Value::Null)];
+    if let Some(assembly) = f.w.session.visible().assemblies.get(&f.sheet.definition) {
+        display_states.extend(
+            assembly
+                .display_states
+                .values()
+                .filter(|state| {
+                    state.configuration.is_none()
+                        || state.configuration.as_ref()
+                            == f.w
+                                .session
+                                .visible()
+                                .active_configurations
+                                .get(&assembly.id)
+                })
+                .map(|state| {
+                    choice(
+                        &state.name,
+                        json!(cad_core::display_states::Selection {
+                            assembly: assembly.id.clone(),
+                            state: state.id.clone(),
+                            owner_path: vec![],
+                        }),
+                    )
+                }),
+        );
+    }
+    if let Some(selected) = &f.sheet.display_state
+        && !selected.owner_path.is_empty()
+    {
+        let name =
+            f.w.session
+                .visible()
+                .assemblies
+                .get(&selected.assembly)
+                .and_then(|assembly| assembly.display_states.get(&selected.state))
+                .map(|state| state.name.as_str())
+                .unwrap_or("Unavailable nested state");
+        display_states.push(choice(name, json!(selected)));
+    }
+    f.select("/display_state", "Display state", display_states);
     let views = view_keys(f.sheet);
     f.transient(
         "projection",
@@ -1339,6 +1386,7 @@ fn annotation_fields(f: &mut Fields<'_>) {
         ("geometric_tolerance", "GD&T"),
         ("center_mark", "Center mark"),
         ("center_line", "Centerline"),
+        ("dimension_group", "Dimension group"),
         ("balloon", "BOM balloon"),
         ("cut_list_balloon", "Cut-list balloon"),
         ("surface_finish", "Surface finish"),
@@ -1363,8 +1411,23 @@ fn annotation_fields(f: &mut Fields<'_>) {
     };
     let path = format!("/entities/{index}");
     f.group("annotation", "Annotation");
-    f.view(&format!("{path}/view"));
+    if matches!(a.kind, AnnotationKind::DimensionGroup { .. }) {
+        f.select(
+            &format!("{path}/view"),
+            "Orthographic view",
+            view_keys(f.sheet)
+                .into_iter()
+                .filter(|view| matches!(view.as_str(), "front" | "top" | "right"))
+                .map(|view| choice(&view, &view))
+                .collect(),
+        );
+    } else {
+        f.view(&format!("{path}/view"));
+    }
     match &a.kind {
+        AnnotationKind::DimensionGroup { group } => {
+            crate::drawing_dimension_groups_ui::fields(f, &format!("{path}/kind/group"), group)
+        }
         AnnotationKind::SurfaceFinish { .. } | AnnotationKind::WeldSymbol { .. } => {
             f.anchor(&format!("{path}/kind/target"), "Model target");
             f.group("symbol", a.kind.label());
@@ -2571,6 +2634,15 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
                     w.fields.insert("drawing-table".into(), id.into());
                 }
             }
+            "group-target" => {
+                w.fields.insert(
+                    "drawing-group-target".into(),
+                    value
+                        .as_str()
+                        .ok_or_else(|| invalid("Choose a dimension group target"))?
+                        .into(),
+                );
+            }
             "row" => {
                 w.fields.insert(
                     "drawing-row".into(),
@@ -2748,6 +2820,7 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
     }
     if pointer == "/definition" {
         set_at(&mut source, "/exploded_view", Value::Null)?;
+        set_at(&mut source, "/display_state", Value::Null)?;
     }
     if pointer.ends_with("/options/kind")
         && !matches!(
@@ -2867,6 +2940,9 @@ fn create_dimension(w: &Workspace, sheet: &Drawing, kind: &str) -> Result<Drawin
 fn create_annotation(w: &Workspace, sheet: &Drawing, kind: &str) -> Result<Annotation> {
     let target = crate::drawing_ui::selected_anchor(w);
     let kind = match kind {
+        "dimension_group" => {
+            crate::drawing_dimension_groups_ui::create(w, sheet, &selected_view(sheet))
+        }
         "leader" => AnnotationKind::Leader {
             target,
             text: "Note".into(),
@@ -2973,6 +3049,11 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
         }
         let mut sheet = crate::drawing_ui::sheet_source(w, &sheet_id)
             .ok_or_else(|| invalid("The drawing sheet no longer exists"))?;
+        if crate::drawing_dimension_groups_ui::apply_action(w, &mut sheet, mutation)? {
+            validate_definition(&sheet)?;
+            publish(w, sheet);
+            return Ok(());
+        }
         if crate::drawing_table_ui::apply_action(w, &mut sheet, mutation)? {
             validate_definition(&sheet)?;
             publish(w, sheet);

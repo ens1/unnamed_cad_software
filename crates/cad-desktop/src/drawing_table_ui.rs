@@ -274,22 +274,7 @@ pub(crate) fn production_fields(
             ],
         );
         f.group("production-columns", "Column contents");
-        let columns = vec![
-            cad_core::bom::Column::Item,
-            cad_core::bom::Column::PartNumber,
-            cad_core::bom::Column::Description,
-            cad_core::bom::Column::Quantity,
-            cad_core::bom::Column::Material,
-            cad_core::bom::Column::Finish,
-            cad_core::bom::Column::Configuration,
-            cad_core::bom::Column::Definition,
-            cad_core::bom::Column::ComponentType,
-            cad_core::bom::Column::Depth,
-            cad_core::bom::Column::Property {
-                key: "part_number".into(),
-                label: "Custom property".into(),
-            },
-        ];
+        let columns = cad_core::bom::column_choices();
         for (index, column) in table.bom_options.columns.iter().enumerate() {
             let pointer = format!("{path}/bom_options/columns/{index}");
             f.select(
@@ -567,29 +552,8 @@ pub(crate) fn apply_action(
     Ok(true)
 }
 fn cut_list_columns(f: &mut crate::drawing_editor_ui::Fields<'_>, table: &Table, path: &str) {
-    use cad_core::cut_list::Column;
     use serde_json::json;
-    let columns = [
-        Column::Item,
-        Column::Description,
-        Column::Section,
-        Column::Length,
-        Column::StartCutAngle,
-        Column::EndCutAngle,
-        Column::Quantity,
-        Column::Material,
-        Column::Finish,
-        Column::Configuration,
-        Column::Definition,
-        Column::Source,
-        Column::BendRadius,
-        Column::BendSweep,
-        Column::Accessory,
-        Column::StockWidth,
-        Column::StockHeight,
-        Column::Thickness,
-        Column::StockBounds,
-    ];
+    let columns = cad_core::cut_list::column_choices();
     f.group("production-columns", "Column contents");
     for (index, _) in table.cut_list_options.columns.iter().enumerate() {
         f.select(

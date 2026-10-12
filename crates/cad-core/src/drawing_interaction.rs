@@ -11,7 +11,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const CONTRACT_VERSION: u32 = 2;
+pub const CONTRACT_VERSION: u32 = 3;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
@@ -48,6 +48,7 @@ pub enum AnchorSlot {
     Second,
     Third,
     Target,
+    GroupTarget { target: Id },
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -57,6 +58,7 @@ pub enum HandleKind {
     DimensionOffset,
     Anchor { slot: AnchorSlot },
     LeaderBend { index: usize },
+    GroupLabel { target: Id },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Handle {
@@ -129,6 +131,11 @@ pub enum Action {
     DimensionOffset {
         id: Id,
         offset_mm: f64,
+    },
+    MoveGroupLabel {
+        id: Id,
+        target: Id,
+        offset_mm: [f64; 2],
     },
     MoveLeaderBend {
         id: Id,
@@ -248,7 +255,7 @@ fn bounds(primitives: &[Primitive]) -> Option<[[f64; 2]; 2]> {
                     add(*point);
                 }
             }
-            Primitive::Spline { curve } => {
+            Primitive::Spline { curve, .. } => {
                 for point in &curve.control_points {
                     add(*point);
                 }
@@ -295,6 +302,18 @@ fn resize_handles(target: &Target, bounds: [[f64; 2]; 2]) -> Vec<Handle> {
 }
 fn annotation_anchors(annotation: &drawing::Annotation) -> Vec<(AnchorSlot, &Anchor)> {
     match &annotation.kind {
+        AnnotationKind::DimensionGroup { group } => {
+            std::iter::once((AnchorSlot::Target, &group.datum))
+                .chain(group.targets.iter().map(|target| {
+                    (
+                        AnchorSlot::GroupTarget {
+                            target: target.id.clone(),
+                        },
+                        &target.anchor,
+                    )
+                }))
+                .collect()
+        }
         AnnotationKind::SurfaceFinish { target, .. }
         | AnnotationKind::WeldSymbol { target, .. }
         | AnnotationKind::Leader { target, .. }
@@ -547,6 +566,29 @@ pub fn build(
                         }
                     }
                 }
+                if let AnnotationKind::DimensionGroup {
+                    group: dimension_group,
+                } = &annotation.kind
+                    && let Ok(layout) = crate::drawing_dimension_groups::layout(
+                        doc,
+                        evaluation,
+                        source,
+                        &annotation.view,
+                        projection,
+                        dimension_group,
+                        annotation.offset_mm,
+                    )
+                {
+                    for target in layout.targets {
+                        handles.push(handle(
+                            &group.target,
+                            HandleKind::GroupLabel {
+                                target: target.target,
+                            },
+                            target.label_mm,
+                        ));
+                    }
+                }
             }
             Target::Table { .. } | Target::TableSegment { .. } => {
                 handles.push(handle(&group.target, HandleKind::Move, extent[1]))
@@ -611,7 +653,17 @@ pub fn build(
         }
     }
     if page == 0 {
-        for instance in drawing::sheet_instances(doc, evaluation, source)? {
+        for displayed in drawing::sheet_display_instances(doc, evaluation, source)? {
+            if matches!(
+                displayed.effect.visibility,
+                Some(
+                    crate::display_states::Visibility::Hidden
+                        | crate::display_states::Visibility::Ghost
+                )
+            ) {
+                continue;
+            }
+            let instance = displayed.placement;
             let key = if instance.mesh_key.is_empty() {
                 instance.configuration.as_ref().map_or_else(
                     || instance.definition.clone(),
@@ -763,7 +815,7 @@ fn primitive_distance(point: [f64; 2], primitive: &Primitive) -> f64 {
             .windows(2)
             .map(|pair| segment_distance(point, pair[0], pair[1]))
             .fold(f64::INFINITY, f64::min),
-        Primitive::Spline { curve } => {
+        Primitive::Spline { curve, .. } => {
             drawing::display_curve(curve)
                 .ok()
                 .map_or(f64::INFINITY, |points| {
@@ -1112,6 +1164,13 @@ fn anchor_mut<'a>(
             | AnnotationKind::GeometricTolerance { target, .. },
             AnchorSlot::Target,
         ) => Ok(target),
+        (AnnotationKind::DimensionGroup { group }, AnchorSlot::Target) => Ok(&mut group.datum),
+        (AnnotationKind::DimensionGroup { group }, AnchorSlot::GroupTarget { target }) => group
+            .targets
+            .iter_mut()
+            .find(|source| &source.id == target)
+            .map(|target| &mut target.anchor)
+            .ok_or_else(|| invalid("The dimension group target no longer exists")),
         (AnnotationKind::CenterLine { first, .. }, AnchorSlot::First) => Ok(first),
         (AnnotationKind::CenterLine { second, .. }, AnchorSlot::Second) => Ok(second),
         _ => Err(invalid("This annotation has no selected point attachment")),
@@ -1311,6 +1370,24 @@ pub fn apply(
                 .ok_or_else(|| invalid("The dimension no longer exists"))?
                 .offset_mm = *offset_mm;
         }
+        Action::MoveGroupLabel {
+            id,
+            target,
+            offset_mm,
+        } => {
+            finite(offset_mm)?;
+            let AnnotationKind::DimensionGroup { group } =
+                &mut annotation_mut(&mut sheet, id)?.kind
+            else {
+                return Err(invalid("Only dimension groups have group-label handles"));
+            };
+            group
+                .targets
+                .iter_mut()
+                .find(|source| &source.id == target)
+                .ok_or_else(|| invalid("The dimension group target no longer exists"))?
+                .label_offset_mm = *offset_mm;
+        }
         Action::MoveLeaderBend {
             id,
             index,
@@ -1413,7 +1490,7 @@ pub fn apply(
                             dimension.options.third_point = model;
                             dimension.options.third = Some(reference.clone());
                         }
-                        AnchorSlot::Target => {
+                        AnchorSlot::Target | AnchorSlot::GroupTarget { .. } => {
                             return Err(invalid(
                                 "Dimensions need a first, second or third reference slot",
                             ));

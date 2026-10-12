@@ -998,8 +998,16 @@ pub fn workspace_semantics(w: &Workspace) -> Vec<cad_core::presentation::Semanti
             id: format!("{}:construction-info", paper.id), role: "drawing-source-info".into(), label: "Drawing information".into(),
             value: Some(format!("Source revision {}", paper.source_info.revision)), state: "ready".into(), commands: vec![],
             relationships: vec![paper.source_info.document.clone(), paper.id.clone()],
-            data: json!({"contract":"tcad.drawing-render-information","version":1,"source":paper.source_info,"view_fidelity":paper.view_fidelity,"diagnostics":paper.diagnostics,"production_vectors_include_debug_metadata":false}),
+            data: json!({"contract":"tcad.drawing-render-information","version":1,"source":paper.source_info,"view_fidelity":paper.view_fidelity,"display_state":paper.display_state,"diagnostics":paper.diagnostics,"production_vectors_include_debug_metadata":false}),
         });
+        if let Some(display) = &paper.display_state {
+            out.push(SemanticElement {
+                id:format!("{}:display-state-info",paper.id),role:"drawing-display-state-information".into(),label:"Saved display arrangement".into(),
+                value:Some(format!("{} hidden · {} ghost · {} finish overrides",display.hidden_components,display.ghost_components,display.finish_overrides)),
+                state:if display.diagnostics.is_empty(){"ready"}else{"warning"}.into(),commands:vec!["drawing.sheet-edit".into()],relationships:vec![paper.id.clone(),display.selection.state.clone()],
+                data:json!({"contract":"tcad.drawing-display-states","version":1,"source":display,"path_origin":"sheet-model-scope","ghost_pickable":false,"vector_finishes":"black-line-art","annotations_preserved":true}),
+            });
+        }
         for (key, label, value) in [
             (
                 "fingerprint",
