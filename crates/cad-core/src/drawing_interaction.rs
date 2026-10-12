@@ -11,7 +11,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const CONTRACT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 4;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
@@ -59,6 +59,9 @@ pub enum HandleKind {
     Anchor { slot: AnchorSlot },
     LeaderBend { index: usize },
     GroupLabel { target: Id },
+    CloudCorner { corner: u8 },
+    CloudVertex { vertex: Id },
+    CloudLabel,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Handle {
@@ -135,6 +138,20 @@ pub enum Action {
     MoveGroupLabel {
         id: Id,
         target: Id,
+        offset_mm: [f64; 2],
+    },
+    ResizeCloudCorner {
+        id: Id,
+        corner: u8,
+        delta_mm: [f64; 2],
+    },
+    MoveCloudVertex {
+        id: Id,
+        vertex: Id,
+        point_mm: [f64; 2],
+    },
+    MoveCloudLabel {
+        id: Id,
         offset_mm: [f64; 2],
     },
     MoveLeaderBend {
@@ -319,6 +336,9 @@ fn annotation_anchors(annotation: &drawing::Annotation) -> Vec<(AnchorSlot, &Anc
         | AnnotationKind::Leader { target, .. }
         | AnnotationKind::Datum { target, .. }
         | AnnotationKind::GeometricTolerance { target, .. }
+        | AnnotationKind::DatumTarget { target, .. }
+        | AnnotationKind::GeometricToleranceFrame { target, .. }
+        | AnnotationKind::RevisionCloud { target, .. }
         | AnnotationKind::Balloon { target, .. }
         | AnnotationKind::CutListBalloon { target, .. } => vec![(AnchorSlot::Target, target)],
         AnnotationKind::CenterLine { first, second, .. } => {
@@ -333,6 +353,8 @@ fn leader_supported(annotation: &drawing::Annotation) -> bool {
         AnnotationKind::Leader { .. }
             | AnnotationKind::Datum { .. }
             | AnnotationKind::GeometricTolerance { .. }
+            | AnnotationKind::DatumTarget { .. }
+            | AnnotationKind::GeometricToleranceFrame { .. }
             | AnnotationKind::Balloon { .. }
             | AnnotationKind::CutListBalloon { .. }
     )
@@ -528,6 +550,26 @@ pub fn build(
                     .projections
                     .get(&annotation.view)
                     .ok_or_else(|| invalid("Missing annotation projection"))?;
+                let cloud_center = if let AnnotationKind::RevisionCloud { target, .. } =
+                    &annotation.kind
+                {
+                    let point =
+                        drawing::point(doc, evaluation, source, target.point, &target.reference)
+                            .or_else(|error| {
+                                if rendered.diagnostics.contains_key(id) {
+                                    Ok(target.point)
+                                } else {
+                                    Err(error)
+                                }
+                            })?;
+                    let at = projection.paper_point(&annotation.view, point)?;
+                    Some([
+                        at[0] + annotation.offset_mm[0],
+                        at[1] + annotation.offset_mm[1],
+                    ])
+                } else {
+                    None
+                };
                 if !matches!(
                     annotation.kind,
                     AnnotationKind::CenterMark { .. } | AnnotationKind::CenterLine { .. }
@@ -535,7 +577,8 @@ pub fn build(
                     handles.push(handle(
                         &group.target,
                         HandleKind::Move,
-                        label_location(primitives).unwrap_or(center),
+                        cloud_center
+                            .unwrap_or_else(|| label_location(primitives).unwrap_or(center)),
                     ));
                 }
                 for (slot, anchor) in annotation_anchors(annotation) {
@@ -586,6 +629,55 @@ pub fn build(
                                 target: target.target,
                             },
                             target.label_mm,
+                        ));
+                    }
+                }
+                if let AnnotationKind::RevisionCloud { cloud, .. } = &annotation.kind
+                    && let Some(center) = cloud_center
+                {
+                    if cloud.shape == crate::drawing_revision::Shape::Polygon {
+                        for vertex in &cloud.vertices {
+                            handles.push(handle(
+                                &group.target,
+                                HandleKind::CloudVertex {
+                                    vertex: vertex.id.clone(),
+                                },
+                                cloud.paper_point(vertex.point_mm, center),
+                            ));
+                        }
+                    } else {
+                        for corner in 0..4 {
+                            let local = [
+                                if corner & 1 == 0 {
+                                    -cloud.width_mm * 0.5
+                                } else {
+                                    cloud.width_mm * 0.5
+                                },
+                                if corner & 2 == 0 {
+                                    -cloud.height_mm * 0.5
+                                } else {
+                                    cloud.height_mm * 0.5
+                                },
+                            ];
+                            handles.push(handle(
+                                &group.target,
+                                HandleKind::CloudCorner { corner },
+                                cloud.paper_point(local, center),
+                            ));
+                        }
+                    }
+                    if cloud.show_label
+                        && cloud
+                            .revision_label(source)
+                            .is_ok_and(|label| !label.is_empty())
+                    {
+                        handles.push(handle(
+                            &group.target,
+                            HandleKind::CloudLabel,
+                            [
+                                center[0] + cloud.label_offset_mm[0],
+                                center[1] + cloud.label_offset_mm[1],
+                            ],
                         ));
                     }
                 }
@@ -1161,9 +1253,12 @@ fn anchor_mut<'a>(
             | AnnotationKind::CutListBalloon { target, .. }
             | AnnotationKind::SurfaceFinish { target, .. }
             | AnnotationKind::WeldSymbol { target, .. }
-            | AnnotationKind::GeometricTolerance { target, .. },
+            | AnnotationKind::GeometricTolerance { target, .. }
+            | AnnotationKind::DatumTarget { target, .. }
+            | AnnotationKind::GeometricToleranceFrame { target, .. },
             AnchorSlot::Target,
         ) => Ok(target),
+        (AnnotationKind::RevisionCloud { target, .. }, AnchorSlot::Target) => Ok(target),
         (AnnotationKind::DimensionGroup { group }, AnchorSlot::Target) => Ok(&mut group.datum),
         (AnnotationKind::DimensionGroup { group }, AnchorSlot::GroupTarget { target }) => group
             .targets
@@ -1387,6 +1482,60 @@ pub fn apply(
                 .find(|source| &source.id == target)
                 .ok_or_else(|| invalid("The dimension group target no longer exists"))?
                 .label_offset_mm = *offset_mm;
+        }
+        Action::ResizeCloudCorner {
+            id,
+            corner,
+            delta_mm,
+        } => {
+            finite(delta_mm)?;
+            if *corner > 3 {
+                return Err(invalid("A cloud resize needs a current corner"));
+            }
+            let annotation = annotation_mut(&mut sheet, id)?;
+            let AnnotationKind::RevisionCloud { cloud, .. } = &mut annotation.kind else {
+                return Err(invalid("The annotation is no longer a revision cloud"));
+            };
+            if cloud.shape == crate::drawing_revision::Shape::Polygon {
+                return Err(invalid("Polygon clouds use vertex handles"));
+            }
+            let local = cloud.local_delta(*delta_mm);
+            cloud.width_mm += if corner & 1 == 0 { -local[0] } else { local[0] };
+            cloud.height_mm += if corner & 2 == 0 { -local[1] } else { local[1] };
+            cloud.validate()?;
+            for (axis, delta) in delta_mm.iter().enumerate() {
+                annotation.offset_mm[axis] += delta * 0.5;
+            }
+        }
+        Action::MoveCloudVertex {
+            id,
+            vertex,
+            point_mm,
+        } => {
+            finite(point_mm)?;
+            let annotation = annotation_mut(&mut sheet, id)?;
+            let AnnotationKind::RevisionCloud { cloud, .. } = &mut annotation.kind else {
+                return Err(invalid("The annotation is no longer a revision cloud"));
+            };
+            if cloud.shape != crate::drawing_revision::Shape::Polygon {
+                return Err(invalid("Only polygon clouds have editable vertices"));
+            }
+            cloud
+                .vertices
+                .iter_mut()
+                .find(|source| &source.id == vertex)
+                .ok_or_else(|| invalid("The cloud vertex no longer exists"))?
+                .point_mm = *point_mm;
+            cloud.validate()?;
+        }
+        Action::MoveCloudLabel { id, offset_mm } => {
+            finite(offset_mm)?;
+            let annotation = annotation_mut(&mut sheet, id)?;
+            let AnnotationKind::RevisionCloud { cloud, .. } = &mut annotation.kind else {
+                return Err(invalid("The annotation is no longer a revision cloud"));
+            };
+            cloud.label_offset_mm = *offset_mm;
+            cloud.validate()?;
         }
         Action::MoveLeaderBend {
             id,

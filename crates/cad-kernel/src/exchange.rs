@@ -314,6 +314,7 @@ pub fn import_structure(doc: &mut Document, resource: &str, root: &Path) -> Resu
             let mut assembly = Assembly {
                 id: key.clone(),
                 name: name.into(),
+                properties: BTreeMap::new(),
                 instances: BTreeMap::new(),
                 mates: vec![],
                 promoted_parameters: BTreeMap::new(),
@@ -424,6 +425,7 @@ pub fn import_structure(doc: &mut Document, resource: &str, root: &Path) -> Resu
     let mut assembly = Assembly {
         id: root.clone(),
         name: "Imported STEP assembly".into(),
+        properties: BTreeMap::new(),
         instances: BTreeMap::new(),
         mates: vec![],
         promoted_parameters: BTreeMap::new(),

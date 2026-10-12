@@ -57,3 +57,29 @@ common/per-target tolerances, stable target ordering, paper label dragging and
 reattachment, all sharing vector output. Design monitor contract 1 adds parameter
 and evaluated property limits, current-source JSON/CLI reports and a coalescing
 persistent background worker. No code tests or interactive runs.
+
+
+## Third checkpoint
+
+Appearance contract 4 adds portable checksum-pinned HDR/EXR environment maps,
+rotation/strength controls and bounded off-thread diffuse/GGX filtering, with
+current replacement validation and explicit pending fallbacks. Custom personal
+finish defaults retain source snapshots and pinned texture files, fully bounded
+and decoded before acceptance, then copied into new documents' resource folders.
+
+Document/part/assembly properties provide stable text keys, configured inheritance,
+common/custom semantic editing and BOM/title association impact. Drawing contract
+10 adds native attached datum targets, composite/stacked tolerance frames and
+rectangular/elliptical/simple-polygon revision clouds linked to stable revision
+rows. Paper handles and shared PDF/DXF vectors retain those source associations.
+
+Linear tolerance stacks retain native driving dimensional bindings, signed terms,
+worst-case requirements and explicitly declared process/shared-variation
+assumptions. Coalescing background reports and CLI exports carry current source
+identity. The hardware library provides 32 supplier-sourced M3–M16 dimensional
+envelopes across washers, nuts and two screw families, with real editable sketches
+and standard features; smooth thread-envelope limitations are disclosed.
+
+Verification is compilation, formatting and strict linting. No tests, assertion
+probes, app launches or interactive runs are performed. Difficult native kernel
+carrier/blend/Boolean work remains outside this session's implementation scope.

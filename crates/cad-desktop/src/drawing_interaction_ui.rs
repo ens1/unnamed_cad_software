@@ -401,6 +401,62 @@ fn begin_capture(w: &Workspace, state: &mut State, request: CaptureRequest<'_>) 
 }
 fn capture_action(capture: &Capture, delta: [f64; 2]) -> Result<Action> {
     Ok(match &capture.handle.kind {
+        HandleKind::CloudCorner { corner } => {
+            let Target::Annotation { id } = &capture.target else {
+                return Err(invalid("Only revision clouds have corner handles"));
+            };
+            Action::ResizeCloudCorner {
+                id: id.clone(),
+                corner: *corner,
+                delta_mm: delta,
+            }
+        }
+        HandleKind::CloudVertex { vertex } => {
+            let Target::Annotation { id } = &capture.target else {
+                return Err(invalid("Only revision clouds have polygon handles"));
+            };
+            let annotation = capture
+                .source
+                .entities
+                .iter()
+                .find(|annotation| &annotation.id == id)
+                .ok_or_else(|| invalid("The revision cloud no longer exists"))?;
+            let cad_core::drawing::AnnotationKind::RevisionCloud { cloud, .. } = &annotation.kind
+            else {
+                return Err(invalid("The annotation is no longer a revision cloud"));
+            };
+            let original = crate::drawing_revision_ui::vertex_point(annotation, vertex)?;
+            let local = cloud.local_delta(delta);
+            Action::MoveCloudVertex {
+                id: id.clone(),
+                vertex: vertex.clone(),
+                point_mm: [original[0] + local[0], original[1] + local[1]],
+            }
+        }
+        HandleKind::CloudLabel => {
+            let Target::Annotation { id } = &capture.target else {
+                return Err(invalid(
+                    "Only revision clouds have revision callout handles",
+                ));
+            };
+            let annotation = capture
+                .source
+                .entities
+                .iter()
+                .find(|annotation| &annotation.id == id)
+                .ok_or_else(|| invalid("The revision cloud no longer exists"))?;
+            let cad_core::drawing::AnnotationKind::RevisionCloud { cloud, .. } = &annotation.kind
+            else {
+                return Err(invalid("The annotation is no longer a revision cloud"));
+            };
+            Action::MoveCloudLabel {
+                id: id.clone(),
+                offset_mm: [
+                    cloud.label_offset_mm[0] + delta[0],
+                    cloud.label_offset_mm[1] + delta[1],
+                ],
+            }
+        }
         HandleKind::Resize { corner } => {
             let mut min = capture.bounds_mm[0];
             let mut max = capture.bounds_mm[1];
@@ -788,6 +844,8 @@ fn supports_leader(source: &Drawing, target: &Target) -> bool {
                     cad_core::drawing::AnnotationKind::Leader { .. }
                         | cad_core::drawing::AnnotationKind::Datum { .. }
                         | cad_core::drawing::AnnotationKind::GeometricTolerance { .. }
+                        | cad_core::drawing::AnnotationKind::DatumTarget { .. }
+                        | cad_core::drawing::AnnotationKind::GeometricToleranceFrame { .. }
                         | cad_core::drawing::AnnotationKind::Balloon { .. }
                         | cad_core::drawing::AnnotationKind::CutListBalloon { .. }
                 )
@@ -1343,6 +1401,9 @@ fn handle_class(kind: &HandleKind) -> &'static str {
         HandleKind::Anchor { .. } => "anchor",
         HandleKind::LeaderBend { .. } => "leader-elbow",
         HandleKind::GroupLabel { .. } => "dimension-group-label",
+        HandleKind::CloudCorner { .. } => "cloud-corner",
+        HandleKind::CloudVertex { .. } => "cloud-vertex",
+        HandleKind::CloudLabel => "cloud-label",
     }
 }
 fn dimension_label(action: &Action) -> &'static str {

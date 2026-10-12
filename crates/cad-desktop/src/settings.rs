@@ -189,7 +189,10 @@ pub fn apply(w: &mut Workspace, close: bool) {
         return;
     };
     let preferences = state.application.clone();
-    if let Err(error) = preferences.validate() {
+    if let Err(error) = preferences
+        .validate()
+        .and_then(|()| preferences.validate_default_assets())
+    {
         fail(w, error.to_string());
         return;
     }
@@ -347,15 +350,15 @@ pub fn cancel(w: &mut Workspace) {
 }
 
 /// Apply personal defaults only at document creation. Existing files retain their own preferences.
-pub fn new_document(w: &Workspace, assembly: bool) -> Document {
+pub fn new_document(w: &Workspace, assembly: bool) -> Result<Document> {
     let mut document = if assembly {
         Document::empty("Assembly1")
     } else {
         Document::blank_part("Part1")
     };
     w.application_preferences
-        .apply_new_document_defaults(&mut document);
-    document
+        .apply_new_document_defaults(&mut document)?;
+    Ok(document)
 }
 
 /// Existing navigation and size controls persist through the same personal preference contract.

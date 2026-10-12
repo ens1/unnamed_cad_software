@@ -421,6 +421,8 @@ fn remap_source_inner(
             field,
             "name"
                 | "metadata"
+                | "standard_part"
+                | "manufacturing"
                 | "description"
                 | "properties"
                 | "title"
@@ -554,6 +556,7 @@ fn remap_source_inner(
             "base_color" | "normal" | "roughness" | "metallic" | "occlusion" | "height" => {
                 field == "textures" && object.get(key).is_some_and(serde_json::Value::is_string)
             }
+            "environment" => field == "lighting",
             "datum" | "constraint" | "source_record" => true,
             "placement" => {
                 object.get("operation").and_then(serde_json::Value::as_str)

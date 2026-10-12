@@ -49,6 +49,15 @@ fn source(w: &Workspace, scope: &str) -> Result<Value> {
                 },
                 preferences.default_model.default_new_part_material
             ));
+            source["default_model"]["default_finish_selection"] = json!(format!(
+                "{}:{}",
+                if preferences.default_finish.is_some() {
+                    "snapshot"
+                } else {
+                    "builtin"
+                },
+                preferences.default_model.default_new_part_finish
+            ));
             Ok(source)
         }
         "presentation" => Ok(json!({"theme":crate::theme_library::selected(w)})),
@@ -173,17 +182,29 @@ fn model_fields(w: &Workspace, application_defaults: bool) -> Vec<SemanticElemen
     } else {
         "model.geometry"
     };
-    let finishes = if application_defaults {
-        cad_core::appearance::default_finishes()
+    let finish_choices = if application_defaults {
+        let mut choices = cad_core::appearance::default_finishes().into_values().map(|finish| json!({"value":format!("builtin:{}",finish.id),"label":format!("Built-in · {}",finish.name)})).collect::<Vec<_>>();
+        choices.extend(cad_core::finish_library::catalog().iter().map(|entry| json!({"value":format!("catalog:{}",entry.finish.id),"label":format!("Catalog · {}",entry.finish.name)})));
+        choices.extend(w.session.visible().finishes.values().map(|finish| json!({"value":format!("project:{}",finish.id),"label":format!("This project · {}",finish.name)})));
+        let preferences = w
+            .settings
+            .as_ref()
+            .map(|state| &state.application)
+            .unwrap_or(&w.application_preferences);
+        if let Some(snapshot) = &preferences.default_finish {
+            choices.push(json!({"value":format!("snapshot:{}",snapshot.finish.id),"label":format!("Saved default · {}",snapshot.finish.name)}));
+        }
+        Value::Array(choices)
     } else {
-        w.session.visible().finishes.clone()
+        Value::Array(
+            w.session
+                .visible()
+                .finishes
+                .values()
+                .map(|finish| json!({"value":finish.id,"label":finish.name}))
+                .collect(),
+        )
     };
-    let finish_choices = Value::Array(
-        finishes
-            .values()
-            .map(|finish| json!({"value":finish.id,"label":finish.name}))
-            .collect(),
-    );
     let material_choices = if application_defaults {
         let mut choices = cad_core::Document::blank_part("Part1").materials.into_values().map(|material| json!({"value":format!("builtin:{}",material.id),"label":format!("Built-in · {}",material.name)})).collect::<Vec<_>>();
         if let Ok(catalog) = cad_core::material_library::bundled_catalog() {
@@ -256,7 +277,11 @@ fn model_fields(w: &Workspace, application_defaults: bool) -> Vec<SemanticElemen
         ),
         (
             geometry,
-            "/default_new_part_finish",
+            if application_defaults {
+                "/default_finish_selection"
+            } else {
+                "/default_new_part_finish"
+            },
             "Default finish for new parts",
             None,
             finish_choices,
@@ -493,6 +518,65 @@ pub fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
         ));
     }
     let mut candidate = source(w, scope)?;
+    if scope == "application" && pointer == "/default_model/default_finish_selection" {
+        let selection = value
+            .as_str()
+            .ok_or_else(|| CadError::Invalid("Choose a visual finish default".into()))?;
+        let (kind, identity) = selection
+            .split_once(':')
+            .ok_or_else(|| CadError::Invalid("Invalid default finish selection".into()))?;
+        let mut preferences = w
+            .settings
+            .as_ref()
+            .map(|state| state.application.clone())
+            .unwrap_or_else(|| w.application_preferences.clone());
+        match kind {
+            "builtin" => {
+                if !cad_core::appearance::default_finishes().contains_key(identity) {
+                    return Err(CadError::Invalid(
+                        "The built-in finish no longer exists".into(),
+                    ));
+                }
+                preferences.default_finish = None;
+                preferences.default_model.default_new_part_finish = identity.into();
+            }
+            "snapshot" => {
+                if !preferences
+                    .default_finish
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.finish.id == identity)
+                {
+                    return Err(CadError::Invalid(
+                        "The saved finish default no longer exists".into(),
+                    ));
+                }
+            }
+            "catalog" | "project" => {
+                let mut catalog_document;
+                let source = if kind == "catalog" {
+                    let finish = cad_core::finish_library::catalog()
+                        .iter()
+                        .find(|entry| entry.finish.id == identity)
+                        .ok_or_else(|| {
+                            CadError::Invalid("The catalog finish no longer exists".into())
+                        })?
+                        .finish
+                        .clone();
+                    catalog_document = cad_core::Document::blank_part("Finish catalog default");
+                    catalog_document.finishes.insert(finish.id.clone(), finish);
+                    &catalog_document
+                } else {
+                    w.session.visible()
+                };
+                let snapshot =
+                    settings_preferences::capture_default_finish(source, &w.root(), identity)?;
+                preferences.default_model.default_new_part_finish = snapshot.finish.id.clone();
+                preferences.default_finish = Some(snapshot);
+            }
+            _ => return Err(CadError::Invalid("Unknown finish default source".into())),
+        }
+        return settings::set_application(w, preferences);
+    }
     if scope == "application" && pointer == "/default_model/default_material_selection" {
         let selection = value
             .as_str()

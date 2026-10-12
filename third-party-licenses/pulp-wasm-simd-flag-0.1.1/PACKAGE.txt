@@ -1,0 +1,4 @@
+pulp-wasm-simd-flag-0.1.1
+Declared SPDX license: MIT
+Source: https://github.com/sarah-quinones/pulp/
+The published crate did not include a top-level license text.

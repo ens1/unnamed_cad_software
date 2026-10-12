@@ -1384,6 +1384,9 @@ fn annotation_fields(f: &mut Fields<'_>) {
         ("leader", "Note"),
         ("datum", "Datum"),
         ("geometric_tolerance", "GD&T"),
+        ("datum_target", "Datum target"),
+        ("revision_cloud", "Revision cloud"),
+        ("tolerance_frame", "Tolerance frame"),
         ("center_mark", "Center mark"),
         ("center_line", "Centerline"),
         ("dimension_group", "Dimension group"),
@@ -1425,6 +1428,18 @@ fn annotation_fields(f: &mut Fields<'_>) {
         f.view(&format!("{path}/view"));
     }
     match &a.kind {
+        AnnotationKind::DatumTarget { symbol, .. } => {
+            f.anchor(&format!("{path}/kind/target"), "Native target attachment");
+            crate::drawing_gdt_ui::target_fields(f, &format!("{path}/kind/symbol"), symbol);
+        }
+        AnnotationKind::RevisionCloud { cloud, .. } => {
+            f.anchor(&format!("{path}/kind/target"), "Cloud attachment");
+            crate::drawing_revision_ui::fields(f, &format!("{path}/kind/cloud"), cloud);
+        }
+        AnnotationKind::GeometricToleranceFrame { frame, .. } => {
+            f.anchor(&format!("{path}/kind/target"), "Native feature attachment");
+            crate::drawing_gdt_ui::frame_fields(f, &format!("{path}/kind/frame"), frame);
+        }
         AnnotationKind::DimensionGroup { group } => {
             crate::drawing_dimension_groups_ui::fields(f, &format!("{path}/kind/group"), group)
         }
@@ -1658,6 +1673,8 @@ fn annotation_fields(f: &mut Fields<'_>) {
             | AnnotationKind::Balloon { .. }
             | AnnotationKind::CutListBalloon { .. }
             | AnnotationKind::GeometricTolerance { .. }
+            | AnnotationKind::DatumTarget { .. }
+            | AnnotationKind::GeometricToleranceFrame { .. }
     ) {
         f.group("leader-elbows", "Leader elbows");
         for (elbow, _) in a.leader_points_mm.iter().enumerate() {
@@ -1807,8 +1824,8 @@ fn table_fields(f: &mut Fields<'_>) {
                     &format!("table/{}/revision/{}/remove", table.id, row.id),
                     "Remove row",
                     json!({"kind":"remove","pointer":format!("{path}/kind/rows"),"index":i}),
-                    true,
-                    "Close Settings first",
+                    !cad_core::drawing_revision::referenced(f.sheet, &table.id, Some(&row.id)),
+                    "Reattach or unlink revision clouds before deleting their revision row",
                 );
             }
         }
@@ -2044,8 +2061,8 @@ fn table_fields(f: &mut Fields<'_>) {
         &format!("table/{}/remove", table.id),
         "Delete table",
         json!({"kind":"table-delete","table":table.id}),
-        true,
-        "Close Settings first",
+        !cad_core::drawing_revision::referenced(f.sheet, &table.id, None),
+        "Reattach or unlink revision clouds before deleting their revision table",
     );
 }
 fn table_units(f: &mut Fields<'_>, path: &str) {
@@ -2634,6 +2651,24 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
                     w.fields.insert("drawing-table".into(), id.into());
                 }
             }
+            "cloud-vertex" => {
+                w.fields.insert(
+                    "drawing-cloud-vertex".into(),
+                    value
+                        .as_str()
+                        .ok_or_else(|| invalid("Choose a cloud vertex"))?
+                        .into(),
+                );
+            }
+            "gdt-row" => {
+                w.fields.insert(
+                    "drawing-gdt-row".into(),
+                    value
+                        .as_str()
+                        .ok_or_else(|| invalid("Choose a frame segment"))?
+                        .into(),
+                );
+            }
             "group-target" => {
                 w.fields.insert(
                     "drawing-group-target".into(),
@@ -2841,6 +2876,7 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
         set_at(&mut source, &format!("{parent}/configuration"), Value::Null)?;
     }
     sheet = serde_json::from_value(source)?;
+    crate::drawing_gdt_ui::normalize_mode(&mut sheet, pointer, &value)?;
     if (pointer.contains("/bom_options/") || pointer.contains("/cut_list_options/"))
         && let Some(evaluation) = crate::drawing_ui::evaluation(w)
     {
@@ -2940,6 +2976,9 @@ fn create_dimension(w: &Workspace, sheet: &Drawing, kind: &str) -> Result<Drawin
 fn create_annotation(w: &Workspace, sheet: &Drawing, kind: &str) -> Result<Annotation> {
     let target = crate::drawing_ui::selected_anchor(w);
     let kind = match kind {
+        "revision_cloud" => crate::drawing_revision_ui::create(w, sheet),
+        "datum_target" => crate::drawing_gdt_ui::create_target(w, sheet)?,
+        "tolerance_frame" => crate::drawing_gdt_ui::create_frame(w, sheet),
         "dimension_group" => {
             crate::drawing_dimension_groups_ui::create(w, sheet, &selected_view(sheet))
         }
@@ -3049,6 +3088,16 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
         }
         let mut sheet = crate::drawing_ui::sheet_source(w, &sheet_id)
             .ok_or_else(|| invalid("The drawing sheet no longer exists"))?;
+        if crate::drawing_revision_ui::apply_action(w, &mut sheet, mutation)? {
+            validate_definition(&sheet)?;
+            publish(w, sheet);
+            return Ok(());
+        }
+        if crate::drawing_gdt_ui::apply_action(w, &mut sheet, mutation)? {
+            validate_definition(&sheet)?;
+            publish(w, sheet);
+            return Ok(());
+        }
         if crate::drawing_dimension_groups_ui::apply_action(w, &mut sheet, mutation)? {
             validate_definition(&sheet)?;
             publish(w, sheet);
@@ -3141,6 +3190,11 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                 let table = mutation["table"]
                     .as_str()
                     .ok_or_else(|| invalid("Missing table"))?;
+                if cad_core::drawing_revision::referenced(&sheet, table, None) {
+                    return Err(invalid(
+                        "Reattach or unlink revision clouds before deleting their revision table",
+                    ));
+                }
                 sheet.tables.retain(|t| t.id != table);
                 sheet.entities.retain(
                     |a| !matches!(&a.kind,AnnotationKind::Balloon{table:source,..} | AnnotationKind::CutListBalloon{table:source,..} if source==table),
@@ -3298,6 +3352,31 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                 let pointer = mutation["pointer"]
                     .as_str()
                     .ok_or_else(|| invalid("Missing drawing list"))?;
+                if kind == "remove"
+                    && pointer.starts_with("/tables/")
+                    && pointer.ends_with("/kind/rows")
+                {
+                    let table = pointer
+                        .split('/')
+                        .nth(2)
+                        .and_then(|index| index.parse::<usize>().ok())
+                        .and_then(|index| sheet.tables.get(index));
+                    if let Some(table) = table
+                        && let TableKind::Revisions { rows } = &table.kind
+                    {
+                        let row = mutation["index"]
+                            .as_u64()
+                            .and_then(|index| usize::try_from(index).ok())
+                            .and_then(|index| rows.get(index));
+                        if row.is_some_and(|row| {
+                            cad_core::drawing_revision::referenced(&sheet, &table.id, Some(&row.id))
+                        }) {
+                            return Err(invalid(
+                                "Reattach or unlink revision clouds before deleting their revision row",
+                            ));
+                        }
+                    }
+                }
                 let mut source = json!(&sheet);
                 match kind {
                     "set" => set_at(&mut source, pointer, mutation["value"].clone())?,

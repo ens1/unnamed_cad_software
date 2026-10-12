@@ -21,9 +21,16 @@ default for new parts changes.
 Application preferences include interface scale, trackpad navigation profiles,
 gesture directions and sensitivities, automatic reload of external presentation
 files, recovery snapshot enablement and interval, and defaults for new models.
-Application defaults use built-in finishes so they do not create unresolved
-references to another project's texture resources. Layout and CSS-like theme
-resources remain independent presentation files.
+The new-model pickers accept built-in, catalog or current-project materials and
+finishes. Custom choices retain independent personal source snapshots. Finish
+textures are copied into a checksum-pinned personal resource store; new documents
+receive their own pinned files in the unsaved resource root before assignment.
+The default snapshot does not keep a live link to the source project. Imported
+texture bytes are bounded and fully decoded before the preference is accepted;
+missing, altered or unsupported assets block Settings Apply and document creation.
+Selecting a built-in clears that custom snapshot. Cancel leaves saved preferences
+unchanged; unreferenced immutable import files may remain. Layout and CSS-like
+theme resources remain independent presentation files.
 
 **Application → Themes** provides a picker for **Classic · Orange**,
 **Nocturne · Violet**, and imported packages. Picking a theme previews its whole

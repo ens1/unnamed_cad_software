@@ -15,8 +15,7 @@ use bevy::{
     },
     prelude::*,
     render::render_resource::{
-        AsBindGroup, Extent3d, Face, ShaderType, TextureDataOrder, TextureDimension, TextureFormat,
-        TextureViewDescriptor, TextureViewDimension,
+        AsBindGroup, Extent3d, Face, ShaderType, TextureDimension, TextureFormat,
     },
     shader::{Shader, ShaderRef},
 };
@@ -24,7 +23,6 @@ use cad_core::{
     Document, PlacedPart,
     appearance::{BuiltinBump, Finish, MappingMode},
 };
-use half::f16;
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     path::{Path, PathBuf},
@@ -114,10 +112,43 @@ struct LoadRequest {
     key: TextureKey,
     resource: cad_core::Resource,
 }
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct EnvironmentKey {
+    root: PathBuf,
+    path: String,
+    sha256: String,
+}
+struct EnvironmentLoaded {
+    diffuse: Handle<Image>,
+    specular: Handle<Image>,
+    compensation: f32,
+    normalization: f32,
+    dimensions: [u32; 2],
+    maximum: f32,
+    bytes: usize,
+    last_used: u64,
+}
+enum EnvironmentState {
+    Pending,
+    Loaded(EnvironmentLoaded),
+    Failed(String),
+}
+fn environment_key(doc: &Document, root: &Path) -> Option<EnvironmentKey> {
+    let resource = doc.resources.get(doc.lighting.environment.as_ref()?)?;
+    Some(EnvironmentKey {
+        root: root.to_path_buf(),
+        path: resource.path.clone(),
+        sha256: resource.sha256.clone(),
+    })
+}
 enum Reply {
     Texture(TextureKey, Result<Image, String>),
     BuiltinHeight(BuiltinBump, Result<Image, String>),
     Studio(Image, Image),
+    Environment(
+        EnvironmentKey,
+        Result<crate::environment_filter::Filtered, String>,
+    ),
 }
 #[derive(Resource)]
 pub struct Runtime {
@@ -133,6 +164,11 @@ pub struct Runtime {
     pub epoch: u64,
     studio: Option<(Handle<Image>, Handle<Image>)>,
     usage_key: String,
+    environments: BTreeMap<EnvironmentKey, EnvironmentState>,
+    environment_loading: Option<EnvironmentKey>,
+    desired_environment: Option<EnvironmentKey>,
+    last_valid_environment: Option<EnvironmentKey>,
+    environment_clock: u64,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -153,6 +189,11 @@ impl Default for Runtime {
             epoch: 0,
             studio: None,
             usage_key: String::new(),
+            environments: BTreeMap::new(),
+            environment_loading: None,
+            desired_environment: None,
+            last_valid_environment: None,
+            environment_clock: 0,
         }
     }
 }
@@ -236,7 +277,97 @@ impl Runtime {
         // Retry failed resources once per source change, including restored files and reimports.
         self.textures
             .retain(|_, state| !matches!(state, TextureState::Failed(_)));
+        self.environments
+            .retain(|_, state| !matches!(state, EnvironmentState::Failed(_)));
         self.epoch = self.epoch.wrapping_add(1);
+    }
+    fn select_environment(&mut self, doc: &Document, root: &Path) {
+        let wanted = environment_key(doc, root);
+        if self.desired_environment != wanted {
+            self.desired_environment = wanted.clone();
+            self.epoch = self.epoch.wrapping_add(1);
+        }
+        self.environment_clock = self.environment_clock.wrapping_add(1);
+        self.environments.retain(|key, state| {
+            !matches!(state, EnvironmentState::Pending)
+                || Some(key) == wanted.as_ref()
+                || Some(key) == self.environment_loading.as_ref()
+        });
+        if let Some(key) = wanted {
+            let state = self
+                .environments
+                .entry(key.clone())
+                .or_insert(EnvironmentState::Pending);
+            if let EnvironmentState::Loaded(loaded) = state {
+                loaded.last_used = self.environment_clock;
+                self.last_valid_environment = Some(key);
+            }
+        }
+    }
+    fn environment_maps(&self) -> Option<(&Handle<Image>, &Handle<Image>, f32)> {
+        if self.desired_environment.is_some() {
+            for key in [&self.desired_environment, &self.last_valid_environment]
+                .into_iter()
+                .flatten()
+            {
+                if let Some(EnvironmentState::Loaded(loaded)) = self.environments.get(key) {
+                    return Some((&loaded.diffuse, &loaded.specular, loaded.compensation));
+                }
+            }
+        }
+        self.studio
+            .as_ref()
+            .map(|(diffuse, specular)| (diffuse, specular, 1.))
+    }
+    fn trim_environments(&mut self, images: &mut Assets<Image>) {
+        // Keep a previous fully validated map for pending previews and quick Cancel/undo.
+        let mut loaded = self
+            .environments
+            .iter()
+            .filter_map(|(key, state)| match state {
+                EnvironmentState::Loaded(loaded) => Some((loaded.last_used, key.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        loaded.sort();
+        let obsolete = loaded.len().saturating_sub(2);
+        for (_, key) in loaded.into_iter().take(obsolete) {
+            if self.desired_environment.as_ref() == Some(&key)
+                || self.last_valid_environment.as_ref() == Some(&key)
+            {
+                continue;
+            }
+            if let Some(EnvironmentState::Loaded(loaded)) = self.environments.remove(&key) {
+                images.remove(&loaded.diffuse);
+                images.remove(&loaded.specular);
+                self.image_bytes = self.image_bytes.saturating_sub(loaded.bytes);
+            }
+        }
+        self.environments.retain(|key, state| {
+            !matches!(state, EnvironmentState::Failed(_))
+                || Some(key) == self.desired_environment.as_ref()
+        });
+    }
+    fn environment_info(&self, doc: &Document, root: &Path) -> serde_json::Value {
+        let key = environment_key(doc, root);
+        let state = key.as_ref().and_then(|key| self.environments.get(key));
+        let mut info = serde_json::json!({"contract":"tcad.environment-render","version":1,"resource":doc.lighting.environment,"state":if key.is_none(){if doc.lighting.environment.is_some(){"failed"}else{"studio"}}else{match state{Some(EnvironmentState::Loaded(_))=>"ready",Some(EnvironmentState::Failed(_))=>"failed",_=>"pending"}},"projection":"equirectangular-2-to-1","color_space":"linear-rgb","diffuse_cube_size":32,"specular_cube_size":128,"specular_mips":8,"filter_samples":256,"background":"workspace","affects_engineering_properties":false,"ray_tracing":false,"preview_fallback":doc.lighting.environment.is_some() && !matches!(state,Some(EnvironmentState::Loaded(_)))});
+        if let Some(key) = &key {
+            info["path"] = serde_json::json!(key.path);
+            info["sha256"] = serde_json::json!(key.sha256);
+        }
+        if let Some(EnvironmentState::Failed(error)) = state {
+            info["error"] = serde_json::json!(error);
+        } else if doc.lighting.environment.is_some() && key.is_none() {
+            info["error"] = "The selected environment resource is missing".into();
+        }
+        if let Some(EnvironmentState::Loaded(loaded)) = state {
+            info["source_dimensions"] = serde_json::json!(loaded.dimensions);
+            info["maximum_source_radiance"] = serde_json::json!(loaded.maximum);
+            info["gpu_radiance_normalization"] = serde_json::json!(loaded.normalization);
+            info["intensity_compensation"] = serde_json::json!(loaded.compensation);
+        }
+        info
     }
     pub fn diagnostics(&self, doc: &Document, root: &Path, validating: bool) -> Vec<String> {
         let mut messages = vec![];
@@ -298,6 +429,25 @@ impl Runtime {
                 }
             }
         }
+        if let Some(resource) = doc
+            .lighting
+            .environment
+            .as_ref()
+            .and_then(|id| doc.resources.get(id))
+        {
+            let key = EnvironmentKey {
+                root: root.to_path_buf(),
+                path: resource.path.clone(),
+                sha256: resource.sha256.clone(),
+            };
+            match self.environments.get(&key) {
+                Some(EnvironmentState::Loaded(_)) => {},
+                Some(EnvironmentState::Failed(error)) => messages.push(format!("Environment {}: {error}; the preview retains the previous validated environment or built-in studio",resource.path)),
+                _ => messages.push(format!("Loading texture environment {} (decode and reflection filtering); the preview retains the previous validated environment or built-in studio",resource.path)),
+            }
+        } else if doc.lighting.environment.is_some() {
+            messages.push("The selected environment resource is missing".into());
+        }
         messages
     }
 }
@@ -318,8 +468,18 @@ pub fn setup(commands: &mut Commands, images: &mut Assets<Image>, runtime: &mut 
     // A coarse studio is available immediately. Filtering the final resources
     // stays off the main thread, but metal never starts in an unlit void.
     runtime.studio = Some((
-        images.add(cube_image(4, 1, true)),
-        images.add(cube_image(8, 4, false)),
+        images.add(crate::environment_filter::cube_image(
+            4,
+            1,
+            true,
+            &studio_radiance,
+        )),
+        images.add(crate::environment_filter::cube_image(
+            8,
+            4,
+            false,
+            &studio_radiance,
+        )),
     ));
     let sender = runtime.sender.clone();
     std::thread::spawn(move || {
@@ -421,6 +581,7 @@ pub fn poll_assets(
         }
         runtime.retain_sources(&sources, &root, &mut images);
     }
+    runtime.select_environment(w.session.visible(), &root);
     let validating =
         w.fields.contains_key("appearance-tool") || w.fields.contains_key("display-state-editor");
     let finishes = if validating {
@@ -487,6 +648,45 @@ pub fn poll_assets(
                 runtime.builtin_height.insert(kind, state);
                 runtime.epoch = runtime.epoch.wrapping_add(1);
             }
+            Reply::Environment(key, result) => {
+                if runtime.environment_loading.as_ref() == Some(&key) {
+                    runtime.environment_loading = None;
+                }
+                if runtime.desired_environment.as_ref() != Some(&key) {
+                    runtime.environments.remove(&key);
+                    continue;
+                }
+                runtime.trim_environments(&mut images);
+                let state = match result {
+                    Ok(filtered) => {
+                        let bytes = [&filtered.diffuse, &filtered.specular]
+                            .into_iter()
+                            .map(|image| image.data.as_ref().map(Vec::len).unwrap_or(0))
+                            .sum::<usize>();
+                        if runtime.image_bytes.saturating_add(bytes) > CACHE_BYTES {
+                            EnvironmentState::Failed("Renderer texture memory limit (512 MiB) reached; remove unused maps or reduce image sizes".into())
+                        } else {
+                            runtime.image_bytes += bytes;
+                            let loaded = EnvironmentLoaded {
+                                diffuse: images.add(filtered.diffuse),
+                                specular: images.add(filtered.specular),
+                                compensation: filtered.intensity_compensation,
+                                normalization: filtered.normalization,
+                                dimensions: filtered.source_dimensions,
+                                maximum: filtered.maximum_radiance,
+                                bytes,
+                                last_used: runtime.environment_clock,
+                            };
+                            runtime.last_valid_environment = Some(key.clone());
+                            EnvironmentState::Loaded(loaded)
+                        }
+                    }
+                    Err(error) => EnvironmentState::Failed(error),
+                };
+                runtime.environments.insert(key, state);
+                runtime.trim_environments(&mut images);
+                runtime.epoch = runtime.epoch.wrapping_add(1);
+            }
             Reply::Studio(diffuse, specular) => {
                 if let Some((diffuse, specular)) = runtime.studio.take() {
                     images.remove(&diffuse);
@@ -519,6 +719,42 @@ pub fn poll_assets(
             let _ = sender.send(Reply::Texture(request.key, result));
         });
     }
+    if runtime.environment_loading.is_none()
+        && let Some(key) = runtime.desired_environment.clone()
+        && matches!(
+            runtime.environments.get(&key),
+            Some(EnvironmentState::Pending)
+        )
+        && let Some(resource) = w
+            .session
+            .visible()
+            .lighting
+            .environment
+            .as_ref()
+            .and_then(|id| w.session.visible().resources.get(id))
+            .cloned()
+    {
+        let sender = runtime.sender.clone();
+        runtime.environment_loading = Some(key.clone());
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(|| {
+                crate::environment_assets::load(&key.root, &resource)
+                    .map(|panorama| crate::environment_filter::panorama(&panorama))
+            })
+            .unwrap_or_else(|_| {
+                Err(
+                    "Environment decoder or reflection filter rejected this file unexpectedly"
+                        .into(),
+                )
+            });
+            let _ = sender.send(Reply::Environment(key, result));
+        });
+    }
+    let info = runtime.environment_info(w.session.visible(), &root);
+    w.fields.insert(
+        "appearance-environment-render-info".into(),
+        info.to_string(),
+    );
     w.appearance_diagnostics = runtime.diagnostics(w.session.visible(), &w.root(), validating);
     w.appearance_validation_key = validation_key(&w);
     if validating && w.confirm_requested && resources_are_current(&w) {
@@ -527,7 +763,8 @@ pub fn poll_assets(
             w.confirm_tool();
         } else if !resources_pending(&w) {
             w.confirm_requested = false;
-            w.status = "Resolve the current texture resource errors before applying".into();
+            w.status =
+                "Resolve the current texture or environment resource errors before applying".into();
         }
     }
 }
@@ -611,11 +848,11 @@ pub fn lighting(
                 .entity(entity)
                 .remove::<ScreenSpaceAmbientOcclusion>();
         }
-        if let Some((diffuse, specular)) = &runtime.studio {
+        if let Some((diffuse, specular, compensation)) = runtime.environment_maps() {
             commands.entity(entity).insert(EnvironmentMapLight {
                 diffuse_map: diffuse.clone(),
                 specular_map: specular.clone(),
-                intensity: STUDIO_INTENSITY * environment,
+                intensity: STUDIO_INTENSITY * environment * compensation,
                 // Bevy rotates lookup rays, rather than the cubemap itself.
                 // Use the inverse so cards and direct lights turn together.
                 rotation: Quat::from_rotation_y(-rotation),
@@ -893,127 +1130,9 @@ fn studio_radiance(direction: Vec3) -> Vec3 {
     }
     radiance
 }
-fn cube_direction(face: u32, x: u32, y: u32, size: u32) -> Vec3 {
-    let u = 2. * (x as f32 + 0.5) / size as f32 - 1.;
-    let v = 2. * (y as f32 + 0.5) / size as f32 - 1.;
-    let direction = match face {
-        0 => Vec3::new(1., -v, -u),
-        1 => Vec3::new(-1., -v, u),
-        2 => Vec3::new(u, 1., v),
-        3 => Vec3::new(u, -1., -v),
-        4 => Vec3::new(u, -v, 1.),
-        _ => Vec3::new(-u, -v, -1.),
-    };
-    // Texture cubemaps are left-handed; Bevy's PBR lookup reverses world Z.
-    // Evaluate the studio in world axes so its softboxes match direct lights.
-    Vec3::new(direction.x, direction.y, -direction.z).normalize()
-}
-fn sample_pair(sample: u32, count: u32) -> Vec2 {
-    Vec2::new(
-        (sample as f32 + 0.5) / count as f32,
-        sample.reverse_bits() as f32 * 2.328_306_4e-10,
-    )
-}
-fn filter_samples() -> &'static [Vec3; 256] {
-    static SAMPLES: OnceLock<[Vec3; 256]> = OnceLock::new();
-    SAMPLES.get_or_init(|| {
-        std::array::from_fn(|sample| {
-            let pair = sample_pair(sample as u32, 256);
-            let phi = std::f32::consts::TAU * pair.x;
-            Vec3::new(phi.cos(), phi.sin(), pair.y)
-        })
-    })
-}
-fn tangent_frame(normal: Vec3) -> (Vec3, Vec3) {
-    let tangent = if normal.z.abs() < 0.99 {
-        Vec3::Z.cross(normal).normalize()
-    } else {
-        Vec3::X.cross(normal).normalize()
-    };
-    (tangent, normal.cross(tangent))
-}
-fn filtered_radiance(normal: Vec3, roughness: f32, diffuse: bool) -> Vec3 {
-    if !diffuse && roughness == 0. {
-        return studio_radiance(normal);
-    }
-    let (tangent, bitangent) = tangent_frame(normal);
-    let mut sum = Vec3::ZERO;
-    let mut weight = 0.;
-    // More samples reduce seams and speckled reflections on rough finishes.
-    for sample in filter_samples() {
-        let cosine = if diffuse {
-            (1. - sample.z).sqrt()
-        } else {
-            let alpha_squared = roughness.powi(4);
-            ((1. - sample.z) / (1. + (alpha_squared - 1.) * sample.z)).sqrt()
-        };
-        let sine = (1. - cosine * cosine).max(0.).sqrt();
-        let half = tangent * (sample.x * sine) + bitangent * (sample.y * sine) + normal * cosine;
-        let direction = if diffuse {
-            half
-        } else {
-            2. * normal.dot(half) * half - normal
-        };
-        let sample_weight = if diffuse {
-            1.
-        } else {
-            normal.dot(direction).max(0.)
-        };
-        sum += studio_radiance(direction) * sample_weight;
-        weight += sample_weight;
-    }
-    sum / weight.max(0.0001)
-}
-fn cube_image(size: u32, levels: u32, diffuse: bool) -> Image {
-    let texels = (0..levels)
-        .map(|mip| (size >> mip).max(1).pow(2) as usize * 6)
-        .sum::<usize>();
-    let mut bytes = Vec::with_capacity(texels * 8);
-    // Explicit mip-major ordering matches wgpu upload order across the six cubemap faces.
-    for mip in 0..levels {
-        let width = (size >> mip).max(1);
-        let roughness = if levels > 1 {
-            mip as f32 / (levels - 1) as f32
-        } else {
-            1.
-        };
-        for face in 0..6 {
-            for y in 0..width {
-                for x in 0..width {
-                    let radiance =
-                        filtered_radiance(cube_direction(face, x, y, width), roughness, diffuse);
-                    for channel in [radiance.x, radiance.y, radiance.z, 1.] {
-                        bytes.extend_from_slice(&f16::from_f32(channel).to_le_bytes());
-                    }
-                }
-            }
-        }
-    }
-    let mut image = Image::new_uninit(
-        Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: 6,
-        },
-        TextureDimension::D2,
-        TextureFormat::Rgba16Float,
-        RenderAssetUsages::default(),
-    );
-    image.data = Some(bytes);
-    image.texture_descriptor.mip_level_count = levels;
-    image.data_order = TextureDataOrder::MipMajor;
-    image.texture_view_descriptor = Some(TextureViewDescriptor {
-        dimension: Some(TextureViewDimension::Cube),
-        ..default()
-    });
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        mag_filter: ImageFilterMode::Linear,
-        min_filter: ImageFilterMode::Linear,
-        mipmap_filter: ImageFilterMode::Linear,
-        ..default()
-    });
-    image
-}
 fn studio_maps() -> (Image, Image) {
-    (cube_image(32, 1, true), cube_image(128, 8, false))
+    (
+        crate::environment_filter::cube_image(32, 1, true, &studio_radiance),
+        crate::environment_filter::cube_image(128, 8, false, &studio_radiance),
+    )
 }

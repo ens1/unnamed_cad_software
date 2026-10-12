@@ -17,9 +17,13 @@ mod direct_edit_ui;
 mod display_states_ui;
 mod drawing_dimension_groups_ui;
 mod drawing_editor_ui;
+mod drawing_gdt_ui;
 mod drawing_interaction_ui;
+mod drawing_revision_ui;
 mod drawing_table_ui;
 mod drawing_ui;
+mod environment_assets;
+mod environment_filter;
 mod exploded_views_ui;
 mod fabrication_ui;
 mod feature_order_ui;
@@ -40,6 +44,7 @@ mod presentation_composition;
 mod presentation_controls;
 mod presentation_resources;
 mod production_ui;
+mod properties_ui;
 mod reference_curves_ui;
 mod reference_repair_ui;
 mod reference_ui;
@@ -61,9 +66,11 @@ mod sketch_handles;
 mod sketch_relations_ui;
 mod sketch_ui;
 mod split_ui;
+mod standard_parts_ui;
 mod surface_ui;
 mod texture_assets;
 mod theme_library;
+mod tolerance_stacks_ui;
 mod ui;
 mod viewport;
 mod viewport_guides;
@@ -125,6 +132,7 @@ pub struct Workspace {
     pub hover_cache: viewport_guides::Cache,
     pub display_state_cache: std::sync::Mutex<display_states_ui::Cache>,
     pub sensor_cache: std::sync::Mutex<sensors_ui::Cache>,
+    pub tolerance_stack_cache: std::sync::Mutex<tolerance_stacks_ui::Cache>,
     pub hover_viewport_seen: bool,
     /// View-only preselection; authored edge sets belong to their feature draft.
     pub geometry_selection: Vec<viewport::Selection>,
@@ -178,7 +186,9 @@ impl Workspace {
             status = "Existing navigation preferences imported into application settings".into();
         }
         let application_preferences = loaded_preferences.preferences;
-        application_preferences.apply_new_document_defaults(&mut doc);
+        if let Err(error) = application_preferences.apply_new_document_defaults(&mut doc) {
+            status = format!("New-model defaults could not be applied: {error}");
+        }
         for arg in std::env::args().skip(1).filter(|a| !a.starts_with("--")) {
             let path = PathBuf::from(arg);
             match FileStore.load(&path) {
@@ -270,6 +280,7 @@ impl Workspace {
             hover_cache: viewport_guides::Cache::default(),
             display_state_cache: Default::default(),
             sensor_cache: Default::default(),
+            tolerance_stack_cache: Default::default(),
             hover_viewport_seen: false,
             geometry_selection: vec![],
             edge_selection_path: None,
@@ -405,6 +416,21 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !properties_ui::current_source_is_valid(self) {
+            self.status = "Correct the current property fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !standard_parts_ui::current_source_is_valid(self) {
+            self.status = "Correct the current standard hardware fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !tolerance_stacks_ui::current_source_is_valid(self) {
+            self.status = "Correct the current tolerance stack fields and wait for its report before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !sensors_ui::current_source_is_valid(self) {
             self.status = "Correct the current design monitor fields before applying".into();
             self.confirm_requested = false;
@@ -552,7 +578,10 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        properties_ui::cancel(self);
         sensors_ui::cancel(self);
+        standard_parts_ui::cancel(self);
+        tolerance_stacks_ui::cancel(self);
         display_states_ui::cancel(self);
         materials_ui::cancel(self);
         components_ui::cancel(self);
@@ -680,7 +709,10 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        properties_ui::cancel(self);
         sensors_ui::cancel(self);
+        standard_parts_ui::cancel(self);
+        tolerance_stacks_ui::cancel(self);
         display_states_ui::cancel(self);
         materials_ui::cancel(self);
         components_ui::cancel(self);
@@ -754,6 +786,21 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn confirm_tool(&mut self) {
+        if !properties_ui::current_source_is_valid(self) {
+            self.status = "Correct the current property fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !standard_parts_ui::current_source_is_valid(self) {
+            self.status = "Correct the current standard hardware fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !tolerance_stacks_ui::current_source_is_valid(self) {
+            self.status = "Correct the current tolerance stack fields and wait for its report before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !sensors_ui::current_source_is_valid(self) {
             self.status = "Correct the current design monitor fields before applying".into();
             self.confirm_requested = false;

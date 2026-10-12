@@ -1,0 +1,33 @@
+# HDR environment lighting
+
+TCAD can use a local linear HDR panorama for reflected and diffuse environment light. Open Lighting, choose **Import HDR environment…**, then set Environment rotation, exposure and Environment strength. **Use built-in studio** restores the locally generated default. Key/fill lights and shadow controls remain independently editable. Imported environments affect visual finishes; engineering material, geometric dimensions, mass, drawing line geometry and manufacturing requirements remain unchanged.
+
+The imported panorama illuminates and reflects in the model. The workspace background remains controlled by the presentation theme. This is interactive rasterized image-based lighting, with screen-space occlusion and the existing directional shadow maps. It does not add ray tracing, environment-driven cast shadows, transparent-object refraction, measured photometric calibration or a rendering/export workbench.
+
+## Supported source profile
+
+- Radiance `.hdr` or OpenEXR `.exr`, identified by bytes as well as extension.
+- A **2:1 equirectangular** full RGB panorama. Longitude wraps; pole sampling clamps. The initial orientation places the panorama midpoint along world +X; Environment rotation turns it about world Y. Source alpha is ignored.
+- Nonempty regular files no larger than **128 MiB**. Dimensions are at most **8192×4096**, with an additional **128 MiB linear RGB pixel** limit. A **4096×2048** RGB panorama fits; 8192×4096 exceeds the pixel limit. The image decoder receives a **256 MiB** output-allocation budget. Equal-window and channel-profile preflight separately bounds codec buffers; optional alpha is omitted from the decoded output. Encoded bytes and codec scratch buffers are additional memory, so this is not a process-wide memory cap. One environment is decoded/filtered at a time.
+- RGB is interpreted as linear sRGB/Rec.709 radiance. Every channel must be finite, nonnegative and at most `1e12`. Convert negative-value or other-color-space source images before import. This is display lighting, not a radiometric measurement.
+- EXR supports version 2, a single non-deep scanline part, flat `R`, `G`, `B` and optional `A` HALF/FLOAT channels without subsampling, and matching full data/display windows. Header size is at most 1 MiB and 128 attributes. Standard compression modes through B44A are accepted by the pinned decoder. Tiled, multipart, deep, UINT-only, cropped-window and chroma-subsampled profiles are rejected. If EXR chromaticities are present, they must describe approximately linear sRGB/Rec.709; absent chromaticities use that working-space assumption. The profile preflight follows the [OpenEXR file layout](https://openexr.com/en/latest/OpenEXRFileLayout.html).
+
+Import checks the bounded header and dimensions before pinning the exact read buffer into a Resource. Complete decode, channel-value validation and reflection filtering run in a background worker. **Apply waits for the current resource to complete** together with the normal current modeling evaluation and source validation. **Cancel** restores the shared editor checkpoint. Unreferenced immutable import bytes can remain after Cancel, as with ordinary texture imports.
+
+Pending or failed replacement maps keep the previous fully validated environment, or the built-in studio, as an explicitly labeled preview. This fallback never counts as successful validation of the replacement. Errors identify the intended resource and block Apply. Rapid changes coalesce to the current requested resource; replies for obsolete root/path/checksum identities are discarded. Navigation remains available during filtering.
+
+## Filtering and bounded caches
+
+The disposable Bevy adapter bilinearly samples linear radiance, computes a cosine-filtered 32×32 diffuse cubemap, and builds a GGX-prefiltered 128×128 specular cubemap with eight roughness mip levels. Filtering uses 256 samples. These settings provide a bounded interactive reflection cache; sharp lights and very fine source details are limited by the output resolution and finite sampling. Cubemaps use filterable RGBA16Float GPU storage.
+
+If the largest source radiance exceeds 16,000, the filter scales radiance into that GPU range and multiplies the environment intensity by the inverse scale. The adjustment preserves the intended relative illumination while avoiding half-float overflow; it is published as `gpu_radiance_normalization` and `intensity_compensation`. Source bytes and values are not rewritten. Final display tone mapping and exposure still affect visible brightness.
+
+At most two validated custom environment pairs remain cached for quick Cancel/undo and pending previews. Their bytes count against the shared **512 MiB** renderer image-data limit. The single coalescing worker never queues an unbounded list of panoramas. Source decoding is independently bounded by the limits above. Changed/missing files and cache exhaustion produce explicit diagnostics. The last decoded environment is a renderer cache, not document authority.
+
+## Portable and replaceable source
+
+The application-owned `tcad.appearance` version 4 adds optional `Lighting.environment: ResourceId`. None/omitted preserves the original studio and its legacy serialization. The resource records a portable local path, file kind and exact SHA-256; originals are copied to `imports/<checksum>.<extension>`. Save, Save As and recoverable checkpoints use the existing pinned-resource portability contract. Component links retain verified resource closure and namespace lighting environment references when importing source definitions; linking a component does not replace the destination scene lighting.
+
+Semantic `viewport-lighting::/environment` publishes the Studio/Resource choices through the existing `appearance-lighting` setter. Import and clear are `appearance.environment.import` and `appearance.environment.clear`. `viewport-lighting::environment-render-info` exposes validation state, source dimensions, filter fidelity, normalization, compensation and preview-fallback status independently of default panel layout. UI controls use the shared commands, draft and undo history; user CSS-like styles may place them anywhere. Imported lighting does not carry Bevy image handles or shader objects in saved source.
+
+The pinned `image` HDR/EXR codecs and their transitives retain their dependency licenses in `THIRD_PARTY_NOTICES.md` and `third-party-licenses`. No network or sample HDR asset is required or bundled. Validation performed for implementation is compilation, formatting and linting; no tests, probes or interactive acceptance run was added or performed.

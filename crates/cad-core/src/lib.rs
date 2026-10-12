@@ -16,7 +16,9 @@ pub mod document;
 pub mod drawing;
 pub mod drawing_dimension_groups;
 pub mod drawing_display_states;
+pub mod drawing_gdt;
 pub mod drawing_interaction;
+pub mod drawing_revision;
 pub mod drawing_strokes;
 pub mod drawing_tables;
 pub mod edge_features;
@@ -73,12 +75,15 @@ pub type Result<T> = std::result::Result<T, CadError>;
 
 pub mod commands;
 pub mod library;
+pub mod model_properties;
 pub mod release;
 pub mod selection_actions;
 pub mod selection_sets;
 pub mod sensors;
 pub mod settings;
 pub mod sketch_actions;
+pub mod standard_parts;
+pub mod tolerance_stacks;
 
 pub mod modeling_tools;
 

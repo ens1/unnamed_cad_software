@@ -396,6 +396,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::materials_ui::semantics(w));
     elements.extend(crate::display_states_ui::elements(w));
     elements.extend(crate::sensors_ui::semantics(w));
+    elements.extend(crate::standard_parts_ui::semantics(w));
+    elements.extend(crate::tolerance_stacks_ui::semantics(w));
+    elements.extend(crate::properties_ui::semantics(w));
     elements.extend(crate::finish_library_ui::semantics(w));
     elements.extend(crate::settings_ui::semantics(w));
     elements.extend(crate::operation_preview::semantics(w));
@@ -682,6 +685,23 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    for setter in ["properties-ui", "model-property"] {
+        adapters.register(
+            setter,
+            crate::properties_ui::set_value,
+            crate::properties_ui::value,
+        );
+    }
+    adapters.register(
+        "tolerance-stack-editor",
+        crate::tolerance_stacks_ui::set_value,
+        crate::tolerance_stacks_ui::current_value,
+    );
+    adapters.register(
+        "standard-parts",
+        crate::standard_parts_ui::set_value,
+        crate::standard_parts_ui::value,
+    );
     adapters.register(
         "sensor-editor",
         crate::sensors_ui::set_value,

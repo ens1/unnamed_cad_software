@@ -122,6 +122,7 @@ TCAD's original code is WTFPL. Dependencies retain their own licenses. This cata
 | bevy_world_serialization | 0.20.0 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/bevy_world_serialization-0.20.0/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/bevy_world_serialization-0.20.0/LICENSE-MIT) |
 | bit-set | 0.10.0 | Apache-2.0 OR MIT | [LICENSE-APACHE](third-party-licenses/bit-set-0.10.0/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/bit-set-0.10.0/LICENSE-MIT) |
 | bit-vec | 0.9.1 | Apache-2.0 OR MIT | [LICENSE-APACHE](third-party-licenses/bit-vec-0.9.1/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/bit-vec-0.9.1/LICENSE-MIT) |
+| bit_field | 0.10.3 | Apache-2.0/MIT | [LICENSE-APACHE](third-party-licenses/bit_field-0.10.3/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/bit_field-0.10.3/LICENSE-MIT) |
 | bitflags | 1.3.2 | MIT/Apache-2.0 | [LICENSE-APACHE](third-party-licenses/bitflags-1.3.2/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/bitflags-1.3.2/LICENSE-MIT) |
 | bitflags | 2.13.2 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/bitflags-2.13.2/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/bitflags-2.13.2/LICENSE-MIT) |
 | bitvec | 1.1.1 | MIT | [LICENSE.txt](third-party-licenses/bitvec-1.1.1/LICENSE.txt) |
@@ -214,6 +215,7 @@ TCAD's original code is WTFPL. Dependencies retain their own licenses. This cata
 | euclid | 0.22.14 | MIT OR Apache-2.0 | [COPYRIGHT](third-party-licenses/euclid-0.22.14/COPYRIGHT), [LICENSE-APACHE](third-party-licenses/euclid-0.22.14/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/euclid-0.22.14/LICENSE-MIT) |
 | event-listener | 5.4.2 | Apache-2.0 OR MIT | [LICENSE-APACHE](third-party-licenses/event-listener-5.4.2/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/event-listener-5.4.2/LICENSE-MIT) |
 | event-listener-strategy | 0.5.4 | Apache-2.0 OR MIT | [LICENSE-APACHE](third-party-licenses/event-listener-strategy-0.5.4/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/event-listener-strategy-0.5.4/LICENSE-MIT) |
+| exr | 1.74.2 | BSD-3-Clause | [LICENSE.md](third-party-licenses/exr-1.74.2/LICENSE.md) |
 | fastrand | 2.5.0 | Apache-2.0 OR MIT | [LICENSE-APACHE](third-party-licenses/fastrand-2.5.0/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/fastrand-2.5.0/LICENSE-MIT) |
 | fax | 0.2.7 | MIT | [LICENSE](third-party-licenses/fax-0.2.7/LICENSE) |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/fdeflate-0.3.7/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/fdeflate-0.3.7/LICENSE-MIT) |
@@ -324,6 +326,7 @@ TCAD's original code is WTFPL. Dependencies retain their own licenses. This cata
 | kurbo | 0.13.1 | Apache-2.0 OR MIT | [LICENSE-APACHE](third-party-licenses/kurbo-0.13.1/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/kurbo-0.13.1/LICENSE-MIT) |
 | lalrpop-util | 0.23.1 | Apache-2.0 OR MIT | [LICENSE-APACHE](third-party-licenses/lalrpop-util-0.23.1/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/lalrpop-util-0.23.1/LICENSE-MIT) |
 | lazy_static | 1.5.1 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/lazy_static-1.5.1/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/lazy_static-1.5.1/LICENSE-MIT) |
+| lebe | 0.5.3 | BSD-3-Clause | [LICENSE-BSD-3-Clause](third-party-licenses/lebe-0.5.3/LICENSE-BSD-3-Clause) |
 | lexical | 7.0.5 | MIT/Apache-2.0 | [LICENSE-APACHE](third-party-licenses/lexical-7.0.5/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/lexical-7.0.5/LICENSE-MIT), [LICENSE.md](third-party-licenses/lexical-7.0.5/LICENSE.md) |
 | lexical-core | 1.0.6 | MIT/Apache-2.0 | [LICENSE-APACHE](third-party-licenses/lexical-core-1.0.6/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/lexical-core-1.0.6/LICENSE-MIT), [LICENSE.md](third-party-licenses/lexical-core-1.0.6/LICENSE.md) |
 | lexical-parse-float | 1.0.6 | MIT/Apache-2.0 | [LICENSE-APACHE](third-party-licenses/lexical-parse-float-1.0.6/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/lexical-parse-float-1.0.6/LICENSE-MIT), [LICENSE.md](third-party-licenses/lexical-parse-float-1.0.6/LICENSE.md) |
@@ -460,6 +463,8 @@ TCAD's original code is WTFPL. Dependencies retain their own licenses. This cata
 | proc-macro-error2 | 2.0.1 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/proc-macro-error2-2.0.1/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/proc-macro-error2-2.0.1/LICENSE-MIT) |
 | proc-macro2 | 1.0.107 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/proc-macro2-1.0.107/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/proc-macro2-1.0.107/LICENSE-MIT) |
 | profiling | 1.0.18 | MIT OR Apache-2.0 | [PACKAGE.txt](third-party-licenses/profiling-1.0.18/PACKAGE.txt) |
+| pulp | 0.22.3 | MIT | [LICENSE](third-party-licenses/pulp-0.22.3/LICENSE) |
+| pulp-wasm-simd-flag | 0.1.1 | MIT | [PACKAGE.txt](third-party-licenses/pulp-wasm-simd-flag-0.1.1/PACKAGE.txt) |
 | pxfm | 0.1.30 | BSD-3-Clause OR Apache-2.0 | [LICENSE-APACHE.md](third-party-licenses/pxfm-0.1.30/LICENSE-APACHE.md), [LICENSE.md](third-party-licenses/pxfm-0.1.30/LICENSE.md) |
 | quick-error | 2.0.1 | MIT/Apache-2.0 | [LICENSE-APACHE](third-party-licenses/quick-error-2.0.1/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/quick-error-2.0.1/LICENSE-MIT) |
 | quick-xml | 0.41.0 | MIT | [LICENSE-MIT.md](third-party-licenses/quick-xml-0.41.0/LICENSE-MIT.md) |
@@ -472,6 +477,7 @@ TCAD's original code is WTFPL. Dependencies retain their own licenses. This cata
 | rand_core | 0.10.1 | MIT OR Apache-2.0 | [COPYRIGHT](third-party-licenses/rand_core-0.10.1/COPYRIGHT), [LICENSE-APACHE](third-party-licenses/rand_core-0.10.1/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/rand_core-0.10.1/LICENSE-MIT) |
 | rand_distr | 0.6.0 | MIT OR Apache-2.0 | [COPYRIGHT](third-party-licenses/rand_distr-0.6.0/COPYRIGHT), [LICENSE-APACHE](third-party-licenses/rand_distr-0.6.0/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/rand_distr-0.6.0/LICENSE-MIT) |
 | range-alloc | 0.1.5 | MIT OR Apache-2.0 | [LICENSE.APACHE](third-party-licenses/range-alloc-0.1.5/LICENSE.APACHE), [LICENSE.MIT](third-party-licenses/range-alloc-0.1.5/LICENSE.MIT) |
+| raw-cpuid | 11.6.0 | MIT | [LICENSE.md](third-party-licenses/raw-cpuid-11.6.0/LICENSE.md) |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib | [LICENSE-APACHE.md](third-party-licenses/raw-window-handle-0.6.2/LICENSE-APACHE.md), [LICENSE-MIT.md](third-party-licenses/raw-window-handle-0.6.2/LICENSE-MIT.md), [LICENSE-ZLIB.md](third-party-licenses/raw-window-handle-0.6.2/LICENSE-ZLIB.md) |
 | raw-window-metal | 1.1.0 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/raw-window-metal-1.1.0/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/raw-window-metal-1.1.0/LICENSE-MIT) |
 | rawpointer | 0.2.1 | MIT/Apache-2.0 | [LICENSE-APACHE](third-party-licenses/rawpointer-0.2.1/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/rawpointer-0.2.1/LICENSE-MIT) |
@@ -479,6 +485,7 @@ TCAD's original code is WTFPL. Dependencies retain their own licenses. This cata
 | rayon-core | 1.13.0 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/rayon-core-1.13.0/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/rayon-core-1.13.0/LICENSE-MIT) |
 | rclite | 0.4.1 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/rclite-0.4.1/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/rclite-0.4.1/LICENSE-MIT) |
 | read-fonts | 0.41.0 | MIT OR Apache-2.0 | [LICENSE-APACHE](third-party-licenses/read-fonts-0.41.0/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/read-fonts-0.41.0/LICENSE-MIT) |
+| reborrow | 0.5.5 | MIT | [LICENSE](third-party-licenses/reborrow-0.5.5/LICENSE) |
 | rectangle-pack | 0.4.2 | MIT/Apache-2.0 | [LICENSE-APACHE](third-party-licenses/rectangle-pack-0.4.2/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/rectangle-pack-0.4.2/LICENSE-MIT) |
 | redox_syscall | 0.4.1 | MIT | [LICENSE](third-party-licenses/redox_syscall-0.4.1/LICENSE) |
 | redox_syscall | 0.5.18 | MIT | [LICENSE](third-party-licenses/redox_syscall-0.5.18/LICENSE) |
@@ -702,4 +709,5 @@ TCAD's original code is WTFPL. Dependencies retain their own licenses. This cata
 | zlib-rs | 0.6.8 | Zlib | [LICENSE](third-party-licenses/zlib-rs-0.6.8/LICENSE) |
 | zmij | 1.0.23 | MIT | [LICENSE-MIT](third-party-licenses/zmij-1.0.23/LICENSE-MIT) |
 | zune-core | 0.5.3 | MIT OR Apache-2.0 OR Zlib | [LICENSE-APACHE](third-party-licenses/zune-core-0.5.3/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/zune-core-0.5.3/LICENSE-MIT), [LICENSE-ZLIB](third-party-licenses/zune-core-0.5.3/LICENSE-ZLIB) |
+| zune-inflate | 0.2.54 | MIT OR Apache-2.0 OR Zlib | [PACKAGE.txt](third-party-licenses/zune-inflate-0.2.54/PACKAGE.txt) |
 | zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib | [LICENSE-APACHE](third-party-licenses/zune-jpeg-0.5.15/LICENSE-APACHE), [LICENSE-MIT](third-party-licenses/zune-jpeg-0.5.15/LICENSE-MIT), [LICENSE-ZLIB](third-party-licenses/zune-jpeg-0.5.15/LICENSE-ZLIB) |

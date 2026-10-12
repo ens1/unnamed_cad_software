@@ -759,6 +759,9 @@ pub struct Feature {
 pub struct Part {
     pub id: Id,
     pub name: String,
+    /// Original sourced hardware envelope, independent of subsequent custom edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standard_part: Option<crate::standard_parts::Origin>,
     pub parameters: BTreeMap<Id, Parameter>,
     pub features: Vec<Feature>,
     pub outputs: Vec<Id>,
@@ -800,6 +803,7 @@ impl Part {
         Self {
             id: id(),
             name: name.into(),
+            standard_part: None,
             parameters: BTreeMap::new(),
             features: vec![],
             outputs: vec![],
@@ -885,6 +889,9 @@ pub struct ParameterRef {
 pub struct Assembly {
     pub id: Id,
     pub name: String,
+    /// Base manufacturing metadata. Empty legacy assemblies keep their hashes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub properties: BTreeMap<String, String>,
     pub instances: BTreeMap<Id, Instance>,
     #[serde(default)]
     pub mates: Vec<Mate>,
@@ -1204,6 +1211,8 @@ pub struct Document {
     pub active_configurations: BTreeMap<Id, Id>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sensors: BTreeMap<Id, crate::sensors::Definition>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tolerance_stacks: BTreeMap<Id, crate::tolerance_stacks::Definition>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlacedPart {
@@ -1229,8 +1238,17 @@ impl Document {
         )
     }
     pub fn validate(&self) -> Result<()> {
+        for origin in self
+            .parts
+            .values()
+            .filter_map(|part| part.standard_part.as_ref())
+        {
+            crate::standard_parts::validate_origin(origin)?;
+        }
+        crate::model_properties::validate(self)?;
         self.settings.validate(self)?;
         crate::sensors::validate(self)?;
+        crate::tolerance_stacks::validate(self)?;
         crate::appearance::validate(self)?;
         crate::weld_beads::validate_parts(self)?;
         crate::exploded_views::validate(self)?;
@@ -1275,6 +1293,13 @@ impl Document {
         crate::assembly_groups::validate(self)?;
         let mut ids = BTreeSet::new();
         ids.extend(self.sensors.keys());
+        for id in self.tolerance_stacks.keys() {
+            if !ids.insert(id) {
+                return Err(CadError::Invalid(
+                    "Tolerance stack identities must be unique".into(),
+                ));
+            }
+        }
         for (key, part) in &self.parts {
             if key != &part.id || !ids.insert(key) {
                 return Err(CadError::Invalid("Invalid part identity".into()));
@@ -1621,6 +1646,7 @@ impl Document {
         let a = Assembly {
             id: id(),
             name: name.into(),
+            properties: BTreeMap::new(),
             instances: BTreeMap::new(),
             mates: vec![],
             promoted_parameters: BTreeMap::new(),
@@ -1678,6 +1704,7 @@ impl Document {
             libraries: BTreeMap::new(),
             active_configurations: BTreeMap::new(),
             sensors: BTreeMap::new(),
+            tolerance_stacks: BTreeMap::new(),
         }
     }
     /// Create a part with this model's finish preference, without inserting an occurrence.

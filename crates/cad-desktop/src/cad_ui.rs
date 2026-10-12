@@ -266,6 +266,10 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "configurations",
             "equations",
             "materials",
+            "properties",
+            "inspection.sensors",
+            "inspection.tolerance-stacks",
+            "standard-parts",
             "appearances",
             "manufacturing",
             "drawings",
@@ -905,6 +909,15 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::properties_ui::current_source_is_valid(w) {
+        return Some("Correct the current property fields before applying");
+    }
+    if !crate::standard_parts_ui::current_source_is_valid(w) {
+        return Some("Correct the current standard hardware fields before applying");
+    }
+    if !crate::tolerance_stacks_ui::current_source_is_valid(w) {
+        return Some("Correct the current tolerance stack and wait for its report before applying");
+    }
     if !crate::sensors_ui::current_source_is_valid(w) {
         return Some("Correct the current design monitor fields before applying");
     }
@@ -1097,6 +1110,10 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Configurations…", "configurations"),
                 ("Equations…", "equations"),
                 ("Engineering Materials…", "materials"),
+                ("Model Properties…", "properties"),
+                ("Design Monitors…", "inspection.sensors"),
+                ("Tolerance Stacks…", "inspection.tolerance-stacks"),
+                ("Standard Hardware…", "standard-parts"),
                 ("Appearance · Colors and Textures…", "appearances"),
                 ("Studio Lighting…", "lighting"),
                 ("Manufacturing…", "manufacturing"),
@@ -1386,6 +1403,7 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                     for (label, cmd) in [
                         ("New Part in Assembly", "part.new"),
                         ("Insert Existing", "assembly.insert-existing"),
+                        ("Standard Hardware", "standard-parts"),
                         ("Move", "assembly.move"),
                         ("Mate", "assembly.mate-new"),
                         ("Components", "assembly.edit"),
@@ -2106,6 +2124,10 @@ pub fn confirmation_label(w: &Workspace) -> String {
         "OK Component".into()
     } else if w.fields.contains_key("mate-editor") {
         "OK Mate".into()
+    } else if w.fields.contains_key("tolerance-stack-tool") {
+        "Apply Tolerance Stacks".into()
+    } else if w.fields.contains_key("standard-parts-tool") {
+        "Insert Standard Hardware".into()
     } else if w.fields.contains_key("sensor-tool") {
         "Apply Design Monitors".into()
     } else if w.fields.contains_key("display-state-editor") {
@@ -2114,7 +2136,9 @@ pub fn confirmation_label(w: &Workspace) -> String {
         "Apply Assembly".into()
     } else if crate::drawing_ui::is_workspace(w) {
         "Apply Drawing".into()
-    } else if w.fields.contains_key("material-tool") && w.fields.contains_key("appearance-tool") {
+    } else if w.fields.contains_key("properties-tool")
+        || w.fields.contains_key("material-tool") && w.fields.contains_key("appearance-tool")
+    {
         "Apply Properties".into()
     } else if w.fields.contains_key("material-tool") {
         "Apply Materials".into()

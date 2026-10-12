@@ -541,7 +541,7 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
         return true;
     }
     if !w.fields.contains_key(TOOL) {
-        begin(w, false);
+        begin(w, command.starts_with("appearance.environment."));
         if !w.fields.contains_key(TOOL) {
             return true;
         }
@@ -549,6 +549,8 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
     let finish = choose_id(w, arguments);
     let result = (|| -> Result<()> {
         match command {
+            "appearance.environment.import" => edit_environment(w, true)?,
+            "appearance.environment.clear" => edit_environment(w, false)?,
             "appearance.open-materials" => {
                 if !current_source_is_valid(w) {
                     return Err(CadError::Invalid("Correct the current appearance fields and finish loading texture resources before switching to materials".into()));
@@ -1023,10 +1025,17 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
                 finish_source(finish).pointer(field).cloned()
             }
         }
-        "appearance-lighting" => serde_json::to_value(&w.session.visible().lighting)
-            .ok()?
-            .pointer(element.data.get("field")?.as_str()?)
-            .cloned(),
+        "appearance-lighting" => {
+            let field = element.data.get("field")?.as_str()?;
+            if field == "/environment" {
+                Some(json!(w.session.visible().lighting.environment))
+            } else {
+                serde_json::to_value(&w.session.visible().lighting)
+                    .ok()?
+                    .pointer(field)
+                    .cloned()
+            }
+        }
         "appearance-part" => Some(json!(
             w.session
                 .visible()
@@ -1286,6 +1295,7 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
         }
         "appearance-lighting" => {
             let mut source = serde_json::to_value(&w.session.visible().lighting)?;
+            source["environment"] = json!(w.session.visible().lighting.environment);
             let pointer = element
                 .data
                 .get("field")
@@ -2097,11 +2107,125 @@ fn resource_choices(w: &Workspace) -> Value {
     );
     json!(choices)
 }
+fn edit_environment(w: &mut Workspace, import: bool) -> Result<()> {
+    let mut document = w.session.visible().clone();
+    document.lighting.environment = if import {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Import a linear HDR environment panorama")
+            .add_filter("HDR environment", &["hdr", "exr"])
+            .pick_file()
+        else {
+            return Ok(());
+        };
+        let bytes = crate::environment_assets::validate_file(&path)?;
+        Some(cad_core::persistence::import_resource_bytes(
+            &mut document,
+            &w.root(),
+            &path,
+            &bytes,
+        )?)
+    } else {
+        None
+    };
+    document.validate()?;
+    let expected = document.fingerprint();
+    w.dispatch(Command::ReplaceDocument { document });
+    if w.session.visible().fingerprint() != expected {
+        return Err(CadError::Invalid(w.status.clone()));
+    }
+    w.fields.insert("appearance-tab".into(), "lighting".into());
+    w.status = if import {
+        "Validating the environment and filtering reflections; Apply waits for the current resource"
+    } else {
+        "Built-in studio selected"
+    }
+    .into();
+    Ok(())
+}
+fn environment_semantics(w: &Workspace) -> Vec<SemanticElement> {
+    let mut out = Vec::new();
+    for (command, label, enabled) in [
+        (
+            "appearance.environment.import",
+            "Import HDR environment…",
+            available(w),
+        ),
+        (
+            "appearance.environment.clear",
+            "Use built-in studio",
+            available(w) && w.session.visible().lighting.environment.is_some(),
+        ),
+    ] {
+        out.push(SemanticElement{id:format!("command:{command}"),role:"appearance-action".into(),label:label.into(),value:None,state:if enabled{"ready"}else{"disabled"}.into(),commands:vec![command.into()],relationships:vec!["viewport-lighting".into()],data:json!({"file_formats":["hdr","exr"],"projection":"equirectangular-2-to-1","max_file_bytes":crate::environment_assets::MAX_FILE_BYTES,"accessibility_label":label})});
+    }
+    let info = w
+        .fields
+        .get("appearance-environment-render-info")
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .unwrap_or_else(|| json!({"state":"pending"}));
+    out.push(SemanticElement {
+        id: "viewport-lighting::environment-render-info".into(),
+        role: "appearance-environment-info".into(),
+        label: "Environment resource status".into(),
+        value: info.get("state").and_then(Value::as_str).map(str::to_owned),
+        state: info
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("pending")
+            .into(),
+        commands: vec![],
+        relationships: w
+            .session
+            .visible()
+            .lighting
+            .environment
+            .clone()
+            .into_iter()
+            .collect(),
+        data: info,
+    });
+    out
+}
 fn lighting_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     let fields = Fields::new(w, "lighting", true);
-    ui.small("Studio reflections and direct lights update while you design.");
+    ui.small("Environment reflections and direct lights update while you design.");
+    field(
+        ui,
+        w,
+        &fields,
+        "/environment",
+        "Reflection environment",
+        json!([]),
+    );
+    for element in environment_semantics(w)
+        .into_iter()
+        .filter(|element| !element.commands.is_empty())
+    {
+        if controls::button(
+            ui,
+            &element.id,
+            &element.role,
+            &["semantic-control"],
+            &element.label,
+            element.state != "disabled",
+            false,
+        )
+        .clicked()
+        {
+            action(w, &element.commands[0], None);
+        }
+    }
+    description(
+        ui,
+        "viewport-lighting::environment-profile",
+        "Import a 2:1 linear HDR/EXR panorama. Reflection lighting updates after bounded decoding and filtering. The workspace background remains themeable.",
+    );
     for (pointer, label, unit) in [
-        ("/environment_rotation_deg", "Studio rotation", Some("deg")),
+        (
+            "/environment_rotation_deg",
+            "Environment rotation",
+            Some("deg"),
+        ),
         ("/exposure", "Exposure", Some("stops")),
         ("/intensity", "Environment strength", None),
         ("/key_intensity", "Key light", None),
@@ -2195,6 +2319,7 @@ fn diagnostics(ui: &mut egui::Ui, w: &mut Workspace) {
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = vec![library_element(w), source_element(w), assignment_element(w)];
+    elements.extend(environment_semantics(w));
     elements.extend(target_elements(w));
     if let Some(id) = selected(w) {
         elements.extend(metadata_elements(w, &id));

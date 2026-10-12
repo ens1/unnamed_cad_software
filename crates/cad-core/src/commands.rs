@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum Command {
+    InsertStandardPart {
+        insertion: Box<crate::standard_parts::Insertion>,
+    },
+    EditModelProperties {
+        edit: crate::model_properties::Edit,
+    },
     ReplaceDocument {
         document: Document,
     },
@@ -154,6 +160,12 @@ pub enum Command {
     DeleteSensor {
         sensor: Id,
     },
+    PutToleranceStack {
+        stack: Box<crate::tolerance_stacks::Definition>,
+    },
+    DeleteToleranceStack {
+        stack: Id,
+    },
     ImportMaterialLibrary {
         catalog: Box<crate::material_library::Catalog>,
         collision: crate::material_library::CollisionPolicy,
@@ -220,6 +232,12 @@ impl Command {
     pub fn execute(self, document: &mut Document) -> Result<()> {
         let missing = || CadError::Invalid("The command target no longer exists".into());
         match self {
+            Self::InsertStandardPart { insertion } => {
+                crate::standard_parts::insert(document, &insertion)?;
+            }
+            Self::EditModelProperties { edit } => {
+                crate::model_properties::apply(document, edit)?;
+            }
             Self::RepairReferences { repairs } => {
                 crate::reference_repair::repair(document, &repairs)?;
             }
@@ -558,6 +576,13 @@ impl Command {
                 crate::materials::put_edited(document, material)?;
             }
             Self::PutSensor { sensor } => crate::sensors::put(document, *sensor)?,
+            Self::PutToleranceStack { stack } => crate::tolerance_stacks::put(document, *stack)?,
+            Self::DeleteToleranceStack { stack } => {
+                document
+                    .tolerance_stacks
+                    .remove(&stack)
+                    .ok_or_else(missing)?;
+            }
             Self::DeleteSensor { sensor } => {
                 document.sensors.remove(&sensor).ok_or_else(missing)?;
             }
@@ -1387,6 +1412,9 @@ fn retarget_drawing_occurrence(
                 }
                 AnnotationKind::Leader { target, .. }
                 | AnnotationKind::Datum { target, .. }
+                | AnnotationKind::DatumTarget { target, .. }
+                | AnnotationKind::GeometricToleranceFrame { target, .. }
+                | AnnotationKind::RevisionCloud { target, .. }
                 | AnnotationKind::SurfaceFinish { target, .. }
                 | AnnotationKind::WeldSymbol { target, .. }
                 | AnnotationKind::GeometricTolerance { target, .. } => {

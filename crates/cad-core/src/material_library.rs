@@ -146,7 +146,14 @@ pub fn export_json(catalog: &Catalog) -> Result<String> {
     Ok(json)
 }
 pub fn bundled_catalog() -> Result<Catalog> {
-    parse_json(BUNDLED_JSON)
+    // Embedded content cannot change within a running build. Validate once;
+    // callers still receive an owned snapshot that they may safely edit.
+    static CATALOG: std::sync::OnceLock<std::result::Result<Catalog, String>> =
+        std::sync::OnceLock::new();
+    CATALOG
+        .get_or_init(|| parse_json(BUNDLED_JSON).map_err(|error| error.to_string()))
+        .clone()
+        .map_err(CadError::Invalid)
 }
 pub fn instantiate(catalog_id: &str) -> Result<Material> {
     bundled_catalog()?.instantiate(catalog_id)

@@ -103,6 +103,19 @@ pub(crate) fn validate_texture_file(path: &Path) -> cad_core::Result<Vec<u8>> {
         .map_err(|message| CadError::Invalid(format!("Texture: {message}")))
 }
 
+/// Personal new-document defaults validate the exact pinned package bytes
+/// before saving them. Ordinary viewport imports still decode in their worker.
+pub(crate) fn validate_default_texture(bytes: &[u8], kind: &str) -> cad_core::Result<()> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_ENCODED_BYTES {
+        return Err(CadError::Invalid(
+            "Default finish texture exceeds the encoded image bound".into(),
+        ));
+    }
+    decode(bytes, kind)
+        .map(|_| ())
+        .map_err(|message| CadError::Invalid(format!("Default finish texture: {message}")))
+}
+
 fn linear(value: u8) -> f64 {
     let value = f64::from(value) / 255.;
     if value <= 0.04045 {

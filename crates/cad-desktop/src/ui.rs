@@ -946,7 +946,10 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         return;
     }
     if crate::reference_repair_ui::action(w, command, Some(&element.data))
+        || crate::properties_ui::action(w, command, Some(&element.data))
         || crate::sensors_ui::action(w, command, Some(&element.data))
+        || crate::standard_parts_ui::action(w, command, Some(&element.data))
+        || crate::tolerance_stacks_ui::action(w, command, Some(&element.data))
         || crate::materials_ui::action(w, command, Some(&element.data))
         || crate::finish_library_ui::action(w, command, Some(&element.data))
         || crate::drawing_ui::semantic_action(w, element, command)
@@ -1123,6 +1126,10 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                         | "display-state-source"
                         | "display-state-selection"
                         | "sensor-editor"
+                        | "standard-parts"
+                        | "tolerance-stack-editor"
+                        | "properties-ui"
+                        | "model-property"
                         | "material-editor"
                         | "drawing-editor"
                         | "drawing-interaction"
@@ -1393,7 +1400,10 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     .unwrap_or_else(|| value.to_string());
                 let key = format!("presentation-field:{}:{editor_generation}", element.id);
                 let keep_invalid_text = crate::assembly_tools_ui::field_is_invalid(w, element)
+                    || crate::properties_ui::field_is_invalid(w, element)
                     || crate::sensors_ui::field_is_invalid(w, element)
+                    || crate::standard_parts_ui::field_is_invalid(w, element)
+                    || crate::tolerance_stacks_ui::field_is_invalid(w, element)
                     || crate::materials_ui::field_is_invalid(w, element)
                     || crate::components_ui::field_is_invalid(w, element)
                     || crate::assembly_welds_ui::field_is_invalid(w, element)
@@ -1491,7 +1501,10 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         draw(ui)
     };
     if let Some(error) = appearance_error {
+        crate::properties_ui::field_error(w, element, error.clone());
         crate::sensors_ui::field_error(w, element, error.clone());
+        crate::standard_parts_ui::field_error(w, element, error.clone());
+        crate::tolerance_stacks_ui::field_error(w, element, error.clone());
         crate::materials_ui::field_error(w, element, error.clone());
         crate::components_ui::field_error(w, element, error.clone());
         crate::assembly_tools_ui::field_error(w, element, error.clone());
@@ -1506,7 +1519,10 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     if let Some(next) = next {
         match crate::presentation_composition::set_value(w, element, next) {
             Ok(()) => {
+                crate::properties_ui::field_error(w, element, None);
                 crate::sensors_ui::field_error(w, element, None);
+                crate::standard_parts_ui::field_error(w, element, None);
+                crate::tolerance_stacks_ui::field_error(w, element, None);
                 crate::materials_ui::field_error(w, element, None);
                 crate::components_ui::field_error(w, element, None);
                 crate::assembly_tools_ui::field_error(w, element, None);
@@ -1519,7 +1535,10 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::configuration_ui::field_error(w, element, None);
             }
             Err(error) => {
+                crate::properties_ui::field_error(w, element, Some(error.to_string()));
                 crate::sensors_ui::field_error(w, element, Some(error.to_string()));
+                crate::standard_parts_ui::field_error(w, element, Some(error.to_string()));
+                crate::tolerance_stacks_ui::field_error(w, element, Some(error.to_string()));
                 crate::materials_ui::field_error(w, element, Some(error.to_string()));
                 crate::components_ui::field_error(w, element, Some(error.to_string()));
                 crate::assembly_tools_ui::field_error(w, element, Some(error.to_string()));
@@ -1879,7 +1898,10 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         return;
     }
     if crate::workspace_controls::action(w, cmd)
+        || crate::properties_ui::action(w, cmd, None)
         || crate::sensors_ui::action(w, cmd, None)
+        || crate::standard_parts_ui::action(w, cmd, None)
+        || crate::tolerance_stacks_ui::action(w, cmd, None)
         || crate::display_states_ui::handle_command(w, cmd, None)
         || crate::materials_ui::action(w, cmd, None)
         || crate::finish_library_ui::action(w, cmd, None)
@@ -1925,6 +1947,9 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || w.fields.contains_key("material-tool")
         || w.fields.contains_key("display-state-editor")
         || w.fields.contains_key("sensor-tool")
+        || w.fields.contains_key("standard-parts-tool")
+        || w.fields.contains_key("tolerance-stack-tool")
+        || w.fields.contains_key("properties-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -2066,8 +2091,10 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         "equations" => crate::configuration_ui::begin(w, "equations"),
         "parameter.new" => w.open_editor("parameter"),
         "libraries" => w.open_editor("libraries"),
-        "file.new-part" => w.replace(crate::settings::new_document(w, false), None),
-        "file.new" => w.replace(crate::settings::new_document(w, true), None),
+        "file.new-part" | "file.new" => match crate::settings::new_document(w, cmd == "file.new") {
+            Ok(document) => w.replace(document, None),
+            Err(error) => w.status = format!("New document defaults could not be applied: {error}"),
+        },
         "file.example" => {
             w.replace(Document::sample(), None);
             w.status = "Drive unit example — sample geometry".into();
@@ -2375,6 +2402,9 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
         || w.fields.contains_key("material-tool")
         || w.fields.contains_key("display-state-editor")
         || w.fields.contains_key("sensor-tool")
+        || w.fields.contains_key("standard-parts-tool")
+        || w.fields.contains_key("tolerance-stack-tool")
+        || w.fields.contains_key("properties-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -2445,6 +2475,9 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
         || w.fields.contains_key("material-tool")
         || w.fields.contains_key("display-state-editor")
         || w.fields.contains_key("sensor-tool")
+        || w.fields.contains_key("standard-parts-tool")
+        || w.fields.contains_key("tolerance-stack-tool")
+        || w.fields.contains_key("properties-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -3032,6 +3065,9 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "bom" => "Bill of materials",
             "inspection" => "Mass Properties",
             "sensors" => "Design Monitors",
+            "standard-parts" => "Standard Hardware",
+            "tolerance-stacks" => "Tolerance Stacks",
+            "properties" => "Model Properties",
             _ => "Command search",
         });
         if !matches!(
@@ -3042,6 +3078,9 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 | "appearances"
                 | "materials"
                 | "sensors"
+                | "standard-parts"
+                | "tolerance-stacks"
+                | "properties"
                 | "reference-repair"
                 | "feature-order"
                 | "assembly-motion"
@@ -3070,6 +3109,8 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "configurations" => crate::configuration_ui::show(ui, w),
             "inspection" => crate::inspection_ui::controls(ui, w),
             "sensors" => crate::sensors_ui::show(ui, w),
+            "standard-parts" => crate::standard_parts_ui::show(ui, w),
+            "tolerance-stacks" => crate::tolerance_stacks_ui::show(ui, w),
             "feature" => feature_editor(ui, w),
             "sketch" => crate::sketch::controls(ui, w),
             "source" => {
@@ -3093,6 +3134,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "versions" => versions(ui, w),
             "bom" => bom(ui, w),
             "materials" => materials(ui, w),
+            "properties" => crate::properties_ui::show(ui, w),
             "appearances" => crate::appearances_ui::show(ui, w),
             "libraries" => library_editor(ui, w),
             "drawings" => drawings(ui, w),
@@ -3520,6 +3562,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                     weld_beads: BTreeMap::new(),
                     rigid_groups: BTreeMap::new(),
                     parameters: BTreeMap::new(),
+                    properties: BTreeMap::new(),
                 },
             );
             let instance = id();

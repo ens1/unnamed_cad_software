@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod symbols;
 pub use symbols::*;
 
-pub const CONTRACT_VERSION: u32 = 8;
+pub const CONTRACT_VERSION: u32 = 10;
 pub const FORMAT_VERSION: u32 = 2;
 pub const VIEW_KEYS: [&str; 6] = [
     "front",
@@ -345,6 +345,18 @@ pub enum MaterialCondition {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AnnotationKind {
+    RevisionCloud {
+        target: Anchor,
+        cloud: Box<crate::drawing_revision::Cloud>,
+    },
+    DatumTarget {
+        target: Anchor,
+        symbol: Box<crate::drawing_gdt::DatumTarget>,
+    },
+    GeometricToleranceFrame {
+        target: Anchor,
+        frame: Box<crate::drawing_gdt::ToleranceFrame>,
+    },
     DimensionGroup {
         group: Box<crate::drawing_dimension_groups::Group>,
     },
@@ -407,7 +419,10 @@ pub enum AnnotationKind {
 impl AnnotationKind {
     pub fn label(&self) -> &'static str {
         match self {
+            Self::RevisionCloud { .. } => "Revision cloud",
             Self::DimensionGroup { .. } => "Dimension group",
+            Self::DatumTarget { .. } => "Datum target",
+            Self::GeometricToleranceFrame { .. } => "Tolerance frame",
             Self::SurfaceFinish { .. } => "Surface finish",
             Self::WeldSymbol { .. } => "Weld symbol",
             Self::Leader { .. } => "Leader note",
@@ -697,30 +712,7 @@ pub fn linked_text(doc: &Document, sheet: &Drawing, value: &LinkedText) -> Resul
             })
             .ok_or_else(|| invalid("Title block model scope is missing"))?,
         LinkedText::ModelProperty { key } => {
-            if let Some(part) = doc.parts.get(&sheet.definition) {
-                let configured = config
-                    .map(|c| crate::configuration::resolve(doc, &sheet.definition, c))
-                    .transpose()?;
-                configured
-                    .as_ref()
-                    .and_then(|c| c.overrides.properties.get(key))
-                    .or_else(|| part.properties.get(key))
-                    .cloned()
-                    .unwrap_or_default()
-            } else if doc.assemblies.contains_key(&sheet.definition) {
-                if let Some(config) = config {
-                    crate::configuration::resolve(doc, &sheet.definition, config)?
-                        .overrides
-                        .properties
-                        .get(key)
-                        .cloned()
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                }
-            } else {
-                return Err(invalid("Title block model scope is missing"));
-            }
+            crate::model_properties::value(doc, &sheet.definition, config.map(String::as_str), key)?
         }
         LinkedText::ConfigurationName => config
             .and_then(|key| {
@@ -970,6 +962,7 @@ pub fn duplicate_sheet(doc: &mut Document, key: &str, name: String) -> Result<Id
         dimension.id = crate::id();
     }
     let mut tables = BTreeMap::new();
+    let mut revision_rows = BTreeMap::new();
     for table in &mut sheet.tables {
         let next = crate::id();
         tables.insert(table.id.clone(), next.clone());
@@ -979,12 +972,32 @@ pub fn duplicate_sheet(doc: &mut Document, key: &str, name: String) -> Result<Id
         }
         if let crate::drawing_tables::TableKind::Revisions { rows } = &mut table.kind {
             for row in rows {
-                row.id = crate::id();
+                let next = crate::id();
+                revision_rows.insert(row.id.clone(), next.clone());
+                row.id = next;
             }
         }
     }
     for annotation in &mut sheet.entities {
         annotation.id = crate::id();
+        if let AnnotationKind::RevisionCloud { cloud, .. } = &mut annotation.kind {
+            for vertex in &mut cloud.vertices {
+                vertex.id = crate::id();
+            }
+            if let Some(link) = &mut cloud.revision {
+                link.table = tables.get(&link.table).cloned().ok_or_else(|| {
+                    invalid("The duplicated cloud revision table is outside its sheet")
+                })?;
+                link.row = revision_rows.get(&link.row).cloned().ok_or_else(|| {
+                    invalid("The duplicated cloud revision row is outside its sheet")
+                })?;
+            }
+        }
+        if let AnnotationKind::GeometricToleranceFrame { frame, .. } = &mut annotation.kind {
+            for row in &mut frame.rows {
+                row.id = crate::id();
+            }
+        }
         if let AnnotationKind::DimensionGroup { group } = &mut annotation.kind {
             for target in &mut group.targets {
                 target.id = crate::id();
@@ -1972,7 +1985,15 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
             ));
         }
     }
+    let mut datum_target_labels = BTreeSet::new();
     for annotation in &sheet.entities {
+        if let AnnotationKind::DatumTarget { symbol, .. } = &annotation.kind
+            && !datum_target_labels.insert((symbol.identifier.to_uppercase(), symbol.number))
+        {
+            return Err(invalid(
+                "Datum target letter/number labels must be unique on the sheet",
+            ));
+        }
         if annotation.id.is_empty()
             || !ids.insert(annotation.id.clone())
             || annotation.offset_mm.iter().any(|v| !v.is_finite())
@@ -1993,6 +2014,8 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
                 AnnotationKind::Leader { .. }
                     | AnnotationKind::Datum { .. }
                     | AnnotationKind::GeometricTolerance { .. }
+                    | AnnotationKind::DatumTarget { .. }
+                    | AnnotationKind::GeometricToleranceFrame { .. }
                     | AnnotationKind::Balloon { .. }
                     | AnnotationKind::CutListBalloon { .. }
             )
@@ -2002,6 +2025,12 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
             ));
         }
         match &annotation.kind {
+            AnnotationKind::RevisionCloud { cloud, .. } => {
+                cloud.validate()?;
+                cloud.revision_label(sheet)?;
+            }
+            AnnotationKind::DatumTarget { symbol, .. } => symbol.validate()?,
+            AnnotationKind::GeometricToleranceFrame { frame, .. } => frame.validate()?,
             AnnotationKind::DimensionGroup { group } => group.validate()?,
             AnnotationKind::SurfaceFinish { symbol, .. } => symbol.validate()?,
             AnnotationKind::WeldSymbol { symbol, .. } => symbol.validate()?,
@@ -2073,7 +2102,10 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
             | AnnotationKind::CutListBalloon { target, .. }
             | AnnotationKind::SurfaceFinish { target, .. }
             | AnnotationKind::WeldSymbol { target, .. }
-            | AnnotationKind::GeometricTolerance { target, .. } => vec![target],
+            | AnnotationKind::GeometricTolerance { target, .. }
+            | AnnotationKind::DatumTarget { target, .. }
+            | AnnotationKind::GeometricToleranceFrame { target, .. } => vec![target],
+            AnnotationKind::RevisionCloud { target, .. } => vec![target],
             AnnotationKind::CenterLine { first, second, .. } => vec![first, second],
             AnnotationKind::CenterMark { .. } => vec![],
         };
@@ -2953,7 +2985,11 @@ fn dimension(
 fn anchor(doc: &Document, e: &Evaluation, sheet: &Drawing, a: &Anchor) -> Result<[f64; 3]> {
     point(doc, e, sheet, a.point, &a.reference)
 }
-fn characteristic(out: &mut Vec<Primitive>, at: [f64; 2], kind: &GeometricCharacteristic) {
+pub(crate) fn characteristic(
+    out: &mut Vec<Primitive>,
+    at: [f64; 2],
+    kind: &GeometricCharacteristic,
+) {
     let c = [at[0] + 3., at[1] + 3.];
     match kind {
         GeometricCharacteristic::Position => {
@@ -3108,6 +3144,18 @@ fn annotation(
     out: &mut Vec<Primitive>,
 ) -> Result<()> {
     match &entity.kind {
+        AnnotationKind::DatumTarget { target, symbol } => {
+            let target = view.screen(anchor(doc, e, sheet, target)?)?;
+            crate::drawing_gdt::render_target(doc, sheet, entity, target, view.scale, symbol, out)?;
+        }
+        AnnotationKind::RevisionCloud { target, cloud } => {
+            let target = view.screen(anchor(doc, e, sheet, target)?)?;
+            out.extend(cloud.render(sheet, entity, target)?);
+        }
+        AnnotationKind::GeometricToleranceFrame { target, frame } => {
+            let target = view.screen(anchor(doc, e, sheet, target)?)?;
+            crate::drawing_gdt::render_frame(doc, sheet, entity, target, frame, out)?;
+        }
         AnnotationKind::DimensionGroup { group } => {
             let projection = ViewProjection {
                 rect_mm: [view.at[0], view.at[1], view.size[0], view.size[1]],
@@ -3320,15 +3368,17 @@ fn annotation(
             let declared = sheet
                 .entities
                 .iter()
-                .filter_map(|entity| {
-                    if let AnnotationKind::Datum { identifier, .. } = &entity.kind {
-                        Some(identifier.as_str())
-                    } else {
-                        None
-                    }
+                .filter_map(|entity| match &entity.kind {
+                    AnnotationKind::Datum { identifier, .. } => Some(identifier.as_str()),
+                    AnnotationKind::DatumTarget { symbol, .. } => Some(symbol.identifier.as_str()),
+                    _ => None,
                 })
                 .collect::<Vec<_>>();
-            if datums.iter().any(|d| !declared.contains(&d.as_str())) {
+            if datums.iter().any(|d| {
+                !declared
+                    .iter()
+                    .any(|identifier| identifier.eq_ignore_ascii_case(d))
+            }) {
                 return Err(invalid(
                     "Geometric tolerance references an undeclared datum identifier",
                 ));
@@ -4520,6 +4570,22 @@ pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation
         }
         for entity in &sheet.entities {
             out.push(crate::presentation::SemanticElement {id:entity.id.clone(),role:"drawing-annotation".into(),label:entity.kind.label().into(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.annotation-delete".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"annotation_id":entity.id,"annotation":entity,"symbol_contract":"tcad.drawing-symbol","symbol_version":SYMBOL_CONTRACT_VERSION,"actions":[{"command":"drawing.sheet-edit","label":"Edit annotation"},{"command":"drawing.annotation-delete","label":"Delete annotation"}]})});
+            if matches!(
+                entity.kind,
+                AnnotationKind::DatumTarget { .. } | AnnotationKind::GeometricToleranceFrame { .. }
+            ) && let Some(element) = out.last_mut()
+            {
+                element.data["symbol_contract"] = serde_json::json!("tcad.drawing-gdt");
+                element.data["symbol_version"] =
+                    serde_json::json!(crate::drawing_gdt::CONTRACT_VERSION);
+            }
+            if matches!(entity.kind, AnnotationKind::RevisionCloud { .. })
+                && let Some(element) = out.last_mut()
+            {
+                element.data["symbol_contract"] = serde_json::json!("tcad.drawing-revision-cloud");
+                element.data["symbol_version"] =
+                    serde_json::json!(crate::drawing_revision::CONTRACT_VERSION);
+            }
             if matches!(
                 entity.kind,
                 AnnotationKind::SurfaceFinish { .. } | AnnotationKind::WeldSymbol { .. }

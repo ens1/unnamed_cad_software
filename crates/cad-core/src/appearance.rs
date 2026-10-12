@@ -3,7 +3,7 @@ use crate::{CadError, Document, Id, PlacedPart, Result, presentation::SemanticEl
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const CONTRACT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 4;
 pub const DEFAULT_FINISH: &str = "clear-anodized-aluminum";
 pub const TEXTURE_KINDS: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "webp"];
 
@@ -251,6 +251,9 @@ pub fn is_default_finishes(finishes: &BTreeMap<Id, Finish>) -> bool {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Lighting {
+    /// Immutable local HDR/EXR equirectangular radiance. None keeps the authored studio.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<Id>,
     pub environment_rotation_deg: f64,
     pub exposure: f64,
     pub intensity: f64,
@@ -261,6 +264,7 @@ pub struct Lighting {
 impl Default for Lighting {
     fn default() -> Self {
         Self {
+            environment: None,
             environment_rotation_deg: 0.,
             exposure: 0.,
             intensity: 1.,
@@ -398,6 +402,33 @@ pub fn validate_lighting(lighting: &Lighting) -> Result<()> {
     }
     Ok(())
 }
+pub fn validate_environment(doc: &Document, environment: Option<&Id>) -> Result<()> {
+    let Some(id) = environment else {
+        return Ok(());
+    };
+    let resource = doc
+        .resources
+        .get(id)
+        .ok_or_else(|| invalid("The selected HDR environment resource is missing"))?;
+    if resource.id != *id
+        || !valid_id(id)
+        || !matches!(resource.kind.to_ascii_lowercase().as_str(), "hdr" | "exr")
+        || resource.sha256.len() != 64
+        || !resource.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || resource.path.is_empty()
+        || resource.path.len() > 2048
+        || resource
+            .path
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\\' | ':'))
+    {
+        return Err(invalid(
+            "HDR environments require a portable checksum-pinned .hdr/.exr resource",
+        ));
+    }
+    crate::persistence::safe_join(std::path::Path::new("."), &resource.path)?;
+    Ok(())
+}
 pub fn validate(doc: &Document) -> Result<()> {
     if !doc.finishes.contains_key(DEFAULT_FINISH) {
         return Err(invalid(
@@ -434,6 +465,7 @@ pub fn validate(doc: &Document) -> Result<()> {
             }
         }
     }
+    validate_environment(doc, doc.lighting.environment.as_ref())?;
     validate_lighting(&doc.lighting)
 }
 pub fn resolve_finish<'a>(doc: &'a Document, placed: &PlacedPart) -> Result<&'a Finish> {
@@ -1014,6 +1046,19 @@ pub fn semantic(doc: &Document, active: Option<&str>, state: &str) -> Vec<Semant
         data: serde_json::json!({"contract":"tcad.appearance","version":CONTRACT_VERSION,"source":doc.lighting,"exposure_unit":"stops","rotation_unit":"deg"}),
     });
     let source = serde_json::to_value(&doc.lighting).unwrap_or_default();
+    let mut environment = field_element(
+        "viewport-lighting::/environment".into(),
+        "Environment",
+        state,
+        "viewport-lighting",
+        serde_json::json!(doc.lighting.environment),
+        serde_json::json!({"setter":"appearance-lighting","field":"/environment","value_type":"choice","nullable":true,"choices":std::iter::once(serde_json::json!({"value":null,"label":"Built-in studio"})).chain(doc.resources.values().filter(|r|matches!(r.kind.to_ascii_lowercase().as_str(),"hdr"|"exr")).map(|r|serde_json::json!({"value":r.id,"label":r.path}))).collect::<Vec<_>>(),"edit_command":"appearance.edit","projection":"equirectangular-2-to-1","color_space":"linear-rgb","radiance_changes_geometry":false}),
+    );
+    environment.commands.extend([
+        "appearance.environment.import".into(),
+        "appearance.environment.clear".into(),
+    ]);
+    out.push(environment);
     for (field, label, minimum, maximum, unit) in [
         (
             "/environment_rotation_deg",

@@ -297,7 +297,10 @@ pub fn rows_with_placements(
                 .map(|p| p.name.as_str())
                 .or_else(|| assembly.map(|a| a.name.as_str()))
                 .unwrap_or_default();
-            let properties = part.map(|p| p.properties.clone()).unwrap_or_default();
+            let properties = part
+                .map(|p| p.properties.clone())
+                .or_else(|| assembly.map(|a| a.properties.clone()))
+                .unwrap_or_default();
             let material_id = part.map(|p| p.material.clone());
             let finish_id = placement
                 .finish

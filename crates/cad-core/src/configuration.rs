@@ -797,6 +797,7 @@ fn apply_part(part: &mut Part, o: &Overrides) -> Result<()> {
 }
 fn apply_assembly(assembly: &mut Assembly, o: &Overrides) -> Result<()> {
     validate_assembly_placements(assembly, o)?;
+    assembly.properties.extend(o.properties.clone());
     for (id, e) in &o.parameters {
         assembly
             .parameters

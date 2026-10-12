@@ -65,6 +65,11 @@ enum Action {
         #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
         tolerance: Option<f64>,
     },
+    ToleranceStacks {
+        project: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     Diff {
         before: PathBuf,
         after: PathBuf,
@@ -225,6 +230,17 @@ fn run() -> Result<()> {
                 atomic_write(&path, csv.as_bytes())?;
             } else {
                 print!("{csv}");
+            }
+        }
+        Action::ToleranceStacks { project, output } => {
+            let document = FileStore.load(&project)?;
+            let report = cad_core::tolerance_stacks::evaluate(&document);
+            let json = serde_json::to_vec_pretty(&report)?;
+            if let Some(path) = output {
+                atomic_write(&path, &json)?;
+                println!("Exported tolerance stacks {}", path.display());
+            } else {
+                println!("{}", String::from_utf8_lossy(&json));
             }
         }
         Action::Sensors {
