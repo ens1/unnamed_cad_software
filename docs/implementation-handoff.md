@@ -931,3 +931,10 @@ No tests, probes, model exercises or UI launches. Flexible occurrence solves,
 continuous mechanical winding and collision-stopped movement remain gaps.
 Source review repaired competing-command/source-style/editor-close/unchanged
 confirmation and stale breadcrumb-context issues before the final checks.
+
+Signed packaging completed for manufacturing/assembly commits `3dd8a85` and
+`55f844a`: `scripts/package-macos.sh` compiled the locked workspace, validated
+the bundle plist, signed the distinct `TCAD`, `tcad-worker` and `tcad-cli`
+executables, and signature-verified the completed `dist/TCAD.app` before replacing
+the previous package. Both implementations are pushed to the private canonical
+origin. No application launch or interactive acceptance was performed.
