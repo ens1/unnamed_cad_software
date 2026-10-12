@@ -8,6 +8,7 @@ use cad_core::{
     selection_actions::SelectionTarget,
     selection_sets::{self, Mode as SetMode},
 };
+use std::collections::BTreeMap;
 
 pub struct ActionPopup {
     target: SelectionTarget,
@@ -976,10 +977,15 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
     };
     let mut elements = descriptors(w, &target);
     for action in &mut elements {
+        let primary = action.data["menu"]["primary"].as_bool() == Some(true);
         if let Some(data) = action.data.as_object_mut() {
             data.insert(
                 "classes".into(),
-                serde_json::json!(["menu-item", "selection-action"]),
+                serde_json::json!([
+                    "menu-item",
+                    "selection-action",
+                    if primary { "primary" } else { "secondary" }
+                ]),
             );
         }
     }
@@ -988,7 +994,8 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
         .filter_map(|element| {
             element
                 .data
-                .get("group")
+                .get("menu")
+                .and_then(|menu| menu.get("group"))
                 .and_then(serde_json::Value::as_str)
         })
         .map(str::to_owned)
@@ -997,12 +1004,12 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
         elements.push(cad_core::presentation::SemanticElement {
             id: format!("selection-group/{group}"),
             role: "selection-action-group".into(),
-            label: group,
+            label: group.clone(),
             value: None,
             state: "ready".into(),
             commands: vec![],
             relationships: vec!["selection-popup".into()],
-            data: serde_json::json!({"presentation_control":true}),
+            data: serde_json::json!({"presentation_control":true,"members":elements.iter().filter(|element|element.data["menu"]["group"].as_str()==Some(&group)).map(|element|&element.id).collect::<Vec<_>>(),"classes":["selection-menu-group"]}),
         });
     }
     for (id, role, label, commands) in [
@@ -1106,6 +1113,9 @@ fn descriptors(
                 }
             }
         }
+    }
+    for action in &mut actions {
+        cad_core::selection_actions::menu_metadata(action);
     }
     actions
 }
@@ -1271,12 +1281,14 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
         }
     }
     let mut open = true;
+    let mut executed = false;
     egui::Popup::new(
         egui::Id::new("selection-popup"),
         ctx.clone(),
         popup.anchor,
         popup.layer,
     )
+    .kind(egui::PopupKind::Menu)
     .at_position(egui::pos2(
         number("left", popup.anchor.x),
         number("top", popup.anchor.y),
@@ -1306,10 +1318,10 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                         .min(number("max-height", ctx.content_rect().height()))
                         .max(0.),
                 )
-                .show(ui, |ui| contents(ui, w, &popup.target));
+                .show(ui, |ui| executed = contents(ui, w, &popup.target));
         })
     });
-    if open {
+    if open && !executed {
         w.selection_popup = Some(popup);
     }
 }
@@ -1366,75 +1378,278 @@ fn title(w: &Workspace, target: &SelectionTarget) -> String {
     }
 }
 
-pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) {
+pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) -> bool {
     let actions = descriptors(w, target);
     if actions.is_empty() {
         ui.weak("Selection is no longer available");
-        return;
+        return false;
     }
     let title = title(w, target);
-    ui.horizontal(|ui| {
-        controls::label(
-            ui,
-            "selection-popup.title",
-            "selection-title",
-            &[],
-            &title,
-            "ready",
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if controls::button(
-                ui,
+    let dismissed = ui
+        .horizontal(|ui| {
+            let dismiss = controls::properties(
                 "selection-popup.dismiss",
                 "dismiss-action",
                 &["menu-item"],
-                "×",
-                true,
-                false,
-            )
-            .on_hover_text("Dismiss actions · Esc")
-            .clicked()
-            {
-                ui.close();
-            }
-        });
-    });
-    let mut group = "";
-    for element in &actions {
-        let next = element
-            .data
-            .get("group")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        if next != group {
-            ui.separator();
-            controls::label(
-                ui,
-                &format!("selection-group/{next}"),
-                "selection-action-group",
-                &[],
-                next,
                 "ready",
             );
-            group = next;
-        }
-        if controls::button(
-            ui,
+            let dismiss_width = controls::length(&dismiss, "width", ui.available_width(), 24.)
+                .max(controls::number(&dismiss, "min-width", 0.))
+                .min(ui.available_width());
+            let available =
+                (ui.available_width() - dismiss_width - ui.spacing().item_spacing.x).max(0.);
+            let title_props =
+                controls::properties("selection-popup.title", "selection-title", &[], "ready");
+            let title_width =
+                controls::length(&title_props, "width", available, available).min(available);
+            controls::bounded_label(
+                ui,
+                "selection-popup.title",
+                "selection-title",
+                &[],
+                &title,
+                "ready",
+                title_width,
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if controls::button(
+                    ui,
+                    "selection-popup.dismiss",
+                    "dismiss-action",
+                    &["menu-item"],
+                    "×",
+                    true,
+                    false,
+                )
+                .on_hover_text("Dismiss actions · Esc")
+                .clicked()
+                {
+                    ui.close();
+                    true
+                } else {
+                    false
+                }
+            })
+            .inner
+        })
+        .inner;
+    if dismissed {
+        return true;
+    }
+    let mut direct = vec![];
+    let mut groups: BTreeMap<String, Vec<&cad_core::presentation::SemanticElement>> =
+        BTreeMap::new();
+    for element in &actions {
+        let primary = element.data["menu"]["primary"].as_bool() == Some(true);
+        let props = controls::properties(
             &element.id,
             &element.role,
-            &["menu-item", "selection-action"],
-            &element.label,
-            element.state != "disabled",
-            element.state == "selected",
-        )
-        .on_hover_text(element.value.as_deref().unwrap_or(&element.label))
-        .on_disabled_hover_text(element.value.as_deref().unwrap_or(&element.label))
-        .clicked()
+            &[
+                "menu-item",
+                "selection-action",
+                if primary { "primary" } else { "secondary" },
+            ],
+            &element.state,
+        );
+        if element.commands.is_empty() || props.get("display").is_some_and(|value| value == "none")
         {
-            execute(w, target, &element.commands[0]);
-            ui.close();
-            break;
+            continue;
         }
+        let primary = props
+            .get("renderer-menu-presentation")
+            .map_or(primary, |mode| {
+                matches!(mode.as_str(), "primary" | "inline")
+            });
+        if primary {
+            direct.push(element);
+        } else {
+            let group = element.data["menu"]["group"].as_str().unwrap_or("More");
+            groups.entry(group.into()).or_default().push(element);
+        }
+    }
+    let action_order = |element: &&cad_core::presentation::SemanticElement| {
+        let primary = element.data["menu"]["primary"].as_bool() == Some(true);
+        let props = controls::properties(
+            &element.id,
+            &element.role,
+            &[
+                "menu-item",
+                "selection-action",
+                if primary { "primary" } else { "secondary" },
+            ],
+            &element.state,
+        );
+        controls::number(
+            &props,
+            "renderer-menu-order",
+            element.data["menu"]["order"].as_f64().unwrap_or(50.) as f32,
+        )
+    };
+    let mut visible_groups = vec![];
+    for (group, members) in groups {
+        let props = controls::properties(
+            &format!("selection-group/{group}"),
+            "selection-action-group",
+            &["selection-menu-group"],
+            "ready",
+        );
+        if props.get("display").is_some_and(|value| value == "none") {
+            continue;
+        }
+        if props
+            .get("renderer-menu-presentation")
+            .is_some_and(|value| value == "primary")
+        {
+            direct.extend(members);
+        } else {
+            visible_groups.push((group, members));
+        }
+    }
+    direct.sort_by(|a, b| action_order(a).total_cmp(&action_order(b)));
+    for element in direct {
+        if menu_action(ui, w, target, element) {
+            return true;
+        }
+    }
+    let mut groups = visible_groups;
+    let group_order = |group: &str, members: &[&cad_core::presentation::SemanticElement]| {
+        let props = controls::properties(
+            &format!("selection-group/{group}"),
+            "selection-action-group",
+            &["selection-menu-group"],
+            "ready",
+        );
+        controls::number(
+            &props,
+            "renderer-menu-order",
+            members
+                .first()
+                .and_then(|e| e.data["menu"]["group_order"].as_f64())
+                .unwrap_or(120.) as f32,
+        )
+    };
+    groups.sort_by(|a, b| group_order(&a.0, &a.1).total_cmp(&group_order(&b.0, &b.1)));
+    if !groups.is_empty() {
+        ui.separator();
+    }
+    for (group, mut members) in groups {
+        members.sort_by(|a, b| action_order(a).total_cmp(&action_order(b)));
+        let id = format!("selection-group/{group}");
+        let props = controls::properties(
+            &id,
+            "selection-action-group",
+            &["selection-menu-group"],
+            "ready",
+        );
+        if props.get("display").is_some_and(|v| v == "none") {
+            continue;
+        }
+        if props
+            .get("renderer-menu-presentation")
+            .is_some_and(|v| v == "inline")
+        {
+            controls::label(
+                ui,
+                &id,
+                "selection-action-group",
+                &["selection-menu-group"],
+                &group,
+                "inline",
+            );
+            for element in members {
+                if menu_action(ui, w, target, element) {
+                    return true;
+                }
+            }
+            continue;
+        }
+        let response = controls::button(
+            ui,
+            &id,
+            "selection-action-group",
+            &["selection-menu-group"],
+            &format!("{group}  ›"),
+            true,
+            false,
+        );
+        let parent = controls::current_target();
+        let parent_width = ui.available_width();
+        let mut executed = false;
+        egui::containers::menu::SubMenu::new().show(ui, &response, |ui| {
+            let render = |ui: &mut egui::Ui| {
+                controls::apply_properties(ui, &props);
+                let available = (ui.ctx().content_rect().width() - 16.).max(0.);
+                let width = controls::length(&props, "width", parent_width, 232.)
+                    .min(available)
+                    .max(0.);
+                ui.set_width(width);
+                egui::ScrollArea::vertical()
+                    .max_height(
+                        controls::number(&props, "max-height", 400.)
+                            .min(ui.ctx().content_rect().height() - 32.)
+                            .max(0.),
+                    )
+                    .show(ui, |ui| {
+                        for element in members {
+                            if menu_action(ui, w, target, element) {
+                                executed = true;
+                                break;
+                            }
+                        }
+                    });
+            };
+            if let Some(parent) = parent {
+                controls::with_target(
+                    parent.child(
+                        &id,
+                        "selection-action-group",
+                        &["selection-menu-group".into()],
+                        "flyout",
+                    ),
+                    ui,
+                    render,
+                );
+            } else {
+                render(ui);
+            }
+        });
+        if executed {
+            return true;
+        }
+    }
+    false
+}
+
+fn menu_action(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    target: &SelectionTarget,
+    element: &cad_core::presentation::SemanticElement,
+) -> bool {
+    let primary = element.data["menu"]["primary"].as_bool() == Some(true);
+    if controls::button(
+        ui,
+        &element.id,
+        &element.role,
+        &[
+            "menu-item",
+            "selection-action",
+            if primary { "primary" } else { "secondary" },
+        ],
+        &element.label,
+        element.state != "disabled",
+        element.state == "selected",
+    )
+    .on_hover_text(element.value.as_deref().unwrap_or(&element.label))
+    .on_disabled_hover_text(element.value.as_deref().unwrap_or(&element.label))
+    .clicked()
+        && let Some(command) = element.commands.first()
+    {
+        execute(w, target, command);
+        ui.close();
+        true
+    } else {
+        false
     }
 }
 
@@ -1522,6 +1737,9 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
             w.selection_popup = None;
             if w.tool_checkpoint.is_none() && w.session.visible().parts.contains_key(definition) {
                 w.view.active_part = Some(definition.clone());
+            }
+            if role == "assembly" && w.session.visible().assemblies.contains_key(definition) {
+                w.fields.insert("assembly-id".into(), definition.clone());
             }
             match command {
                 "selection.fit" => {

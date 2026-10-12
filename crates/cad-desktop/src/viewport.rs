@@ -619,19 +619,21 @@ pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
     {
         return Some(evaluation);
     }
-    let selecting_input = w.dialog.as_deref() == Some("feature")
-        && serde_json::from_str::<cad_core::Feature>(&w.json).is_ok_and(|f| {
-            matches!(
-                f.operation,
-                cad_core::Operation::Fillet { .. }
-                    | cad_core::Operation::Chamfer { .. }
-                    | cad_core::Operation::Shell { .. }
-                    | cad_core::Operation::Draft { .. }
-                    | cad_core::Operation::DirectEdit { .. }
-                    | cad_core::Operation::BodyFilter { .. }
-                    | cad_core::Operation::Split { .. }
-            )
-        });
+    let selecting_input = w.fields.contains_key("assembly-weld-editor")
+        || w.dialog.as_deref() == Some("feature")
+            && serde_json::from_str::<cad_core::Feature>(&w.json).is_ok_and(|f| {
+                matches!(
+                    f.operation,
+                    cad_core::Operation::Fillet { .. }
+                        | cad_core::Operation::Chamfer { .. }
+                        | cad_core::Operation::Shell { .. }
+                        | cad_core::Operation::Draft { .. }
+                        | cad_core::Operation::DirectEdit { .. }
+                        | cad_core::Operation::BodyFilter { .. }
+                        | cad_core::Operation::Split { .. }
+                        | cad_core::Operation::WeldBead { .. }
+                )
+            });
     if selecting_input && let Some(checkpoint) = w.tool_checkpoint.as_ref() {
         return checkpoint
             .draft
@@ -1482,7 +1484,189 @@ pub fn sync_scene(
         }
     }
 }
+fn weld_guides(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
+    let painter = ui.painter().with_clip_rect(rect);
+    for preview in crate::weld_beads_ui::current_joint_previews(w) {
+        let matrix = if preview.path.is_empty()
+            && w.session
+                .visible()
+                .parts
+                .contains_key(&preview.owner.definition)
+        {
+            display_evaluation(w)
+                .and_then(|e| {
+                    display_instances(w, e).into_iter().find(|instance| {
+                        instance.definition == preview.owner.definition
+                            && w.edge_selection_path
+                                .as_ref()
+                                .is_none_or(|path| path == &instance.path)
+                            && w.view
+                                .active_instance
+                                .as_ref()
+                                .is_none_or(|id| instance.path.last() == Some(id))
+                    })
+                })
+                .map(|instance| instance.matrix)
+                .unwrap_or(preview.matrix)
+        } else {
+            preview.matrix
+        };
+        let transform = |point: [f64; 3]| {
+            std::array::from_fn(|axis| {
+                matrix[axis][0] * point[0]
+                    + matrix[axis][1] * point[1]
+                    + matrix[axis][2] * point[2]
+                    + matrix[axis][3]
+            })
+        };
+        let prefix = format!(
+            "weld-joint:{}/{}/{}",
+            preview.owner.definition,
+            preview.owner.node,
+            preview.path.join("/")
+        );
+        let mut labeled = std::collections::BTreeSet::new();
+        for (index, guide) in preview.guides.iter().enumerate() {
+            let state = match guide.valid {
+                Some(true) => "ready",
+                Some(false) => "invalid",
+                None => "pending",
+            };
+            let classes = vec![
+                "viewport-guide".into(),
+                "weld-guide".into(),
+                if guide.label == "Seam root" {
+                    "weld-root".into()
+                } else {
+                    "weld-toe".into()
+                },
+            ];
+            let props = w.theme.properties_for(&style_target(w).child(
+                &format!("{prefix}/guide/{index}"),
+                "weld-joint-guide",
+                &classes,
+                state,
+            ));
+            if props.get("display").is_some_and(|v| v == "none")
+                || props.get("visibility").is_some_and(|v| v == "hidden")
+            {
+                continue;
+            }
+            let color = props
+                .get("color")
+                .and_then(|v| crate::ui::color(v))
+                .unwrap_or_else(|| match guide.valid {
+                    Some(false) => egui::Color32::from_rgb(205, 48, 36),
+                    None => egui::Color32::from_rgb(190, 132, 35),
+                    Some(true) => egui::Color32::from_rgb(30, 143, 158),
+                });
+            let width = crate::presentation_controls::number(
+                &props,
+                "stroke-width",
+                if guide.valid == Some(false) { 3. } else { 1.5 },
+            )
+            .max(0.);
+            for pair in guide.points.windows(2) {
+                if let (Some(a), Some(b)) = (
+                    project(w, rect, transform(pair[0])),
+                    project(w, rect, transform(pair[1])),
+                ) {
+                    painter.line_segment([a, b], egui::Stroke::new(width, color));
+                }
+            }
+            if guide.valid == Some(false)
+                && labeled.insert(guide.support)
+                && let Some(point) = guide
+                    .points
+                    .get(guide.points.len() / 2)
+                    .and_then(|point| project(w, rect, transform(*point)))
+            {
+                painter.circle_stroke(
+                    point,
+                    crate::presentation_controls::number(&props, "handle-size", 5.).max(0.),
+                    egui::Stroke::new(width, color),
+                );
+                painter.text(
+                    point + egui::vec2(6., -6.),
+                    egui::Align2::LEFT_BOTTOM,
+                    format!(
+                        "Support {} · {} · contact failed",
+                        guide.support + 1,
+                        guide.label
+                    ),
+                    egui::FontId::proportional(crate::presentation_controls::number(
+                        &props,
+                        "font-size",
+                        11.,
+                    )),
+                    color,
+                );
+            }
+        }
+        let props = w.theme.properties_for(&style_target(w).child(
+            &format!("{prefix}/seam"),
+            "weld-joint-guide",
+            &[
+                "viewport-guide".into(),
+                "weld-guide".into(),
+                "weld-seam".into(),
+            ],
+            if preview.complete { "ready" } else { "invalid" },
+        ));
+        if props.get("display").is_some_and(|v| v == "none")
+            || props.get("visibility").is_some_and(|v| v == "hidden")
+        {
+            continue;
+        }
+        let color = props
+            .get("color")
+            .and_then(|v| crate::ui::color(v))
+            .unwrap_or_else(|| selection_color(w));
+        let width = crate::presentation_controls::number(&props, "stroke-width", 2.).max(0.);
+        for pair in preview.seam_points.windows(2) {
+            if let (Some(a), Some(b)) = (
+                project(w, rect, transform(pair[0])),
+                project(w, rect, transform(pair[1])),
+            ) {
+                painter.line_segment([a, b], egui::Stroke::new(width, color));
+            }
+        }
+        if let (Some(orientation), Some(origin)) = (
+            preview.orientation,
+            preview.seam_points.get(preview.seam_points.len() / 2),
+        ) {
+            let size = cad_core::expression::value(
+                w.session.visible(),
+                &preview.owner.definition,
+                &preview.source.size,
+                cad_core::Dimension::Length,
+            )
+            .unwrap_or(2.);
+            for (index, direction) in orientation.into_iter().enumerate() {
+                let end = std::array::from_fn(|axis| origin[axis] + direction[axis] * size);
+                if let (Some(a), Some(b)) = (
+                    project(w, rect, transform(*origin)),
+                    project(w, rect, transform(end)),
+                ) {
+                    painter.arrow(a, b - a, egui::Stroke::new(width, color));
+                    painter.text(
+                        b,
+                        egui::Align2::LEFT_BOTTOM,
+                        format!("Support {} direction", index + 1),
+                        egui::FontId::proportional(crate::presentation_controls::number(
+                            &props,
+                            "font-size",
+                            10.,
+                        )),
+                        color,
+                    );
+                }
+            }
+        }
+    }
+}
 pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
+    weld_guides(w, ui, rect);
     crate::reference_ui::overlay(w, ui, rect);
     let painter = ui.painter().with_clip_rect(rect);
     let origin = rect.right_bottom() - egui::vec2(58., 66.);

@@ -9,6 +9,7 @@ mod background;
 mod body_filter_ui;
 mod cad_ui;
 mod component_pattern_ui;
+mod components_ui;
 mod configuration_ui;
 mod contours_ui;
 mod curve_pattern_ui;
@@ -81,7 +82,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/35;solver/tcad-native-lm/16";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/36;solver/tcad-native-lm/16";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -396,6 +397,11 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !components_ui::current_source_is_valid(self) {
+            self.status = "Correct the component placement fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !production_ui::current_source_is_valid(self) {
             self.status = "Correct the current production fields before applying".into();
             self.confirm_requested = false;
@@ -492,6 +498,9 @@ impl Workspace {
         if self.sketch.is_some() && !sketch::finish(self) {
             return;
         }
+        if holes_ui::complete_positions(self) {
+            return;
+        }
         let editing_edges = selection_ui::edge_feature(self).is_some();
         match self.session.apply() {
             Ok(()) => {
@@ -513,6 +522,7 @@ impl Workspace {
                 self.fields.clear();
                 drawing_interaction_ui::reset(self);
                 production_ui::reset(self);
+                drawing_ui::retain_workspace(self);
                 if let Some(feature) = self.after_confirm.take() {
                     ui::feature_preset(self, &feature);
                 }
@@ -521,6 +531,7 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        components_ui::cancel(self);
         assembly_tools_ui::cancel(self);
         assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
@@ -553,6 +564,7 @@ impl Workspace {
         self.fields.clear();
         self.manager_tree = true;
         self.status = "Draft discarded".into();
+        drawing_ui::retain_workspace(self);
     }
     pub fn replace(&mut self, d: Document, path: Option<PathBuf>) {
         settings::cancel(self);
@@ -642,6 +654,7 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        components_ui::cancel(self);
         assembly_tools_ui::cancel(self);
         assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
@@ -678,6 +691,10 @@ impl Workspace {
                 && key != "drawing-source-invalid"
         });
         self.fields.remove("smart-dimension-mode");
+        self.fields.retain(|key, _| {
+            !key.starts_with("component-placement-invalid:")
+                && !key.starts_with("component-insert-")
+        });
         self.fields.remove("component-pattern-editor");
         self.fields.remove("component-pattern-source-invalid");
         self.fields.remove("configuration-owner");
@@ -705,8 +722,14 @@ impl Workspace {
         }
         self.rendered_key.clear();
         self.status = "Operation cancelled".into();
+        drawing_ui::retain_workspace(self);
     }
     pub fn confirm_tool(&mut self) {
+        if !components_ui::current_source_is_valid(self) {
+            self.status = "Correct the component placement fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !production_ui::current_source_is_valid(self) {
             self.status = "Correct the current production fields before applying".into();
             self.confirm_requested = false;

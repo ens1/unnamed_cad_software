@@ -465,6 +465,30 @@ impl ViewProjection {
         })
     }
 }
+/// Rendering fidelity travels with a view, separately from its production paper vectors.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ViewFidelity {
+    pub description: String,
+    pub hidden_line_removal: bool,
+    pub approximate: bool,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DrawingSourceInfo {
+    pub document: Id,
+    pub revision: u64,
+    pub fingerprint: String,
+    pub backend: String,
+}
+impl DrawingSourceInfo {
+    fn current(doc: &Document, evaluation: &Evaluation) -> Self {
+        Self {
+            document: doc.id.clone(),
+            revision: doc.revision,
+            fingerprint: doc.fingerprint(),
+            backend: evaluation.identity.backend.clone(),
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sheet {
     pub id: Id,
@@ -474,6 +498,10 @@ pub struct Sheet {
     pub views: BTreeMap<String, ViewLayout>,
     #[serde(default)]
     pub projections: BTreeMap<String, ViewProjection>,
+    #[serde(default)]
+    pub view_fidelity: BTreeMap<String, ViewFidelity>,
+    #[serde(default)]
+    pub source_info: DrawingSourceInfo,
     #[serde(default)]
     pub groups: Vec<crate::drawing_interaction::PrimitiveGroup>,
     /// Preview-only diagnostics; production export still rejects these source errors.
@@ -3540,6 +3568,8 @@ fn build_continuation_sheet(
         primitives: format_geometry(doc, &page_definition)?,
         views: BTreeMap::new(),
         projections: BTreeMap::new(),
+        view_fidelity: BTreeMap::new(),
+        source_info: DrawingSourceInfo::current(doc, e),
         groups: vec![],
         diagnostics: BTreeMap::new(),
     };
@@ -3620,6 +3650,8 @@ fn build_sheet_mode(
         primitives: vec![],
         views: BTreeMap::new(),
         projections: BTreeMap::new(),
+        view_fidelity: BTreeMap::new(),
+        source_info: DrawingSourceInfo::current(doc, e),
         groups: vec![],
         diagnostics: BTreeMap::new(),
     };
@@ -4038,11 +4070,18 @@ fn build_sheet_mode(
             },
         );
         let layout_invalid = result.diagnostics.contains_key(&view_id(sheet, name));
-        let note = if layout_invalid {
-            format!("LAYOUT NEEDS REPAIR · preview wireframe clipped to saved rectangle · {note}")
-        } else {
-            note
-        };
+        result.view_fidelity.insert(
+            name.clone(),
+            ViewFidelity {
+                approximate: name == "section-z" || curves.iter().any(Option::is_none),
+                hidden_line_removal: false,
+                description: if layout_invalid {
+                    format!("Layout needs repair; preview clipped to saved rectangle. {note}")
+                } else {
+                    note
+                },
+            },
+        );
         let view_start = out.len();
         text(out, [view.at[0], view.at[1] + view.size[1] + 4.], 3.5, name);
         text(
@@ -4050,7 +4089,7 @@ fn build_sheet_mode(
             [view.at[0], view.at[1] + view.size[1] + 1.],
             2.4,
             format!(
-                "{note}; scale {}{}",
+                "Scale {}{}",
                 scale_label(view.scale),
                 if orthographic && matches!(name.as_str(), "front" | "top" | "right") {
                     "; third-angle projection"
@@ -4228,17 +4267,6 @@ fn build_sheet_mode(
             "An annotation refers to a view that is absent from its sheet",
         ));
     }
-    text(
-        out,
-        [bounds[0][0] + 4., footer_height - 1.],
-        3.,
-        format!(
-            "{} | Rev {} | Source {}",
-            doc.name,
-            doc.revision,
-            &doc.fingerprint()[..12]
-        ),
-    );
     for (i, note) in sheet
         .annotations
         .iter()

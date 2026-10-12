@@ -546,6 +546,106 @@ pub fn current_source_is_valid(w: &Workspace) -> bool {
 pub fn reset(w: &mut Workspace) {
     w.drawing_interaction = State::default();
 }
+/// End an accepted/cancelled edit while retaining the paper's navigation and selection.
+pub fn finish_edit(w: &mut Workspace) {
+    let state = &mut w.drawing_interaction;
+    state.cache = None;
+    state.capture = None;
+    state.hover = None;
+    state.context_target = None;
+    state.guides.clear();
+    state.errors.clear();
+    state.statuses.clear();
+    state.dimension_hint = None;
+    state.tool = Tool::Select;
+}
+pub fn selected_target(w: &Workspace) -> Option<&Target> {
+    selected(&w.drawing_interaction)
+}
+pub fn rendered_sheet(w: &Workspace) -> Option<&cad_core::drawing::Sheet> {
+    let cache = w.drawing_interaction.cache.as_ref()?;
+    (geometry_equal(&cache.geometry, w.session.visible())
+        && w.fields.get("drawing-preview") == Some(&cache.source.id)
+        && cache.page == page(w))
+    .then_some(cache.paper.as_ref())
+}
+pub fn select_item(w: &mut Workspace, target: Target) {
+    if active(w) {
+        w.status = "Finish or cancel the paper gesture before changing selection".into();
+        return;
+    }
+    let Some(source) = sheet(w) else { return };
+    let mut state = std::mem::take(&mut w.drawing_interaction);
+    restore_presentation(w, &mut state, &source);
+    let exists = match &target {
+        Target::View { key } => cad_core::drawing::view_keys(&source).contains(key),
+        Target::Dimension { id } => source.dimensions.iter().any(|item| &item.id == id),
+        Target::Annotation { id } => source.entities.iter().any(|item| &item.id == id),
+        Target::Table { id } => source.tables.iter().any(|item| &item.id == id),
+        Target::TableSegment { table, segment } => source
+            .tables
+            .iter()
+            .any(|item| &item.id == table && item.segments.iter().any(|item| &item.id == segment)),
+        Target::TitleCell { id } => source
+            .format
+            .iter()
+            .flat_map(|format| &format.title_block)
+            .flat_map(|block| &block.cells)
+            .any(|cell| &cell.id == id),
+    };
+    if exists {
+        select(w, &mut state, &source, page(w), target);
+    } else {
+        state.selection = None;
+    }
+    save_presentation(w, &state);
+    w.drawing_interaction = state;
+}
+fn save_presentation(w: &mut Workspace, state: &State) {
+    w.view.drawing_page = page(w);
+    w.view.drawing_selection = selected(state).cloned();
+    w.view.drawing_paper_views = state
+        .views
+        .iter()
+        .map(|(key, view)| {
+            (
+                key.clone(),
+                cad_core::presentation::DrawingPaperView {
+                    zoom: view.zoom,
+                    pan: [view.pan.x, view.pan.y],
+                },
+            )
+        })
+        .collect();
+}
+fn restore_presentation(w: &Workspace, state: &mut State, source: &Drawing) {
+    for (key, view) in &w.view.drawing_paper_views {
+        state.views.entry(key.clone()).or_insert_with(|| PaperView {
+            zoom: if view.zoom.is_finite() && view.zoom > 0. {
+                view.zoom.clamp(0.2, 12.)
+            } else {
+                1.
+            },
+            pan: egui::vec2(
+                if view.pan[0].is_finite() {
+                    view.pan[0]
+                } else {
+                    0.
+                },
+                if view.pan[1].is_finite() {
+                    view.pan[1]
+                } else {
+                    0.
+                },
+            ),
+        });
+    }
+    if state.selection.is_none()
+        && let Some(target) = &w.view.drawing_selection
+    {
+        state.selection = Some((source.id.clone(), page(w), target.clone()));
+    }
+}
 pub fn escape(w: &mut Workspace) -> bool {
     let mut state = std::mem::take(&mut w.drawing_interaction);
     let handled = if let Some(capture) = state.capture.take() {
@@ -735,7 +835,7 @@ fn selected_commands(w: &Workspace, state: &State) -> Vec<SemanticElement> {
     out
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
-    if w.dialog.as_deref() != Some("drawings") {
+    if !crate::drawing_ui::is_workspace(w) {
         return vec![];
     }
     let state = &w.drawing_interaction;
@@ -1046,6 +1146,8 @@ pub fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) -> Result
                     .ok_or_else(|| invalid("Choose an existing continuation page"))?
                     as u32;
                 w.fields.insert("drawing-page".into(), page.to_string());
+                w.view.drawing_page = page;
+                w.view.drawing_selection = None;
                 w.drawing_interaction.selection = None;
                 w.drawing_interaction.tool = Tool::Select;
             }
@@ -1154,6 +1256,7 @@ pub fn action(w: &mut Workspace, cmd: &str, data: Option<&Value>) -> bool {
     }
     let mut state = std::mem::take(&mut w.drawing_interaction);
     let result = execute(w, &mut state, cmd, data);
+    save_presentation(w, &state);
     w.drawing_interaction = state;
     if let Err(error) = result {
         w.status = error.to_string();
@@ -1493,11 +1596,27 @@ pub fn frame(
     response: &egui::Response,
     viewport_id: &str,
 ) -> bool {
-    if w.dialog.as_deref() != Some("drawings") {
+    if !crate::drawing_ui::is_workspace(w) {
         return false;
     }
-    let Some(source) = sheet(w) else { return false };
+    let Some(source) = sheet(w) else {
+        ui.painter_at(viewport)
+            .rect_filled(viewport, 0., ui.visuals().faint_bg_color);
+        let mut state = std::mem::take(&mut w.drawing_interaction);
+        draw_status(
+            ui,
+            &mut state,
+            viewport,
+            viewport_id,
+            "Drawing workspace · Create a sheet or load a template",
+            "ready",
+            true,
+        );
+        w.drawing_interaction = state;
+        return true;
+    };
     let mut state = std::mem::take(&mut w.drawing_interaction);
+    restore_presentation(w, &mut state, &source);
     if state.grid_mm == 0. {
         state.grid_mm = 1.;
         state.snapping = true;
@@ -2138,6 +2257,7 @@ pub fn frame(
         status,
         false,
     );
+    save_presentation(w, &state);
     w.drawing_interaction = state;
     true
 }

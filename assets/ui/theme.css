@@ -19,6 +19,24 @@
   padding: 8px;
   border: 1px solid #A9ACAF;
   border-radius: 6px;
+  width: 232px;
+  max-width: 300px;
+  max-height: 460px;
+}
+
+[role=selection-title] {
+  width: 180px;
+  text-overflow: ellipsis;
+  font-size: 10px;
+}
+[role=selection-action-group] {
+  width: 100%;
+  height: 24px;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+[role=selection-action], [role=dismiss-action] {
+  text-overflow: ellipsis;
 }
 
 * {
@@ -428,6 +446,65 @@
   flex-direction: row;
   gap: 3px;
   padding: 1px 0px;
+}
+[role=component-placement-field], [role=component-insert-field] {
+  display: flex;
+  flex-direction: row;
+  gap: 3px;
+  padding: 1px 0px;
+}
+[role=component-placement-frame] {
+  font-size: 10px;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+[role=sketch-operation-prompt] {
+  font-weight: bold;
+  font-size: 11px;
+}
+[role=sketch-operation-status] {
+  font-size: 10px;
+}
+[role=sketch-dimension-input] {
+  background: var(--panel);
+  border: 1px solid var(--active);
+  border-radius: 4px;
+  padding: 4px;
+}
+[role=sketch-dimension-value] {
+  width: 110px;
+  height: 24px;
+}
+[role=sketch-dimension-action], [role=sketch-operation-action], [role=component-insert-action] {
+  height: 24px;
+  padding: 3px 6px;
+  border-radius: 3px;
+}
+[role=apply-action].confirmation-control {
+  width: 112px;
+  height: 26px;
+  border-radius: 4px;
+  text-overflow: ellipsis;
+}
+[role=cancel-action].confirmation-control {
+  width: 72px;
+  height: 26px;
+  border-radius: 4px;
+}
+[role=weld-joint-guide] {
+  stroke-width: 2px;
+  font-size: 10px;
+  handle-size: 5px;
+}
+[role=weld-joint-guide][state=invalid] {
+  color: var(--error);
+  stroke-width: 3px;
+}
+[role=weld-joint-guide][state=pending] {
+  color: var(--warning);
+}
+[role=weld-joint-guide][state=ready] {
+  color: var(--reference);
 }
 [role=field-label].modeling-field, [role=field-label].drawing-field {
   width: 100px;

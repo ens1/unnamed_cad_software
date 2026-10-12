@@ -31,6 +31,7 @@ fn prepared(
     Ok((evaluator, solved, pose(*transform)))
 }
 pub(crate) fn build(
+    adapter: &MonstertruckAdapter,
     doc: &Document,
     owner: &NodeRef,
     definition: &Definition,
@@ -63,8 +64,21 @@ pub(crate) fn build(
         supports.push((builder::transformed(&geometry, *transform), reference));
     }
     let mut history = TopologyHistory::default();
-    let built = crate::weld_beads::build(doc, owner, definition, &seam, &supports, &mut history)?;
-    let adapter = MonstertruckAdapter::default();
+    let mut preview = None;
+    let result = crate::weld_beads::build(
+        doc,
+        owner,
+        definition,
+        &seam,
+        &supports,
+        &mut history,
+        &mut preview,
+    );
+    if let Some(preview) = &mut preview {
+        preview.frame_label = "Owning assembly frame".into();
+    }
+    crate::weld_beads::record_preview(adapter, preview, result.as_ref().err());
+    let built = result?;
     adapter.register_weld_history(owner, history);
     let mesh = adapter.mesh(&Shape::Bodies(built.solids.clone()), owner, tolerance)?;
     Ok((mesh, built.solids, built.metadata))

@@ -4,6 +4,45 @@ use serde::{Deserialize, Serialize};
 
 pub const CONTRACT_VERSION: u32 = 1;
 pub const MAX_SEGMENTS: usize = 1024;
+pub const JOINT_PREVIEW_VERSION: u32 = 1;
+
+/// Disposable native contact feedback, scoped to the enclosing evaluation's
+/// request identity. These curves explain a rejected bead and never authorize
+/// geometry, establish support identity, or become saved modeling intent.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JointPreview {
+    pub version: u32,
+    pub owner: NodeRef,
+    pub source: Definition,
+    /// Occurrence of the owning part/assembly, relative to the document root.
+    #[serde(default)]
+    pub path: Vec<Id>,
+    /// Millimeters in the owning part or assembly frame, transformed to root.
+    pub matrix: [[f64; 4]; 4],
+    pub frame_label: String,
+    pub seam_points: Vec<[f64; 3]>,
+    pub supports: Vec<FaceSource>,
+    #[serde(default)]
+    pub orientation: Option<[[f64; 3]; 2]>,
+    pub guides: Vec<ContactGuide>,
+    /// True only when the complete native bead has passed construction.
+    pub complete: bool,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ContactGuide {
+    pub label: String,
+    pub support: usize,
+    pub segment: usize,
+    pub points: Vec<[f64; 3]>,
+    /// `Some(true)` passed exact contact validation; `Some(false)` failed it.
+    /// None means construction stopped before that contact could be checked.
+    pub valid: Option<bool>,
+    #[serde(default)]
+    pub message: Option<String>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

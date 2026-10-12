@@ -6,8 +6,8 @@ use cad_core::{
     CadError, Document, NodeRef, Result, TopologyRef,
     reference_curves::CurveSource,
     weld_beads::{
-        CONTRACT_VERSION, Definition, Evaluated, EvaluatedSegment, FaceSource, MAX_SEGMENTS,
-        Profile, SeamSource, Values,
+        CONTRACT_VERSION, ContactGuide, Definition, Evaluated, EvaluatedSegment, FaceSource,
+        JOINT_PREVIEW_VERSION, JointPreview, MAX_SEGMENTS, Profile, SeamSource, Values,
     },
 };
 use monstertruck::modeling::*;
@@ -860,6 +860,34 @@ pub(crate) struct Built {
     pub solids: Vec<Solid>,
     pub metadata: Evaluated,
 }
+fn guide_points(path: &Path, offset: Vector3, start: f64, end: f64) -> Vec<[f64; 3]> {
+    let divisions = if matches!(path, Path::Line { .. }) {
+        1
+    } else {
+        64
+    };
+    (0..=divisions)
+        .map(|index| {
+            let position = start + (end - start) * index as f64 / divisions as f64;
+            let point = path.point(position) + path.rotation(position) * offset;
+            [point.x, point.y, point.z]
+        })
+        .collect()
+}
+pub(crate) fn record_preview(
+    adapter: &MonstertruckAdapter,
+    mut preview: Option<JointPreview>,
+    error: Option<&CadError>,
+) {
+    if let Some(preview) = &mut preview {
+        preview.message = error.map(ToString::to_string);
+        preview.complete = error.is_none();
+    }
+    if let Some(preview) = preview {
+        adapter.register_weld_joint(preview);
+    }
+}
+#[allow(clippy::too_many_arguments)] // Native inputs, provenance and optional display feedback stay separate.
 pub(crate) fn build(
     doc: &Document,
     owner: &NodeRef,
@@ -867,9 +895,24 @@ pub(crate) fn build(
     resolved: &ResolvedSeam,
     explicit_supports: &[(Face, TopologyRef)],
     generated: &mut TopologyHistory,
+    preview: &mut Option<JointPreview>,
 ) -> Result<Built> {
     let values = definition.values(doc, &owner.definition)?;
     let path = classify(&resolved.curves)?;
+    *preview = Some(JointPreview {
+        version: JOINT_PREVIEW_VERSION,
+        owner: owner.clone(),
+        source: definition.clone(),
+        path: vec![],
+        matrix: std::array::from_fn(|r| std::array::from_fn(|c| if r == c { 1. } else { 0. })),
+        frame_label: "Owning part frame".into(),
+        seam_points: guide_points(&path, Vector3::zero(), 0., path.length()),
+        supports: definition.supports.clone(),
+        orientation: None,
+        guides: vec![],
+        complete: false,
+        message: None,
+    });
     if definition.suppressed {
         return Ok(Built {
             solids: vec![],
@@ -913,6 +956,16 @@ pub(crate) fn build(
     } else {
         vec![]
     };
+    if definition.supports.is_empty() {
+        preview.as_mut().unwrap().supports = support_faces
+            .iter()
+            .map(|(_, reference)| FaceSource {
+                body: definition.seam.dependency().clone(),
+                reference: Box::new(reference.clone()),
+                path: definition.seam.path().to_vec(),
+            })
+            .collect();
+    }
     let supports = supports(&support_faces)?;
     if !supports.is_empty()
         && supports.len()
@@ -927,20 +980,73 @@ pub(crate) fn build(
         ));
     }
     let (u, v) = frame(definition, &values, &path, &supports)?;
+    preview.as_mut().unwrap().orientation = Some([[u.x, u.y, u.z], [v.x, v.y, v.z]]);
     let section = section(definition, &values, path.point(0.), path.tangent(0.), u, v)?;
     let mut sources = resolved.sources.clone();
     sources.extend(support_faces.iter().map(|(_, source)| source.clone()));
     let spans = intervals(&values, path.length())?;
+    for (segment, [start, end]) in spans.iter().copied().enumerate() {
+        for support in 0..supports.len() {
+            let toes = if definition.profile == Profile::Fillet {
+                vec![section.toes[support]]
+            } else {
+                section.toes.to_vec()
+            };
+            for (index, offset) in std::iter::once(Vector3::zero()).chain(toes).enumerate() {
+                preview.as_mut().unwrap().guides.push(ContactGuide {
+                    label: if index == 0 {
+                        "Seam root".into()
+                    } else {
+                        format!(
+                            "Toe {}",
+                            if definition.profile == Profile::Fillet {
+                                support + 1
+                            } else {
+                                index
+                            }
+                        )
+                    },
+                    support,
+                    segment,
+                    points: guide_points(&path, offset, start, end),
+                    valid: None,
+                    message: None,
+                });
+            }
+        }
+    }
     let mut solids = vec![];
     let mut metadata = vec![];
     for (index, [start, end]) in spans.into_iter().enumerate() {
         for (support_index, support) in supports.iter().enumerate() {
-            contact(support, &path, Vector3::zero(), start, end)?;
-            if definition.profile == Profile::Fillet {
-                contact(support, &path, section.toes[support_index], start, end)?;
+            let toes = if definition.profile == Profile::Fillet {
+                vec![section.toes[support_index]]
             } else {
-                for toe in &section.toes {
-                    contact(support, &path, *toe, start, end)?;
+                section.toes.to_vec()
+            };
+            for (toe_index, offset) in std::iter::once(Vector3::zero()).chain(toes).enumerate() {
+                let result = contact(support, &path, offset, start, end);
+                let guide = preview
+                    .as_mut()
+                    .unwrap()
+                    .guides
+                    .iter_mut()
+                    .filter(|guide| guide.segment == index && guide.support == support_index)
+                    .nth(toe_index)
+                    .unwrap();
+                guide.valid = Some(result.is_ok());
+                if let Err(error) = result {
+                    let message = format!(
+                        "Support {} / {} / Stitch {}: {error}",
+                        support_index + 1,
+                        guide.label,
+                        index + 1
+                    );
+                    guide.message = Some(message.clone());
+                    return Err(match error {
+                        CadError::Unsupported(_) => CadError::Unsupported(message),
+                        _ => CadError::Invalid(message),
+                    });
                 }
             }
         }
@@ -1108,9 +1214,18 @@ pub(crate) fn operation(
         .iter()
         .map(|face| support(adapter, face, inputs))
         .collect::<Result<Vec<_>>>()?;
-    Ok(Shape::Bodies(
-        build(doc, owner, definition, &resolved, &supports, generated)?.solids,
-    ))
+    let mut preview = None;
+    let result = build(
+        doc,
+        owner,
+        definition,
+        &resolved,
+        &supports,
+        generated,
+        &mut preview,
+    );
+    record_preview(adapter, preview, result.as_ref().err());
+    Ok(Shape::Bodies(result?.solids))
 }
 
 pub(crate) fn metadata(
@@ -1126,13 +1241,16 @@ pub(crate) fn metadata(
         .iter()
         .map(|face| support(adapter, face, inputs))
         .collect::<Result<Vec<_>>>()?;
-    Ok(build(
+    let mut preview = None;
+    let result = build(
         doc,
         owner,
         definition,
         &resolved,
         &supports,
         &mut TopologyHistory::default(),
-    )?
-    .metadata)
+        &mut preview,
+    );
+    record_preview(adapter, preview, result.as_ref().err());
+    Ok(result?.metadata)
 }

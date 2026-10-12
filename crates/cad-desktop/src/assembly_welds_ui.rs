@@ -2,7 +2,7 @@
 use crate::{Workspace, presentation_controls as controls, viewport};
 use bevy_egui::egui;
 use cad_core::{
-    CadError, Result,
+    CadError, NodeRef, Result,
     commands::Command,
     presentation::SemanticElement,
     weld_beads::{Definition, FaceSource, Pattern, Profile, SeamSource},
@@ -43,6 +43,15 @@ fn parsed(w: &Workspace) -> Result<Definition> {
         return Err(invalid("Saved bead identity cannot change"));
     }
     Ok(source)
+}
+pub(crate) fn feedback_target(w: &Workspace) -> Option<NodeRef> {
+    if !w.fields.contains_key(EDITOR) || !source_is_current(w) {
+        return None;
+    }
+    Some(NodeRef {
+        definition: editor_owner(w)?.into(),
+        node: parsed(w).ok()?.id,
+    })
 }
 fn source_is_current(w: &Workspace) -> bool {
     if !w.fields.contains_key(EDITOR) {
@@ -501,6 +510,22 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         vec![],
     );
     group(w, &mut out, "seam", "Seam and support faces");
+    let mut note = |key: &str, label: &str| {
+        out.push(SemanticElement {
+        id: identity(w, key), role: "assembly-weld-help".into(), label: label.into(), value: None,
+        state: "ready".into(), commands: vec![], relationships: vec![definition.id.clone()],
+        data: json!({"group":"seam","classes":["modeling-status","weld-feedback"],"owner":owner,"weld":definition.id}),
+    })
+    };
+    note(
+        "joint-requirements",
+        crate::weld_beads_ui::joint_help(&definition),
+    );
+    note(
+        "owner-frame",
+        "Seam and support geometry is evaluated in the owning assembly's frame using each component's current solved placement.",
+    );
+    out.extend(crate::weld_beads_ui::feedback(w, owner, &definition.id));
     let (seams, supports) = geometry_choices(w, owner);
     field(
         w,
@@ -672,29 +697,55 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         Some("mm"),
         vec![],
     );
-    group(w, &mut out, "orientation", "Bead orientation");
-    for (index, axis) in ["X", "Y", "Z"].iter().enumerate() {
+    if !matches!(definition.seam, SeamSource::ModelEdge { .. }) && definition.supports.is_empty() {
+        group(
+            w,
+            &mut out,
+            "orientation",
+            "Owning assembly frame · bead orientation",
+        );
+        for (index, axis) in ["X", "Y", "Z"].iter().enumerate() {
+            field(
+                w,
+                &mut out,
+                &source,
+                "orientation",
+                &format!("/direction/{index}"),
+                &format!("Owner-frame direction {axis}"),
+                Some(""),
+                vec![],
+            );
+        }
         field(
             w,
             &mut out,
             &source,
             "orientation",
-            &format!("/direction/{index}"),
-            &format!("Owner-frame direction {axis}"),
-            Some(""),
+            "/roll",
+            "Roll about seam",
+            Some("deg"),
             vec![],
         );
+    } else {
+        out.push(SemanticElement {
+            id: identity(w, "joint-orientation"), role: "assembly-weld-help".into(),
+            label: "Joint faces determine bead orientation; direction and roll apply only to an authored seam without support faces.".into(), value: None, state: "ready".into(), commands: vec![], relationships: vec![definition.id.clone()], data: json!({"group":"seam","classes":["modeling-status","weld-feedback"]}),
+        });
+        if definition
+            .values(w.session.visible(), owner)
+            .is_ok_and(|values| values.roll_rad.abs() > 1e-10)
+        {
+            command_element(
+                w,
+                &mut out,
+                "reset-joint-roll",
+                "Use joint orientation",
+                ACTION,
+                json!({"kind":"set","pointer":"/roll","value":"0 deg"}),
+                source_is_current(w),
+            );
+        }
     }
-    field(
-        w,
-        &mut out,
-        &source,
-        "orientation",
-        "/roll",
-        "Roll about seam",
-        Some("deg"),
-        vec![],
-    );
     group(
         w,
         &mut out,
@@ -1035,10 +1086,9 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&Value>) -> bool {
 }
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     guard(w);
-    for element in semantics(w)
-        .into_iter()
-        .filter(|element| element.id.starts_with("assembly-weld-editor:"))
-    {
+    for element in semantics(w).into_iter().filter(|element| {
+        element.id.starts_with("assembly-weld-editor:") || element.role == "weld-joint-feedback"
+    }) {
         match element.role.as_str() {
             "assembly-weld-group" => {
                 controls::label(
@@ -1051,6 +1101,16 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                 );
             }
             "assembly-weld-field" => crate::ui::semantic_field(ui, w, &element),
+            "assembly-weld-help" | "weld-joint-feedback" => {
+                controls::label(
+                    ui,
+                    &element.id,
+                    &element.role,
+                    &["modeling-status", "weld-feedback"],
+                    &element.label,
+                    &element.state,
+                );
+            }
             "assembly-weld-action"
                 if controls::button(
                     ui,

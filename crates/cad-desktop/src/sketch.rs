@@ -1355,6 +1355,9 @@ pub(crate) fn reconcile(w: &mut Workspace, before: &Document) {
     }
 }
 pub fn finish(w: &mut Workspace) -> bool {
+    if !crate::holes_ui::positions_are_ready(w) {
+        return false;
+    }
     crate::sketch_handles::end(w);
     solve(w);
     let Some(s) = &w.sketch else { return false };
@@ -1418,6 +1421,7 @@ pub fn finish(w: &mut Workspace) -> bool {
     }
 }
 pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    crate::holes_ui::sketch_prompt(ui, w);
     if w.sketch.as_ref().is_some_and(|s| s.choosing_plane) {
         ui.label("Choose an origin plane or a planar model face.");
         for name in ["Front Plane", "Top Plane", "Right Plane"] {
@@ -2655,6 +2659,7 @@ pub fn overlay(
     let mut handle_clicked = crate::sketch_ui::annotations(w, ui, r);
     handle_clicked |= crate::sketch_handles::overlay(w, ui, r);
     let mut selection_click = None;
+    let mut placed_hole_center = None;
     let mut member_click = false;
     let suppressed_points = w
         .sketch
@@ -2745,7 +2750,7 @@ pub fn overlay(
                 selection_click = Some((entity, response.clone()));
             }
             Tool::Point => {
-                add_point(s, cursor, false);
+                placed_hole_center = Some(add_point(s, cursor, false));
                 s.closed = true;
             }
             Tool::Polyline => {
@@ -3341,6 +3346,9 @@ pub fn overlay(
         {
             crate::selection_ui::open(w, &hit, hit.interact_pointer_pos().unwrap_or(r.center()));
         }
+    }
+    if let Some(point) = placed_hole_center {
+        crate::holes_ui::remember_placed_center(w, point);
     }
     if edited {
         solve(w);

@@ -652,12 +652,6 @@ fn context_fields(f: &mut Fields<'_>, section: &str) {
             ("tables", "Tables"),
         ]),
     );
-    f.transient(
-        "preview",
-        "Show sheet in model viewport",
-        json!(f.w.fields.contains_key("drawing-preview")),
-        vec![],
-    );
     for (kind, label) in [
         ("drawing.sheet-add", "New sheet"),
         ("drawing.sheet-template-load", "From template"),
@@ -672,8 +666,8 @@ fn context_fields(f: &mut Fields<'_>, section: &str) {
     }
 }
 fn sheet_fields(f: &mut Fields<'_>) {
-    f.group("sheet", "Sheet");
-    f.text("/name", "Name", false);
+    f.group("scope", "Model scope");
+    f.text("/name", "Sheet name", false);
     let scopes =
         f.w.session
             .visible()
@@ -688,7 +682,8 @@ fn sheet_fields(f: &mut Fields<'_>) {
                     .map(|a| choice(&a.name, &a.id)),
             )
             .collect();
-    f.select("/definition", "Model scope", scopes);
+    f.select("/definition", "Model", scopes);
+    f.group("paper", "Paper");
     f.number("/paper_mm/0", "Paper width", "mm", Some(50.), Some(2000.));
     f.number("/paper_mm/1", "Paper height", "mm", Some(50.), Some(2000.));
     for (label, size) in [
@@ -733,7 +728,56 @@ fn sheet_fields(f: &mut Fields<'_>) {
                 .map(|v| choice(&v.name, &v.id)),
         );
     }
+    f.group("projection", "Projection");
     f.select("/exploded_view", "Assembly state", exploded);
+    let views = view_keys(f.sheet);
+    f.transient(
+        "projection",
+        "Views",
+        json!(if views == ["front", "top", "right"] {
+            "standard"
+        } else if views == ["front", "top", "right", "isometric"] {
+            "standard-isometric"
+        } else if views == ["front"] {
+            "front"
+        } else {
+            "custom"
+        }),
+        choices(&[
+            ("standard", "Front / Top / Right"),
+            ("standard-isometric", "Standard + Isometric"),
+            ("front", "Front only"),
+            ("custom", "Custom views"),
+        ]),
+    );
+    f.note(
+        "projection-convention",
+        "Third-angle projection · Top above Front, Right beside Front",
+        "ready",
+    );
+    f.group("scale", "Scale");
+    let saved_scale = f
+        .sheet
+        .view_layouts
+        .get("front")
+        .and_then(|layout| layout.scale);
+    let mut scale_choices = vec![choice("Automatic standard scale", Value::Null)];
+    for scale in [0.1, 0.2, 0.25, 0.5, 1., 2., 5., 10.] {
+        scale_choices.push(choice(scale_label(scale), scale));
+    }
+    if let Some(scale) = saved_scale
+        && !scale_choices
+            .iter()
+            .any(|option| option["value"].as_f64() == Some(scale))
+    {
+        scale_choices.push(choice(format!("{} (saved)", scale_label(scale)), scale));
+    }
+    f.transient(
+        "scale",
+        "Shared view scale",
+        json!(saved_scale),
+        scale_choices,
+    );
     f.group("sheet-actions", "Manage sheet");
     for (command, label) in [
         ("drawing.sheet-duplicate", "Duplicate"),
@@ -2071,11 +2115,11 @@ fn saved_row_fields(f: &mut Fields<'_>, table: &Table, path: &str) {
 }
 
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
-    if w.dialog.as_deref() != Some("drawings") {
+    if !crate::drawing_ui::is_workspace(w) {
         return vec![];
     }
     let Some(sheet) = active_sheet(w) else {
-        return vec![];
+        return empty_semantics(w);
     };
     let current_section = section(w, &sheet);
     let mut fields = Fields::new(w, &sheet);
@@ -2088,27 +2132,39 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         "tables" => table_fields(&mut fields),
         _ => sheet_fields(&mut fields),
     }
-    fields.group("confirmation", "Preview and save");
-    let source_valid = current_source_is_valid(w);
-    if !source_valid {
-        fields.note("source-invalid","Correct the staged drawing fields before applying. Hidden invalid fields also remain pending.","error");
+    if !current_source_is_valid(w) {
+        fields.group("validation", "Drawing validation");
+        fields.note("source-invalid", "Correct the staged drawing fields before applying. Hidden invalid fields also remain pending.", "error");
     }
+    fields.group("confirmation", "Preview and save");
     for (command, label, enabled) in [
         (
             "draft.apply",
             "Apply drawing",
-            w.session.draft.is_some() && source_valid,
+            crate::cad_ui::confirmation_available(w),
         ),
         ("draft.cancel", "Cancel", w.tool_checkpoint.is_some()),
-        ("file.export-pdf", "Export PDF", source_valid),
-        ("file.export-drawing-dxf", "Export DXF", source_valid),
+        (
+            "file.export-pdf",
+            "Export PDF",
+            w.session.draft.is_none()
+                && current_source_is_valid(w)
+                && crate::drawing_ui::evaluation(w).is_some_and(|e| e.valid),
+        ),
+        (
+            "file.export-drawing-dxf",
+            "Export DXF",
+            w.session.draft.is_none()
+                && current_source_is_valid(w)
+                && crate::drawing_ui::evaluation(w).is_some_and(|e| e.valid),
+        ),
     ] {
         fields.action(
             command,
             label,
             json!({"kind":"confirmation","command":command}),
             enabled,
-            "A current valid drawing draft is required",
+            "A current validated drawing is required",
         );
     }
     for element in &mut fields.out {
@@ -2250,44 +2306,50 @@ pub fn reset(w: &mut Workspace) {
             && !key.starts_with("drawing-control:collection:")
     });
 }
+fn empty_semantics(w: &Workspace) -> Vec<SemanticElement> {
+    let mut data = json!({"contract":CONTRACT,"version":VERSION,"document":w.session.visible().id,"editor":w.fields.get(GENERATION),"group":"empty"});
+    let mut elements = vec![SemanticElement {
+        id: "drawing-editor:empty".into(),
+        role: "drawing-editor-group".into(),
+        label: "New drawing".into(),
+        value: None,
+        state: "ready".into(),
+        commands: vec![],
+        relationships: vec![],
+        data: data.clone(),
+    }];
+    for (command, label) in [
+        ("drawing.sheet-add", "New sheet"),
+        ("drawing.sheet-template-load", "From template"),
+    ] {
+        let enabled = w.settings.is_none();
+        data["command"] = json!(command);
+        data["enabled"] = json!(enabled);
+        data["actions"] = json!([{"command":command,"label":label,"enabled":enabled}]);
+        elements.push(SemanticElement {
+            id: format!("drawing-editor:{command}"),
+            role: "drawing-editor-action".into(),
+            label: label.into(),
+            value: None,
+            state: if enabled { "ready" } else { "disabled" }.into(),
+            commands: vec![command.into()],
+            relationships: vec![],
+            data: data.clone(),
+        });
+    }
+    elements
+}
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     if !w.fields.contains_key(GENERATION) {
         w.fields.insert(GENERATION.into(), cad_core::id());
     }
-    if active_sheet(w).is_none() {
-        let mut data = json!({"contract":CONTRACT,"version":VERSION,"document":w.session.visible().id,"editor":w.fields.get(GENERATION)});
-        let mut elements = vec![];
-        elements.push(SemanticElement {
-            id: "drawing-editor:empty".into(),
-            role: "drawing-editor-group".into(),
-            label: "Drawings".into(),
-            value: None,
-            state: "ready".into(),
-            commands: vec![],
-            relationships: vec![],
-            data: data.clone(),
-        });
-        for (command, label) in [
-            ("drawing.sheet-add", "New sheet"),
-            ("drawing.sheet-template-load", "From template"),
-        ] {
-            data["command"] = json!(command);
-            elements.push(SemanticElement {
-                id: format!("drawing-editor:{command}"),
-                role: "drawing-editor-action".into(),
-                label: label.into(),
-                value: None,
-                state: "ready".into(),
-                commands: vec![command.into()],
-                relationships: vec![],
-                data: data.clone(),
-            });
-        }
-        crate::operation_editor_ui::render_elements(ui, w, elements);
-    } else {
-        crate::operation_editor_ui::render_elements(ui, w, semantics(w));
-    }
+    let properties = semantics(w)
+        .into_iter()
+        .filter(|element| element.data["group"] != "confirmation")
+        .collect();
+    crate::operation_editor_ui::render_elements(ui, w, properties);
 }
+
 fn live(w: &Workspace, element: &SemanticElement) -> Result<SemanticElement> {
     let fresh = semantics(w)
         .into_iter()
@@ -2517,6 +2579,53 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
                         .ok_or_else(|| invalid("Expected a drawing row"))?
                         .into(),
                 );
+            }
+            "projection" => {
+                let mut sheet = active_sheet(w).ok_or_else(|| invalid("Select a sheet"))?;
+                let views = match value.as_str().unwrap_or("") {
+                    "standard" => vec!["front".into(), "top".into(), "right".into()],
+                    "standard-isometric" => vec![
+                        "front".into(),
+                        "top".into(),
+                        "right".into(),
+                        "isometric".into(),
+                    ],
+                    "front" => vec!["front".into()],
+                    "custom" => {
+                        w.fields.insert("drawing-section".into(), "views".into());
+                        return Ok(());
+                    }
+                    _ => return Err(invalid("Choose current projection views")),
+                };
+                set_views(&mut sheet, views)?;
+                publish(w, sheet);
+            }
+            "scale" => {
+                let mut sheet = active_sheet(w).ok_or_else(|| invalid("Select a sheet"))?;
+                let evaluation = crate::drawing_ui::evaluation(w).ok_or_else(|| {
+                    invalid("Wait for current model geometry before changing scale")
+                })?;
+                let resolved = build_sheet_preview(w.session.visible(), evaluation, &sheet, 0)?;
+                for key in view_keys(&sheet) {
+                    let mut layout = sheet
+                        .view_layouts
+                        .get(&key)
+                        .cloned()
+                        .or_else(|| resolved.views.get(&key).cloned())
+                        .ok_or_else(|| invalid("Drawing view layout is unavailable"))?;
+                    if value.is_null() {
+                        layout.scale = None;
+                    } else {
+                        layout.scale = Some(
+                            value
+                                .as_f64()
+                                .filter(|n| n.is_finite() && *n > 0.)
+                                .ok_or_else(|| invalid("Enter a positive drawing scale"))?,
+                        );
+                    }
+                    sheet.view_layouts.insert(key, layout);
+                }
+                publish(w, sheet);
             }
             "preview" => {
                 if value

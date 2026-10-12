@@ -210,6 +210,10 @@ pub struct Evaluation {
     pub weldments: BTreeMap<String, crate::weldment::EvaluatedWeldment>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub weld_beads: BTreeMap<String, crate::weld_beads::Evaluated>,
+    /// Current native joint diagnostics, including failed beads. Display only;
+    /// their presence never relaxes document validity or Apply eligibility.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weld_joints: Vec<crate::weld_beads::JointPreview>,
     /// Assembly-owned deposited metal, separate from shared part definitions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub assembly_welds: BTreeMap<String, crate::assembly_welds::Evaluated>,

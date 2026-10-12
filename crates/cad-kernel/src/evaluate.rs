@@ -201,6 +201,7 @@ impl<K: KernelAdapter> Evaluator<K> {
             sheets: BTreeMap::new(),
             weldments: BTreeMap::new(),
             weld_beads: BTreeMap::new(),
+            weld_joints: self.adapter.weld_joint_previews(),
             assembly_welds: BTreeMap::new(),
             mold_analyses: BTreeMap::new(),
             configurations: cad_core::configuration::evaluated(&document).ok(),
@@ -633,6 +634,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         }
         // A failed rebuild may have updated adapter provenance. Never reuse its prior cache key.
         self.last_source.clear();
+        self.adapter.clear_weld_joint_previews();
         let report =
             crate::assemblies::build_shapes_report(&self.adapter, &solved, root, tolerance, true)?;
         if !report.failures.is_empty() {
@@ -1192,6 +1194,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         let mut sheets = BTreeMap::new();
         let mut weldments = BTreeMap::new();
         let mut weld_beads = BTreeMap::new();
+        let mut weld_joints = vec![];
         let mut history = BTreeMap::new();
         for part in solved.parts.values() {
             self.focused_preview(part, &part.id, tolerance);
@@ -1201,6 +1204,12 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             for (feature, bead) in self.weld_bead_output(&solved, &part.id)? {
                 weld_beads.insert(format!("{}::{feature}", part.id), bead);
             }
+            weld_joints.extend(
+                self.adapter
+                    .weld_joint_previews()
+                    .into_iter()
+                    .filter(|preview| preview.owner.definition == part.id),
+            );
             for (feature, report) in self.mold_output(&solved, &part.id) {
                 mold_analyses.insert(format!("{}::{feature}", part.id), report);
             }
@@ -1279,6 +1288,17 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 for (feature, bead) in self.weld_bead_output(&configured_solved, &i.definition)? {
                     weld_beads.insert(format!("{key}::{feature}"), bead);
                 }
+                weld_joints.extend(
+                    self.adapter
+                        .weld_joint_previews()
+                        .into_iter()
+                        .filter(|preview| preview.owner.definition == i.definition)
+                        .map(|mut preview| {
+                            preview.path = i.path.clone();
+                            preview.matrix = i.matrix;
+                            preview
+                        }),
+                );
                 for (feature, geometry) in self.sketch_output(&configured_solved, &i.definition)? {
                     sketches.insert(format!("{key}::{feature}"), geometry);
                 }
@@ -1301,6 +1321,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             .retain(|key, _| history.contains_key(key));
         let properties = cad_core::inspection::evaluate(document, &meshes)?;
         let mut assembly_welds = BTreeMap::new();
+        let mut diagnostics = vec![];
         let occurrences = cad_core::assembly_welds::occurrences(document, &assemblies)?;
         for occurrence in &occurrences {
             let Some(assembly) = occurrence.context.assemblies.get(&occurrence.definition) else {
@@ -1343,19 +1364,37 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                         ),
                     );
                 }
-                let (mesh, bodies, bead) = self
+                let result = self.adapter.assembly_weld(
+                    &occurrence.context,
+                    &owner,
+                    weld,
+                    &contexts,
+                    root,
+                    tolerance,
+                );
+                if let Some(mut preview) = self
                     .adapter
-                    .assembly_weld(
-                        &occurrence.context,
-                        &owner,
-                        weld,
-                        &contexts,
-                        root,
-                        tolerance,
-                    )
-                    .map_err(|e| {
-                        CadError::Invalid(format!("{} / {}: {e}", assembly.name, weld.name))
-                    })?;
+                    .weld_joint_previews()
+                    .into_iter()
+                    .find(|preview| preview.owner == owner)
+                {
+                    preview.path = occurrence.path.clone();
+                    preview.matrix =
+                        std::array::from_fn(|r| std::array::from_fn(|c| occurrence.matrix[(r, c)]));
+                    preview.frame_label = format!("{} assembly frame", assembly.name);
+                    weld_joints.push(preview);
+                }
+                let (mesh, bodies, bead) = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        diagnostics.push(Diagnostic {
+                            severity: "error".into(),
+                            target: Some(weld.id.clone()),
+                            message: format!("{} / {}: {error}", assembly.name, weld.name),
+                        });
+                        continue;
+                    }
+                };
                 let seam_context = &contexts[weld.seam.path()].0;
                 let seam_part = &seam_context.parts[&weld.seam.dependency().definition];
                 let material = weld
@@ -1414,9 +1453,9 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             identity,
             meshes,
             instances,
-            diagnostics: vec![],
-            valid: true,
-            geometry_valid: true,
+            valid: diagnostics.is_empty(),
+            geometry_valid: diagnostics.is_empty(),
+            diagnostics,
             elapsed_ms: start.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
             sketches,
             references,
@@ -1431,6 +1470,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             sheets,
             weldments,
             weld_beads,
+            weld_joints,
             assembly_welds,
             history: std::sync::Arc::new(history),
             operation_preview: None,

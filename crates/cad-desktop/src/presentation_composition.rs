@@ -388,6 +388,8 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     }
     elements.extend(crate::configuration_ui::semantics(w));
     elements.extend(crate::sketch_ui::dimension_semantics(w));
+    elements.extend(crate::holes_ui::sketch_semantics(w));
+    elements.extend(crate::components_ui::semantics(w));
     elements.extend(cad_core::navigation::semantic_fields(&w.view.navigation));
     elements.extend(crate::presentation_resources::semantics(w));
     elements.extend(crate::appearances_ui::semantics(w));
@@ -396,6 +398,8 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::operation_editor_ui::semantics(w));
     elements.extend(crate::assembly_tools_ui::semantics(w));
     elements.extend(crate::assembly_welds_ui::semantics(w));
+    elements.extend(crate::weld_beads_ui::semantics(w));
+    elements.extend(crate::drawing_ui::workspace_semantics(w));
     for element in crate::drawing_editor_ui::semantics(w) {
         if let Some(existing) = elements
             .iter_mut()
@@ -674,6 +678,16 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "component-placement",
+        crate::components_ui::set_value,
+        crate::components_ui::current_value,
+    );
+    adapters.register(
+        "component-insert",
+        crate::components_ui::set_insert_value,
+        crate::components_ui::insert_value,
+    );
     adapters.register(
         "production",
         crate::production_ui::set_field,

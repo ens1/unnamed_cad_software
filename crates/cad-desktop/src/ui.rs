@@ -68,6 +68,10 @@ pub fn workspace_ui(
     }
     ctx.set_visuals(visuals);
 
+    if w.view.drawing_workspace && w.dialog.is_none() {
+        crate::drawing_ui::open_workspace(&mut w);
+    }
+
     let size = ctx.content_rect().size();
     crate::presentation_controls::begin_frame(&w.theme, &w.view.active_layout);
     let semantics = crate::presentation_composition::semantics(&w);
@@ -279,7 +283,14 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
         }
     }
     if shortcuts.1 {
-        w.confirm_tool();
+        if w.sketch
+            .as_ref()
+            .is_some_and(|sketch| sketch.dimension.is_some())
+        {
+            crate::sketch_ui::finish_dimension(w);
+        } else {
+            w.confirm_tool();
+        }
     }
     if shortcuts.2 {
         save(w, false);
@@ -337,7 +348,11 @@ fn navigation(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::cad_ui::navigation(ui, w);
 }
 fn dependencies(ui: &mut egui::Ui, w: &mut Workspace) {
-    crate::cad_ui::tree(ui, w);
+    if crate::drawing_ui::is_workspace(w) {
+        crate::drawing_ui::tree(ui, w);
+    } else {
+        crate::cad_ui::tree(ui, w);
+    }
 }
 pub(crate) fn graph(ui: &mut egui::Ui, w: &mut Workspace, part: &Part) {
     crate::graph_ui::show(ui, w, Some(part));
@@ -674,6 +689,10 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
         crate::appearances_ui::lighting_view(ui, w)
     });
     registry.register("drawings-editor", |ui, w, _| drawings(ui, w));
+    registry.register("drawing-tree", |ui, w, _| crate::drawing_ui::tree(ui, w));
+    registry.register("drawing-completion", |ui, w, _| {
+        crate::drawing_ui::footer(ui, w)
+    });
     registry.register("manufacturing-editor", |ui, w, _| manufacturing(ui, w));
     registry.register("versions-editor", |ui, w, _| versions(ui, w));
     registry.register("review-editor", |ui, w, _| comments(ui, w));
@@ -892,6 +911,19 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         w.status = "Apply or cancel Settings before using another command".into();
         return;
     }
+    if command == "drawings" {
+        crate::drawing_ui::open_workspace(w);
+        return;
+    }
+    if crate::drawing_ui::is_workspace(w)
+        && (command.starts_with("feature.")
+            || command.starts_with("sketch.")
+            || command.starts_with("assembly.")
+            || command == "part.new")
+        && !crate::drawing_ui::leave_workspace(w)
+    {
+        return;
+    }
     if element.role == "selection-action" && matches!(command, "assembly.move" | "assembly.rotate")
     {
         if let Some(target) = element
@@ -910,6 +942,7 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         return;
     }
     if crate::reference_repair_ui::action(w, command, Some(&element.data))
+        || crate::drawing_ui::semantic_action(w, element, command)
         || crate::sketch_relations_ui::semantic_action(w, element, command)
         || crate::feature_order_ui::action(w, command, Some(&element.data))
         || crate::operation_editor_ui::action(w, command, Some(&element.data))
@@ -1075,6 +1108,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 || matches!(
                     setter,
                     "operation-editor"
+                        | "component-placement"
+                        | "component-insert"
                         | "drawing-editor"
                         | "drawing-interaction"
                         | "production"
@@ -1344,6 +1379,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     .unwrap_or_else(|| value.to_string());
                 let key = format!("presentation-field:{}:{editor_generation}", element.id);
                 let keep_invalid_text = crate::assembly_tools_ui::field_is_invalid(w, element)
+                    || crate::components_ui::field_is_invalid(w, element)
                     || crate::assembly_welds_ui::field_is_invalid(w, element)
                     || crate::operation_editor_ui::field_is_invalid(w, element)
                     || crate::drawing_editor_ui::field_is_invalid(w, element)
@@ -1439,6 +1475,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         draw(ui)
     };
     if let Some(error) = appearance_error {
+        crate::components_ui::field_error(w, element, error.clone());
         crate::assembly_tools_ui::field_error(w, element, error.clone());
         crate::assembly_welds_ui::field_error(w, element, error.clone());
         crate::operation_editor_ui::field_error(w, element, error.clone());
@@ -1451,6 +1488,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     if let Some(next) = next {
         match crate::presentation_composition::set_value(w, element, next) {
             Ok(()) => {
+                crate::components_ui::field_error(w, element, None);
                 crate::assembly_tools_ui::field_error(w, element, None);
                 crate::assembly_welds_ui::field_error(w, element, None);
                 crate::appearances_ui::field_error(w, element, None);
@@ -1461,6 +1499,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::configuration_ui::field_error(w, element, None);
             }
             Err(error) => {
+                crate::components_ui::field_error(w, element, Some(error.to_string()));
                 crate::assembly_tools_ui::field_error(w, element, Some(error.to_string()));
                 crate::assembly_welds_ui::field_error(w, element, Some(error.to_string()));
                 w.status = error.to_string();
@@ -1789,6 +1828,21 @@ fn reference_repair_blocks(w: &mut Workspace, command: &str) -> bool {
 }
 
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if w.settings.is_none() && !crate::drawing_interaction_ui::active(w) {
+        if cmd == "drawings" {
+            crate::drawing_ui::open_workspace(w);
+            return;
+        }
+        if crate::drawing_ui::is_workspace(w)
+            && (cmd.starts_with("feature.")
+                || cmd.starts_with("sketch.")
+                || cmd.starts_with("assembly.")
+                || cmd == "part.new")
+            && !crate::drawing_ui::leave_workspace(w)
+        {
+            return;
+        }
+    }
     if crate::drawing_interaction_ui::active(w)
         && !matches!(cmd, "draft.cancel" | "operation.cancel" | "tool.cancel")
     {
@@ -1803,6 +1857,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         return;
     }
     if crate::workspace_controls::action(w, cmd)
+        || crate::drawing_ui::action(w, cmd)
+        || crate::components_ui::action(w, cmd)
         || crate::reference_repair_ui::action(w, cmd, None)
         || crate::sketch_relations_ui::action(w, cmd)
         || crate::selection_ui::set_action(w, cmd)
@@ -2085,6 +2141,15 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         }
         "file.release" => export(w, true),
         "part.new" => new_part(w),
+        "assembly.mate-new" => {
+            let owner = w
+                .fields
+                .get("assembly-id")
+                .filter(|id| w.session.visible().assemblies.contains_key(*id))
+                .cloned()
+                .unwrap_or_else(|| w.session.visible().root.clone());
+            crate::mate_ui::new(w, &owner);
+        }
         "sketch.new" => {
             if w.view.active_part.is_none() {
                 new_part(w);
@@ -2260,7 +2325,12 @@ fn new_part(w: &mut Workspace) {
         .visible()
         .new_part(&format!("Part{}", w.session.visible().parts.len() + 1));
     let def = part.id.clone();
-    let root = w.session.visible().root.clone();
+    let root = w
+        .fields
+        .get("assembly-id")
+        .filter(|id| w.session.visible().assemblies.contains_key(*id))
+        .cloned()
+        .unwrap_or_else(|| w.session.visible().root.clone());
     w.dispatch(Command::PutPart {
         part,
         assembly: Some(root),
@@ -2890,11 +2960,16 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
     if matches!(
         dialog.as_str(),
         "feature" | "sketch" | "reference-repair" | "feature-order"
-    ) {
+    ) || (w.tool_checkpoint.is_some() || w.session.draft.is_some()) && dialog != "drawings"
+    {
         crate::cad_ui::confirmation(ui, w);
         if w.dialog.is_none() {
             return;
         }
+        ui.separator();
+    }
+    if dialog == "drawings" {
+        crate::drawing_ui::footer(ui, w);
         ui.separator();
     }
     ui.horizontal(|ui| {
@@ -2902,6 +2977,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "reference-repair" => "Repair References",
             "feature-order" => "Feature Order",
             "assembly-motion" => "Move / Rotate Component",
+            "component-insert" => "Insert Existing Component",
             "selection" => "Selection Actions",
             "feature" => "Feature",
             "sketch" => "Sketch on model",
@@ -2974,6 +3050,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             }
             "presentation" => presentation_editor(ui, w),
             "assembly" => assembly_editor(ui, w),
+            "component-insert" => crate::components_ui::show(ui, w),
             "versions" => versions(ui, w),
             "bom" => bom(ui, w),
             "materials" => materials(ui, w),
@@ -3376,24 +3453,9 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
         crate::mate_ui::show(ui, w, &assembly_id);
         return;
     }
-    ui.horizontal(|ui| {
-        if ui.button("Add instance").clicked()
-            && let Some(definition) = w.view.active_part.clone()
-        {
-            let key = id();
-            w.dispatch(Command::PutInstance {
-                assembly: assembly_id.clone(),
-                instance: Instance {
-                    id: key,
-                    name: cad_core::presentation::definition_name(&doc, &definition),
-                    definition,
-                    placement: Default::default(),
-                    configuration: None,
-                    finish: None,
-                    fixed: a.instances.is_empty(),
-                    translation_expressions: None,
-                },
-            });
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Insert Existing…").clicked() {
+            crate::components_ui::begin_insert(w);
         }
         if ui.button("New subassembly").clicked() {
             let mut document = doc.clone();
@@ -3555,24 +3617,6 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                         cad_core::presentation::definition_name(&doc, &instance.definition)
                     ));
                     crate::assembly_tools_ui::show_placement(ui, w, &assembly_id, &i.id);
-                    ui.horizontal(|ui| {
-                        ui.label(if doc.active_configurations.contains_key(&assembly_id) { "Base position seed" } else { "Position seed" });
-                        for (axis, value) in ["X", "Y", "Z"].into_iter().zip(&mut instance.placement.translation) {
-                            ui.label(axis);
-                            changed |= ui
-                                .add(egui::DragValue::new(value).speed(0.2).suffix(" mm"))
-                                .changed();
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(if doc.active_configurations.contains_key(&assembly_id) { "Base rotation seed" } else { "Rotation seed" });
-                        for (axis, value) in ["X", "Y", "Z"].into_iter().zip(&mut instance.placement.rotation_deg) {
-                            ui.label(axis);
-                            changed |= ui
-                                .add(egui::DragValue::new(value).speed(0.2).suffix("°"))
-                                .changed();
-                        }
-                    });
                     ui.small("Mates solve from these starting coordinates. Move / Rotate uses the current solved pose.");
                     let mut expr = instance.translation_expressions.is_some();
                     if ui
@@ -3612,7 +3656,8 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                             instance,
                         });
                     }
-                    ui.horizontal(|ui| {
+                    crate::components_ui::show_placement(ui,w,&assembly_id,&i.id);
+                    ui.horizontal_wrapped(|ui| {
                         if ui.button("Edit in place").clicked() {
                             let path = doc.placed_parts().unwrap_or_default().into_iter()
                                 .find(|placed| placed.path.last() == Some(&i.id)).map(|placed| placed.path);

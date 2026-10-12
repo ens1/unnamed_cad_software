@@ -15,6 +15,10 @@ pub struct DimensionEditor {
     pub document: Document,
     pub history_len: usize,
     pub focus_value: bool,
+    pub focus_nearby: bool,
+    /// A first pick offers its size immediately, while retaining the first
+    /// reference for a deliberate second pick.
+    pub extend_pick: bool,
 }
 #[derive(Clone)]
 pub struct DimensionCheckpoint {
@@ -39,12 +43,14 @@ fn ensure_dimension_checkpoint(w: &mut Workspace) {
 }
 /// Custom layouts target the same sketch entities as the native viewport.
 pub fn semantic_action(w: &mut Workspace, element: &presentation::SemanticElement, command: &str) {
-    if element.role == "sketch-dimension-editor"
-        && element
-            .data
-            .get("sketch")
-            .and_then(serde_json::Value::as_str)
-            == w.sketch.as_ref().map(|s| s.sketch_id.as_str())
+    if matches!(
+        element.role.as_str(),
+        "sketch-dimension-editor" | "sketch-operation-prompt"
+    ) && element
+        .data
+        .get("sketch")
+        .and_then(serde_json::Value::as_str)
+        == w.sketch.as_ref().map(|s| s.sketch_id.as_str())
     {
         action(w, command);
         return;
@@ -361,9 +367,36 @@ pub fn select(w: &mut Workspace, entity: Option<SketchEntity>, additive: bool) {
     crate::navigation::stop(w);
     let dimension_mode = w.fields.contains_key("smart-dimension-mode");
     if let Some(s) = &mut w.sketch {
-        if dimension_mode && entity.as_ref().is_some_and(|entity|s.dimension.as_ref().is_some_and(|editor|!matches!(entity,SketchEntity::Constraint {constraint} if constraint==&editor.constraint))) && s.dimension.take().is_some() {
-            // Picking the next geometry retains the preceding dimension preview.
-            s.selection.clear();
+        let repeat_pick = dimension_mode
+            && s.dimension.is_some()
+            && entity
+                .as_ref()
+                .is_some_and(|entity| s.selection.contains(entity));
+        if repeat_pick {
+            if let Some(editor) = &mut s.dimension {
+                editor.focus_value = true;
+                editor.focus_nearby = true;
+            }
+            return;
+        }
+        if dimension_mode
+            && entity.as_ref().is_some_and(|entity| {
+                s.dimension.as_ref().is_some_and(|editor| {
+                    !matches!(entity,SketchEntity::Constraint {constraint} if constraint==&editor.constraint)
+                })
+            })
+        {
+            if s.dimension.as_ref().is_some_and(|editor| editor.extend_pick)
+                && s.selection.len() == 1
+                && !matches!(entity, Some(SketchEntity::Constraint { .. }))
+            {
+                discard_first_pick_dimension(s);
+            } else {
+                // A completed reference pair starts a fresh dimension.
+                s.dimension = None;
+                s.dimension_pick = None;
+                s.selection.clear();
+            }
         }
         let additive = if dimension_mode {
             entity.is_some() && !s.selection.is_empty() && s.selection.len() < 2
@@ -390,6 +423,20 @@ pub fn select(w: &mut Workspace, entity: Option<SketchEntity>, additive: bool) {
             _ => None,
         });
     }
+}
+fn discard_first_pick_dimension(s: &mut sketch::EditingSketch) {
+    let Some(editor) = s.dimension.take() else {
+        return;
+    };
+    // A type change may have replaced an existing constraint; restore the
+    // complete pre-pick constraint set while retaining the current geometry.
+    s.constraints = editor.source.constraints.clone();
+    s.history.truncate(editor.history_len);
+    s.dimension_pick = Some(DimensionCheckpoint {
+        source: editor.source,
+        document: editor.document,
+        history_len: editor.history_len,
+    });
 }
 fn attach_dimension(s: &mut sketch::EditingSketch, choice: &DimensionChoice, driven: bool) -> Id {
     if let Some(c) = s.constraints.iter_mut().find(|c| {
@@ -419,8 +466,12 @@ pub fn smart_dimension(w: &mut Workspace) {
     smart_dimension_mode(w, false);
 }
 fn smart_dimension_mode(w: &mut Workspace, driven: bool) {
+    open_dimension(w, driven, false);
+}
+fn open_dimension(w: &mut Workspace, driven: bool, extend_pick: bool) {
     if let Some(editor) = w.sketch.as_mut().and_then(|s| s.dimension.as_mut()) {
         editor.focus_value = true;
+        editor.focus_nearby = true;
         return;
     }
     ensure_dimension_checkpoint(w);
@@ -470,7 +521,21 @@ fn smart_dimension_mode(w: &mut Workspace, driven: bool) {
             s.chain.clear();
             s.clicks.clear();
         }
-        w.status = "Smart Dimension: pick two points / members. Pick a circle center then an edge for perpendicular distance. D dimensions one selected entity; Esc cancels.".into();
+        w.status = "Smart Dimension: pick a member for its size, or a center / point then an edge for a distance. Enter a value, choose a second reference, or use Done Dimension.".into();
+        return;
+    }
+    if s.selection.len() == 1
+        && matches!(
+            s.selection[0],
+            SketchEntity::Origin | SketchEntity::XAxis | SketchEntity::YAxis
+        )
+    {
+        if let Some(s) = &mut w.sketch {
+            s.tool = sketch::Tool::Select;
+            s.chain.clear();
+            s.clicks.clear();
+        }
+        w.status = "Smart Dimension: reference selected. Pick the sketch point or member to dimension from it.".into();
         return;
     }
     let choices = a::dimensions(
@@ -499,13 +564,17 @@ fn smart_dimension_mode(w: &mut Workspace, driven: bool) {
                     document,
                     history_len,
                     focus_value: true,
+                    focus_nearby: true,
+                    extend_pick: extend_pick
+                        || (s.selection.len() == 1
+                            && !matches!(s.selection[0], SketchEntity::Constraint { .. })),
                 });
                 s.tool = sketch::Tool::Select;
                 s.chain.clear();
                 s.clicks.clear();
             }
             w.manager_tree = false;
-            w.status="Enter the dimension in the docked field. Edits preview live; Done keeps this preview, Cancel Dimension restores its start, Apply Sketch commits.".into();
+            w.status="Enter the dimension beside the geometry or in the docked field. Edits preview live; Done Dimension retains it, Cancel Dimension restores its start, Finish Sketch commits.".into();
             sketch::solve(w);
         }
         Err(e) => w.status = e.to_string(),
@@ -516,19 +585,14 @@ pub fn selection_changed(w: &mut Workspace) {
     if !w.fields.contains_key("smart-dimension-mode") {
         return;
     }
-    if w.sketch.as_ref().is_some_and(|s| {
+    let driven = w
+        .fields
+        .get("smart-dimension-mode")
+        .is_some_and(|mode| mode == "reference");
+    let first_pick = w.sketch.as_ref().is_some_and(|s| {
         s.selection.len() == 1 && !matches!(s.selection[0], SketchEntity::Constraint { .. })
-    }) {
-        w.status =
-            "Smart Dimension: pick a second point / member, or press D to dimension this one entity (circle diameter, line length, or point coordinates)."
-                .into();
-    } else {
-        let driven = w
-            .fields
-            .get("smart-dimension-mode")
-            .is_some_and(|mode| mode == "reference");
-        smart_dimension_mode(w, driven);
-    }
+    });
+    open_dimension(w, driven, first_pick);
 }
 pub fn cancel_dimension(w: &mut Workspace) -> bool {
     let checkpoint = w.sketch.as_mut().and_then(|s| {
@@ -559,6 +623,16 @@ pub fn cancel_dimension(w: &mut Workspace) -> bool {
     true
 }
 pub fn finish_dimension(w: &mut Workspace) {
+    if w.sketch
+        .as_ref()
+        .is_some_and(|sketch| sketch.dimension.is_some())
+    {
+        sketch::solve(w);
+    }
+    if let Some(error) = w.sketch.as_ref().and_then(|sketch| sketch.error.as_ref()) {
+        w.status = format!("Correct the dimension before finishing: {error}");
+        return;
+    }
     if let Some(s) = &mut w.sketch {
         s.dimension = None;
         s.dimension_pick = None;
@@ -567,7 +641,7 @@ pub fn finish_dimension(w: &mut Workspace) {
     }
     w.selection_popup = None;
     w.context_selection = None;
-    w.status = "Dimension preview retained. Pick the next pair; Apply Sketch commits the validated sketch.".into();
+    w.status = "Dimension retained in the sketch draft. Pick the next member or reference pair; Finish Sketch commits the validated sketch.".into();
 }
 /// Transient editor state is semantic data; layouts need not infer pick state
 /// from viewport styling or docked widgets.
@@ -582,7 +656,7 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
         .dimension
         .as_ref()
         .and_then(|editor| s.constraints.iter().find(|c| c.id == editor.constraint));
-    vec![presentation::SemanticElement {
+    let mut elements = vec![presentation::SemanticElement {
         id: format!("{}::smart-dimension", s.sketch_id),
         role: "sketch-dimension-editor".into(),
         label: "Smart Dimension".into(),
@@ -602,8 +676,33 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
         relationships: std::iter::once(s.sketch_id.clone())
             .chain(s.selection.iter().map(|entity| entity.key().to_string()))
             .collect(),
-        data: serde_json::json!({"definition":s.definition,"sketch":s.sketch_id,"selection":s.selection,"pending_model_edge":s.dimension_model.as_ref().map(|selected|serde_json::json!({"body":selected.body,"reference":selected.reference,"path":selected.path})),"constraint":constraint,"mode":w.fields.get("smart-dimension-mode"),"unit":constraint.map(|c|a::dimension_unit(&c.kind)),"perpendicular_distance":constraint.is_some_and(|c|c.kind=="point_line_distance"),"current_error":s.error,"shared_draft":true,"requires_current_validation":true}),
-    }]
+        data: serde_json::json!({"definition":s.definition,"sketch":s.sketch_id,"selection":s.selection,"pending_model_edge":s.dimension_model.as_ref().map(|selected|serde_json::json!({"body":selected.body,"reference":selected.reference,"path":selected.path})),"constraint":constraint,"mode":w.fields.get("smart-dimension-mode"),"unit":constraint.map(|c|a::dimension_unit(&c.kind)),"perpendicular_distance":constraint.is_some_and(|c|c.kind=="point_line_distance"),"current_error":s.error,"shared_draft":true,"requires_current_validation":true,"accepts_second_reference":s.dimension.as_ref().is_some_and(|editor|editor.extend_pick),"completion_label":"Done Dimension","completion_scope":"dimension","commit_command":"sketch.finish","actions":[{"command":"sketch.finish-dimension","label":"Done Dimension","enabled":constraint.is_some() && s.error.is_none(),"disabled_reason":"Enter a valid dimension before finishing"},{"command":"sketch.cancel-dimension","label":"Cancel Dimension","enabled":true}]}),
+    }];
+    if let Some(constraint) = constraint {
+        elements.push(dimension_value_element(w, s, constraint));
+    }
+    elements
+}
+fn dimension_value_element(
+    w: &Workspace,
+    sketch: &sketch::EditingSketch,
+    constraint: &SketchConstraint,
+) -> presentation::SemanticElement {
+    presentation::SemanticElement {
+        id: format!("{}::nearby-dimension-value", sketch.sketch_id),
+        role: "sketch-dimension-value".into(),
+        label: a::label(&constraint.kind).into(),
+        value: Some(constraint.value.0.clone()),
+        state: if sketch.error.is_some() {
+            "error"
+        } else {
+            "draft"
+        }
+        .into(),
+        commands: vec![],
+        relationships: vec![sketch.sketch_id.clone(), constraint.id.clone()],
+        data: serde_json::json!({"contract":"tcad.presentation.field","version":1,"document":w.session.visible().id,"definition":sketch.definition,"sketch":sketch.sketch_id,"setter":"sketch-dimension","constraint":constraint.id,"field":"value","json":constraint.value.0,"editable":!constraint.driven,"kind":"expression","unit":a::dimension_unit(&constraint.kind),"diagnostics":sketch.error.iter().collect::<Vec<_>>(),"accessibility_label":format!("{} expression", a::label(&constraint.kind)),"classes":["dimension-value","viewport-overlay"]}),
+    }
 }
 /// Transient model-edge preselection has its own overlay and never replaces
 /// global model selection. Source restoration clears this feedback with it.
@@ -745,10 +844,17 @@ pub fn model_edge_dimension_pick(
             "This edge projects to a point on the sketch plane".into(),
         ));
     }
-    let mut source = sketch::sketch_definition(s);
     let owner = s.definition.clone();
     let sketch_id = s.sketch_id.clone();
     let reference = edge.reference.clone();
+    let extending = s
+        .dimension
+        .as_ref()
+        .is_some_and(|editor| editor.extend_pick);
+    let mut source = sketch::sketch_definition(s);
+    if extending && let Some(editor) = &s.dimension {
+        source.constraints = editor.source.constraints.clone();
+    }
     let existing = source
         .conversions
         .iter()
@@ -782,10 +888,13 @@ pub fn model_edge_dimension_pick(
         .insert(sketch_id, source.clone());
     // The normal source admission rejects downstream / cyclic model references.
     document.validate()?;
-    if let Some(s) = &mut w.sketch
-        && s.dimension.take().is_some()
-    {
-        s.selection.clear();
+    if let Some(s) = &mut w.sketch {
+        if extending {
+            discard_first_pick_dimension(s);
+        } else if s.dimension.take().is_some() {
+            s.dimension_pick = None;
+            s.selection.clear();
+        }
     }
     ensure_dimension_checkpoint(w);
     if let Some(s) = &mut w.sketch {
@@ -1341,9 +1450,9 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 s.selection.len() + usize::from(s.dimension_model.is_some())
             ));
         });
-        ui.small("Command-click or Shift-click to select two entities, then Smart Dimension. In dimension pick mode, pick two entities without a modifier.");
+        ui.small("Pick a member in Smart Dimension to edit its size immediately. Pick a second reference for a distance or angle; Command-click or Shift-click also supports selection first.");
         if dimension_mode && s.dimension.is_none() {
-            ui.small("Pick a center / point and straight edge for perpendicular distance. D dimensions one selected circle, line or point. Esc exits pick mode.");
+            ui.small("Pick a center / point and straight edge for perpendicular distance. Pick a circle for diameter or a line for length. Esc exits pick mode.");
         }
         if s.selection.len() >= 2 {
             ui.small("For axis symmetry, select two points or matching members, then the straight member, X Axis, or Y Axis to reflect about.");
@@ -1416,7 +1525,13 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 }
                 changed |= response.changed();
                 text_edit_started |= response.gained_focus();
+                if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                    finish_dimension_requested = true;
+                }
                 ui.small("Live preview · remains pending until Apply Sketch");
+                if editor.extend_pick {
+                    ui.small("Choose a second reference to change this size preview into a distance or angle, or use Done Dimension to retain this size.");
+                }
                 if c.kind == "point_line_distance" {
                     ui.small("Perpendicular distance to the exact oriented line; the saved side stays fixed, including through zero. Reference dimensions measure without driving.");
                 }
@@ -1426,7 +1541,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 {
                     promote = Some((c.id.clone(), c.value.clone(), a::dimension_unit(&c.kind)));
                 }
-                if ui.small_button("Done · pick next dimension").clicked() {
+                if ui.small_button("Done Dimension").clicked() {
                     finish_dimension_requested = true;
                 }
                 if ui.small_button("Cancel Dimension").clicked() {
@@ -1464,6 +1579,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     }
     if finish_dimension_requested {
         finish_dimension(w);
+        changed = false;
     }
     if let Some(command) = relation_command {
         action(w, &command);
@@ -1565,6 +1681,7 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, r: egui::Rect) -> bool 
     let plane = s.plane.clone();
     let matrix = s.matrix;
     let mut clicked = None;
+    let mut active_annotation = None;
     let inactive = cad_core::sketch_transform::inactive_entities(&source);
     for (index, c) in source.constraints.iter().enumerate() {
         if cad_core::sketch_dimensions::group_for_constraint(&source, &c.id).is_some() {
@@ -1708,6 +1825,12 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, r: egui::Rect) -> bool 
             position,
             galley.size() + egui::vec2(padding * 2., padding * 2.),
         );
+        if s.dimension
+            .as_ref()
+            .is_some_and(|editor| editor.constraint == c.id)
+        {
+            active_annotation = Some(rect);
+        }
         if !r.intersects(rect) {
             continue;
         }
@@ -1781,7 +1904,155 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, r: egui::Rect) -> bool 
             selection_ui::open(w, &response, response.rect.right_bottom());
         }
     }
+    if let Some(annotation) = active_annotation {
+        consumed |= nearby_dimension(w, ui, r, annotation);
+    }
     consumed
+}
+
+/// The in-model editor is another binding to the shared dimension expression.
+/// Its placement, size, colors and controls remain ordinary semantic styles.
+fn nearby_dimension(
+    w: &mut Workspace,
+    ui: &mut egui::Ui,
+    viewport: egui::Rect,
+    annotation: egui::Rect,
+) -> bool {
+    use crate::presentation_controls as controls;
+    let elements = dimension_semantics(w);
+    let Some(value) = elements
+        .iter()
+        .find(|element| element.role == "sketch-dimension-value")
+    else {
+        return false;
+    };
+    let Some(editor) = elements
+        .iter()
+        .find(|element| element.role == "sketch-dimension-editor")
+    else {
+        return false;
+    };
+    let id = format!("{}::nearby", editor.id);
+    let size = egui::vec2(220., 102.).min(viewport.size());
+    let min =
+        (annotation.right_bottom() + egui::vec2(8., 4.)).clamp(viewport.min, viewport.max - size);
+    let default = egui::Rect::from_min_size(min, size);
+    let Some(rect) = controls::overlay_rect_state(
+        &id,
+        "sketch-dimension-input",
+        &value.state,
+        viewport,
+        default,
+    ) else {
+        return false;
+    };
+    let props = controls::properties(
+        &id,
+        "sketch-dimension-input",
+        &["viewport-overlay", "dimension-editor"],
+        &value.state,
+    );
+    let field_props = controls::properties(
+        &value.id,
+        &value.role,
+        &["semantic-control", "dimension-value"],
+        &value.state,
+    );
+    let focus = w
+        .sketch
+        .as_ref()
+        .and_then(|sketch| sketch.dimension.as_ref())
+        .is_some_and(|editor| editor.focus_nearby);
+    let mut expression = crate::presentation_composition::current_value(w, value)
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let mut changed = false;
+    let mut requested = None;
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(&id).max_rect(rect));
+    child.set_clip_rect(viewport.intersect(rect));
+    controls::apply_properties(&mut child, &props);
+    let mut frame = controls::frame_from_properties(&mut child, &props);
+    if !props.contains_key("background") {
+        frame.fill = child.visuals().panel_fill;
+    }
+    frame.show(&mut child, |ui| {
+        controls::label(
+            ui,
+            &format!("{}:label", value.id),
+            "field-label",
+            &["dimension-value"],
+            &value.label,
+            &value.state,
+        );
+        ui.scope(|ui| {
+            controls::apply_properties(ui, &field_props);
+            let size = controls::field_size(ui, &field_props);
+            let response = ui
+                .add_enabled_ui(value.data["editable"].as_bool().unwrap_or(false), |ui| {
+                    ui.add_sized(
+                        size,
+                        egui::TextEdit::singleline(&mut expression)
+                            .id_salt(&value.id)
+                            .desired_width(size.x)
+                            .hint_text("Value, units or parameter"),
+                    )
+                })
+                .inner;
+            if focus && value.data["editable"].as_bool().unwrap_or(false) {
+                response.request_focus();
+            }
+            changed = response.changed();
+            if response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
+                requested = Some("sketch.finish-dimension".into());
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            for action in editor.action_descriptors().into_iter().filter(|action| {
+                matches!(
+                    action.command.as_str(),
+                    "sketch.finish-dimension" | "sketch.cancel-dimension"
+                )
+            }) {
+                if controls::button(
+                    ui,
+                    &action.id,
+                    "sketch-dimension-action",
+                    &["dimension-action"],
+                    &action.label,
+                    action.enabled,
+                    false,
+                )
+                .clicked()
+                {
+                    requested = Some(action.command);
+                }
+            }
+        });
+    });
+    if let Some(sketch) = &mut w.sketch
+        && let Some(editor) = &mut sketch.dimension
+    {
+        editor.focus_nearby = false;
+    }
+    if changed
+        && let Err(error) =
+            crate::presentation_composition::set_value(w, value, serde_json::json!(expression))
+    {
+        w.status = error.to_string();
+    }
+    if let Some(command) = requested {
+        action(w, &command);
+    }
+    ui.input(|input| {
+        input
+            .pointer
+            .hover_pos()
+            .is_some_and(|pointer| rect.contains(pointer))
+            && (input.pointer.any_pressed()
+                || input.pointer.any_released()
+                || input.pointer.any_down())
+    })
 }
 
 pub(crate) fn selected_block(source: &Sketch, selection: &[SketchEntity]) -> Option<Id> {

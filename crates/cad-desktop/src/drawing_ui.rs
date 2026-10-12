@@ -394,6 +394,94 @@ fn unique_name(doc: &cad_core::Document, base: &str) -> String {
     }
     name
 }
+pub fn is_workspace(w: &Workspace) -> bool {
+    w.view.drawing_workspace || w.dialog.as_deref() == Some("drawings")
+}
+/// Enter a paper workspace without starting a model draft.
+pub fn open_workspace(w: &mut Workspace) -> bool {
+    if !drawing_context(w) {
+        return false;
+    }
+    restore_workspace_fields(w);
+    true
+}
+pub fn leave_workspace(w: &mut Workspace) -> bool {
+    if w.tool_checkpoint.is_some() || crate::drawing_interaction_ui::active(w) {
+        w.status = "Apply or cancel the current drawing edit before returning to Model".into();
+        return false;
+    }
+    w.view.drawing_workspace = false;
+    if w.command_tab == "Drawing" {
+        w.command_tab = "Features".into();
+    }
+    w.fields.remove("drawing-preview");
+    if w.dialog.as_deref() == Some("drawings") {
+        w.dialog = None;
+    }
+    w.manager_tree = true;
+    true
+}
+fn restore_workspace_fields(w: &mut Workspace) {
+    let key = w
+        .view
+        .drawing_sheet
+        .as_ref()
+        .filter(|key| {
+            w.session
+                .visible()
+                .drawings
+                .iter()
+                .any(|sheet| &sheet.id == *key)
+        })
+        .cloned()
+        .or_else(|| {
+            w.session
+                .visible()
+                .drawings
+                .first()
+                .map(|sheet| sheet.id.clone())
+        });
+    w.view.drawing_sheet = key.clone();
+    w.command_tab = "Drawing".into();
+    w.dialog = Some("drawings".into());
+    w.manager_tree = false;
+    w.fields
+        .entry("drawing-editor-generation".into())
+        .or_insert_with(cad_core::id);
+    if let Some(key) = key {
+        let max = w
+            .session
+            .visible()
+            .drawings
+            .iter()
+            .find(|sheet| sheet.id == key)
+            .map(cad_core::drawing_tables::page_count)
+            .unwrap_or(1);
+        w.view.drawing_page = w.view.drawing_page.min(max.saturating_sub(1));
+        w.fields.insert("drawing-active".into(), key.clone());
+        w.fields.insert("drawing-preview".into(), key);
+        w.fields
+            .insert("drawing-page".into(), w.view.drawing_page.to_string());
+    } else {
+        w.fields.remove("drawing-active");
+        w.fields.remove("drawing-preview");
+        w.view.drawing_selection = None;
+        w.view.drawing_page = 0;
+    }
+}
+/// Called after shared Apply/Cancel clears transient source controls. Paper zoom,
+/// pan and surviving selection remain view preferences, independent of the draft.
+pub fn retain_workspace(w: &mut Workspace) {
+    if !w.view.drawing_workspace {
+        return;
+    }
+    crate::drawing_editor_ui::reset(w);
+    crate::drawing_interaction_ui::finish_edit(w);
+    restore_workspace_fields(w);
+    if let Some(target) = w.view.drawing_selection.clone() {
+        crate::drawing_interaction_ui::select_item(w, target);
+    }
+}
 pub(crate) fn drawing_context(w: &mut Workspace) -> bool {
     if w.sketch.is_some() || w.tool_checkpoint.is_some() && w.dialog.as_deref() != Some("drawings")
     {
@@ -404,13 +492,19 @@ pub(crate) fn drawing_context(w: &mut Workspace) -> bool {
         w.open_editor("drawings");
     }
     w.manager_tree = false;
+    w.command_tab = "Drawing".into();
+    w.view.drawing_workspace = true;
     true
 }
 pub(crate) fn select_sheet(w: &mut Workspace, key: &str) {
     if w.fields.get("drawing-preview").is_none_or(|id| id != key) {
         crate::drawing_interaction_ui::escape(w);
         w.fields.insert("drawing-page".into(), "0".into());
+        w.view.drawing_page = 0;
+        w.view.drawing_selection = None;
     }
+    w.view.drawing_sheet = Some(key.into());
+    w.view.drawing_workspace = true;
     w.fields.insert("drawing-preview".into(), key.into());
     w.fields.insert("drawing-active".into(), key.into());
 }
@@ -551,6 +645,17 @@ fn add_symbol(w: &mut Workspace, requested: Option<&str>, command: &str) {
     put(w, sheet);
 }
 pub fn action(w: &mut Workspace, command: &str) -> bool {
+    match command {
+        "drawing.workspace-open" => {
+            open_workspace(w);
+            return true;
+        }
+        "drawing.workspace-model" => {
+            leave_workspace(w);
+            return true;
+        }
+        _ => {}
+    }
     if matches!(
         command,
         "drawing.surface-finish-add" | "drawing.weld-symbol-add"
@@ -625,6 +730,19 @@ pub fn semantic_action(
         return true;
     };
     select_sheet(w, &key);
+    if command == "drawing.tree-select" {
+        if let Some(target) = element
+            .data
+            .get("target")
+            .filter(|target| !target.is_null())
+            .and_then(|target| serde_json::from_value(target.clone()).ok())
+        {
+            crate::drawing_interaction_ui::select_item(w, target);
+        } else {
+            w.fields.insert("drawing-section".into(), "sheet".into());
+        }
+        return true;
+    }
     if command == "drawing.sheet-edit" {
         let section = match element.role.as_str() {
             "drawing-sheet-format" | "drawing-title-field" => "format",
@@ -750,6 +868,9 @@ pub(crate) fn sheet_command(w: &mut Workspace, key: &str, command: &str) {
     semantic_action(w, &element, command);
 }
 pub fn editor(ui: &mut egui::Ui, w: &mut Workspace) {
+    if w.view.drawing_workspace && !w.fields.contains_key("drawing-preview") {
+        restore_workspace_fields(w);
+    }
     crate::drawing_interaction_ui::show_controls(ui, w);
     crate::drawing_editor_ui::show(ui, w);
 }
@@ -762,4 +883,317 @@ pub fn preview(
     viewport_id: &str,
 ) -> bool {
     crate::drawing_interaction_ui::frame(w, ui, rect, response, viewport_id)
+}
+
+/// Independently bindable paper navigation, sheet tree and construction information.
+pub fn workspace_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+    use cad_core::presentation::SemanticElement;
+    use serde_json::json;
+    let mut out = vec![];
+    for (command, label, enabled) in [
+        (
+            "drawing.workspace-open",
+            "Drawing",
+            w.sketch.is_none() && (w.tool_checkpoint.is_none() || is_workspace(w)),
+        ),
+        (
+            "drawing.workspace-model",
+            "Model",
+            w.tool_checkpoint.is_none() && !crate::drawing_interaction_ui::active(w),
+        ),
+    ] {
+        let enabled = enabled && w.settings.is_none();
+        out.push(SemanticElement {
+            id: format!("command:{command}"), role: "command".into(), label: label.into(),
+            value: None, state: if enabled { "available" } else { "disabled" }.into(),
+            commands: vec![command.into()], relationships: vec![],
+            data: json!({"enabled":enabled,"workspace":"drawing","actions":[{"command":command,"label":label,"enabled":enabled}]}),
+        });
+    }
+    if !is_workspace(w) {
+        return out;
+    }
+    let active = w
+        .fields
+        .get("drawing-active")
+        .or(w.view.drawing_sheet.as_ref());
+    let target =
+        crate::drawing_interaction_ui::selected_target(w).or(w.view.drawing_selection.as_ref());
+    out.push(SemanticElement {
+        id: "drawing.workspace-tree".into(),
+        role: "drawing-tree-group".into(),
+        label: "Sheets".into(),
+        value: None,
+        state: "ready".into(),
+        commands: vec![
+            "drawing.sheet-add".into(),
+            "drawing.sheet-template-load".into(),
+        ],
+        relationships: vec![],
+        data: json!({"contract":"tcad.presentation.drawing-workspace","version":1}),
+    });
+    for sheet in &w.session.visible().drawings {
+        let sheet_selected = active == Some(&sheet.id);
+        out.push(tree_element(
+            &sheet.id,
+            &sheet.id,
+            &sheet.name,
+            None,
+            sheet_selected,
+            "sheet",
+        ));
+        for view in view_keys(sheet) {
+            let item = cad_core::drawing_interaction::Target::View { key: view.clone() };
+            out.push(tree_element(
+                &view_id(sheet, &view),
+                &sheet.id,
+                &view,
+                Some(&item),
+                sheet_selected && target == Some(&item),
+                "view",
+            ));
+        }
+        for dimension in &sheet.dimensions {
+            let item = cad_core::drawing_interaction::Target::Dimension {
+                id: dimension.id.clone(),
+            };
+            out.push(tree_element(
+                &dimension.id,
+                &sheet.id,
+                &format!("{:?} dimension", dimension.options.kind),
+                Some(&item),
+                sheet_selected && target == Some(&item),
+                "dimension",
+            ));
+        }
+        for annotation in &sheet.entities {
+            let item = cad_core::drawing_interaction::Target::Annotation {
+                id: annotation.id.clone(),
+            };
+            out.push(tree_element(
+                &annotation.id,
+                &sheet.id,
+                annotation.kind.label(),
+                Some(&item),
+                sheet_selected && target == Some(&item),
+                "annotation",
+            ));
+        }
+        for table in &sheet.tables {
+            let item = cad_core::drawing_interaction::Target::Table {
+                id: table.id.clone(),
+            };
+            out.push(tree_element(
+                &table.id,
+                &sheet.id,
+                &table.title,
+                Some(&item),
+                sheet_selected && target == Some(&item),
+                "table",
+            ));
+        }
+    }
+    if let Some(paper) = crate::drawing_interaction_ui::rendered_sheet(w) {
+        out.push(SemanticElement {
+            id: format!("{}:construction-info", paper.id), role: "drawing-source-info".into(), label: "Drawing information".into(),
+            value: Some(format!("Source revision {}", paper.source_info.revision)), state: "ready".into(), commands: vec![],
+            relationships: vec![paper.source_info.document.clone(), paper.id.clone()],
+            data: json!({"contract":"tcad.drawing-render-information","version":1,"source":paper.source_info,"view_fidelity":paper.view_fidelity,"diagnostics":paper.diagnostics,"production_vectors_include_debug_metadata":false}),
+        });
+        for (key, label, value) in [
+            (
+                "fingerprint",
+                "Source",
+                paper.source_info.fingerprint.clone(),
+            ),
+            ("backend", "Evaluator", paper.source_info.backend.clone()),
+        ] {
+            out.push(SemanticElement {
+                id: format!("{}:construction-info:{key}", paper.id), role: "drawing-source-detail".into(),
+                label: label.into(), value: Some(value.clone()), state: "ready".into(), commands: vec![],
+                relationships: vec![format!("{}:construction-info", paper.id)],
+                data: json!({"contract":"tcad.drawing-render-information","version":1,"field":key,"json":value}),
+            });
+        }
+        for (key, fidelity) in &paper.view_fidelity {
+            out.push(SemanticElement {
+                id: format!("{}:view-info:{key}", paper.id), role: "drawing-view-info".into(), label: key.clone(),
+                value: Some(format!("{} · Hidden lines included", fidelity.description)),
+                state: if fidelity.approximate { "approximate" } else { "ready" }.into(), commands: vec![],
+                relationships: vec![paper.id.clone()],
+                data: json!({"contract":"tcad.drawing-render-information","version":1,"view_key":key,"fidelity":fidelity,"projection":paper.projections.get(key)}),
+            });
+        }
+    }
+    out.extend(footer_semantics(w));
+    out
+}
+fn tree_element(
+    id: &str,
+    sheet: &str,
+    label: &str,
+    target: Option<&cad_core::drawing_interaction::Target>,
+    selected: bool,
+    kind: &str,
+) -> cad_core::presentation::SemanticElement {
+    cad_core::presentation::SemanticElement {
+        id: format!("drawing-tree:{id}"),
+        role: "drawing-tree-item".into(),
+        label: label.into(),
+        value: None,
+        state: if selected { "selected" } else { "ready" }.into(),
+        commands: vec!["drawing.tree-select".into()],
+        relationships: vec![sheet.into()],
+        data: serde_json::json!({"contract":"tcad.presentation.drawing-workspace","version":1,"sheet_id":sheet,"target":target,"item_kind":kind,"actions":[{"command":"drawing.tree-select","label":"Select","enabled":true}]}),
+    }
+}
+pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
+    use crate::presentation_controls as controls;
+    let elements = workspace_semantics(w);
+    let props = controls::properties(
+        "drawing.workspace-tree",
+        "drawing-tree-group",
+        &["compact"],
+        "ready",
+    );
+    if props.get("display").is_some_and(|value| value == "none") {
+        return;
+    }
+    ui.scope(|ui| {
+        controls::apply_properties(ui, &props);
+        controls::label(
+            ui,
+            "drawing.workspace-tree:title",
+            "drawing-tree-title",
+            &["compact"],
+            "Sheets",
+            "ready",
+        );
+        for element in elements
+            .iter()
+            .filter(|element| element.role == "drawing-tree-item")
+        {
+            let kind = element.data["item_kind"].as_str().unwrap_or("sheet");
+            let sheet = element.data["sheet_id"].as_str();
+            if kind != "sheet" && sheet != w.fields.get("drawing-active").map(String::as_str) {
+                continue;
+            }
+            let clicked = if kind == "sheet" {
+                controls::selectable(
+                    ui,
+                    &element.id,
+                    &element.role,
+                    &element.label,
+                    element.state == "selected",
+                )
+                .clicked()
+            } else {
+                ui.indent(&element.id, |ui| {
+                    controls::selectable(
+                        ui,
+                        &element.id,
+                        &element.role,
+                        &element.label,
+                        element.state == "selected",
+                    )
+                    .clicked()
+                })
+                .inner
+            };
+            if clicked {
+                semantic_action(w, element, "drawing.tree-select");
+            }
+        }
+        egui::CollapsingHeader::new("Drawing information")
+            .id_salt("drawing.workspace-info")
+            .show(ui, |ui| {
+                for element in elements.iter().filter(|element| {
+                    matches!(
+                        element.role.as_str(),
+                        "drawing-source-info" | "drawing-source-detail" | "drawing-view-info"
+                    )
+                }) {
+                    let text = format!(
+                        "{} · {}",
+                        element.label,
+                        element.value.as_deref().unwrap_or("")
+                    );
+                    controls::label(
+                        ui,
+                        &element.id,
+                        &element.role,
+                        &["compact"],
+                        &text,
+                        &element.state,
+                    );
+                }
+            });
+    });
+}
+/// The default dock pins this group below scrolling properties; all actions are
+/// independently available to user-defined compositions.
+pub fn footer_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+    use serde_json::json;
+    if !is_workspace(w) {
+        return vec![];
+    }
+    let source_valid = crate::drawing_editor_ui::current_source_is_valid(w)
+        && crate::drawing_interaction_ui::current_source_is_valid(w);
+    let export_ready = source_valid
+        && w.session.draft.is_none()
+        && evaluation(w).is_some_and(|e| e.valid)
+        && !w.session.visible().drawings.is_empty();
+    [
+        ("draft.apply", "Apply", crate::cad_ui::confirmation_available(w)),
+        ("draft.cancel", "Cancel edit", w.tool_checkpoint.is_some()),
+        ("file.export-pdf", "PDF", export_ready),
+        ("file.export-drawing-dxf", "DXF", export_ready),
+        ("drawing.workspace-model", "Model", w.tool_checkpoint.is_none() && !crate::drawing_interaction_ui::active(w)),
+    ].into_iter().map(|(command,label,enabled)| {
+        let enabled = enabled && w.settings.is_none();
+        cad_core::presentation::SemanticElement {
+        id: format!("drawing-footer:{command}"), role: "drawing-workspace-action".into(), label: label.into(),
+        value: (!enabled).then(|| if command.starts_with("file.export") { "Apply a current validated drawing before export" } else { "Finish or validate the current drawing edit" }.into()),
+        state: if enabled { "ready" } else { "disabled" }.into(), commands: vec![command.into()], relationships: vec![],
+        data: json!({"contract":"tcad.presentation.drawing-workspace","version":1,"group":"drawing.workspace-footer","enabled":enabled,"actions":[{"command":command,"label":label,"enabled":enabled}]}),
+    }}).collect()
+}
+pub fn footer(ui: &mut egui::Ui, w: &mut Workspace) {
+    use crate::presentation_controls as controls;
+    let props = controls::properties(
+        "drawing.workspace-footer",
+        "drawing-workspace-footer",
+        &["compact"],
+        "ready",
+    );
+    if props.get("display").is_some_and(|value| value == "none") {
+        return;
+    }
+    ui.scope(|ui| {
+        controls::apply_properties(ui, &props);
+        ui.horizontal_wrapped(|ui| {
+            for element in footer_semantics(w) {
+                let enabled = element.data["enabled"].as_bool().unwrap_or(false);
+                let response = controls::button(
+                    ui,
+                    &element.id,
+                    &element.role,
+                    &["compact"],
+                    &element.label,
+                    enabled,
+                    false,
+                );
+                let response = if let Some(reason) = element.value {
+                    response.on_hover_text(reason)
+                } else {
+                    response
+                };
+                if response.clicked()
+                    && let Some(command) = element.commands.first()
+                {
+                    crate::ui::action(w, command);
+                }
+            }
+        });
+    });
 }

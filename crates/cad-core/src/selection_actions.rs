@@ -2,7 +2,60 @@
 use crate::{Document, Id, Operation, TopologyRef, presentation::SemanticElement};
 use serde::{Deserialize, Serialize};
 
-pub const CONTRACT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 4;
+
+/// Default menu composition hints; action identity and availability remain independent.
+/// Custom presentations may promote, reorder, regroup or omit these controls.
+pub fn menu_metadata(element: &mut SemanticElement) {
+    let Some(command) = element.commands.first() else {
+        return;
+    };
+    let existing = element
+        .data
+        .get("group")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("More");
+    let (group, order, primary) = match command.as_str() {
+        "sketch.new" | "sketch.convert-entities" => ("Create", 0, true),
+        "sketch.smart-dimension" => ("Dimensions", 0, true),
+        "feature.fillet" => ("Modify", 0, true),
+        "feature.chamfer" => ("Modify", 1, true),
+        "feature.extrude" | "feature.drilled-holes" => ("Create", 1, true),
+        "feature.cut" | "feature.shell" => ("Modify", 2, true),
+        "feature.move-face" => ("Modify", 3, true),
+        "feature.offset-face" => ("Modify", 4, true),
+        "feature.edit" | "selection.edit-in-place" => ("Edit", 5, true),
+        "sketch.relations" => ("Relations", 6, true),
+        "sketch.toggle-construction" => ("Edit", 7, true),
+        "sketch.delete-selection" => ("Edit", 8, true),
+        "assembly.insert-existing" | "part.new" => ("Component", 0, true),
+        "assembly.mate-new" | "selection.mate" => ("Component", 1, true),
+        "selection.measure" => ("View", 90, true),
+        "selection.fit" | "viewport.fit" => ("View", 91, true),
+        "feature.tapped-hole" => ("Hole types", 0, false),
+        "feature.counterbore" => ("Hole types", 1, false),
+        "feature.countersink" => ("Hole types", 2, false),
+        _ => (existing, 50, false),
+    };
+    let group_order = match group {
+        "Create" | "Model" => 0,
+        "Modify" | "Edit" | "Feature" => 10,
+        "Hole types" => 20,
+        "Selection" => 30,
+        "Dimensions" | "Relations" => 35,
+        "Direct Editing" => 40,
+        "Bodies" => 50,
+        "Surfaces" => 60,
+        "Reference" => 70,
+        "Component" => 80,
+        "Weld" | "Weldments" => 90,
+        "Mold" => 100,
+        "View" => 110,
+        _ => 120,
+    };
+    let metadata = serde_json::json!({"group":group,"group_id":format!("selection-group/{group}"),"order":order,"group_order":group_order,"primary":primary});
+    element.data["menu"] = metadata;
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -235,7 +288,14 @@ pub fn project(
                         "Component",
                         reason,
                     ),
-                    ("part.new", "Insert Component", "Component", reason),
+                    ("part.new", "New Part in Assembly", "Component", reason),
+                    (
+                        "assembly.insert-existing",
+                        "Insert Existing Component…",
+                        "Component",
+                        reason,
+                    ),
+                    ("assembly.mate-new", "Mate…", "Component", reason),
                     ("viewport.fit", "Zoom to Fit", "View", None),
                 ],
                 _ => vec![],
@@ -256,7 +316,6 @@ pub fn project(
         return vec![];
     };
     let suppressed = crate::configuration::feature_suppressed(document, &part.id, feature);
-    let data = serde_json::to_value(target).unwrap_or_default();
     let mut out = vec![];
     let busy = if editing {
         Some("Confirm or cancel the current operation first")
@@ -267,21 +326,7 @@ pub fn project(
     };
     let body = crate::configuration::has_solid_output(document, &part.id);
     let mut add = |command: &str, label: &str, group: &str, reason: Option<&str>| {
-        out.push(SemanticElement {
-            id: format!("selection:{command}"),
-            role: "selection-action".into(),
-            label: label.into(),
-            value: reason.map(str::to_string),
-            state: if reason.is_some() {
-                "disabled"
-            } else {
-                "ready"
-            }
-            .into(),
-            commands: vec![command.into()],
-            relationships: vec![part.id.clone(), feature.id.clone()],
-            data: serde_json::json!({"contract_version": CONTRACT_VERSION, "target": data, "group": group}),
-        });
+        out.push(descriptor(target, command, label, group, reason));
     };
     let selected_operation = if let SelectionTarget::Geometry {
         body: Some(body), ..
@@ -699,7 +744,7 @@ fn descriptor(
     group: &str,
     reason: Option<&str>,
 ) -> SemanticElement {
-    SemanticElement {
+    let mut element = SemanticElement {
         id: format!("selection:{command}"),
         role: "selection-action".into(),
         label: label.into(),
@@ -713,7 +758,9 @@ fn descriptor(
         commands: vec![command.into()],
         relationships: vec![target.definition().into(), target.feature().into()],
         data: serde_json::json!({"contract_version": CONTRACT_VERSION, "target": target, "group": group}),
-    }
+    };
+    menu_metadata(&mut element);
+    element
 }
 pub fn sketch_project(
     document: &Document,

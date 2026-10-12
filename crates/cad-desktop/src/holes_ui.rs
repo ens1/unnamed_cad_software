@@ -15,6 +15,8 @@ struct PendingHole {
     definition: Id,
     body: Option<NodeRef>,
     positions: Option<(NodeRef, Vec<Id>)>,
+    #[serde(default)]
+    owns_positions: bool,
 }
 impl PendingHole {
     fn new(w: &Workspace, name: &str) -> Self {
@@ -40,6 +42,7 @@ impl PendingHole {
             definition,
             body,
             positions,
+            owns_positions: false,
         }
     }
     fn encode(&self) -> serde_json::Result<String> {
@@ -192,8 +195,8 @@ fn selected_sketch_points(w: &Workspace) -> Option<(NodeRef, Vec<Id>)> {
     Some((source, selected))
 }
 
-/// Finish Sketch clears transient fields; keep only explicitly selected source IDs
-/// in the pending hole action until the validated sketch commit completes.
+/// Keep deliberate hole-center placements and explicit existing point picks.
+/// Sketch corners or unrelated members are never inferred as hole centers.
 pub fn remember_positions(w: &mut Workspace) {
     let Some(pending) = w
         .after_confirm
@@ -210,16 +213,212 @@ pub fn remember_positions(w: &mut Workspace) {
     } else {
         PendingHole::new(w, pending)
     };
-    let Some(selected) = selected_sketch_points(w) else {
+    let Some(mut selected) = selected_sketch_points(w) else {
         return;
     };
     if pending.document != w.session.visible().id || pending.definition != selected.0.definition {
         w.after_confirm = None;
         return;
     }
+    if pending.owns_positions
+        && let Some((source, points)) = &pending.positions
+        && source == &selected.0
+        && let Some(sketch) = &w.sketch
+    {
+        selected.1.extend(
+            points
+                .iter()
+                .filter(|point| sketch.keys.contains(point))
+                .cloned(),
+        );
+        selected.1.sort();
+        selected.1.dedup();
+    }
     pending.positions = Some(selected);
     if let Ok(payload) = pending.encode() {
         w.after_confirm = Some(payload);
+    }
+}
+
+pub fn remember_placed_center(w: &mut Workspace, point: Id) {
+    let Some(payload) = w
+        .after_confirm
+        .as_deref()
+        .and_then(|pending| pending.strip_prefix(DEFERRED))
+    else {
+        return;
+    };
+    let Ok(mut pending) = serde_json::from_str::<PendingHole>(payload) else {
+        return;
+    };
+    let Some(sketch) = &w.sketch else { return };
+    if !pending.owns_positions
+        || pending.definition != sketch.definition
+        || pending.document != w.session.visible().id
+    {
+        return;
+    }
+    let source = NodeRef {
+        definition: sketch.definition.clone(),
+        node: sketch.feature.clone(),
+    };
+    let Some((positions, points)) = &mut pending.positions else {
+        return;
+    };
+    if positions != &source || !sketch.keys.contains(&point) {
+        return;
+    }
+    if !points.contains(&point) {
+        points.push(point);
+    }
+    if let Ok(payload) = pending.encode() {
+        w.after_confirm = Some(payload);
+    }
+}
+
+/// Finish validated positions by opening the feature in the same transaction.
+/// The shared checkpoint survives until the hole's OK or Cancel.
+pub fn complete_positions(w: &mut Workspace) -> bool {
+    if w.sketch.is_some() {
+        return false;
+    }
+    let Some(pending) = w
+        .after_confirm
+        .as_deref()
+        .filter(|pending| is_preset(pending))
+        .map(str::to_owned)
+    else {
+        return false;
+    };
+    w.after_confirm = None;
+    w.confirm_requested = false;
+    preset(w, &pending);
+    true
+}
+
+pub fn positions_are_ready(w: &mut Workspace) -> bool {
+    let prompt = sketch_semantics(w).into_iter().next();
+    if prompt.is_some_and(|prompt| prompt.data["point_count"].as_u64() == Some(0)) {
+        w.confirm_requested = false;
+        w.status = "Place at least one hole center before finishing positions".into();
+        return false;
+    }
+    true
+}
+
+pub fn sketch_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+    let Some(sketch) = &w.sketch else {
+        return vec![];
+    };
+    let Some(payload) = w
+        .after_confirm
+        .as_deref()
+        .and_then(|pending| pending.strip_prefix(DEFERRED))
+    else {
+        return vec![];
+    };
+    let Ok(pending) = serde_json::from_str::<PendingHole>(payload) else {
+        return vec![];
+    };
+    if pending.document != w.session.visible().id || pending.definition != sketch.definition {
+        return vec![];
+    }
+    let mut points = pending
+        .positions
+        .as_ref()
+        .filter(|(source, _)| source.node == sketch.feature)
+        .map(|(_, points)| {
+            points
+                .iter()
+                .filter(|point| sketch.keys.contains(point))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if let Some((_, selected)) = selected_sketch_points(w) {
+        points.extend(selected);
+        points.sort();
+        points.dedup();
+    }
+    let prompt = if sketch.choosing_plane {
+        format!(
+            "{} — choose a plane or planar face for the centers",
+            pending.name
+        )
+    } else {
+        format!("{} — place centers, then Finish Positions", pending.name)
+    };
+    let can_finish = !points.is_empty()
+        && !sketch.choosing_plane
+        && sketch.error.is_none()
+        && sketch.edit.is_none();
+    vec![cad_core::presentation::SemanticElement {
+        id: format!("{}::hole-positions", sketch.sketch_id),
+        role: "sketch-operation-prompt".into(),
+        label: prompt,
+        value: Some(format!(
+            "{} centers placed · dimensions and relations stay editable",
+            points.len()
+        )),
+        state: if sketch.choosing_plane {
+            "choose-plane"
+        } else if sketch.error.is_some() {
+            "error"
+        } else if points.is_empty() {
+            "place-centers"
+        } else {
+            "ready-to-finish"
+        }
+        .into(),
+        commands: vec![
+            "sketch.tool.point".into(),
+            "sketch.finish".into(),
+            "sketch.cancel".into(),
+        ],
+        relationships: std::iter::once(sketch.sketch_id.clone())
+            .chain(points.iter().cloned())
+            .collect(),
+        data: serde_json::json!({"contract":"tcad.sketch-operation-workflow","version":1,"document":pending.document,"definition":pending.definition,"sketch":sketch.sketch_id,"operation":pending.name,"body":pending.body,"positions":pending.positions,"completed_points":points,"point_count":points.len(),"completion_label":"Finish Positions","completion_scope":"hole-position-sketch","next_operation":pending.name,"requires_current_validation":true,"shared_checkpoint":true,"classes":["operation-prompt","hole-position-prompt"],"actions":[{"command":"sketch.tool.point","label":"Place Centers","enabled":!sketch.choosing_plane},{"command":"sketch.finish","label":"Finish Positions","enabled":can_finish,"disabled_reason":"Place at least one center and resolve sketch errors"},{"command":"sketch.cancel","label":format!("Cancel {}",pending.name),"enabled":true}]}),
+    }]
+}
+
+pub fn sketch_prompt(ui: &mut egui::Ui, w: &mut Workspace) {
+    for element in sketch_semantics(w) {
+        crate::presentation_controls::label(
+            ui,
+            &element.id,
+            &element.role,
+            &["operation-prompt", "hole-position-prompt"],
+            &element.label,
+            &element.state,
+        );
+        if let Some(value) = &element.value {
+            crate::presentation_controls::label(
+                ui,
+                &format!("{}:status", element.id),
+                "sketch-operation-status",
+                &["operation-prompt"],
+                value,
+                &element.state,
+            );
+        }
+        ui.horizontal_wrapped(|ui| {
+            for descriptor in element.action_descriptors() {
+                if crate::presentation_controls::button(
+                    ui,
+                    &descriptor.id,
+                    "sketch-operation-action",
+                    &["operation-action"],
+                    &descriptor.label,
+                    descriptor.enabled,
+                    false,
+                )
+                .clicked()
+                {
+                    crate::sketch_ui::action(w, &descriptor.command);
+                }
+            }
+        });
     }
 }
 
@@ -228,7 +427,8 @@ fn begin_positions(w: &mut Workspace, mut pending: PendingHole, body: NodeRef) {
     if w.sketch.is_some() {
         crate::sketch::set_tool(w, crate::sketch::Tool::Point);
         pending.body = Some(body);
-        pending.positions = None;
+        pending.positions = selected_sketch_points(w);
+        pending.owns_positions = true;
         match pending.encode() {
             Ok(payload) => w.after_confirm = Some(payload),
             Err(error) => {
@@ -236,7 +436,10 @@ fn begin_positions(w: &mut Workspace, mut pending: PendingHole, body: NodeRef) {
                 return;
             }
         }
-        w.status="Place and constrain hole-center points, select the intended points, then Finish Sketch to open the hole editor".into();
+        w.status = format!(
+            "{} — place and constrain centers, then Finish Positions to set the hole size",
+            pending.name
+        );
     }
 }
 
@@ -247,6 +450,7 @@ pub fn preset(w: &mut Workspace, name: &str) {
         w.status = "Confirm or cancel the current configuration or component pattern first".into();
         return;
     }
+    let handoff = name.starts_with(DEFERRED);
     let decoded = name
         .strip_prefix(DEFERRED)
         .map(serde_json::from_str::<PendingHole>)
@@ -261,7 +465,25 @@ pub fn preset(w: &mut Workspace, name: &str) {
             }
             pending
         }
-        Ok(None) => PendingHole::new(w, name),
+        Ok(None) => {
+            let mut pending = PendingHole::new(w, name);
+            if let Some(previous) = w
+                .after_confirm
+                .as_deref()
+                .and_then(|value| value.strip_prefix(DEFERRED))
+                .and_then(|value| serde_json::from_str::<PendingHole>(value).ok())
+                .filter(|previous| {
+                    previous.owns_positions
+                        && previous.document == pending.document
+                        && previous.definition == pending.definition
+                })
+            {
+                pending.body = previous.body;
+                pending.positions = previous.positions;
+                pending.owns_positions = true;
+            }
+            pending
+        }
         Err(error) => {
             w.status = format!("Deferred hole selection is invalid: {error}");
             return;
@@ -276,15 +498,20 @@ pub fn preset(w: &mut Workspace, name: &str) {
     }
     crate::history::latest(w);
     if w.confirm_requested {
-        pending.positions = selected_sketch_points(w).or(pending.positions);
         match pending.encode() {
-            Ok(value) => w.after_confirm = Some(value),
+            Ok(value) => {
+                w.after_confirm = Some(value);
+                remember_positions(w);
+            }
             Err(error) => w.status = error.to_string(),
         }
         return;
     }
     if w.sketch.is_some() {
-        pending.positions = selected_sketch_points(w);
+        if !pending.owns_positions {
+            pending.positions = selected_sketch_points(w);
+        }
+        pending.owns_positions = true;
         let deferred = match pending.encode() {
             Ok(value) => value,
             Err(error) => {
@@ -293,13 +520,19 @@ pub fn preset(w: &mut Workspace, name: &str) {
             }
         };
         w.after_confirm = Some(deferred);
-        w.confirm_tool();
-        if w.sketch.is_some() && !w.confirm_requested {
-            w.after_confirm = None;
+        remember_positions(w);
+        if !positions_are_ready(w) {
+            crate::sketch::set_tool(w, crate::sketch::Tool::Point);
+            w.status = format!(
+                "{} — place and constrain centers, then Finish Positions",
+                pending.name
+            );
+            return;
         }
+        w.confirm_tool();
         return;
     }
-    if w.tool_checkpoint.is_some() {
+    if w.tool_checkpoint.is_some() && !handoff {
         w.status = "Confirm or cancel the current feature first".into();
         return;
     }
@@ -501,9 +734,15 @@ pub fn preset(w: &mut Workspace, name: &str) {
         return;
     }
     w.view.active_node = Some(feature.id.clone());
+    w.status = format!(
+        "{} · {} positions selected · changes preview before OK Feature",
+        feature.name,
+        match &feature.operation {
+            Operation::DrilledHoles { definition } => definition.points.len(),
+            _ => 0,
+        }
+    );
     ui::feature_dialog(w, Some(feature));
-    w.status =
-        "Select the intended hole-center points in Positions; changes preview before OK".into();
 }
 
 pub fn fields(
@@ -539,7 +778,7 @@ pub fn fields(
         egui::ScrollArea::vertical().id_salt("hole-position-points").max_height(170.).show(ui, |ui| {
             for (index, (id, point)) in points.iter().enumerate() {
                 let mut selected = definition.points.contains(id);
-                if ui.checkbox(&mut selected, format!("Point {} · ({:.4}, {:.4}) mm", index + 1, point[0], point[1])).changed() { if selected { definition.points.push(id.clone()); } else { definition.points.retain(|point| point != id); } changed = true; }
+                if ui.checkbox(&mut selected, format!("Point {} · ({}, {})", index + 1, doc.settings.format_length(point[0]), doc.settings.format_length(point[1]))).changed() { if selected { definition.points.push(id.clone()); } else { definition.points.retain(|point| point != id); } changed = true; }
             }
         });
         if definition.points.iter().any(|point| !points.iter().any(|(id, _)| id == point)) {
@@ -547,7 +786,7 @@ pub fn fields(
             if ui.small_button("Clear Missing Points").clicked() { definition.points.retain(|point| points.iter().any(|(id, _)| id == point)); changed = true; }
         }
         if ui.small_button("Clear Position Selection").clicked() { definition.points.clear(); changed = true; }
-        ui.small("Choose each intended center explicitly; sketch corners are never selected automatically.");
+        ui.small("Centers placed by the hole-position workflow are preselected. Choose additional centers explicitly; sketch corners are never selected automatically.");
     });
     let mut threaded = definition.thread.is_some();
     if ui

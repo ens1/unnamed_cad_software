@@ -503,10 +503,19 @@ pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
         return true;
     }
     if let Some(name) = command.strip_prefix("presentation.command-tab.")
-        && let Some(tab) = ["Features", "Sketch", "Assembly", "Evaluate", "Graph"]
-            .iter()
-            .find(|tab| tab.eq_ignore_ascii_case(name))
+        && let Some(tab) = [
+            "Features", "Sketch", "Assembly", "Drawing", "Evaluate", "Graph",
+        ]
+        .iter()
+        .find(|tab| tab.eq_ignore_ascii_case(name))
     {
+        if *tab == "Drawing" {
+            crate::drawing_ui::open_workspace(w);
+            return true;
+        }
+        if crate::drawing_ui::is_workspace(w) && !crate::drawing_ui::leave_workspace(w) {
+            return true;
+        }
         w.command_tab = (*tab).into();
         if *tab == "Graph" {
             w.view.active_layout = "graph-workspace".into();
@@ -629,7 +638,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             "command-manager",
         );
     }
-    for tab in ["Features", "Sketch", "Assembly", "Evaluate", "Graph"] {
+    for tab in [
+        "Features", "Sketch", "Assembly", "Drawing", "Evaluate", "Graph",
+    ] {
         publish(
             format!("command-tab/{}", tab.to_lowercase()),
             "command-tab",
@@ -843,12 +854,28 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
         }
     }
     for element in &mut out {
+        if element
+            .commands
+            .iter()
+            .any(|command| command == "draft.apply")
+        {
+            element.label = confirmation_label(w);
+            element.data["completion_scope"] = serde_json::json!(if w.sketch.is_some() {
+                "sketch"
+            } else if w.dialog.as_deref() == Some("component-insert") {
+                "component"
+            } else if crate::drawing_ui::is_workspace(w) {
+                "drawing"
+            } else {
+                "feature"
+            });
+        }
         if element.role == "menu" {
             let items = menu_items(&element.label, w);
             element.data["items"] = serde_json::json!(items);
         }
         if sketching && w.command_tab == "Sketch" && element.id == "command-toolbar/sketch.new" {
-            element.label = "Finish".into();
+            element.label = confirmation_label(w);
             element.commands = vec!["draft.apply".into()];
             element.state = if confirmation_available(w) {
                 "selected"
@@ -878,6 +905,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::components_ui::current_source_is_valid(w) {
+        return Some("Correct or select the component before applying");
+    }
     if !crate::production_ui::current_source_is_valid(w) {
         return Some("Correct the current production fields before applying");
     }
@@ -1108,7 +1138,9 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
 }
 pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
     ui.horizontal(|ui| {
-        for tab in ["Features", "Sketch", "Assembly", "Evaluate", "Graph"] {
+        for tab in [
+            "Features", "Sketch", "Assembly", "Drawing", "Evaluate", "Graph",
+        ] {
             if controls::selectable(
                 ui,
                 &format!("command-tab/{}", tab.to_lowercase()),
@@ -1118,14 +1150,10 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
             )
             .clicked()
             {
-                w.command_tab = tab.into();
-                if tab == "Graph" {
-                    w.view.active_layout = "graph-workspace".into();
-                    w.view.mode = "Flow".into();
-                } else if w.view.active_layout == "graph-workspace" {
-                    w.view.active_layout = "instrument-rail".into();
-                    w.view.mode = "Model".into();
-                }
+                presentation_action(
+                    w,
+                    &format!("presentation.command-tab.{}", tab.to_lowercase()),
+                );
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1347,8 +1375,11 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                 }
                 "Assembly" => {
                     for (label, cmd) in [
-                        ("Components", "part.new"),
-                        ("Mates", "assembly.edit"),
+                        ("New Part in Assembly", "part.new"),
+                        ("Insert Existing", "assembly.insert-existing"),
+                        ("Move", "assembly.move"),
+                        ("Mate", "assembly.mate-new"),
+                        ("Components", "assembly.edit"),
                         ("Library", "libraries"),
                     ] {
                         if command_button(ui, cmd, label, true).clicked() {
@@ -1399,6 +1430,16 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                     ] {
                         if command_button(ui, cmd, label, true).clicked() {
                             ui::action(w, cmd);
+                        }
+                    }
+                }
+                "Drawing" => {
+                    for (label, command) in [
+                        ("New Sheet", "drawing.sheet-add"),
+                        ("Model", "drawing.workspace-model"),
+                    ] {
+                        if command_button(ui, command, label, true).clicked() {
+                            ui::action(w, command);
                         }
                     }
                 }
@@ -1592,7 +1633,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
             crate::assembly_groups_ui::tree(ui, w);
             crate::assembly_welds_ui::tree(ui, w);
             if ui.button("Insert Component").clicked() {
-                ui::action(w, "part.new");
+                ui::action(w, "assembly.insert-existing");
             }
         });
         return;
@@ -2045,7 +2086,27 @@ pub fn properties(ui: &mut egui::Ui, w: &mut Workspace) {
             crate::ui::parameters(ui, w);
         });
 }
+pub fn confirmation_label(w: &Workspace) -> String {
+    if w.sketch.is_some() {
+        return crate::holes_ui::sketch_semantics(w)
+            .iter()
+            .find_map(|element| element.data["completion_label"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| "Finish Sketch".into());
+    }
+    if w.dialog.as_deref() == Some("component-insert") {
+        "OK Component".into()
+    } else if w.fields.contains_key("mate-editor") {
+        "OK Mate".into()
+    } else if w.dialog.as_deref() == Some("assembly") {
+        "Apply Assembly".into()
+    } else if crate::drawing_ui::is_workspace(w) {
+        "Apply Drawing".into()
+    } else {
+        "OK Feature".into()
+    }
+}
 pub fn confirmation(ui: &mut egui::Ui, w: &mut Workspace) {
+    let label = confirmation_label(w);
     ui.horizontal(|ui| {
         let enabled = confirmation_available(w);
         if controls::button(
@@ -2053,7 +2114,7 @@ pub fn confirmation(ui: &mut egui::Ui, w: &mut Workspace) {
             "draft.apply",
             "apply-action",
             &["confirmation-control"],
-            "Apply",
+            &label,
             enabled,
             false,
         )
@@ -2073,7 +2134,11 @@ pub fn confirmation(ui: &mut egui::Ui, w: &mut Workspace) {
         )
         .clicked()
         {
-            w.cancel_tool();
+            if w.tool_checkpoint.is_some() {
+                w.cancel_tool();
+            } else {
+                w.cancel();
+            }
         }
     });
     if w.confirm_requested {

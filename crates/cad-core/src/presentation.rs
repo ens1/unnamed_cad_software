@@ -1030,7 +1030,7 @@ fn parameter_links(doc: &Document, owner: &str, expression: &crate::Expr) -> Vec
 pub const COMMANDS: &[(&str, &str)] = &[
     ("reference.repair", "Repair References…"),
     ("reference.repair-station", "Inspect Repair Upstream Stage"),
-    ("sketch.finish-dimension", "Done · Pick Next Dimension"),
+    ("sketch.finish-dimension", "Done Dimension"),
     ("sketch.cancel-dimension", "Cancel Dimension"),
     ("assembly.inspection-new", "Interference / Clearance"),
     ("assembly.inspection-edit", "Edit Assembly Inspection"),
@@ -1083,7 +1083,9 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("file.export-bom", "Export BOM CSV"),
     ("production.edit", "Production Report Preferences"),
     ("file.release", "Create immutable release"),
-    ("part.new", "Create part"),
+    ("part.new", "New Part in Assembly"),
+    ("assembly.insert-existing", "Insert Existing Component"),
+    ("assembly.mate-new", "Mate"),
     ("sketch.new", "Planar sketch"),
     ("feature.new", "Add feature"),
     ("feature.extrude", "Extruded Boss/Base"),
@@ -1358,6 +1360,11 @@ pub struct Theme {
     #[serde(default)]
     pub rules: Vec<StyleRule>,
 }
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DrawingPaperView {
+    pub zoom: f32,
+    pub pan: [f32; 2],
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PresentationState {
     /// Transient feature-history inspection. Saved projects reopen at Latest.
@@ -1377,6 +1384,17 @@ pub struct PresentationState {
     pub ghost_others: bool,
     pub pinned: Vec<Id>,
     pub mode: String,
+    /// Paper workspace preferences are presentation intent, never drawing source.
+    #[serde(default)]
+    pub drawing_workspace: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing_sheet: Option<Id>,
+    #[serde(default)]
+    pub drawing_page: u32,
+    #[serde(default)]
+    pub drawing_paper_views: BTreeMap<String, DrawingPaperView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing_selection: Option<crate::drawing_interaction::Target>,
     pub original: bool,
     pub orbit: [f32; 2],
     /// User navigation preferences are presentation intent, separate from CAD source.
@@ -1423,6 +1441,11 @@ impl Default for PresentationState {
             ghost_others: true,
             pinned: vec![],
             mode: "Model".into(),
+            drawing_workspace: false,
+            drawing_sheet: None,
+            drawing_page: 0,
+            drawing_paper_views: BTreeMap::new(),
+            drawing_selection: None,
             original: false,
             orbit: [0.65, 0.4],
             navigation: crate::navigation::Preferences::default(),

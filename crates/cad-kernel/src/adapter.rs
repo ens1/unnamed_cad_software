@@ -44,6 +44,10 @@ impl Shape {
 }
 pub trait KernelAdapter {
     fn fingerprint(&self) -> &str;
+    fn clear_weld_joint_previews(&self) {}
+    fn weld_joint_previews(&self) -> Vec<cad_core::weld_beads::JointPreview> {
+        vec![]
+    }
     fn alias_history(&self, owner: &NodeRef, input: &NodeRef) -> Result<()>;
     fn alias_histories(&self, owner: &NodeRef, inputs: &[NodeRef]) -> Result<()> {
         match inputs {
@@ -159,6 +163,7 @@ pub trait KernelAdapter {
 pub struct MonstertruckAdapter {
     histories: std::cell::RefCell<BTreeMap<NodeRef, TopologyHistory>>,
     tables: std::cell::RefCell<BTreeMap<String, (monstertruck::step::load::Table, f64)>>,
+    weld_joints: std::cell::RefCell<BTreeMap<NodeRef, cad_core::weld_beads::JointPreview>>,
 }
 #[derive(Clone, Default)]
 pub(crate) struct TopologyHistory {
@@ -930,7 +935,13 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/35;solver/tcad-native-lm/16"
+        "monstertruck/0.4.1+fc2306852a46;adapter/36;solver/tcad-native-lm/16"
+    }
+    fn clear_weld_joint_previews(&self) {
+        self.weld_joints.borrow_mut().clear();
+    }
+    fn weld_joint_previews(&self) -> Vec<cad_core::weld_beads::JointPreview> {
+        self.weld_joints.borrow().values().cloned().collect()
     }
     fn sketch_material_regions(
         &self,
@@ -2168,7 +2179,8 @@ impl KernelAdapter for MonstertruckAdapter {
         root: &Path,
         tolerance: f64,
     ) -> Result<(MeshData, Vec<Solid>, cad_core::weld_beads::Evaluated)> {
-        crate::assembly_welds::build(doc, owner, definition, contexts, root, tolerance)
+        self.weld_joints.borrow_mut().remove(owner);
+        crate::assembly_welds::build(self, doc, owner, definition, contexts, root, tolerance)
     }
     fn mesh(&self, shape: &Shape, producer: &NodeRef, tolerance: f64) -> Result<MeshData> {
         if !tolerance.is_finite() || tolerance <= 0. {
@@ -2593,6 +2605,11 @@ impl MonstertruckAdapter {
     }
     pub(crate) fn register_weld_history(&self, owner: &NodeRef, history: TopologyHistory) {
         self.histories.borrow_mut().insert(owner.clone(), history);
+    }
+    pub(crate) fn register_weld_joint(&self, preview: cad_core::weld_beads::JointPreview) {
+        self.weld_joints
+            .borrow_mut()
+            .insert(preview.owner.clone(), preview);
     }
     pub(crate) fn face_source(&self, body: &NodeRef, face: FaceId) -> Option<TopologyRef> {
         self.histories

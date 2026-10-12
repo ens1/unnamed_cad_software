@@ -1223,6 +1223,16 @@ fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::
     use cad_core::weld_beads::{Pattern, Profile};
     const P: &str = "/operation/definition";
     fields.group("sources", "Weld joint");
+    fields.note(
+        "joint-requirements",
+        crate::weld_beads_ui::joint_help(definition),
+        "ready",
+    );
+    fields.out.extend(crate::weld_beads_ui::feedback(
+        fields.w,
+        fields.owner,
+        &fields.feature.id,
+    ));
     let mut seams = crate::weld_beads_ui::seam_choices(fields.w, fields.owner, &fields.feature.id)
         .into_iter()
         .map(|(source, label)| choice(label, source))
@@ -1323,6 +1333,20 @@ fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::
         fields.group("placement", "Authored seam orientation");
         fields.coordinates(&format!("{P}/direction"), "Section direction", "");
         fields.quantity(&format!("{P}/roll"), "Section roll", "deg");
+    } else {
+        fields.note("joint-orientation", "The native joint faces determine bead orientation. Direction and roll apply only to an authored seam without support faces.", "ready");
+        if definition
+            .values(fields.w.session.visible(), fields.owner)
+            .is_ok_and(|values| values.roll_rad.abs() > 1e-10)
+        {
+            fields.action(
+                "reset-joint-roll",
+                "Use joint orientation",
+                json!({"kind":"set","pointer":format!("{P}/roll"),"value":"0 deg"}),
+                true,
+                "",
+            );
+        }
     }
     fields.group("appearance", "Finish and engineering material");
     let doc = fields.w.session.visible();
