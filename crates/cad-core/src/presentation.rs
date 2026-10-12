@@ -1100,11 +1100,69 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("feature.sweep", "Sweep"),
     ("assembly.edit", "Assembly and mates"),
     ("inspection.sensors", "Design Monitors"),
+    ("camera-views", "Named Views"),
+    ("camera-view.save", "Save Current View"),
+    ("camera-view.edit", "Edit Named View"),
+    ("camera-view.rename", "Rename Named View"),
+    ("camera-view.update", "Update Named View From Camera"),
+    ("camera-view.delete", "Delete Named View"),
+    ("camera-view.recall", "Recall Named View"),
+    ("camera-view.perspective", "Perspective Projection"),
+    ("camera-view.orthographic", "Orthographic Projection"),
     ("standard-parts", "Standard Hardware"),
     ("inspection.tolerance-stacks", "Tolerance Stacks"),
     ("appearance.environment.import", "Import HDR Environment"),
     ("appearance.environment.clear", "Use Studio Environment"),
     ("properties", "Model Properties"),
+    ("sketch-block-library", "Sketch Block Library"),
+    (
+        "sketch-library.add",
+        "Add Native Blocks to Personal Library",
+    ),
+    ("sketch-library.refresh", "Refresh Sketch Block Library"),
+    (
+        "inspection.frame-selected",
+        "Use Selected Component Coordinates",
+    ),
+    ("inspection.export-json", "Export Mass Properties JSON"),
+    (
+        "drawing.interact-cohort-align-x",
+        "Align Annotation Origins in a Column",
+    ),
+    (
+        "drawing.interact-cohort-align-y",
+        "Align Annotation Origins in a Row",
+    ),
+    (
+        "drawing.interact-cohort-distribute-x",
+        "Distribute Annotation Origins Horizontally",
+    ),
+    (
+        "drawing.interact-cohort-distribute-y",
+        "Distribute Annotation Origins Vertically",
+    ),
+    (
+        "drawing.interact-cohort-stack-x",
+        "Space Annotations in a Row",
+    ),
+    (
+        "drawing.interact-cohort-stack-y",
+        "Space Annotations in a Column",
+    ),
+    (
+        "drawing.interact-cohort-copy",
+        "Duplicate Selected Annotations",
+    ),
+    (
+        "drawing.interact-cohort-delete",
+        "Delete Selected Annotations",
+    ),
+    ("drawing.interact-clear-selection", "Clear Paper Selection"),
+    ("material.export-csv", "Export Selected Material CSV"),
+    (
+        "material.export-project-csv",
+        "Export Project Materials CSV",
+    ),
     ("assembly.display-state-new", "New Assembly Display State"),
     ("assembly.display-state-normal", "Normal Assembly Display"),
     ("assembly.move", "Move Component"),
@@ -1412,6 +1470,14 @@ pub struct PresentationState {
     pub drawing_selection: Option<crate::drawing_interaction::Target>,
     pub original: bool,
     pub orbit: [f32; 2],
+    /// f64 camera authority; legacy transient values remain adapter mirrors.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_pose: Option<crate::camera_views::Pose>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::camera_views::is_default_projection"
+    )]
+    pub camera_projection: crate::camera_views::Projection,
     /// User navigation preferences are presentation intent, separate from CAD source.
     #[serde(default)]
     pub navigation: crate::navigation::Preferences,
@@ -1466,6 +1532,8 @@ impl Default for PresentationState {
             drawing_selection: None,
             original: false,
             orbit: [0.65, 0.4],
+            camera_pose: None,
+            camera_projection: Default::default(),
             navigation: crate::navigation::Preferences::default(),
             roll: 0.,
             target: [0.; 3],

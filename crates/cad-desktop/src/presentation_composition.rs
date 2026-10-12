@@ -396,6 +396,10 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::materials_ui::semantics(w));
     elements.extend(crate::display_states_ui::elements(w));
     elements.extend(crate::sensors_ui::semantics(w));
+    elements.extend(crate::sketch_block_library_ui::elements(w));
+    elements.extend(crate::command_palette::semantics(w));
+    elements.extend(crate::inspection_ui::semantics(w));
+    elements.extend(crate::camera_views_ui::elements(w));
     elements.extend(crate::standard_parts_ui::semantics(w));
     elements.extend(crate::tolerance_stacks_ui::semantics(w));
     elements.extend(crate::properties_ui::semantics(w));
@@ -455,6 +459,12 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "Preview validation",
         ),
         ("workspace.viewport", "model-viewport", "Model viewport"),
+        ("workspace.sensors", "sensors-editor", "Design Monitors"),
+        (
+            "workspace.tolerance-stacks",
+            "tolerance-stacks-editor",
+            "Tolerance Stacks",
+        ),
     ] {
         elements.push(SemanticElement {
             id: id.into(), role: role.into(), label: label.into(), value: None,
@@ -701,6 +711,34 @@ fn value_adapters() -> ValueAdapters {
         "standard-parts",
         crate::standard_parts_ui::set_value,
         crate::standard_parts_ui::value,
+    );
+    adapters.register(
+        "camera-view",
+        |w, element, value| {
+            if crate::camera_views_ui::set_value(w, element, value)
+                && !crate::camera_views_ui::field_is_invalid(w, element)
+            {
+                Ok(())
+            } else {
+                Err(cad_core::CadError::Invalid(w.status.clone()))
+            }
+        },
+        crate::camera_views_ui::current_value,
+    );
+    adapters.register(
+        "command-palette",
+        crate::command_palette::set_value,
+        crate::command_palette::current_value,
+    );
+    adapters.register(
+        "inspection-report",
+        crate::inspection_ui::set_value,
+        crate::inspection_ui::current_value,
+    );
+    adapters.register(
+        "sketch-block-library",
+        crate::sketch_block_library_ui::set_value,
+        crate::sketch_block_library_ui::current_value,
     );
     adapters.register(
         "sensor-editor",

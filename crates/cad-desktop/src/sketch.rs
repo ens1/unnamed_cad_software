@@ -838,6 +838,47 @@ pub fn plane(name: &str) -> Plane {
         _ => Plane::default(),
     }
 }
+/// Raw source stays independent of the native editor. Only a buffer still
+/// identical to its recorded baseline follows native drawing/solver changes.
+fn synchronize_source_buffer(
+    fields: &mut BTreeMap<String, String>,
+    source: &Sketch,
+    initialize: bool,
+) {
+    let key = format!("sketch-source:{}", source.id);
+    let baseline = format!("sketch-source-baseline:{}", source.id);
+    if !initialize && !fields.contains_key(&key) {
+        return;
+    }
+    let Ok(current) = serde_json::to_string_pretty(source) else {
+        return;
+    };
+    if !fields.contains_key(&key)
+        || fields.get(&key) == fields.get(&baseline)
+        || (!fields.contains_key(&baseline) && fields.get(&key) == Some(&current))
+    {
+        fields.insert(key, current.clone());
+        fields.insert(baseline, current);
+    }
+}
+/// Unknown legacy buffers are treated conservatively. Valid text already equal
+/// to the current source is not an unapplied edit, but its formatting is retained.
+pub(crate) fn source_buffer_is_pending(w: &Workspace, source: &Sketch) -> bool {
+    let key = format!("sketch-source:{}", source.id);
+    let Some(raw) = w.fields.get(&key) else {
+        return false;
+    };
+    w.fields
+        .get(&format!("sketch-source-baseline:{}", source.id))
+        != Some(raw)
+        && serde_json::from_str::<Sketch>(raw).map_or(true, |parsed| parsed != *source)
+}
+fn synchronize_active_source(w: &mut Workspace) {
+    if let Some(sketch) = &w.sketch {
+        synchronize_source_buffer(&mut w.fields, &sketch_definition(sketch), false);
+    }
+}
+
 pub(crate) fn sketch_definition(s: &EditingSketch) -> Sketch {
     Sketch {
         id: s.sketch_id.clone(),
@@ -1212,6 +1253,7 @@ pub(crate) fn solve(w: &mut Workspace) {
             w.status = format!("{e} · last valid body preview retained");
         }
     }
+    synchronize_active_source(w);
 }
 /// Reconcile only the current worker result, including freshly resolved conversion curves.
 pub(crate) fn accept_evaluation(w: &mut Workspace) {
@@ -1287,6 +1329,7 @@ pub(crate) fn accept_evaluation(w: &mut Workspace) {
         }
         crate::sketch_relations_ui::refresh(w, report);
     }
+    synchronize_active_source(w);
 }
 /// Edits from custom bindings and parameter panels reconcile into the active editor.
 pub(crate) fn reconcile(w: &mut Workspace, before: &Document) {
@@ -1784,10 +1827,18 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             );
         });
         egui::CollapsingHeader::new("Advanced Source").show(ui, |ui| {
+            let source = sketch_definition(s);
             let key = format!("sketch-source:{}", s.sketch_id);
-            let text = w.fields.entry(key).or_insert_with(|| {
-                serde_json::to_string_pretty(&sketch_definition(s)).unwrap_or_default()
-            });
+            let baseline = format!("sketch-source-baseline:{}", s.sketch_id);
+            synchronize_source_buffer(&mut w.fields, &source, true);
+            let mut accepted = false;
+            let Some(text) = w.fields.get_mut(&key) else {
+                ui.colored_label(
+                    Color32::from_rgb(180, 45, 30),
+                    "Current sketch source could not be serialized",
+                );
+                return;
+            };
             ui.add(
                 egui::TextEdit::multiline(&mut *text)
                     .code_editor()
@@ -1795,7 +1846,8 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     .desired_rows(8),
             );
             if ui.button("Refresh Source").clicked() {
-                *text = serde_json::to_string_pretty(&sketch_definition(s)).unwrap_or_default();
+                *text = serde_json::to_string_pretty(&source).unwrap_or_default();
+                accepted = true;
             }
             if ui.button("Load Sketch Source").clicked() {
                 match serde_json::from_str::<Sketch>(text) {
@@ -1809,6 +1861,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                         s.name = source.name.clone();
                         restore(s, source);
                         changed = true;
+                        accepted = true;
                     }
                     Ok(_) => {
                         s.error = Some(
@@ -1817,6 +1870,10 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     }
                     Err(error) => s.error = Some(error.to_string()),
                 }
+            }
+            if accepted {
+                let current = text.clone();
+                w.fields.insert(baseline, current);
             }
         });
         if let Some(error) = &s.error {

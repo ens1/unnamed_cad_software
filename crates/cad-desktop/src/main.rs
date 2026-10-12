@@ -8,6 +8,8 @@ mod assembly_welds_ui;
 mod background;
 mod body_filter_ui;
 mod cad_ui;
+mod camera_views_ui;
+mod command_palette;
 mod component_pattern_ui;
 mod components_ui;
 mod configuration_ui;
@@ -19,6 +21,7 @@ mod drawing_dimension_groups_ui;
 mod drawing_editor_ui;
 mod drawing_gdt_ui;
 mod drawing_interaction_ui;
+mod drawing_layout_ui;
 mod drawing_revision_ui;
 mod drawing_table_ui;
 mod drawing_ui;
@@ -58,6 +61,7 @@ mod settings_preferences;
 mod settings_ui;
 mod sketch;
 mod sketch_analysis_ui;
+mod sketch_block_library_ui;
 mod sketch_blocks_ui;
 mod sketch_dimensions_ui;
 mod sketch_edit_ui;
@@ -436,6 +440,10 @@ impl Workspace {
             self.confirm_requested = false;
             return;
         }
+        if !camera_views_ui::ready_to_confirm(self) {
+            self.confirm_requested = false;
+            return;
+        }
         if !display_states_ui::ready_to_confirm(self) {
             return;
         }
@@ -580,6 +588,7 @@ impl Workspace {
     pub fn cancel(&mut self) {
         properties_ui::cancel(self);
         sensors_ui::cancel(self);
+        camera_views_ui::cancel(self);
         standard_parts_ui::cancel(self);
         tolerance_stacks_ui::cancel(self);
         display_states_ui::cancel(self);
@@ -676,6 +685,9 @@ impl Workspace {
         }
     }
     pub fn open_editor(&mut self, name: &str) {
+        if name == "commands" {
+            command_palette::before_open(self);
+        }
         if name == "drawings"
             && (self.dialog.as_deref() != Some("drawings")
                 || !self.fields.contains_key("drawing-editor-generation"))
@@ -711,6 +723,7 @@ impl Workspace {
     pub fn cancel_tool(&mut self) {
         properties_ui::cancel(self);
         sensors_ui::cancel(self);
+        camera_views_ui::cancel(self);
         standard_parts_ui::cancel(self);
         tolerance_stacks_ui::cancel(self);
         display_states_ui::cancel(self);
@@ -803,6 +816,10 @@ impl Workspace {
         }
         if !sensors_ui::current_source_is_valid(self) {
             self.status = "Correct the current design monitor fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !camera_views_ui::ready_to_confirm(self) {
             self.confirm_requested = false;
             return;
         }

@@ -63,6 +63,7 @@ struct Capture {
     sheet: Id,
     page: u32,
     target: Target,
+    cohort: Vec<Id>,
     handle: Handle,
     point_mm: [f64; 2],
     bounds_mm: [[f64; 2]; 2],
@@ -80,6 +81,8 @@ pub struct State {
     cache: Option<Cache>,
     views: BTreeMap<String, PaperView>,
     selection: Option<(Id, u32, Target)>,
+    cohort: Vec<Target>,
+    annotation_spacing_mm: f64,
     hover: Option<Target>,
     context_target: Option<Target>,
     tool: Tool,
@@ -205,8 +208,18 @@ fn refresh(w: &Workspace, state: &mut State, source: &Drawing, page: u32) -> Res
                 .is_none_or(|c| !c.scene.targets.iter().any(|h| &h.target == target)))
     {
         state.selection = None;
+        state.cohort.clear();
         state.context_target = None;
         state.tool = Tool::Select;
+    }
+    if let Some(cache) = &state.cache {
+        state.cohort.retain(|target| {
+            cache
+                .scene
+                .targets
+                .iter()
+                .any(|item| &item.target == target)
+        });
     }
     if let Tool::Dimension { first: Some(first) } = &mut state.tool
         && let Some(cache) = &state.cache
@@ -269,8 +282,69 @@ fn paper_point(rect: Rect, scale: f32, point: Pos2) -> [f64; 2] {
 fn selected(state: &State) -> Option<&Target> {
     state.selection.as_ref().map(|s| &s.2)
 }
+fn target_label(source: &Drawing, target: &Target) -> String {
+    match target {
+        Target::Annotation { id } => source
+            .entities
+            .iter()
+            .find(|annotation| &annotation.id == id)
+            .map(|annotation| match &annotation.kind {
+                cad_core::drawing::AnnotationKind::Datum { identifier, .. } => {
+                    format!("Datum {identifier}")
+                }
+                cad_core::drawing::AnnotationKind::DatumTarget { symbol, .. } => {
+                    format!("Datum target {}{}", symbol.identifier, symbol.number)
+                }
+                cad_core::drawing::AnnotationKind::Leader { text, .. } => format!(
+                    "Note · {}",
+                    text.lines()
+                        .next()
+                        .unwrap_or("")
+                        .chars()
+                        .take(40)
+                        .collect::<String>()
+                ),
+                cad_core::drawing::AnnotationKind::RevisionCloud { cloud, .. } => cloud
+                    .revision_label(source)
+                    .ok()
+                    .filter(|label| !label.is_empty())
+                    .map(|label| format!("Revision cloud {label}"))
+                    .unwrap_or_else(|| "Revision cloud".into()),
+                _ => annotation.kind.label().into(),
+            })
+            .unwrap_or_else(|| "Missing annotation".into()),
+        Target::Dimension { id } => source
+            .dimensions
+            .iter()
+            .find(|dimension| &dimension.id == id)
+            .map(|dimension| format!("{:?} dimension", dimension.options.kind))
+            .unwrap_or_else(|| "Missing dimension".into()),
+        Target::View { key } => format!("{key} view"),
+        Target::Table { id } => source
+            .tables
+            .iter()
+            .find(|table| &table.id == id)
+            .map(|table| table.title.clone())
+            .unwrap_or_else(|| "Missing table".into()),
+        Target::TableSegment { table, .. } => source
+            .tables
+            .iter()
+            .find(|source| &source.id == table)
+            .map(|table| format!("{} continuation", table.title))
+            .unwrap_or_else(|| "Missing continuation".into()),
+        Target::TitleCell { id } => source
+            .format
+            .iter()
+            .flat_map(|format| &format.title_block)
+            .flat_map(|block| &block.cells)
+            .find(|cell| &cell.id == id)
+            .map(|cell| cell.label.clone())
+            .unwrap_or_else(|| "Missing title field".into()),
+    }
+}
 fn select(w: &mut Workspace, state: &mut State, source: &Drawing, page: u32, target: Target) {
     state.selection = Some((source.id.clone(), page, target.clone()));
+    state.cohort = vec![target.clone()];
     w.fields.insert("drawing-active".into(), source.id.clone());
     match target {
         Target::View { key } => {
@@ -301,6 +375,60 @@ fn select(w: &mut Workspace, state: &mut State, source: &Drawing, page: u32, tar
     w.geometry_selection.clear();
     w.selection_popup = None;
     w.manager_tree = false;
+}
+fn select_extended(
+    w: &mut Workspace,
+    state: &mut State,
+    source: &Drawing,
+    page: u32,
+    target: Target,
+    toggle: bool,
+) -> Result<()> {
+    let mut cohort = state.cohort.clone();
+    if let Some(index) = cohort.iter().position(|item| item == &target) {
+        if toggle {
+            cohort.remove(index);
+        }
+    } else {
+        if cohort.len() >= cad_core::drawing_layout::MAX_COHORT {
+            return Err(invalid("Paper selection is limited to 128 items"));
+        }
+        cohort.push(target.clone());
+    }
+    let primary = if cohort.contains(&target) {
+        Some(target)
+    } else {
+        cohort.last().cloned()
+    };
+    if let Some(primary) = primary {
+        select(w, state, source, page, primary);
+    } else {
+        state.selection = None;
+    }
+    state.cohort = cohort;
+    Ok(())
+}
+fn select_for_drag(
+    w: &mut Workspace,
+    state: &mut State,
+    source: &Drawing,
+    page: u32,
+    target: Target,
+) {
+    if state.cohort.contains(&target) {
+        let cohort = state.cohort.clone();
+        select(w, state, source, page, target);
+        state.cohort = cohort;
+    } else {
+        select(w, state, source, page, target);
+    }
+}
+fn annotation_spacing(state: &State) -> f64 {
+    if state.annotation_spacing_mm == 0. {
+        8.
+    } else {
+        state.annotation_spacing_mm
+    }
 }
 fn publish(w: &mut Workspace, source: Drawing) -> Result<()> {
     let id = source.id.clone();
@@ -377,6 +505,23 @@ fn begin_capture(w: &Workspace, state: &mut State, request: CaptureRequest<'_>) 
         .ok_or_else(|| invalid("Paper geometry is unavailable"))?
         .scene
         .clone();
+    let cohort = if handle.kind == HandleKind::Move && state.cohort.len() > 1 {
+        let ids = crate::drawing_layout_ui::ids(&state.cohort)?;
+        if ids.iter().any(|id| {
+            source
+                .entities
+                .iter()
+                .find(|annotation| &annotation.id == id)
+                .is_none_or(|annotation| !cad_core::drawing_layout::movable(annotation))
+        }) {
+            return Err(invalid(
+                "Group translation needs movable annotations; center geometry stays attached to its source",
+            ));
+        }
+        ids
+    } else {
+        vec![]
+    };
     state.capture = Some(Capture {
         session: w.session.clone(),
         fields: w.fields.clone(),
@@ -385,6 +530,7 @@ fn begin_capture(w: &Workspace, state: &mut State, request: CaptureRequest<'_>) 
         sheet: source.id.clone(),
         page,
         target: target.target.clone(),
+        cohort,
         handle,
         point_mm: paper_point(paper, scale, pointer),
         bounds_mm: target.bounds_mm,
@@ -400,6 +546,12 @@ fn begin_capture(w: &Workspace, state: &mut State, request: CaptureRequest<'_>) 
     Ok(())
 }
 fn capture_action(capture: &Capture, delta: [f64; 2]) -> Result<Action> {
+    if !capture.cohort.is_empty() && capture.handle.kind == HandleKind::Move {
+        return Ok(Action::TranslateAnnotations {
+            annotations: capture.cohort.clone(),
+            delta_mm: delta,
+        });
+    }
     Ok(match &capture.handle.kind {
         HandleKind::CloudCorner { corner } => {
             let Target::Annotation { id } = &capture.target else {
@@ -553,9 +705,18 @@ fn update_capture(w: &mut Workspace, state: &mut State, pointer: Pos2) -> Result
         capture.handle.at_mm[1] + delta[1],
     ];
     let snap = if state.snapping {
-        interaction::snap(
+        let excluded = if capture.cohort.is_empty() {
+            vec![capture.target.clone()]
+        } else {
+            capture
+                .cohort
+                .iter()
+                .map(|id| Target::Annotation { id: id.clone() })
+                .collect()
+        };
+        interaction::snap_excluding(
             &capture.scene,
-            &capture.target,
+            &excluded,
             moved,
             6. / capture.scale as f64,
             state.grid.then_some(state.grid_mm.max(0.01)),
@@ -670,6 +831,7 @@ pub fn select_item(w: &mut Workspace, target: Target) {
         select(w, &mut state, &source, page(w), target);
     } else {
         state.selection = None;
+        state.cohort.clear();
     }
     save_presentation(w, &state);
     w.drawing_interaction = state;
@@ -717,6 +879,7 @@ fn restore_presentation(w: &Workspace, state: &mut State, source: &Drawing) {
         && let Some(target) = &w.view.drawing_selection
     {
         state.selection = Some((source.id.clone(), page(w), target.clone()));
+        state.cohort = vec![target.clone()];
     }
 }
 pub fn escape(w: &mut Workspace) -> bool {
@@ -907,6 +1070,20 @@ fn selected_commands(w: &Workspace, state: &State) -> Vec<SemanticElement> {
             enabled,
         ));
     }
+    out.extend(crate::drawing_layout_ui::commands(
+        w,
+        &source,
+        &state.cohort,
+        Some(target),
+        identity(w),
+        enabled && state.errors.is_empty(),
+    ));
+    out.push(command(
+        w,
+        "drawing.interact-clear-selection",
+        "Clear paper selection",
+        enabled,
+    ));
     out
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
@@ -957,6 +1134,15 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ),
         field(
             w,
+            "annotation-spacing",
+            "Copy / stack spacing",
+            json!(annotation_spacing(state)),
+            "quantity",
+            Some("mm"),
+            vec![],
+        ),
+        field(
+            w,
             "dimension-mode",
             "Dimension",
             json!(state.dimension_mode),
@@ -995,6 +1181,8 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data["target"] = json!(target.target);
             data["bounds_mm"] = json!(target.bounds_mm);
             data["handles"] = json!(target.handles);
+            data["in_cohort"] = json!(state.cohort.contains(&target.target));
+            data["primary"] = json!(selection == Some(&target.target));
             out.push(SemanticElement {
                 id: format!(
                     "{}:paper:{}:{}",
@@ -1003,9 +1191,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                     target.target.identity()
                 ),
                 role: "drawing-paper-item".into(),
-                label: target.target.identity(),
+                label: target_label(&cache.source, &target.target),
                 value: target.diagnostic.clone(),
-                state: if selection == Some(&target.target) {
+                state: if state.cohort.contains(&target.target) {
                     "selected"
                 } else if target.diagnostic.is_some() {
                     "invalid"
@@ -1014,6 +1202,32 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 }
                 .into(),
                 commands: vec!["drawing.interact-select-item".into()],
+                relationships: vec![cache.source.id.clone()],
+                data,
+            });
+            let mut data = identity(w);
+            data["target"] = json!(target.target);
+            data["enabled"] = json!(state.capture.is_none());
+            out.push(SemanticElement {
+                id: format!(
+                    "{}:paper:{}:toggle:{}",
+                    cache.source.id,
+                    cache.page,
+                    target.target.identity()
+                ),
+                role: "drawing-paper-cohort-entry".into(),
+                label: format!(
+                    "Toggle {} in selection",
+                    target_label(&cache.source, &target.target)
+                ),
+                value: None,
+                state: if state.cohort.contains(&target.target) {
+                    "selected"
+                } else {
+                    "ready"
+                }
+                .into(),
+                commands: vec!["drawing.interact-toggle-item".into()],
                 relationships: vec![cache.source.id.clone()],
                 data,
             });
@@ -1031,7 +1245,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                     role: "drawing-paper-handle".into(),
                     label: format!(
                         "{} {}",
-                        target.target.identity(),
+                        target_label(&cache.source, &target.target),
                         handle_class(&handle.kind)
                     ),
                     value: None,
@@ -1048,6 +1262,19 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             }
         }
     }
+    let mut data = identity(w);
+    data["cohort"] = json!(state.cohort);
+    data["primary"] = json!(selected(state));
+    out.push(SemanticElement {
+        id: "drawing.paper-selection".into(),
+        role: "drawing-paper-selection".into(),
+        label: format!("{} paper items selected", state.cohort.len()),
+        value: None,
+        state: "ready".into(),
+        commands: vec![],
+        relationships: vec![],
+        data,
+    });
     for (viewport, (message, status)) in &state.statuses {
         let mut data = identity(w);
         data["viewport"] = json!(viewport);
@@ -1202,6 +1429,26 @@ pub fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) -> Result
                 }
                 w.drawing_interaction.grid_mm = n;
             }
+            "annotation-spacing" => {
+                let value = if let Some(value) = value.as_f64() {
+                    value
+                } else {
+                    cad_core::expression::value(
+                        w.session.visible(),
+                        &w.session.visible().root,
+                        &Expr::from(
+                            value
+                                .as_str()
+                                .ok_or_else(|| invalid("Enter paper spacing"))?,
+                        ),
+                        Dimension::Length,
+                    )?
+                };
+                if !value.is_finite() || !(0.1..=1000.).contains(&value) {
+                    return Err(invalid("Annotation spacing must be 0.1–1000 mm"));
+                }
+                w.drawing_interaction.annotation_spacing_mm = value;
+            }
             "dimension-mode" => {
                 w.drawing_interaction.dimension_mode = serde_json::from_value(value)?;
                 if matches!(
@@ -1224,6 +1471,7 @@ pub fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) -> Result
                 w.view.drawing_page = page;
                 w.view.drawing_selection = None;
                 w.drawing_interaction.selection = None;
+                w.drawing_interaction.cohort.clear();
                 w.drawing_interaction.tool = Tool::Select;
             }
             _ => return Err(invalid("Unknown paper interaction field")),
@@ -1243,7 +1491,92 @@ fn execute(w: &mut Workspace, state: &mut State, cmd: &str, data: Option<&Value>
     if w.settings.is_some() {
         return Err(invalid("Close Settings before changing the drawing"));
     }
+    if cmd.starts_with("drawing.interact-cohort-") {
+        if !state.errors.is_empty() {
+            return Err(invalid(
+                "Correct the retained paper control text before arranging, copying or deleting annotations",
+            ));
+        }
+        if data.is_some_and(|data| {
+            data.get("cohort")
+                .is_some_and(|cohort| cohort != &json!(state.cohort))
+                || data
+                    .get("primary")
+                    .is_some_and(|primary| primary != &json!(selected(state)))
+        }) {
+            return Err(invalid(
+                "The paper selection changed; use its current cleanup controls",
+            ));
+        }
+        let ids = crate::drawing_layout_ui::ids(&state.cohort)?;
+        let source = sheet(w).ok_or_else(|| invalid("Select a drawing sheet"))?;
+        let primary = if let Some(Target::Annotation { id }) = selected(state) {
+            id.clone()
+        } else {
+            return Err(invalid("Choose an annotation as the layout reference"));
+        };
+        let spacing = annotation_spacing(state);
+        let action = match cmd {
+            "drawing.interact-cohort-copy" => Action::CopyAnnotations {
+                annotations: ids,
+                offset_mm: [spacing, spacing],
+            },
+            "drawing.interact-cohort-delete" => Action::DeleteAnnotations { annotations: ids },
+            _ => {
+                use cad_core::drawing_layout::{Mode, Request};
+                let mode = match cmd {
+                    "drawing.interact-cohort-align-x" => Mode::AlignX,
+                    "drawing.interact-cohort-align-y" => Mode::AlignY,
+                    "drawing.interact-cohort-distribute-x" => Mode::DistributeX,
+                    "drawing.interact-cohort-distribute-y" => Mode::DistributeY,
+                    "drawing.interact-cohort-stack-x" => Mode::StackX,
+                    "drawing.interact-cohort-stack-y" => Mode::StackY,
+                    _ => return Err(invalid("Unknown annotation layout command")),
+                };
+                Action::ArrangeAnnotations {
+                    request: Box::new(Request {
+                        version: cad_core::drawing_layout::CONTRACT_VERSION,
+                        annotations: ids,
+                        primary,
+                        mode,
+                        spacing_mm: spacing,
+                    }),
+                }
+            }
+        };
+        apply(w, state, &action)?;
+        if matches!(action, Action::CopyAnnotations { .. }) {
+            let old = source
+                .entities
+                .iter()
+                .map(|annotation| &annotation.id)
+                .collect::<std::collections::BTreeSet<_>>();
+            let updated = sheet(w).ok_or_else(|| invalid("The updated drawing is unavailable"))?;
+            let copied = updated
+                .entities
+                .iter()
+                .filter(|annotation| !old.contains(&annotation.id))
+                .map(|annotation| Target::Annotation {
+                    id: annotation.id.clone(),
+                })
+                .collect::<Vec<_>>();
+            if let Some(primary) = copied.last().cloned() {
+                select(w, state, &updated, page(w), primary);
+                state.cohort = copied;
+            }
+        } else if matches!(action, Action::DeleteAnnotations { .. }) {
+            state.selection = None;
+            state.cohort.clear();
+            state.context_target = None;
+        }
+        return Ok(());
+    }
     match cmd {
+        "drawing.interact-clear-selection" => {
+            state.selection = None;
+            state.cohort.clear();
+            state.context_target = None;
+        }
         "drawing.interact-select" => state.tool = Tool::Select,
         "drawing.interact-dimension" => {
             if page(w) != 0 {
@@ -1256,7 +1589,7 @@ fn execute(w: &mut Workspace, state: &mut State, cmd: &str, data: Option<&Value>
                 state.views.remove(&view_key(&source, page(w)));
             }
         }
-        "drawing.interact-select-item" => {
+        "drawing.interact-select-item" | "drawing.interact-toggle-item" => {
             let target: Target = serde_json::from_value(
                 data.ok_or_else(|| invalid("Choose a paper item"))?["target"].clone(),
             )?;
@@ -1269,7 +1602,21 @@ fn execute(w: &mut Workspace, state: &mut State, cmd: &str, data: Option<&Value>
             {
                 return Err(invalid("This paper item is no longer on the current page"));
             }
-            select(w, state, &source, page(w), target);
+            if cmd == "drawing.interact-toggle-item"
+                || data.is_some_and(|data| data["extend"] == Value::Bool(true))
+            {
+                select_extended(
+                    w,
+                    state,
+                    &source,
+                    page(w),
+                    target,
+                    cmd == "drawing.interact-toggle-item"
+                        || data.is_some_and(|data| data["toggle"] == Value::Bool(true)),
+                )?;
+            } else {
+                select(w, state, &source, page(w), target);
+            }
         }
         "drawing.interact-reattach" => {
             let data = data.ok_or_else(|| invalid("Choose an attachment handle"))?;
@@ -1925,10 +2272,16 @@ pub fn frame(
         };
     }
     for target in &scene.targets {
-        let is_selected = selected(&state) == Some(&target.target);
+        let is_selected = state.cohort.contains(&target.target);
         let is_hovered = state.hover.as_ref() == Some(&target.target);
         if is_selected || is_hovered || target.diagnostic.is_some() {
             let mut classes = vec!["paper-item"];
+            if selected(&state) == Some(&target.target) {
+                classes.push("primary");
+            }
+            if state.cohort.contains(&target.target) {
+                classes.push("cohort");
+            }
             if target.diagnostic.is_some() {
                 classes.push("diagnostic");
             }
@@ -2086,7 +2439,7 @@ pub fn frame(
                         })
                 })
             }) {
-                select(w, &mut state, &source, page(w), target.target.clone());
+                select_for_drag(w, &mut state, &source, page(w), target.target.clone());
                 if let Err(error) = begin_capture(
                     w,
                     &mut state,
@@ -2113,6 +2466,19 @@ pub fn frame(
                 {
                     w.status = error.to_string();
                 }
+            } else if ui.input(|input| input.modifiers.command || input.modifiers.shift) {
+                let target = hit
+                    .as_ref()
+                    .map(|hit| hit.target.clone())
+                    .or_else(|| hovered_handle.as_ref().map(|(hit, _)| hit.target.clone()));
+                if let Some(target) = target {
+                    let toggle = ui.input(|input| input.modifiers.command);
+                    if let Err(error) =
+                        select_extended(w, &mut state, &source, page(w), target, toggle)
+                    {
+                        w.status = error.to_string();
+                    }
+                }
             } else if let Some((target, handle)) = hovered_handle {
                 if let Err(error) = begin_capture(
                     w,
@@ -2136,6 +2502,7 @@ pub fn frame(
                 select(w, &mut state, &source, page(w), hit.target);
             } else {
                 state.selection = None;
+                state.cohort.clear();
             }
         }
     }
@@ -2153,7 +2520,7 @@ pub fn frame(
             None
         };
         if let Some(target) = state.context_target.clone() {
-            select(w, &mut state, &source, page(w), target);
+            select_for_drag(w, &mut state, &source, page(w), target);
         }
     }
     if state.context_target.is_some() && state.capture.is_none() {
@@ -2290,7 +2657,9 @@ pub fn frame(
         }
     } else {
         match &state.tool {
-            Tool::Select => "Select or drag drawing items · pinch to zoom · two fingers to pan",
+            Tool::Select => {
+                "Command-click toggles · Shift-click adds · drag selected annotations together · pinch zoom · two-finger pan"
+            }
             Tool::Dimension { first: None } => {
                 if matches!(
                     state.dimension_mode,

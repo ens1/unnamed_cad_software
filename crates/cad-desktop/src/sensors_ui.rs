@@ -659,6 +659,20 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             element.data["report_current"] = json!(false);
         }
     }
+    for element in &mut out {
+        let enabled = available(w) && current_source_is_valid(w);
+        let reason = if !available(w) {
+            "Apply or cancel the current operation before editing a monitor"
+        } else {
+            "Correct retained monitor fields before selecting another monitor"
+        };
+        element.data["actions"] = json!([
+            {"command":"inspection.sensors","label":"Open design monitors","enabled":available(w),
+                "disabled_reason":(!available(w)).then_some(reason)},
+            {"command":"sensor.edit","label":"Edit monitor","enabled":enabled,
+                "disabled_reason":(!enabled).then_some(reason),"arguments":{"sensor":element.data["sensor"]}}
+        ]);
+    }
     if editing(w) {
         out.extend(fields(w));
         out.push(SemanticElement{id:"design-monitors:source".into(),role:"design-monitor-source".into(),label:"Advanced source".into(),value:Some(w.json.clone()),state:if current_source_is_valid(w){"draft"}else{"invalid"}.into(),commands:vec![],relationships:vec![],data:json!({"setter":"sensor-editor","pointer":"source","editor":w.fields.get(TOKEN),"json":w.json,"editable":selected(w).is_some(),"value_type":"text","multiline":true,"rows":12})});
@@ -668,7 +682,20 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ("sensor.delete", "Delete monitor"),
         ("sensor.export-report", "Export readings…"),
     ] {
-        out.push(SemanticElement{id:format!("command:{command}"),role:"design-monitor-action".into(),label:label.into(),value:None,state:"ready".into(),commands:vec![command.into()],relationships:vec![],data:json!({"enabled":available(w) && (command!="sensor.delete"||selected(w).is_some())})});
+        let enabled = available(w)
+            && (command != "sensor.delete" || selected(w).is_some())
+            && (command != "sensor.export-report" || !current.source.is_empty())
+            && (command == "sensor.export-report" || current_source_is_valid(w));
+        let reason = if !available(w) {
+            "Apply or cancel the current operation before using design monitors"
+        } else if command == "sensor.delete" && selected(w).is_none() {
+            "Select a monitor to delete"
+        } else if command == "sensor.export-report" && current.source.is_empty() {
+            "Wait for the current monitor report before exporting"
+        } else {
+            "Correct retained monitor fields before changing its definition"
+        };
+        out.push(SemanticElement{id:format!("command:{command}"),role:"design-monitor-action".into(),label:label.into(),value:(!enabled).then(||reason.into()),state:if enabled{"ready"}else{"disabled"}.into(),commands:vec![command.into()],relationships:vec![],data:json!({"enabled":enabled,"sensor":selected(w),"actions":[{"command":command,"label":label,"enabled":enabled,"disabled_reason":(!enabled).then_some(reason),"arguments":{"sensor":selected(w)}}]})});
     }
     out
 }

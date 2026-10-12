@@ -1,6 +1,6 @@
 # Configurations, design tables, and component reuse
 
-Configuration contract version 4 stores named definitions, inheritance, source overrides, feature dimension expressions, component placement and free curve mate seeds, and selected configuration IDs in native documents. Versions 1–3 definitions and tables remain readable. It contains application-owned IDs, expression text, and data; no renderer or kernel objects are authoritative. The existing part `configurations` parameter-override maps remain readable. Editing one migrates that row into the richer `configuration_details` form. Assembly configurations use their own definition map. Empty additive fields are omitted so older pinned library source hashes remain stable.
+Configuration contract version 8 stores named definitions, inheritance, source overrides, feature and sketch dimension expressions, scalar configured repetition equations, component placement and free curve mate seeds, and selected configuration IDs in native documents. Versions 1–7 definitions and tables remain readable. It contains application-owned IDs, expression text, and data; no renderer or kernel objects are authoritative. The existing part `configurations` parameter-override maps remain readable. Editing one migrates that row into the richer `configuration_details` form. Assembly configurations use their own definition map. Empty additive fields are omitted so older pinned library source hashes remain stable.
 
 ## Supported configuration behavior
 

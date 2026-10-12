@@ -363,36 +363,81 @@ fn sign(invert: bool) -> f32 {
     if invert { -1. } else { 1. }
 }
 fn zoom(w: &mut Workspace, logarithm: f32, rect: egui::Rect, anchor: egui::Pos2, speed: f32) {
-    let old = w.view.distance;
-    w.view.distance = (old
-        * (-logarithm.clamp(-2., 2.)
-            * speed
-            * w.view.navigation.zoom_sensitivity
-            * sign(w.view.navigation.invert_zoom))
-        .exp())
-    .clamp(0.005, 10000.);
-    let (_, r, u) = viewport::basis(w);
+    let mut pose = crate::camera_views_ui::current(w);
+    let old = pose.distance_mm;
+    let factor = (-f64::from(logarithm.clamp(-2., 2.))
+        * f64::from(speed)
+        * f64::from(w.view.navigation.zoom_sensitivity)
+        * f64::from(sign(w.view.navigation.invert_zoom)))
+    .exp();
+    let frame = pose.frame();
     let [horizontal, vertical] = viewport::focal(w, rect);
-    let shift = (r * (anchor.x - rect.center().x) / horizontal
-        - u * (anchor.y - rect.center().y) / vertical)
-        * (old - w.view.distance);
-    w.view.target = (Vec3::from_array(w.view.target) + shift).to_array();
+    let offset = bevy::math::DVec3::from_array(frame.right) * f64::from(anchor.x - rect.center().x)
+        / horizontal
+        - bevy::math::DVec3::from_array(frame.up) * f64::from(anchor.y - rect.center().y)
+            / vertical;
+    let scale = match &mut pose.projection {
+        cad_core::camera_views::Projection::Perspective { .. } => {
+            pose.distance_mm = (old * factor).clamp(0.5, 1e6);
+            old - pose.distance_mm
+        }
+        cad_core::camera_views::Projection::Orthographic { vertical_span_mm } => {
+            let old = *vertical_span_mm;
+            *vertical_span_mm = (old * factor).clamp(0.1, 1e8);
+            1. - *vertical_span_mm / old
+        }
+    };
+    pose.target_mm = (bevy::math::DVec3::from_array(pose.target_mm) + offset * scale).to_array();
+    crate::camera_views_ui::set_current(w, pose);
 }
 fn pan(w: &mut Workspace, delta: [f32; 2], speed: f32) {
-    let (_, r, u) = viewport::basis(w);
+    let mut pose = crate::camera_views_ui::current(w);
+    let frame = pose.frame();
     let p = &w.view.navigation;
-    let shift = (r * delta[0] * sign(p.invert_pan[0]) - u * delta[1] * sign(p.invert_pan[1]))
-        * p.pan_sensitivity
-        * w.view.distance
-        * speed;
-    w.view.target = (Vec3::from_array(w.view.target) + shift).to_array();
+    let reach = match pose.projection {
+        cad_core::camera_views::Projection::Perspective { vertical_fov_deg } => {
+            pose.distance_mm * (vertical_fov_deg.to_radians() * 0.5).tan()
+                / (std::f64::consts::PI / 8.).tan()
+        }
+        cad_core::camera_views::Projection::Orthographic { vertical_span_mm } => {
+            vertical_span_mm / (2. * (std::f64::consts::PI / 8.).tan())
+        }
+    };
+    let shift = (bevy::math::DVec3::from_array(frame.right)
+        * f64::from(delta[0] * sign(p.invert_pan[0]))
+        - bevy::math::DVec3::from_array(frame.up) * f64::from(delta[1] * sign(p.invert_pan[1])))
+        * f64::from(p.pan_sensitivity)
+        * reach
+        * f64::from(speed);
+    pose.target_mm = (bevy::math::DVec3::from_array(pose.target_mm) + shift).to_array();
+    crate::camera_views_ui::set_current(w, pose);
 }
 fn orbit(w: &mut Workspace, delta: [f32; 2], speed: f32) {
+    let mut pose = crate::camera_views_ui::current(w);
     let p = &w.view.navigation;
-    w.view.orbit[0] += delta[0] * p.orbit_sensitivity * speed * sign(p.invert_orbit[0]);
-    w.view.orbit[1] -= delta[1] * p.orbit_sensitivity * speed * sign(p.invert_orbit[1]);
-    w.view.orbit = w.view.orbit.map(|a| a.rem_euclid(std::f32::consts::TAU));
+    pose.orbit_rad[0] += f64::from(delta[0])
+        * f64::from(p.orbit_sensitivity)
+        * f64::from(speed)
+        * f64::from(sign(p.invert_orbit[0]));
+    pose.orbit_rad[1] -= f64::from(delta[1])
+        * f64::from(p.orbit_sensitivity)
+        * f64::from(speed)
+        * f64::from(sign(p.invert_orbit[1]));
+    crate::camera_views_ui::set_current(w, pose);
 }
+fn scale_view(w: &mut Workspace, factor: f64) {
+    let mut pose = crate::camera_views_ui::current(w);
+    match &mut pose.projection {
+        cad_core::camera_views::Projection::Perspective { .. } => {
+            pose.distance_mm = (pose.distance_mm * factor).clamp(0.5, 1e6)
+        }
+        cad_core::camera_views::Projection::Orthographic { vertical_span_mm } => {
+            *vertical_span_mm = (*vertical_span_mm * factor).clamp(0.1, 1e8)
+        }
+    };
+    crate::camera_views_ui::set_current(w, pose);
+}
+
 fn finite(event: Event) -> bool {
     match event.motion {
         Motion::Scroll { delta, .. } | Motion::Pan { delta } => delta
@@ -606,12 +651,12 @@ pub fn navigate(w: &mut Workspace, ctx: &egui::Context, response: &egui::Respons
                         changed |= logarithm != 0.;
                     }
                     Motion::Rotate { radians } => {
-                        w.view.roll = (w.view.roll
-                            + radians
-                                * speed
-                                * w.view.navigation.roll_sensitivity
-                                * sign(w.view.navigation.invert_roll))
-                        .rem_euclid(std::f32::consts::TAU);
+                        let mut pose = crate::camera_views_ui::current(w);
+                        pose.roll_rad += f64::from(radians)
+                            * f64::from(speed)
+                            * f64::from(w.view.navigation.roll_sensitivity)
+                            * f64::from(sign(w.view.navigation.invert_roll));
+                        crate::camera_views_ui::set_current(w, pose);
                         changed |= radians != 0.;
                     }
                     Motion::Pan { delta } => {
@@ -646,6 +691,9 @@ pub fn navigate(w: &mut Workspace, ctx: &egui::Context, response: &egui::Respons
     changed
 }
 pub fn sanitize(view: &mut PresentationState) {
+    if crate::camera_views_ui::precise(view).is_some() {
+        return;
+    }
     if !view.roll.is_finite() {
         view.roll = 0.;
     }
@@ -686,14 +734,19 @@ pub fn set(w: &mut Workspace, pointer: &str, value: serde_json::Value) {
     }
 }
 pub fn upright(w: &mut Workspace) {
-    let offset = viewport::eye(w) - Vec3::from_array(w.view.target);
-    if offset.x.hypot(offset.z) > 1e-6 {
-        w.view.orbit[0] = offset.x.atan2(offset.z);
+    let mut pose = crate::camera_views_ui::current(w);
+    let [yaw, pitch] = pose.orbit_rad;
+    let x = yaw.sin() * pitch.cos();
+    let y = -yaw.cos() * pitch.cos();
+    if x.hypot(y) > 1e-6 {
+        pose.orbit_rad[0] = x.atan2(-y);
     }
-    w.view.orbit[1] = (offset.y / w.view.distance).clamp(-1., 1.).asin();
-    w.view.roll = 0.;
+    pose.orbit_rad[1] = pitch.sin().clamp(-1., 1.).asin();
+    pose.roll_rad = 0.;
+    crate::camera_views_ui::set_current(w, pose);
     stop(w);
 }
+
 pub fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>) -> bool {
     if !command.starts_with("navigation.") {
         return false;
@@ -735,8 +788,8 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>
         "navigation.upright" => upright(w),
         "navigation.fit-all" => viewport::fit(w, false),
         "navigation.fit-selection" => viewport::fit(w, true),
-        "navigation.zoom-in" => w.view.distance = (w.view.distance / 1.25).max(0.005),
-        "navigation.zoom-out" => w.view.distance = (w.view.distance * 1.25).min(10000.),
+        "navigation.zoom-in" => scale_view(w, 0.8),
+        "navigation.zoom-out" => scale_view(w, 1.25),
         "navigation.orbit-left" => orbit(w, [-30., 0.], 1.),
         "navigation.orbit-right" => orbit(w, [30., 0.], 1.),
         "navigation.orbit-up" => orbit(w, [0., 30.], 1.),

@@ -44,7 +44,7 @@ sheet.
 
 Cloud fields, actions, source identity and direct handles publish semantic data
 for user layouts and CSS-like styles. Drawing contract 10, revision-cloud contract
-1 and paper-interaction contract 4 preserve source ownership independently of
+1 and paper-interaction contract 5 preserve source ownership independently of
 widgets and kernel objects. The cloud shares the existing drawing draft,
 current-validation Apply, Cancel and one-operation undo.
 

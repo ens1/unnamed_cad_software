@@ -230,6 +230,9 @@ pub(crate) fn namespace_snapshot(
     json["drawings"] = serde_json::json!([]);
     json["comments"] = serde_json::json!([]);
     json["libraries"] = serde_json::json!({});
+    // Scene camera bookmarks are not part of a component's mechanical closure.
+    // The verified original snapshot digest still covers their authored bytes.
+    json["camera_views"] = serde_json::json!({});
     remap_source(&mut json, &mapping, "")?;
     let imported: Document = serde_json::from_value(json)?;
     Ok((imported, mapping))

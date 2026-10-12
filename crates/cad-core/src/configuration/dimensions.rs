@@ -8,7 +8,9 @@ use serde::{Serialize, Serializer, ser};
 use serde_json::{Value, value::Serializer as JsonSerializer};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const FIELD_CONTRACT_VERSION: u32 = 3;
+pub const FIELD_CONTRACT_VERSION: u32 = 4;
+/// Expressions use f64 authority; literal integers retain their full native range.
+pub const MAX_EXPRESSION_COUNT: u64 = (1_u64 << 53) - 1;
 const MARKER: &str = "__tcad_expression_field_v1";
 const INTEGER: &str = "__tcad_integer_field_v1";
 
@@ -95,6 +97,52 @@ pub fn authored_value(field: &DimensionField, expression: &Expr) -> Result<Value
         return Err(invalid("Count exceeds its native integer type"));
     }
     Ok(Value::from(value))
+}
+/// Validate the source without materializing configurations or evaluating geometry.
+pub fn validate_source(field: &DimensionField, expression: &Expr) -> Result<()> {
+    crate::expression::references(&expression.0)?;
+    if field.kind == FieldKind::Count
+        && (expression.0.trim().parse::<u64>().is_ok() || unsigned_literal(&expression.0))
+    {
+        authored_value(field, expression)?;
+    }
+    Ok(())
+}
+
+fn unsigned_literal(text: &str) -> bool {
+    let text = text.trim().strip_prefix('+').unwrap_or(text.trim());
+    !text.is_empty() && text.bytes().all(|character| character.is_ascii_digit())
+}
+
+/// Resolve a scalar repetition expression while preserving the native integer field.
+/// Exact unsigned literals bypass f64 so old large literal values cannot be rounded.
+pub fn count_value(
+    doc: &crate::Document,
+    owner: &str,
+    field: &DimensionField,
+    expression: &Expr,
+) -> Result<u64> {
+    if field.kind != FieldKind::Count {
+        return Err(invalid("This field is not a repetition count"));
+    }
+    if expression.0.trim().parse::<u64>().is_ok() || unsigned_literal(&expression.0) {
+        return authored_value(field, expression)?
+            .as_u64()
+            .ok_or_else(|| invalid("Count is not an unsigned integer"));
+    }
+    let value = crate::expression::value(doc, owner, expression, crate::Dimension::Scalar)?;
+    let maximum = field.maximum.unwrap_or(u64::MAX).min(MAX_EXPRESSION_COUNT);
+    if !value.is_finite() || value < 0.0 || value.fract() != 0.0 {
+        return Err(invalid(
+            "Count expressions must produce a finite nonnegative integer scalar",
+        ));
+    }
+    if value > maximum as f64 {
+        return Err(invalid(
+            "Count expression exceeds its native integer bound or the exact f64 integer range (2^53−1)",
+        ));
+    }
+    Ok(value as u64)
 }
 fn collect_integers(
     value: &Value,

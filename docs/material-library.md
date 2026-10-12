@@ -31,6 +31,8 @@ Density and engineering properties use `f64`. Numeric local edits cannot retain 
 
 Assignments reference local material identities. Deletion is refused while a material is assigned to a part, referenced by a named configuration, or selected as the new-part default. A material used by a pinned component snapshot cannot be edited in place; make the component unique and duplicate the material first.
 
+Material and finish browsers retain invalid typed fields and unmatched Advanced Source text. Changing the selected definition or assignment scope, importing a library, creating/duplicating a record, or assigning a finish/material waits until that text is corrected. Search filters and favorites remain available. Editing another valid field does not overwrite unmatched source text; **Refresh source from draft** explicitly discards only the source buffer and its diagnostic. Cancel still restores the shared editing checkpoint. Finish and lighting corrections remain editable while texture/environment decoding is pending; Apply continues to require current decoded resources and validation.
+
 `ModelSettings.default_new_part_material` and `default_new_part_finish` affect subsequently created parts. They do not rescale geometry or change existing assignments. The unchanged engineering default is `aluminum`. In application Settings, the new-model default picker accepts a built-in, bundled catalog entry, or current-project material. Catalog/project choices save a complete portable snapshot with a fresh identity in personal preferences. New documents receive that snapshot before assignments are created; later edits to the source project or catalog do not silently change the saved default. Selecting a built-in clears the snapshot. The independent finish picker similarly retains a personal finish snapshot with its exact checksum-pinned texture files. New documents copy those assets into their own resource root; missing or altered assets prevent creating a document with invalid defaults. See [Settings](settings.md). Existing files retain their own definitions.
 
 ## Portable libraries
@@ -68,3 +70,7 @@ Manufacturing requirements record design intent. They do not add coating solids,
 The catalog contains a selected transcription of factual numeric values in an original TCAD arrangement. Original TCAD code and catalog arrangement use the repository's WTFPL license. Supplier publications, product names, and trademarks remain their owners'; their prose, page designs, PDFs, and logos are not bundled or relicensed. Citations identify the data source and do not imply supplier endorsement.
 
 The catalog supports material selection, identification, and model mass calculations. It does not supply certified stock properties, fatigue curves, temperature-dependent datasets, anisotropic constitutive models, or simulation design allowables. The stated property conditions remain relevant even when a part's shape changes. Optical finishes and texture maps remain separate from engineering properties.
+
+Catalog CSV provides source-preserving bulk editing alongside native JSON, with
+ordinary density/grade/condition fields and typed JSON provenance/property cells.
+Imports remain explicit fresh copies. See [material CSV](material-csv.md).

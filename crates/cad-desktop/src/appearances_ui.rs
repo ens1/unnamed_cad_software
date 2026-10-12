@@ -9,6 +9,7 @@ use cad_core::{
     presentation::SemanticElement,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 const EDITOR: &str = "appearance-editor";
 const TOOL: &str = "appearance-tool";
@@ -281,6 +282,41 @@ fn available(w: &Workspace) -> bool {
 fn finish_editable(w: &Workspace, id: &str) -> bool {
     available(w) && !cad_core::library::finish_is_pinned(w.session.visible(), id)
 }
+fn bound_field(element: &SemanticElement) -> bool {
+    matches!(
+        element.data["setter"].as_str(),
+        Some("appearance-finish" | "appearance-lighting")
+    ) || element.data["setter"] == "appearance-ui" && element.data["field"] == "source"
+}
+fn field_revision(w: &Workspace) -> Value {
+    json!([
+        w.session.generation,
+        w.session.committed.revision,
+        w.session
+            .draft
+            .as_ref()
+            .map(|draft| (&draft.id, draft.edit))
+    ])
+}
+fn field_source(w: &Workspace, element: &SemanticElement) -> Option<Value> {
+    if element.data["setter"] == "appearance-lighting" {
+        serde_json::to_value(&w.session.visible().lighting).ok()
+    } else {
+        let id = element.data["bound_finish"].as_str()?;
+        serde_json::to_value(w.session.visible().finishes.get(id)?).ok()
+    }
+}
+fn field_digest(value: &Value) -> Option<String> {
+    serde_json::to_vec(value)
+        .ok()
+        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+}
+fn field_identity_current(w: &Workspace, element: &SemanticElement) -> bool {
+    element.data["document"] == json!(w.session.visible().id)
+        && element.data["generation"] == json!(w.session.generation)
+        && (element.data["setter"] != "appearance-ui"
+            || element.data["bound_finish"] == json!(selected(w)))
+}
 fn protect_finish_field(w: &Workspace, element: &mut SemanticElement) {
     let setter = element.data.get("setter").and_then(Value::as_str);
     let finish = if setter == Some("appearance-finish") {
@@ -296,6 +332,19 @@ fn protect_finish_field(w: &Workspace, element: &mut SemanticElement) {
     } else {
         None
     };
+    if bound_field(element) {
+        element.data["document"] = json!(w.session.visible().id);
+        element.data["generation"] = json!(w.session.generation);
+        element.data["source_revision"] = field_revision(w);
+        element.data["bound_finish"] = json!(finish);
+        element.data["source_sha256"] =
+            json!(field_source(w, element).as_ref().and_then(field_digest));
+        element.data["editor"] = json!(format!(
+            "{}:{}",
+            w.session.visible().id,
+            finish.as_deref().unwrap_or("lighting")
+        ));
+    }
     if finish
         .as_ref()
         .is_some_and(|id| cad_core::library::finish_is_pinned(w.session.visible(), id))
@@ -356,19 +405,50 @@ pub fn begin(w: &mut Workspace, lighting: bool) {
     w.open_editor("appearances");
 }
 pub fn current_source_is_valid(w: &Workspace) -> bool {
-    !w.fields.contains_key(INVALID)
+    source_text_is_valid(w, None)
         && (!w.fields.contains_key(TOOL) || crate::render_appearance::resources_are_current(w))
-        && !w
-            .fields
-            .keys()
-            .any(|key| key.starts_with("appearance-field-invalid:"))
         && w.appearance_diagnostics.is_empty()
+}
+fn source_text_is_valid(w: &Workspace, ignored: Option<&str>) -> bool {
+    !w.fields.contains_key(INVALID)
+        && !w.fields.keys().any(|key| {
+            key.starts_with("appearance-field-invalid:")
+                && ignored.is_none_or(|id| key != &format!("appearance-field-invalid:{id}"))
+        })
         && w.fields.get(SOURCE).is_none_or(|source| {
             serde_json::from_str::<Finish>(source).is_ok_and(|finish| {
                 selected(w).as_ref() == Some(&finish.id)
                     && w.session.visible().finishes.get(&finish.id) == Some(&finish)
             })
         })
+}
+pub fn selection_ready(w: &Workspace) -> Result<()> {
+    if source_text_is_valid(w, None) {
+        Ok(())
+    } else {
+        Err(CadError::Invalid("Correct retained finish/lighting text or explicitly Refresh finish source before changing the selected finish or assignment; your text is preserved".into()))
+    }
+}
+fn selection_changing(command: &str) -> bool {
+    matches!(
+        command,
+        "appearance.edit"
+            | "appearance.customize-target"
+            | "appearance.use-assigned"
+            | "appearance.assign-target"
+            | "appearance.new"
+            | "appearance.duplicate"
+            | "appearance.delete"
+            | "appearance.assign-part"
+            | "appearance.assign-instance"
+            | "appearance.inherit-instance"
+            | "appearance.assign-face"
+            | "appearance.repair-face"
+            | "appearance.remove-face-override"
+            | "appearance.capture-face"
+            | "appearance.inherit-face"
+            | "appearance.clear-manufacturing"
+    )
 }
 pub fn field_error(w: &mut Workspace, element: &SemanticElement, error: Option<String>) {
     if !element
@@ -379,12 +459,25 @@ pub fn field_error(w: &mut Workspace, element: &SemanticElement, error: Option<S
     {
         return;
     }
+    if bound_field(element)
+        && (!field_identity_current(w, element)
+            || error.is_some() && element.data["source_revision"] != field_revision(w))
+    {
+        return;
+    }
     let key = format!("appearance-field-invalid:{}", element.id);
     if let Some(error) = error {
         w.fields.insert(key, error);
     } else {
         w.fields.remove(&key);
     }
+}
+pub fn field_is_invalid(w: &Workspace, element: &SemanticElement) -> bool {
+    element.data["setter"]
+        .as_str()
+        .is_some_and(|setter| setter.starts_with("appearance-"))
+        && w.fields
+            .contains_key(&format!("appearance-field-invalid:{}", element.id))
 }
 fn checked_dispatch(
     w: &mut Workspace,
@@ -409,6 +502,11 @@ fn put(w: &mut Workspace, finish: Finish) -> Result<()> {
         return Err(CadError::Invalid("This finish is pinned by a linked component. Duplicate it to customize a unique component.".into()));
     }
     let id = finish.id.clone();
+    let source_was_current = w.fields.get(SOURCE).is_none_or(|text| {
+        serde_json::from_str::<Finish>(text).is_ok_and(|source| {
+            source == finish || w.session.visible().finishes.get(&id) == Some(&source)
+        })
+    });
     let expected = serde_json::to_value(&finish)?;
     checked_dispatch(
         w,
@@ -418,8 +516,10 @@ fn put(w: &mut Workspace, finish: Finish) -> Result<()> {
         expected,
         Some(&id),
     )?;
-    w.fields.remove(INVALID);
-    if w.fields.contains_key(SOURCE) {
+    if source_was_current {
+        w.fields.remove(INVALID);
+    }
+    if source_was_current && w.fields.contains_key(SOURCE) {
         w.fields.insert(
             SOURCE.into(),
             serde_json::to_string_pretty(&w.session.visible().finishes[&id])?,
@@ -516,6 +616,16 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
     if !command.starts_with("appearance.") {
         return false;
     }
+    if command == "appearance.refresh-source" {
+        w.fields.remove(SOURCE);
+        w.fields.remove(INVALID);
+        w.fields
+            .remove("appearance-field-invalid:appearance:source");
+        w.fields
+            .retain(|key, _| !key.starts_with("presentation-field:appearance:source:"));
+        w.status = "Finish source refreshed from the current draft".into();
+        return true;
+    }
     if let Some(section) = command.strip_prefix(SECTION_TOGGLE) {
         if SECTIONS.iter().any(|(id, _, _)| *id == section) {
             let open = section_open(w, section);
@@ -538,6 +648,12 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
             }
             .into(),
         );
+        return true;
+    }
+    if selection_changing(command)
+        && let Err(error) = selection_ready(w)
+    {
+        w.status = error.to_string();
         return true;
     }
     if !w.fields.contains_key(TOOL) {
@@ -960,6 +1076,9 @@ fn finish_source(finish: &Finish) -> Value {
     source
 }
 pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
+    if bound_field(element) && !field_identity_current(w, element) {
+        return None;
+    }
     match element.data.get("setter")?.as_str()? {
         "appearance-ui" => match element.data.get("field")?.as_str()? {
             "library" => Some(json!(selected(w).or_else(|| initial(w)))),
@@ -1058,6 +1177,16 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
     }
 }
 pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> Result<()> {
+    if bound_field(element)
+        && (!field_identity_current(w, element)
+            || element.data["source_revision"] != field_revision(w)
+            || field_source(w, element)
+                .as_ref()
+                .and_then(field_digest)
+                .is_none_or(|digest| element.data["source_sha256"] != digest))
+    {
+        return Err(CadError::Invalid("This finish/lighting field belongs to an earlier document or source; use the current editor control".into()));
+    }
     if !available(w) {
         return Err(CadError::Invalid(
             "Apply or cancel the current operation before editing visual finishes".into(),
@@ -1086,6 +1215,20 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
         return Err(CadError::Invalid("This finish is pinned by a linked component. Duplicate it to customize a unique component.".into()));
     }
     if setter == "appearance-ui" {
+        if element
+            .data
+            .get("field")
+            .and_then(Value::as_str)
+            .is_some_and(|field| {
+                matches!(
+                    field,
+                    "library" | "target-part" | "target-scope" | "target-instance"
+                )
+            })
+            && !source_text_is_valid(w, Some(&element.id))
+        {
+            return Err(CadError::Invalid("Correct retained finish/lighting text before changing selection or assignment; your text is preserved".into()));
+        }
         match element.data.get("field").and_then(Value::as_str) {
             Some("library") => {
                 let id = value
@@ -1094,8 +1237,10 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                     .ok_or_else(|| {
                         CadError::Invalid("Choose a visual finish from the library".into())
                     })?;
-                load(w, id);
-                w.fields.insert(EDIT_MODE.into(), "assignment".into());
+                if selected(w).as_deref() != Some(id) {
+                    load(w, id);
+                    w.fields.insert(EDIT_MODE.into(), "assignment".into());
+                }
                 return Ok(());
             }
             Some("target-part") => {
@@ -1103,6 +1248,9 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                     .as_str()
                     .filter(|id| w.session.visible().parts.contains_key(*id))
                     .ok_or_else(|| CadError::Invalid("Choose a part".into()))?;
+                if target_part(w).as_deref() == Some(id) {
+                    return Ok(());
+                }
                 w.fields.insert(TARGET_PART.into(), id.into());
                 w.fields.remove(TARGET_INSTANCE);
                 w.fields.remove(TARGET_FACE);
@@ -1119,6 +1267,9 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                             "Choose part, component instance or selected face scope".into(),
                         )
                     })?;
+                if crate::appearances_ui::scope(w) == scope {
+                    return Ok(());
+                }
                 if scope == "face" && target_face(w).is_none() {
                     capture_face(w)?;
                 }
@@ -1145,6 +1296,12 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                     .ok_or_else(|| {
                         CadError::Invalid("Choose one of this part's component instances".into())
                     })?;
+                if target_instance(w)
+                    .as_ref()
+                    .is_some_and(|(assembly, instance)| instance_key(assembly, instance) == key)
+                {
+                    return Ok(());
+                }
                 w.fields.insert(TARGET_INSTANCE.into(), key.into());
                 w.fields.insert(TARGET_SCOPE.into(), "instance".into());
                 reset_target_editor(w);
@@ -1376,8 +1533,9 @@ fn button(ui: &mut egui::Ui, w: &mut Workspace, command: &str, label: &str, enab
     let modifies_finish = command.starts_with(IMPORT)
         || command.starts_with(CLEAR)
         || command == "appearance.clear-manufacturing";
-    let enabled =
-        enabled && (!modifies_finish || selected(w).is_some_and(|id| finish_editable(w, &id)));
+    let enabled = enabled
+        && (!modifies_finish || selected(w).is_some_and(|id| finish_editable(w, &id)))
+        && (!selection_changing(command) || source_text_is_valid(w, None));
     if controls::button(
         ui,
         &format!("command:{command}"),
@@ -1586,6 +1744,13 @@ fn target_elements(w: &Workspace) -> Vec<SemanticElement> {
         commands: vec![],
         relationships: vec!["workspace.appearance-panel".into()],
         data: json!({"setter":"appearance-ui","field":field,"json":value,"editable":available(w),"choices":choices,"value_type":"choice","transient":true,"accessibility_label":label}),
+    })
+    .map(|mut element| {
+        if !source_text_is_valid(w, Some(&element.id)) {
+            element.data["editable"] = json!(false);
+            element.data["disabled_reason"] = json!("Correct retained finish/lighting text before changing assignment scope");
+        }
+        element
     })
     .collect()
 }
@@ -2087,6 +2252,13 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
     });
     section(ui, w, "source", |ui, w| {
         crate::ui::semantic_field(ui, w, &source_element(w));
+        button(
+            ui,
+            w,
+            "appearance.refresh-source",
+            "Refresh source from draft",
+            true,
+        );
     });
     if let Some(error) = w.fields.get(INVALID) {
         ui.colored_label(ui.visuals().error_fg_color, error);
@@ -2456,6 +2628,11 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ),
         ("appearance.new", "New visual finish", available(w)),
         (
+            "appearance.refresh-source",
+            "Refresh finish source from draft",
+            selected(w).is_some(),
+        ),
+        (
             "appearance.open-materials",
             "Engineering materials…",
             available(w),
@@ -2618,11 +2795,42 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             }
         }
     }
+    for element in &mut elements {
+        if element
+            .commands
+            .iter()
+            .any(|command| selection_changing(command))
+            && !source_text_is_valid(w, None)
+        {
+            element.state = "disabled".into();
+            element.value = Some(
+                "Correct retained finish/lighting text before changing selection or assignment"
+                    .into(),
+            );
+            element.data["disabled_reason"] = json!(
+                "Correct retained finish/lighting text before changing selection or assignment"
+            );
+        }
+    }
     elements
 }
 pub fn reconcile_semantics(w: &Workspace, elements: &mut [SemanticElement]) {
     for element in elements {
         protect_finish_field(w, element);
+        if element.data["setter"] == "appearance-ui"
+            && element.data["field"].as_str().is_some_and(|field| {
+                matches!(
+                    field,
+                    "library" | "target-part" | "target-scope" | "target-instance"
+                )
+            })
+            && !source_text_is_valid(w, Some(&element.id))
+        {
+            element.data["editable"] = json!(false);
+            element.data["disabled_reason"] = json!(
+                "Correct retained finish/lighting text before changing selection or assignment"
+            );
+        }
         if element
             .data
             .get("setter")
@@ -2645,7 +2853,7 @@ pub fn reconcile_semantics(w: &Workspace, elements: &mut [SemanticElement]) {
     }
 }
 fn library_element(w: &Workspace) -> SemanticElement {
-    SemanticElement {
+    let mut element = SemanticElement {
         id: "appearance:library".into(),
         role: "appearance-library-selection".into(),
         label: "Named finish".into(),
@@ -2654,7 +2862,13 @@ fn library_element(w: &Workspace) -> SemanticElement {
         commands: vec![],
         relationships: vec!["surface-finishes".into()],
         data: json!({"setter":"appearance-ui","field":"library","json":selected(w).or_else(||initial(w)),"editable":available(w),"choices":w.session.visible().finishes.values().map(|finish|json!({"value":finish.id,"label":finish.name})).collect::<Vec<_>>()}),
+    };
+    if !source_text_is_valid(w, Some(&element.id)) {
+        element.data["editable"] = json!(false);
+        element.data["disabled_reason"] =
+            json!("Correct retained finish/lighting text before changing the selected finish");
     }
+    element
 }
 fn source_element(w: &Workspace) -> SemanticElement {
     let mut element = SemanticElement {
@@ -2681,11 +2895,16 @@ pub fn select_named_finish(w: &mut Workspace, id: &str) -> Result<()> {
     if !w.session.visible().finishes.contains_key(id) {
         return Err(CadError::Invalid("The selected finish is missing".into()));
     }
+    if selected(w).as_deref() == Some(id) {
+        return Ok(());
+    }
+    selection_ready(w)?;
     load(w, id);
     w.fields.insert(EDIT_MODE.into(), "assignment".into());
     Ok(())
 }
 pub fn add_named_finish(w: &mut Workspace, finish: Finish, assign: bool) -> Result<()> {
+    selection_ready(w)?;
     if !available(w) {
         return Err(CadError::Invalid(
             "Finish the active operation before assigning appearances".into(),

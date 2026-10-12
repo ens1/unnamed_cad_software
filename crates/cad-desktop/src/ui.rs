@@ -256,7 +256,12 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
             .sketch
             .as_ref()
             .is_some_and(|s| s.drag.is_some() || s.edit.is_some());
-        if crate::drawing_interaction_ui::escape(w) || crate::assembly_motion_ui::cancel_drag(w) {
+        if w.dialog.as_deref() == Some("sketch-block-library") {
+            crate::sketch_block_library_ui::close(w);
+        } else if crate::command_palette::escape(w)
+            || crate::drawing_interaction_ui::escape(w)
+            || crate::assembly_motion_ui::cancel_drag(w)
+        {
             ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
             });
@@ -282,7 +287,7 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
             w.cancel();
         }
     }
-    if shortcuts.1 {
+    if shortcuts.1 && w.dialog.as_deref() != Some("commands") {
         if w.sketch
             .as_ref()
             .is_some_and(|sketch| sketch.dimension.is_some())
@@ -678,6 +683,28 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
         )
     });
     registry.register("assembly-editor", |ui, w, _| assembly_editor(ui, w));
+    registry.register("camera-views-editor", |ui, w, _| {
+        crate::camera_views_ui::show(ui, w)
+    });
+    registry.register("standard-parts-editor", |ui, w, _| {
+        crate::standard_parts_ui::show(ui, w)
+    });
+    registry.register("model-properties-editor", |ui, w, _| {
+        crate::properties_ui::show(ui, w)
+    });
+    registry.register("sensors-editor", |ui, w, _| crate::sensors_ui::show(ui, w));
+    registry.register("tolerance-stacks-editor", |ui, w, _| {
+        crate::tolerance_stacks_ui::show(ui, w)
+    });
+    registry.register("command-palette", |ui, w, _| {
+        crate::command_palette::show(ui, w)
+    });
+    registry.register("inspection-editor", |ui, w, _| {
+        crate::inspection_ui::controls(ui, w)
+    });
+    registry.register("sketch-block-library-editor", |ui, w, _| {
+        crate::sketch_block_library_ui::show(ui, w)
+    });
     registry.register("materials-editor", |ui, w, _| materials(ui, w));
     registry.register("appearances-editor", |ui, w, _| {
         crate::appearances_ui::show(ui, w)
@@ -941,11 +968,18 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         }
         return;
     }
+    if command == "camera-views" || command.starts_with("camera-view.") {
+        crate::camera_views_ui::semantic_action(w, element, command);
+        return;
+    }
     if command.starts_with("assembly.display-state-") {
         crate::display_states_ui::semantic_action(w, element, command);
         return;
     }
-    if crate::reference_repair_ui::action(w, command, Some(&element.data))
+    if crate::sketch_block_library_ui::action(w, command, Some(&element.data))
+        || crate::command_palette::action(w, command, Some(&element.data))
+        || crate::inspection_ui::action(w, command, Some(&element.data))
+        || crate::reference_repair_ui::action(w, command, Some(&element.data))
         || crate::properties_ui::action(w, command, Some(&element.data))
         || crate::sensors_ui::action(w, command, Some(&element.data))
         || crate::standard_parts_ui::action(w, command, Some(&element.data))
@@ -1126,6 +1160,10 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                         | "display-state-source"
                         | "display-state-selection"
                         | "sensor-editor"
+                        | "sketch-block-library"
+                        | "command-palette"
+                        | "inspection-report"
+                        | "camera-view"
                         | "standard-parts"
                         | "tolerance-stack-editor"
                         | "properties-ui"
@@ -1179,6 +1217,13 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
             )
         }
     });
+    let request_focus = element
+        .data
+        .get("focus_request")
+        .and_then(Value::as_str)
+        .is_some_and(|key| {
+            key == format!("focus-request:{}", element.id) && w.fields.remove(key).is_some()
+        });
     let mut draw = |ui: &mut egui::Ui| {
         ui.scope(|ui| {
             crate::presentation_controls::apply_properties(ui, &props);
@@ -1402,6 +1447,9 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 let keep_invalid_text = crate::assembly_tools_ui::field_is_invalid(w, element)
                     || crate::properties_ui::field_is_invalid(w, element)
                     || crate::sensors_ui::field_is_invalid(w, element)
+                    || crate::appearances_ui::field_is_invalid(w, element)
+                    || crate::sketch_block_library_ui::field_is_invalid(w, element)
+                    || crate::camera_views_ui::field_is_invalid(w, element)
                     || crate::standard_parts_ui::field_is_invalid(w, element)
                     || crate::tolerance_stacks_ui::field_is_invalid(w, element)
                     || crate::materials_ui::field_is_invalid(w, element)
@@ -1436,6 +1484,9 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                         }
                     })
                     .inner;
+                if request_focus {
+                    response.request_focus();
+                }
                 if !response.has_focus() && !response.changed() && !keep_invalid_text {
                     *text = current;
                     appearance_error = Some(None);
@@ -1503,6 +1554,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     if let Some(error) = appearance_error {
         crate::properties_ui::field_error(w, element, error.clone());
         crate::sensors_ui::field_error(w, element, error.clone());
+        crate::sketch_block_library_ui::field_error(w, element, error.clone());
+        crate::camera_views_ui::field_error(w, element, error.clone());
         crate::standard_parts_ui::field_error(w, element, error.clone());
         crate::tolerance_stacks_ui::field_error(w, element, error.clone());
         crate::materials_ui::field_error(w, element, error.clone());
@@ -1521,6 +1574,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
             Ok(()) => {
                 crate::properties_ui::field_error(w, element, None);
                 crate::sensors_ui::field_error(w, element, None);
+                crate::sketch_block_library_ui::field_error(w, element, None);
+                crate::camera_views_ui::field_error(w, element, None);
                 crate::standard_parts_ui::field_error(w, element, None);
                 crate::tolerance_stacks_ui::field_error(w, element, None);
                 crate::materials_ui::field_error(w, element, None);
@@ -1537,6 +1592,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
             Err(error) => {
                 crate::properties_ui::field_error(w, element, Some(error.to_string()));
                 crate::sensors_ui::field_error(w, element, Some(error.to_string()));
+                crate::sketch_block_library_ui::field_error(w, element, Some(error.to_string()));
+                crate::camera_views_ui::field_error(w, element, Some(error.to_string()));
                 crate::standard_parts_ui::field_error(w, element, Some(error.to_string()));
                 crate::tolerance_stacks_ui::field_error(w, element, Some(error.to_string()));
                 crate::materials_ui::field_error(w, element, Some(error.to_string()));
@@ -1900,6 +1957,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
     if crate::workspace_controls::action(w, cmd)
         || crate::properties_ui::action(w, cmd, None)
         || crate::sensors_ui::action(w, cmd, None)
+        || crate::camera_views_ui::handle_command(w, cmd, None)
         || crate::standard_parts_ui::action(w, cmd, None)
         || crate::tolerance_stacks_ui::action(w, cmd, None)
         || crate::display_states_ui::handle_command(w, cmd, None)
@@ -1947,6 +2005,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || w.fields.contains_key("material-tool")
         || w.fields.contains_key("display-state-editor")
         || w.fields.contains_key("sensor-tool")
+        || crate::camera_views_ui::active(w)
         || w.fields.contains_key("standard-parts-tool")
         || w.fields.contains_key("tolerance-stack-tool")
         || w.fields.contains_key("properties-tool")
@@ -2402,6 +2461,7 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
         || w.fields.contains_key("material-tool")
         || w.fields.contains_key("display-state-editor")
         || w.fields.contains_key("sensor-tool")
+        || crate::camera_views_ui::active(w)
         || w.fields.contains_key("standard-parts-tool")
         || w.fields.contains_key("tolerance-stack-tool")
         || w.fields.contains_key("properties-tool")
@@ -2475,6 +2535,7 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
         || w.fields.contains_key("material-tool")
         || w.fields.contains_key("display-state-editor")
         || w.fields.contains_key("sensor-tool")
+        || crate::camera_views_ui::active(w)
         || w.fields.contains_key("standard-parts-tool")
         || w.fields.contains_key("tolerance-stack-tool")
         || w.fields.contains_key("properties-tool")
@@ -3028,7 +3089,11 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
     if matches!(
         dialog.as_str(),
         "feature" | "sketch" | "reference-repair" | "feature-order"
-    ) || (w.tool_checkpoint.is_some() || w.session.draft.is_some()) && dialog != "drawings"
+    ) || (w.tool_checkpoint.is_some() || w.session.draft.is_some())
+        && !matches!(
+            dialog.as_str(),
+            "drawings" | "materials" | "standard-parts" | "camera-views" | "commands"
+        )
     {
         crate::cad_ui::confirmation(ui, w);
         if w.dialog.is_none() {
@@ -3065,6 +3130,8 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "bom" => "Bill of materials",
             "inspection" => "Mass Properties",
             "sensors" => "Design Monitors",
+            "sketch-block-library" => "Sketch Block Library",
+            "camera-views" => "Named Views",
             "standard-parts" => "Standard Hardware",
             "tolerance-stacks" => "Tolerance Stacks",
             "properties" => "Model Properties",
@@ -3078,6 +3145,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 | "appearances"
                 | "materials"
                 | "sensors"
+                | "commands"
                 | "standard-parts"
                 | "tolerance-stacks"
                 | "properties"
@@ -3090,8 +3158,12 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             && !crate::assembly_tools_ui::active(w)
             && ui.small_button("Close").clicked()
         {
-            w.dialog = None;
-            w.manager_tree = true;
+            if dialog == "sketch-block-library" {
+                crate::sketch_block_library_ui::close(w);
+            } else {
+                w.dialog = None;
+                w.manager_tree = true;
+            }
         }
     });
     ui.separator();
@@ -3109,6 +3181,8 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "configurations" => crate::configuration_ui::show(ui, w),
             "inspection" => crate::inspection_ui::controls(ui, w),
             "sensors" => crate::sensors_ui::show(ui, w),
+            "sketch-block-library" => crate::sketch_block_library_ui::show(ui, w),
+            "camera-views" => crate::camera_views_ui::show(ui, w),
             "standard-parts" => crate::standard_parts_ui::show(ui, w),
             "tolerance-stacks" => crate::tolerance_stacks_ui::show(ui, w),
             "feature" => feature_editor(ui, w),
@@ -3203,16 +3277,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                     }
                 }
             }
-            _ => {
-                let query = w.fields.entry("command-query".into()).or_default();
-                ui.text_edit_singleline(query);
-                let query = query.to_lowercase();
-                for (command, label) in cad_core::presentation::command_catalog() {
-                    if label.to_lowercase().contains(&query) && ui.button(label).clicked() {
-                        action(w, command);
-                    }
-                }
-            }
+            _ => crate::command_palette::show(ui, w),
         });
 }
 fn feature_editor(ui: &mut egui::Ui, w: &mut Workspace) {

@@ -5,10 +5,11 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
 };
+pub mod counts;
 pub mod dimensions;
 pub mod sketch_dimensions;
 pub use dimensions::{DimensionField, FIELD_CONTRACT_VERSION};
-pub const CONTRACT_VERSION: u32 = 7;
+pub const CONTRACT_VERSION: u32 = 8;
 fn supported_version(value: u32) -> bool {
     (1..=CONTRACT_VERSION).contains(&value)
 }
@@ -363,8 +364,7 @@ fn validate_dimensions(
                     "{} no longer has dimensional field {path}; remove or replace its configuration override",
                     feature.name
                 )))?;
-            dimensions::authored_value(field, expression)?;
-            crate::expression::references(&expression.0)
+            dimensions::validate_source(field, expression)
                 .map_err(|error| invalid(format!("{} {path}: {error}", feature.name)))?;
         }
     }
@@ -434,6 +434,7 @@ pub fn validate(doc: &Document) -> Result<()> {
                     "feature",
                 )?;
                 validate_dimensions(p, &o.feature_dimensions)?;
+                counts::validate(doc, definition, o)?;
                 sketch_dimensions::validate(p, &o.sketch_dimensions)?;
                 require_keys(
                     o.sketches.keys(),
@@ -711,16 +712,19 @@ fn apply_part(part: &mut Part, o: &Overrides) -> Result<()> {
                 .collect::<BTreeMap<_, _>>();
             let mut operation = serde_json::to_value(&feature.operation)?;
             for (path, expression) in fields {
+                let field = available
+                    .get(path)
+                    .ok_or_else(|| invalid("The configured field no longer exists"))?;
+                if field.kind == dimensions::FieldKind::Count {
+                    // Counts need the complete configured parameter context, so
+                    // they are installed in a second stage by counts::apply.
+                    continue;
+                }
                 let (pointer, _) = dimensions::resolve_pointer(&operation, path)?;
                 let value = operation.pointer_mut(&pointer).ok_or_else(|| {
                     invalid(format!("{} has no dimensional field {path}", feature.name))
                 })?;
-                *value = dimensions::authored_value(
-                    available
-                        .get(path)
-                        .ok_or_else(|| invalid("The configured field no longer exists"))?,
-                    expression,
-                )?;
+                *value = dimensions::authored_value(field, expression)?;
             }
             feature.operation = serde_json::from_value(operation)?;
         }
@@ -851,7 +855,9 @@ pub fn apply_definition(
     configuration: &str,
 ) -> Result<Resolved> {
     let c = resolve(doc, definition, configuration)?;
+    counts::apply_parameters(doc, definition, &c.overrides.parameters)?;
     apply_overrides(doc, definition, &c.overrides)?;
+    counts::apply(doc, definition, &c.overrides)?;
     if let Some(a) = doc.assemblies.get(definition).cloned() {
         let prepared = crate::component_pattern::prepare(doc, &a, &c.overrides)?;
         doc.assemblies.insert(definition.into(), prepared);
@@ -870,11 +876,18 @@ fn apply_overrides(doc: &mut Document, definition: &str, overrides: &Overrides) 
 pub fn effective(doc: &Document) -> Result<Document> {
     let mut d = doc.clone();
     let mut selected = BTreeMap::new();
-    // Apply every parameter scope before evaluating any cross-scope pattern count.
+    // Stage every selected parameter scope before any count expression. These
+    // parameter-only writes do not materialize recursive configuration variants.
     for (definition, key) in &doc.active_configurations {
         let resolved = resolve(doc, definition, key)?;
-        apply_overrides(&mut d, definition, &resolved.overrides)?;
+        counts::apply_parameters(&mut d, definition, &resolved.overrides.parameters)?;
         selected.insert(definition.clone(), resolved.overrides);
+    }
+    for (definition, overrides) in &selected {
+        apply_overrides(&mut d, definition, overrides)?;
+    }
+    for (definition, overrides) in &selected {
+        counts::apply(&mut d, definition, overrides)?;
     }
     for definition in doc.assemblies.keys() {
         let overrides = selected.get(definition).cloned().unwrap_or_default();
@@ -1926,6 +1939,17 @@ pub fn check_geometry_context(
     }
     let mut expressions = Vec::new();
     strings(&value, &mut expressions);
+    // Integer operation fields no longer contain their authored expressions.
+    // Include those sources in the external-equation proof so occurrence
+    // contexts cannot silently reuse geometry with differently driven counts.
+    if let Some(configuration) = context.active_configurations.get(definition) {
+        let resolved = resolve(source, definition, configuration)?;
+        expressions.extend(
+            counts::expressions(source, definition, &resolved.overrides)?
+                .into_iter()
+                .map(|expression| expression.0),
+        );
+    }
     let mut pending = expressions
         .into_iter()
         .filter_map(|s| crate::expression::references(&s).ok())
@@ -2012,7 +2036,8 @@ pub fn semantic(
                 commands: vec!["configurations".into(), "equations".into()],
                 relationships: vec![owner.clone(), field.feature.clone()],
                 data: serde_json::json!({"contract":"tcad.configuration.dimension-source","version":FIELD_CONTRACT_VERSION,
-                    "owner":owner,"source":field,"json":field.expression.0,"kind":field.kind,"maximum":field.maximum,"editable":false}),
+                    "owner":owner,"source":field,"json":field.expression.0,"kind":field.kind,"maximum":field.maximum,"editable":false,
+                    "scalar_count_expression":field.kind==dimensions::FieldKind::Count,"maximum_expression_count":dimensions::MAX_EXPRESSION_COUNT}),
             });
         }
         if let Some(part) = doc.parts.get(owner) {

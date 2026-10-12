@@ -14,6 +14,7 @@ use std::{
     io::{Cursor, Read},
     path::Path,
 };
+mod default_validation;
 
 const MAX_ENCODED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RGBA_BYTES: u64 = 64 * 1024 * 1024;
@@ -111,8 +112,7 @@ pub(crate) fn validate_default_texture(bytes: &[u8], kind: &str) -> cad_core::Re
             "Default finish texture exceeds the encoded image bound".into(),
         ));
     }
-    decode(bytes, kind)
-        .map(|_| ())
+    default_validation::validate(bytes, kind)
         .map_err(|message| CadError::Invalid(format!("Default finish texture: {message}")))
 }
 

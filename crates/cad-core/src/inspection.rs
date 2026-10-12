@@ -4,6 +4,7 @@ use crate::{CadError, Document, Id, Result, protocol::MeshData};
 use nalgebra::{Matrix3, Vector3};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+pub mod report;
 
 pub const CONTRACT_VERSION: u32 = 1;
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -48,6 +49,7 @@ fn validate_metrics(value: &Metrics) -> Result<()> {
         .chain(value.inertia_kg_m2.iter().flatten().flatten())
         .all(|v| v.is_finite());
     if !finite
+        || (0..3).any(|axis| value.bounds_mm[0][axis] > value.bounds_mm[1][axis])
         || !value.area_mm2.is_finite()
         || value.area_mm2 <= 0.
         || !value.volume_mm3.is_finite()
@@ -281,6 +283,7 @@ pub fn evaluate(
 /// Transform a cached result into assembly coordinates without re-integrating its boundary.
 pub fn placed(value: &Metrics, placement: [[f64; 4]; 4]) -> Result<Metrics> {
     validate_metrics(value)?;
+    report::validate_rigid(placement)?;
     let rotation = Matrix3::from_fn(|r, c| placement[r][c]);
     let translation = Vector3::from_fn(|r, _| placement[r][3]);
     let point = |p: [f64; 3]| array(rotation * Vector3::from(p) + translation);

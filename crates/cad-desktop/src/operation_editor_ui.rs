@@ -28,7 +28,7 @@ pub fn supports(operation: &Operation) -> bool {
 }
 
 fn current(w: &Workspace) -> Option<(&str, &Feature)> {
-    if w.dialog.as_deref() != Some("feature") || w.tool_checkpoint.is_none() {
+    if crate::command_palette::context_editor(w) != Some("feature") || w.tool_checkpoint.is_none() {
         return None;
     }
     let owner = w.view.active_part.as_deref()?;

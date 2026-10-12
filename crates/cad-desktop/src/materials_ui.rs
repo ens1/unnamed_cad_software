@@ -4,6 +4,7 @@ use crate::{Workspace, cad_ui, presentation_controls as controls};
 use bevy_egui::egui;
 use cad_core::{CadError, Id, Material, Result, commands::Command, presentation::SemanticElement};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 const TOOL: &str = "material-tool";
 const SELECTED: &str = "material-selected";
@@ -68,6 +69,63 @@ fn selected(w: &Workspace) -> Option<Material> {
         catalog().into_iter().find(|material| material.id == id)
     }
 }
+fn record_field(element: &SemanticElement) -> bool {
+    element.data["setter"] == "material-editor"
+        || element.data["setter"] == "material-ui" && element.data["field"] == "source"
+}
+fn source_revision(w: &Workspace) -> Value {
+    json!([
+        w.session.generation,
+        w.session.committed.revision,
+        w.session
+            .draft
+            .as_ref()
+            .map(|draft| (&draft.id, draft.edit))
+    ])
+}
+fn record_digest(material: &Material) -> Option<String> {
+    serde_json::to_vec(material)
+        .ok()
+        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
+}
+fn bind_records(w: &Workspace, elements: &mut [SemanticElement]) {
+    let Some(material) = selected(w) else {
+        return;
+    };
+    let record_key = key(w);
+    let revision = source_revision(w);
+    let digest = record_digest(&material);
+    for element in elements.iter_mut().filter(|element| record_field(element)) {
+        element.data["document"] = json!(w.session.visible().id);
+        element.data["material"] = json!(material.id);
+        element.data["material_key"] = json!(record_key);
+        element.data["source_revision"] = revision.clone();
+        element.data["source_sha256"] = json!(digest);
+        element.data["editor"] = json!(format!(
+            "{}:{}",
+            w.session.visible().id,
+            record_key.as_deref().unwrap_or_default()
+        ));
+    }
+}
+fn bound_material(w: &Workspace, element: &SemanticElement) -> Option<Material> {
+    if element.data["document"] != json!(w.session.visible().id) {
+        return None;
+    }
+    let record_key = element.data["material_key"].as_str()?;
+    let material = if let Some(id) = record_key.strip_prefix("project:") {
+        w.session.visible().materials.get(id)?.clone()
+    } else {
+        let id = record_key.strip_prefix("catalog:")?;
+        catalog().into_iter().find(|material| material.id == id)?
+    };
+    (element.data["material"] == material.id).then_some(material)
+}
+fn record_identity_current(w: &Workspace, element: &SemanticElement) -> bool {
+    element.data["document"] == json!(w.session.visible().id)
+        && element.data["material_key"] == json!(key(w))
+        && selected(w).is_some_and(|material| element.data["material"] == material.id)
+}
 fn editable(w: &Workspace) -> bool {
     key(w).is_some_and(|key| key.starts_with("project:")) && available(w) && !pinned(w)
 }
@@ -91,6 +149,48 @@ fn choose(w: &mut Workspace, key: String) {
     w.fields.retain(|key, _| {
         !key.starts_with(ERROR_PREFIX) && !key.starts_with("presentation-field:material:")
     });
+}
+fn selection_changing(command: &str) -> bool {
+    matches!(
+        command,
+        "material.add"
+            | "material.assign"
+            | "material.inherit"
+            | "material.use-for-new-parts"
+            | "material.new"
+            | "material.duplicate"
+            | "material.delete"
+            | "material.import"
+    )
+}
+fn selection_ready(w: &Workspace) -> Result<()> {
+    if current_source_is_valid(w) {
+        Ok(())
+    } else {
+        Err(CadError::Invalid(
+            "Correct the current material fields or explicitly Refresh source before changing the selected material or assignment; your text is preserved".into(),
+        ))
+    }
+}
+fn select(w: &mut Workspace, next: &str) -> Result<()> {
+    if key(w).as_deref() == Some(next) {
+        return Ok(());
+    }
+    selection_ready(w)?;
+    if next
+        .strip_prefix("project:")
+        .is_some_and(|id| w.session.visible().materials.contains_key(id))
+        || next
+            .strip_prefix("catalog:")
+            .is_some_and(|id| catalog().iter().any(|material| material.id == id))
+    {
+        choose(w, next.into());
+        Ok(())
+    } else {
+        Err(CadError::Invalid(
+            "Choose a current project or catalog material".into(),
+        ))
+    }
 }
 pub fn begin(w: &mut Workspace) {
     if w.fields.contains_key("appearance-tool")
@@ -129,11 +229,16 @@ pub fn cancel(w: &mut Workspace) {
     });
 }
 pub fn current_source_is_valid(w: &Workspace) -> bool {
-    !w.fields.keys().any(|key| key.starts_with(ERROR_PREFIX))
-        && w.fields.get(SOURCE).is_none_or(|source| {
-            serde_json::from_str::<Material>(source)
-                .is_ok_and(|material| editable(w) && selected(w).as_ref() == Some(&material))
-        })
+    source_is_valid_except(w, None)
+}
+fn source_is_valid_except(w: &Workspace, ignored: Option<&str>) -> bool {
+    !w.fields.keys().any(|key| {
+        key.starts_with(ERROR_PREFIX)
+            && ignored.is_none_or(|id| key != &format!("{ERROR_PREFIX}{id}"))
+    }) && w.fields.get(SOURCE).is_none_or(|source| {
+        serde_json::from_str::<Material>(source)
+            .is_ok_and(|material| editable(w) && selected(w).as_ref() == Some(&material))
+    })
 }
 pub fn field_is_invalid(w: &Workspace, element: &SemanticElement) -> bool {
     w.fields
@@ -144,6 +249,12 @@ pub fn field_error(w: &mut Workspace, element: &SemanticElement, error: Option<S
         element.data.get("setter").and_then(Value::as_str),
         Some("material-editor" | "material-ui")
     ) {
+        return;
+    }
+    if record_field(element)
+        && (!record_identity_current(w, element)
+            || error.is_some() && element.data["source_revision"] != source_revision(w))
+    {
         return;
     }
     let key = format!("{ERROR_PREFIX}{}", element.id);
@@ -221,18 +332,22 @@ fn import(w: &mut Workspace) -> Result<()> {
     let Some(path) = rfd::FileDialog::new()
         .set_title("Import an engineering material library")
         .add_filter("TCAD material library", &["tcadmaterials", "json"])
+        .add_filter("Material catalog CSV", &["csv"])
         .pick_file()
     else {
         return Ok(());
     };
-    let metadata = std::fs::metadata(&path)?;
-    if metadata.len() > 16 * 1024 * 1024 {
-        return Err(CadError::Invalid(
-            "Material library files are limited to 16 MiB".into(),
-        ));
+    let mut catalog = cad_core::material_csv::read(&path)?;
+    if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("csv"))
+    {
+        for material in &mut catalog.materials {
+            if let Some(previous) = w.session.visible().materials.get(&material.id) {
+                cad_core::materials::normalize_edited(previous, material);
+            }
+        }
     }
-    let source = std::fs::read_to_string(path)?;
-    let catalog = cad_core::material_library::parse_json(&source)?;
     let mut document = w.session.visible().clone();
     // Import is additive. Existing assigned records and IDs remain untouched.
     let plan = cad_core::material_library::plan_import(
@@ -248,18 +363,33 @@ fn import(w: &mut Workspace) -> Result<()> {
     }
     Ok(())
 }
-fn export(w: &mut Workspace, all: bool) -> Result<()> {
+fn export(w: &mut Workspace, all: bool, csv: bool) -> Result<()> {
     let materials = if all {
         w.session.visible().materials.values().cloned().collect()
     } else {
         vec![selected(w).ok_or_else(|| CadError::Invalid("Choose a material to export".into()))?]
     };
     let catalog = cad_core::material_library::Catalog::new("TCAD project materials", materials);
-    let source = cad_core::material_library::export_json(&catalog)?;
+    let source = if csv {
+        cad_core::material_csv::export(&catalog)?
+    } else {
+        cad_core::material_library::export_json(&catalog)?
+    };
     let Some(path) = rfd::FileDialog::new()
         .set_title("Export engineering materials")
-        .set_file_name("Materials.tcadmaterials")
-        .add_filter("TCAD material library", &["tcadmaterials"])
+        .set_file_name(if csv {
+            "Materials.csv"
+        } else {
+            "Materials.tcadmaterials"
+        })
+        .add_filter(
+            if csv {
+                "Material catalog CSV"
+            } else {
+                "TCAD material library"
+            },
+            if csv { &["csv"] } else { &["tcadmaterials"] },
+        )
         .save_file()
     else {
         return Ok(());
@@ -283,8 +413,20 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
         if let Some(key) = arguments
             .and_then(|value| value.get("key"))
             .and_then(Value::as_str)
+            && let Err(error) = select(w, key)
         {
-            choose(w, key.into());
+            w.status = error.to_string();
+        }
+        return true;
+    }
+    if command == "material.refresh-source" {
+        if let Some(material) = selected(w) {
+            w.fields.remove(SOURCE);
+            let id = format!("material:{}:source", material.id);
+            w.fields.remove(&format!("{ERROR_PREFIX}{id}"));
+            w.fields
+                .retain(|key, _| !key.starts_with(&format!("presentation-field:{id}:")));
+            w.status = "Advanced material source refreshed from the current draft".into();
         }
         return true;
     }
@@ -313,6 +455,12 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
     }
     if !available(w) {
         w.status = "Apply or cancel the current operation before editing materials".into();
+        return true;
+    }
+    if selection_changing(command)
+        && let Err(error) = selection_ready(w)
+    {
+        w.status = error.to_string();
         return true;
     }
     if !w.fields.contains_key(TOOL) {
@@ -412,8 +560,10 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                 w.fields.remove("material-property-value");
             }
             "material.import" => import(w)?,
-            "material.export" => export(w, false)?,
-            "material.export-project" => export(w, true)?,
+            "material.export" => export(w, false, false)?,
+            "material.export-csv" => export(w, false, true)?,
+            "material.export-project" => export(w, true, false)?,
+            "material.export-project-csv" => export(w, true, true)?,
             _ => {
                 return Err(CadError::Invalid(format!(
                     "Unknown material action: {command}"
@@ -626,6 +776,7 @@ fn property_fields(w: &Workspace) -> Vec<SemanticElement> {
             element.data["disabled_reason"] = json!(readonly_reason(w));
         }
     }
+    bind_records(w, &mut out);
     out
 }
 fn property_presentation(key: cad_core::materials::PropertyKey) -> (&'static str, f64) {
@@ -651,14 +802,17 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
             "target" => Some(json!(target(w))),
             "configuration" => Some(json!(configuration(w).unwrap_or_default())),
             "selected" => Some(json!(key(w))),
-            "source" => Some(json!(
-                w.fields
-                    .get(SOURCE)
-                    .cloned()
-                    .or_else(|| selected(w)
-                        .and_then(|material| serde_json::to_string_pretty(&material).ok()))
-                    .unwrap_or_default()
-            )),
+            "source" => {
+                let material = bound_material(w, element)?;
+                Some(json!(
+                    w.fields
+                        .get(SOURCE)
+                        .filter(|_| record_identity_current(w, element))
+                        .cloned()
+                        .or_else(|| serde_json::to_string_pretty(&material).ok())
+                        .unwrap_or_default()
+                ))
+            }
             _ => Some(json!(
                 w.fields
                     .get(&format!("material-{field}"))
@@ -667,7 +821,7 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
             )),
         },
         "material-editor" => {
-            let material = selected(w)?;
+            let material = bound_material(w, element)?;
             if field == "/metadata/tags" {
                 return Some(json!(
                     material
@@ -696,6 +850,15 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
     }
 }
 pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> Result<()> {
+    if record_field(element)
+        && (!record_identity_current(w, element)
+            || element.data["source_revision"] != source_revision(w)
+            || bound_material(w, element).is_none_or(|material| {
+                element.data["source_sha256"] != json!(record_digest(&material))
+            }))
+    {
+        return Err(CadError::Invalid("This material control belongs to an earlier document, selection or draft; use the current editor field".into()));
+    }
     let pointer = element
         .data
         .get("field")
@@ -705,8 +868,18 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
         let text = value.as_str().ok_or_else(|| {
             CadError::Invalid("Material browser fields require text or a named choice".into())
         })?;
+        if matches!(pointer, "target" | "configuration" | "selected")
+            && !source_is_valid_except(w, Some(&element.id))
+        {
+            return Err(CadError::Invalid(
+                "Correct the retained material fields before changing selection or assignment; your text is preserved".into(),
+            ));
+        }
         match pointer {
             "target" => {
+                if target(w).as_deref() == Some(text) {
+                    return Ok(());
+                }
                 if !w.session.visible().parts.contains_key(text) {
                     return Err(CadError::Invalid("Choose a target part".into()));
                 }
@@ -717,6 +890,9 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                 }
             }
             "configuration" => {
+                if configuration(w).as_deref().unwrap_or_default() == text {
+                    return Ok(());
+                }
                 if text.is_empty() {
                     w.fields.remove(CONFIGURATION);
                 } else if target(w).is_some_and(|owner| {
@@ -732,7 +908,24 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                     choose(w, format!("project:{id}"));
                 }
             }
-            "selected" => choose(w, text.into()),
+            "selected" => {
+                // The field's previous navigation error may be corrected here;
+                // the action path still requires every retained field to be valid.
+                if key(w).as_deref() != Some(text) {
+                    if !(text
+                        .strip_prefix("project:")
+                        .is_some_and(|id| w.session.visible().materials.contains_key(id))
+                        || text
+                            .strip_prefix("catalog:")
+                            .is_some_and(|id| catalog().iter().any(|material| material.id == id)))
+                    {
+                        return Err(CadError::Invalid(
+                            "Choose a current project or catalog material".into(),
+                        ));
+                    }
+                    choose(w, text.into());
+                }
+            }
             "source" => {
                 if !editable(w) {
                     return Err(CadError::Invalid(
@@ -768,6 +961,9 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
     }
     let mut material =
         selected(w).ok_or_else(|| CadError::Invalid("Choose a project material".into()))?;
+    let source_was_current = w.fields.get(SOURCE).is_some_and(|text| {
+        serde_json::from_str::<Material>(text).is_ok_and(|source| source == material)
+    });
     if pointer == "/density_kg_m3" {
         let density = value
             .as_f64()
@@ -856,7 +1052,7 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
         return Err(CadError::Invalid("Unknown material field".into()));
     }
     put(w, material.clone())?;
-    if w.fields.contains_key(SOURCE) {
+    if source_was_current {
         w.fields
             .insert(SOURCE.into(), serde_json::to_string_pretty(&material)?);
     }
@@ -887,7 +1083,13 @@ fn matches(w: &Workspace, material: &Material) -> bool {
             || w.view.library_favorites.contains(&preference_key(material)))
         && (collection != "recent" || w.view.library_recent.contains(&preference_key(material)))
 }
-fn entry(material: &Material, catalog: bool, selected: bool, favorite: bool) -> SemanticElement {
+fn entry(
+    material: &Material,
+    catalog: bool,
+    selected: bool,
+    favorite: bool,
+    enabled: bool,
+) -> SemanticElement {
     let key = format!(
         "{}:{}",
         if catalog { "catalog" } else { "project" },
@@ -898,10 +1100,17 @@ fn entry(material: &Material, catalog: bool, selected: bool, favorite: bool) -> 
         role: "material-library-entry".into(),
         label: material.name.clone(),
         value: Some(format!("{} kg/m³", material.density_kg_m3)),
-        state: if selected { "selected" } else { "ready" }.into(),
+        state: if selected {
+            "selected"
+        } else if enabled {
+            "ready"
+        } else {
+            "disabled"
+        }
+        .into(),
         commands: vec!["material.select".into()],
         relationships: vec!["workspace.material-library".into()],
-        data: json!({"key":key,"material":material,"catalog":catalog,"favorite":favorite,"engineering_material":true,"visual_finish_independent":true,"accessibility_label":material.name}),
+        data: json!({"key":key,"material":material,"catalog":catalog,"favorite":favorite,"engineering_material":true,"visual_finish_independent":true,"accessibility_label":material.name,"actions":[{"command":"material.select","enabled":enabled || selected,"disabled_reason":if enabled || selected {""} else {"Correct retained material text before changing selection"}}]}),
     }
 }
 fn browser_fields(w: &Workspace) -> Vec<SemanticElement> {
@@ -942,7 +1151,7 @@ fn target_fields(w: &Workspace) -> Vec<SemanticElement> {
     let configs = target(w)
         .map(|owner| cad_core::configuration::names(w.session.visible(), &owner))
         .unwrap_or_default();
-    vec![
+    let mut fields = vec![
         field(
             "material:target",
             "Part",
@@ -974,7 +1183,15 @@ fn target_fields(w: &Workspace) -> Vec<SemanticElement> {
             ),
             (None, available(w)),
         ),
-    ]
+    ];
+    for element in &mut fields {
+        if !source_is_valid_except(w, Some(&element.id)) {
+            element.data["editable"] = json!(false);
+            element.data["disabled_reason"] =
+                json!("Correct retained material text before changing assignment scope");
+        }
+    }
+    fields
 }
 fn action_element(command: &str, label: &str, enabled: bool, reason: &str) -> SemanticElement {
     SemanticElement {
@@ -1050,6 +1267,18 @@ fn actions(w: &Workspace) -> Vec<SemanticElement> {
         ),
         ("material.favorite", "Favorite", has, "Choose a material"),
         (
+            "material.export-csv",
+            "Export selected CSV…",
+            has,
+            "Choose a material",
+        ),
+        (
+            "material.export-project-csv",
+            "Export project CSV…",
+            !w.session.visible().materials.is_empty(),
+            "Add a material first",
+        ),
+        (
             "material.open-appearance",
             "Visual finishes…",
             available(w),
@@ -1081,7 +1310,18 @@ fn actions(w: &Workspace) -> Vec<SemanticElement> {
         ),
     ]
     .into_iter()
-    .map(|(command, label, enabled, reason)| action_element(command, label, enabled, reason))
+    .map(|(command, label, enabled, reason)| {
+        if selection_changing(command) && !current_source_is_valid(w) {
+            action_element(
+                command,
+                label,
+                false,
+                "Correct retained material text before changing selection or assignment",
+            )
+        } else {
+            action_element(command, label, enabled, reason)
+        }
+    })
     .collect()
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
@@ -1168,6 +1408,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             false,
             key.as_deref() == Some(&format!("project:{}", material.id)),
             w.view.library_favorites.contains(&preference_key(material)),
+            current_source_is_valid(w),
         ));
     }
     for material in catalog() {
@@ -1178,6 +1419,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             w.view
                 .library_favorites
                 .contains(&preference_key(&material)),
+            current_source_is_valid(w),
         ));
     }
     if let Some(material) = selected(w) {
@@ -1194,6 +1436,12 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         );
         source.data["multiline"] = json!(true);
         elements.push(source);
+        elements.push(action_element(
+            "material.refresh-source",
+            "Refresh source from draft",
+            true,
+            "",
+        ));
         if let Some(metadata) = serde_json::to_value(&material)
             .ok()
             .and_then(|source| source.get("metadata").cloned())
@@ -1210,6 +1458,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             });
         }
     }
+    bind_records(w, &mut elements);
     elements
 }
 fn render_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement) {
@@ -1433,6 +1682,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                             w.view
                                 .library_favorites
                                 .contains(&preference_key(&material)),
+                            current_source_is_valid(w),
                         );
                         let favorite = entry.data["favorite"].as_bool().unwrap_or(false);
                         let response = controls::button(
@@ -1441,7 +1691,10 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                             &entry.role,
                             &["semantic-control"],
                             &format!("{}{}", if favorite { "★ " } else { "" }, entry.label),
-                            true,
+                            entry
+                                .action_descriptors()
+                                .iter()
+                                .any(|action| action.enabled),
                             entry.state == "selected",
                         )
                         .on_hover_text(format!("{} kg/m³", material.density_kg_m3));
@@ -1579,6 +1832,16 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             {
                 crate::ui::semantic_field(ui, w, &element);
             }
+            render_action(
+                ui,
+                w,
+                &action_element(
+                    "material.refresh-source",
+                    "Refresh source from draft",
+                    true,
+                    "",
+                ),
+            );
         });
     }
     for (key, error) in &w.fields {

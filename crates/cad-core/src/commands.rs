@@ -154,6 +154,12 @@ pub enum Command {
     PutMaterial {
         material: Material,
     },
+    PutCameraView {
+        view: Box<crate::camera_views::Definition>,
+    },
+    DeleteCameraView {
+        view: Id,
+    },
     PutSensor {
         sensor: Box<crate::sensors::Definition>,
     },
@@ -575,6 +581,8 @@ impl Command {
             Self::PutMaterial { material } => {
                 crate::materials::put_edited(document, material)?;
             }
+            Self::PutCameraView { view } => crate::camera_views::put(document, *view)?,
+            Self::DeleteCameraView { view } => crate::camera_views::delete(document, &view)?,
             Self::PutSensor { sensor } => crate::sensors::put(document, *sensor)?,
             Self::PutToleranceStack { stack } => crate::tolerance_stacks::put(document, *stack)?,
             Self::DeleteToleranceStack { stack } => {

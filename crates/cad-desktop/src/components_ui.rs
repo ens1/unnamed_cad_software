@@ -476,7 +476,7 @@ pub fn current_source_is_valid(w: &Workspace) -> bool {
     if w.fields.keys().any(|key| key.starts_with(INVALID)) {
         return false;
     }
-    if w.dialog.as_deref() != Some(INSERT) {
+    if crate::command_palette::context_editor(w) != Some(INSERT) {
         return true;
     }
     !w.fields.contains_key("component-insert-error")

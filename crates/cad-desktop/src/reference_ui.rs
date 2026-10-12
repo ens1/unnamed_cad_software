@@ -1426,7 +1426,7 @@ fn visible(
     reference: &EvaluatedReference,
     evaluation: &cad_core::protocol::Evaluation,
 ) -> bool {
-    if reference.version != CONTRACT_VERSION {
+    if reference.version != CONTRACT_VERSION || !viewport::visible(w, instance) {
         return false;
     }
     if w.view.isolation
@@ -1499,6 +1499,9 @@ pub fn picks(
     let mut hits = Vec::new();
     let (origin, _) = viewport::ray(w, rect, pointer);
     for instance in viewport::display_instances(w, evaluation) {
+        if !crate::display_states_ui::pickable(w, &instance.path) {
+            continue;
+        }
         let key = cad_core::history::mesh_key(instance);
         for (_, reference) in evaluation
             .references

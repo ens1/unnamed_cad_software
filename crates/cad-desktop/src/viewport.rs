@@ -61,59 +61,86 @@ pub struct Selection {
 pub fn render_point(p: [f64; 3]) -> Vec3 {
     Vec3::new(p[0] as f32 * 0.01, p[2] as f32 * 0.01, -p[1] as f32 * 0.01)
 }
-pub fn world_point(p: Vec3) -> [f64; 3] {
-    [p.x as f64 * 100., -p.z as f64 * 100., p.y as f64 * 100.]
-}
 pub fn placed(p: [f64; 3], i: &PlacedPart) -> [f64; 3] {
     std::array::from_fn(|j| {
         i.matrix[j][0] * p[0] + i.matrix[j][1] * p[1] + i.matrix[j][2] * p[2] + i.matrix[j][3]
     })
 }
+fn direction(value: [f64; 3]) -> Vec3 {
+    Vec3::new(value[0] as f32, value[2] as f32, -value[1] as f32)
+}
 pub fn eye(w: &Workspace) -> Vec3 {
-    let [yaw, pitch] = w.view.orbit;
-    Vec3::from_array(w.view.target)
-        + Vec3::new(
-            yaw.sin() * pitch.cos(),
-            pitch.sin(),
-            yaw.cos() * pitch.cos(),
-        ) * w.view.distance
+    render_point(crate::camera_views_ui::current(w).frame().eye_mm)
 }
 pub fn basis(w: &Workspace) -> (Vec3, Vec3, Vec3) {
-    let forward = (Vec3::from_array(w.view.target) - eye(w)).normalize();
-    // Derive the camera frame from orbit orientation, including over the poles.
-    // A fixed world-up vector becomes singular at vertical views and flips beyond them.
-    let yaw = w.view.orbit[0];
-    let right = Vec3::new(yaw.cos(), 0., -yaw.sin());
-    let up = right.cross(forward);
-    let (sin, cos) = w.view.roll.sin_cos();
-    (forward, right * cos + up * sin, up * cos - right * sin)
+    let frame = crate::camera_views_ui::current(w).frame();
+    (
+        direction(frame.forward),
+        direction(frame.right),
+        direction(frame.up),
+    )
 }
-pub fn project(w: &Workspace, rect: egui::Rect, p: [f64; 3]) -> Option<egui::Pos2> {
-    let p = render_point(p) - eye(w);
-    let (f, r, u) = basis(w);
-    let depth = p.dot(f);
-    if depth <= 0.001 {
-        return None;
-    }
-    let [horizontal, vertical] = focal(w, rect);
-    Some(rect.center() + egui::vec2(p.dot(r) * horizontal / depth, -p.dot(u) * vertical / depth))
-}
-/// Duplicated regions display the same render texture. Match its stretch when
-/// projecting source handles and constructing interaction rays.
-pub(crate) fn focal(w: &Workspace, rect: egui::Rect) -> [f32; 2] {
-    let aspect = w.viewport_size[0].max(1) as f32 / w.viewport_size[1].max(1) as f32;
-    let scale = 0.5 / (std::f32::consts::PI / 8.).tan();
+/// Pixel focal lengths, or pixels/mm for an orthographic source camera.
+pub(crate) fn focal(w: &Workspace, rect: egui::Rect) -> [f64; 2] {
+    let pose = crate::camera_views_ui::current(w);
+    let aspect = f64::from(w.viewport_size[0].clamp(32, 4096))
+        / f64::from(w.viewport_size[1].clamp(32, 4096));
+    let scale = match pose.projection {
+        cad_core::camera_views::Projection::Perspective { vertical_fov_deg } => {
+            0.5 / (vertical_fov_deg.to_radians() * 0.5).tan()
+        }
+        cad_core::camera_views::Projection::Orthographic { vertical_span_mm } => {
+            1. / vertical_span_mm
+        }
+    };
     [
-        rect.width().max(1.) / aspect * scale,
-        rect.height().max(1.) * scale,
+        f64::from(rect.width().max(1.)) / aspect * scale,
+        f64::from(rect.height().max(1.)) * scale,
     ]
 }
-pub fn ray(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> ([f64; 3], [f64; 3]) {
-    let (f, r, u) = basis(w);
+pub fn project(w: &Workspace, rect: egui::Rect, p: [f64; 3]) -> Option<egui::Pos2> {
+    let pose = crate::camera_views_ui::current(w);
+    let frame = pose.frame();
+    let offset = DVec3::from_array(p) - DVec3::from_array(frame.eye_mm);
+    let depth = offset.dot(DVec3::from_array(frame.forward));
+    if !depth.is_finite()
+        || depth <= (pose.distance_mm * 0.0001).max(0.001)
+        || depth > (pose.distance_mm * 100.).max(10000.)
+    {
+        return None;
+    }
+    let divisor = if matches!(
+        pose.projection,
+        cad_core::camera_views::Projection::Perspective { .. }
+    ) {
+        depth
+    } else {
+        1.
+    };
     let [horizontal, vertical] = focal(w, rect);
-    let d = (f + r * (p.x - rect.center().x) / horizontal - u * (p.y - rect.center().y) / vertical)
-        .normalize();
-    (world_point(eye(w)), [d.x as f64, -d.z as f64, d.y as f64])
+    let x = offset.dot(DVec3::from_array(frame.right)) * horizontal / divisor;
+    let y = -offset.dot(DVec3::from_array(frame.up)) * vertical / divisor;
+    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    Some(rect.center() + egui::vec2(x as f32, y as f32))
+}
+pub fn ray(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> ([f64; 3], [f64; 3]) {
+    let pose = crate::camera_views_ui::current(w);
+    let frame = pose.frame();
+    let [horizontal, vertical] = focal(w, rect);
+    let offset = DVec3::from_array(frame.right) * f64::from(p.x - rect.center().x) / horizontal
+        - DVec3::from_array(frame.up) * f64::from(p.y - rect.center().y) / vertical;
+    let forward = DVec3::from_array(frame.forward);
+    match pose.projection {
+        cad_core::camera_views::Projection::Perspective { .. } => {
+            (frame.eye_mm, (forward + offset).normalize().to_array())
+        }
+        cad_core::camera_views::Projection::Orthographic { .. } => (
+            (DVec3::from_array(frame.eye_mm) + offset).to_array(),
+            frame.forward,
+        ),
+    }
 }
 
 /// Display visibility for transient hover guides, using the same station and
@@ -742,7 +769,8 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
                         distance = distance.min(t);
                     }
                 }
-                if distance.is_finite() {
+                let point = std::array::from_fn(|i| o[i] + d[i] * distance);
+                if distance.is_finite() && project(w, rect, point).is_some() {
                     hits.push(Selection {
                         instance: key.clone(),
                         path: instance.path.clone(),
@@ -751,7 +779,7 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
                         reference: face.reference.clone(),
                         body: face.body.clone(),
                         distance,
-                        point: std::array::from_fn(|i| o[i] + d[i] * distance),
+                        point,
                     });
                 }
             }
@@ -1109,6 +1137,7 @@ fn fit_region(w: &mut Workspace, scope: FitScope) {
         w.view.target = [0.; 3];
         w.view.distance = 3.5;
     }
+    crate::camera_views_ui::after_fit(w);
 }
 pub fn camera(
     w: Res<Workspace>,
@@ -1122,12 +1151,47 @@ pub fn camera(
             "background",
             Color::srgb(0.82, 0.84, 0.86),
         ));
-        *t = Transform::from_translation(eye(&w))
-            .looking_at(Vec3::from_array(w.view.target), basis(&w).2);
-        if let Projection::Perspective(p) = &mut *projection {
-            p.fov = std::f32::consts::FRAC_PI_4;
-            p.near = (w.view.distance * 0.0001).max(0.00001);
-            p.far = (w.view.distance * 100.).max(100.);
+        let pose = crate::camera_views_ui::current(&w);
+        let (forward, right, up) = basis(&w);
+        *t = Transform {
+            translation: eye(&w),
+            rotation: Quat::from_mat3(&Mat3::from_cols(right, up, -forward)),
+            ..default()
+        };
+        let distance = (pose.distance_mm * 0.01) as f32;
+        let near = (distance * 0.0001).max(0.00001);
+        let far = (distance * 100.).max(100.);
+        match pose.projection {
+            cad_core::camera_views::Projection::Perspective { vertical_fov_deg } => {
+                if !matches!(*projection, Projection::Perspective(_)) {
+                    *projection = Projection::Perspective(PerspectiveProjection::default());
+                }
+                if let Projection::Perspective(p) = &mut *projection {
+                    p.fov = vertical_fov_deg.to_radians() as f32;
+                    p.near = near;
+                    p.far = far;
+                    p.aspect_ratio = w.viewport_size[0].clamp(32, 4096) as f32
+                        / w.viewport_size[1].clamp(32, 4096) as f32;
+                }
+            }
+            cad_core::camera_views::Projection::Orthographic { vertical_span_mm } => {
+                if !matches!(*projection, Projection::Orthographic(_)) {
+                    *projection = Projection::Orthographic(OrthographicProjection::default_3d());
+                }
+                if let Projection::Orthographic(p) = &mut *projection {
+                    p.scaling_mode = bevy::camera::ScalingMode::FixedVertical {
+                        viewport_height: (vertical_span_mm * 0.01) as f32,
+                    };
+                    p.scale = 1.;
+                    p.near = near;
+                    p.far = far;
+                    bevy::camera::CameraProjection::update(
+                        p,
+                        w.viewport_size[0].clamp(32, 4096) as f32,
+                        w.viewport_size[1].clamp(32, 4096) as f32,
+                    );
+                }
+            }
         }
     }
     if let Some(mut img) = images.get_mut(&image.image) {

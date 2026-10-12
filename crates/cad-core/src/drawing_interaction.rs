@@ -11,7 +11,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const CONTRACT_VERSION: u32 = 4;
+pub const CONTRACT_VERSION: u32 = 5;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
@@ -123,6 +123,20 @@ pub struct Snap {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
+    TranslateAnnotations {
+        annotations: Vec<Id>,
+        delta_mm: [f64; 2],
+    },
+    ArrangeAnnotations {
+        request: Box<crate::drawing_layout::Request>,
+    },
+    CopyAnnotations {
+        annotations: Vec<Id>,
+        offset_mm: [f64; 2],
+    },
+    DeleteAnnotations {
+        annotations: Vec<Id>,
+    },
     Move {
         target: Target,
         delta_mm: [f64; 2],
@@ -317,7 +331,7 @@ fn resize_handles(target: &Target, bounds: [[f64; 2]; 2]) -> Vec<Handle> {
         })
         .collect()
 }
-fn annotation_anchors(annotation: &drawing::Annotation) -> Vec<(AnchorSlot, &Anchor)> {
+pub(crate) fn annotation_anchors(annotation: &drawing::Annotation) -> Vec<(AnchorSlot, &Anchor)> {
     match &annotation.kind {
         AnnotationKind::DimensionGroup { group } => {
             std::iter::once((AnchorSlot::Target, &group.datum))
@@ -1082,6 +1096,21 @@ pub fn snap(
     tolerance_mm: f64,
     grid_mm: Option<f64>,
 ) -> Snap {
+    snap_excluding(
+        scene,
+        std::slice::from_ref(target),
+        paper_mm,
+        tolerance_mm,
+        grid_mm,
+    )
+}
+pub fn snap_excluding(
+    scene: &Scene,
+    excluded: &[Target],
+    paper_mm: [f64; 2],
+    tolerance_mm: f64,
+    grid_mm: Option<f64>,
+) -> Snap {
     let mut result = Snap {
         point: paper_mm,
         guides: vec![],
@@ -1095,7 +1124,7 @@ pub fn snap(
             .map(|grid| (paper_mm[axis] / grid).round() * grid);
         let mut peer = None;
         for other in &scene.targets {
-            if &other.target == target {
+            if excluded.contains(&other.target) {
                 continue;
             }
             for at in [
@@ -1316,6 +1345,44 @@ pub fn apply(
     }
     let mut sheet = source.clone();
     match action {
+        Action::TranslateAnnotations {
+            annotations,
+            delta_mm,
+        } => {
+            if page != 0 {
+                return Err(invalid(
+                    "Annotation cleanup belongs on the first paper page",
+                ));
+            }
+            sheet = crate::drawing_layout::translate(source, annotations, *delta_mm)?;
+        }
+        Action::ArrangeAnnotations { request } => {
+            if page != 0 {
+                return Err(invalid(
+                    "Annotation cleanup belongs on the first paper page",
+                ));
+            }
+            sheet = crate::drawing_layout::arrange(doc, evaluation, source, request)?;
+        }
+        Action::CopyAnnotations {
+            annotations,
+            offset_mm,
+        } => {
+            if page != 0 {
+                return Err(invalid(
+                    "Annotation copying belongs on the first paper page",
+                ));
+            }
+            sheet = crate::drawing_layout::copy(source, annotations, *offset_mm)?.0;
+        }
+        Action::DeleteAnnotations { annotations } => {
+            if page != 0 {
+                return Err(invalid(
+                    "Annotation deletion belongs on the first paper page",
+                ));
+            }
+            sheet = crate::drawing_layout::delete(source, annotations)?;
+        }
         Action::Move { target, delta_mm } => {
             finite(delta_mm)?;
             match target {

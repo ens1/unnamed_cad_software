@@ -4,6 +4,7 @@ use crate::*;
 use nalgebra::{Matrix2, Rotation2, Vector2};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+pub mod library;
 pub mod resources;
 pub const CONTRACT_VERSION: u32 = 2;
 pub const MAX_MEMBERS: usize = 4096;

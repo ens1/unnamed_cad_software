@@ -1213,6 +1213,8 @@ pub struct Document {
     pub sensors: BTreeMap<Id, crate::sensors::Definition>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tolerance_stacks: BTreeMap<Id, crate::tolerance_stacks::Definition>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub camera_views: BTreeMap<Id, crate::camera_views::Definition>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlacedPart {
@@ -1249,6 +1251,7 @@ impl Document {
         self.settings.validate(self)?;
         crate::sensors::validate(self)?;
         crate::tolerance_stacks::validate(self)?;
+        crate::camera_views::validate(self)?;
         crate::appearance::validate(self)?;
         crate::weld_beads::validate_parts(self)?;
         crate::exploded_views::validate(self)?;
@@ -1705,6 +1708,7 @@ impl Document {
             active_configurations: BTreeMap::new(),
             sensors: BTreeMap::new(),
             tolerance_stacks: BTreeMap::new(),
+            camera_views: BTreeMap::new(),
         }
     }
     /// Create a part with this model's finish preference, without inserting an occurrence.

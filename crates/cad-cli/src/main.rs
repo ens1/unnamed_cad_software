@@ -70,6 +70,11 @@ enum Action {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    Materials {
+        project: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     Diff {
         before: PathBuf,
         after: PathBuf,
@@ -230,6 +235,28 @@ fn run() -> Result<()> {
                 atomic_write(&path, csv.as_bytes())?;
             } else {
                 print!("{csv}");
+            }
+        }
+        Action::Materials { project, output } => {
+            let document = FileStore.load(&project)?;
+            let catalog = cad_core::material_library::Catalog::new(
+                format!("{} materials", document.name),
+                document.materials.into_values().collect(),
+            );
+            let csv = output.as_ref().is_some_and(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("csv"))
+            });
+            let source = if csv {
+                cad_core::material_csv::export(&catalog)?
+            } else {
+                cad_core::material_library::export_json(&catalog)?
+            };
+            if let Some(path) = output {
+                atomic_write(&path, source.as_bytes())?;
+                println!("Exported material catalog {}", path.display());
+            } else {
+                println!("{source}");
             }
         }
         Action::ToleranceStacks { project, output } => {

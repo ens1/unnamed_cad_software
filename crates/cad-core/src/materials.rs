@@ -473,27 +473,30 @@ pub fn put(document: &mut Document, material: Material) -> Result<()> {
 }
 /// Numeric local edits cannot keep an unchanged manufacturer attribution.
 /// Explicit catalog replacement uses `put` and supplies its own source snapshot.
+pub fn normalize_edited(previous: &Material, material: &mut Material) {
+    if previous.density_kg_m3 != material.density_kg_m3 {
+        let previous_provenance = previous
+            .metadata
+            .as_ref()
+            .and_then(|m| m.density_provenance.as_ref());
+        if let Some(metadata) = &mut material.metadata
+            && metadata.density_provenance.as_ref() == previous_provenance
+        {
+            metadata.density_provenance = Some(PropertyProvenance::default());
+        }
+    }
+    for (key, next) in &mut material.properties.0 {
+        if let Some(previous) = previous.properties.get(*key)
+            && previous.value != next.value
+            && previous.provenance == next.provenance
+        {
+            next.provenance = PropertyProvenance::default();
+        }
+    }
+}
 pub fn put_edited(document: &mut Document, mut material: Material) -> Result<()> {
     if let Some(previous) = document.materials.get(&material.id) {
-        if previous.density_kg_m3 != material.density_kg_m3 {
-            let previous_provenance = previous
-                .metadata
-                .as_ref()
-                .and_then(|m| m.density_provenance.as_ref());
-            if let Some(metadata) = &mut material.metadata
-                && metadata.density_provenance.as_ref() == previous_provenance
-            {
-                metadata.density_provenance = Some(PropertyProvenance::default());
-            }
-        }
-        for (key, next) in &mut material.properties.0 {
-            if let Some(previous) = previous.properties.get(*key)
-                && previous.value != next.value
-                && previous.provenance == next.provenance
-            {
-                next.provenance = PropertyProvenance::default();
-            }
-        }
+        normalize_edited(previous, &mut material);
     }
     put(document, material)
 }

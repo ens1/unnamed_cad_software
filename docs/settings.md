@@ -32,6 +32,8 @@ Selecting a built-in clears that custom snapshot. Cancel leaves saved preference
 unchanged; unreferenced immutable import files may remain. Layout and CSS-like
 theme resources remain independent presentation files.
 
+Repeated personal-default validation retains at most 1024 process-local successful decode proofs, keyed by the actual texture-byte SHA-256 and normalized PNG/JPEG/TIFF/WebP codec. Each use still rereads bounded package bytes, verifies pinned resource checksums and rehashes the exact slice; a matching proof only avoids decoding those identical bytes again. Dimension/allocation/codec budgets remain unchanged, failed decodes are never cached, eviction requires a fresh decode, and the cache retains neither image pixels nor renderer handles. New documents publish the actual installed finish/resource identities only after complete staged validation.
+
 **Application → Themes** provides a picker for **Classic · Orange**,
 **Nocturne · Violet**, and imported packages. Picking a theme previews its whole
 layout and styling immediately. **Load theme…** accepts a presentation manifest,

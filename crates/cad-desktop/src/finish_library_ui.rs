@@ -122,6 +122,13 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
             .and_then(|arguments| arguments.get("key"))
             .and_then(Value::as_str)
         {
+            if crate::finish_library_ui::key(w).as_deref() == Some(key) {
+                return true;
+            }
+            if let Err(error) = crate::appearances_ui::selection_ready(w) {
+                w.status = error.to_string();
+                return true;
+            }
             if let Some(id) = key.strip_prefix("project:")
                 && let Err(error) = crate::appearances_ui::select_named_finish(w, id)
             {
@@ -156,6 +163,14 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
     }
     if !available(w) {
         w.status = "Apply or cancel the current operation before editing visual finishes".into();
+        return true;
+    }
+    if matches!(
+        command,
+        "finish-library.assign" | "finish-library.add" | "finish-library.import"
+    ) && let Err(error) = crate::appearances_ui::selection_ready(w)
+    {
+        w.status = error.to_string();
         return true;
     }
     if !w.fields.contains_key("appearance-tool") {
@@ -338,7 +353,7 @@ fn entry(w: &Workspace, finish: &Finish, catalog: bool) -> SemanticElement {
         .into(),
         commands: vec!["finish-library.select".into()],
         relationships: vec!["workspace.finish-library".into()],
-        data: json!({"key":entry_key,"finish":finish,"catalog":catalog,"favorite":w.view.library_favorites.contains(&preference_key(finish)),"engineering_material_independent":true,"accessibility_label":finish.name}),
+        data: json!({"key":entry_key,"finish":finish,"catalog":catalog,"favorite":w.view.library_favorites.contains(&preference_key(finish)),"engineering_material_independent":true,"accessibility_label":finish.name,"actions":[{"command":"finish-library.select","enabled":key(w).as_deref()==Some(&entry_key)||crate::appearances_ui::selection_ready(w).is_ok(),"disabled_reason":"Correct retained finish/lighting text before changing selection"}]}),
     }
 }
 fn actions(w: &Workspace) -> Vec<SemanticElement> {
@@ -349,7 +364,9 @@ fn actions(w: &Workspace) -> Vec<SemanticElement> {
         ("finish-library.import","Import finishes…",available(w),"Finish the active operation first"),
         ("finish-library.export","Export selected…",has,"Choose a finish"),
         ("finish-library.export-project","Export project finishes…",!w.session.visible().finishes.is_empty(),"The project finish library is empty")]
-        .into_iter().map(|(command,label,enabled,reason)|SemanticElement{id:format!("command:{command}"),role:"finish-library-action".into(),label:label.into(),value:None,state:if enabled{"ready"}else{"disabled"}.into(),commands:vec![command.into()],relationships:vec!["workspace.finish-library".into()],data:json!({"enabled":enabled,"disabled_reason":if enabled{""}else{reason},"accessibility_label":label})}).collect()
+        .into_iter().map(|(command,label,mut enabled,mut reason)| {
+            if matches!(command,"finish-library.assign"|"finish-library.add"|"finish-library.import")&&crate::appearances_ui::selection_ready(w).is_err(){enabled=false;reason="Correct retained finish/lighting text before changing selection or assignment";}
+            SemanticElement{id:format!("command:{command}"),role:"finish-library-action".into(),label:label.into(),value:None,state:if enabled{"ready"}else{"disabled"}.into(),commands:vec![command.into()],relationships:vec!["workspace.finish-library".into()],data:json!({"enabled":enabled,"disabled_reason":if enabled{""}else{reason},"accessibility_label":label})}}).collect()
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = vec![
@@ -513,7 +530,10 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                         &element.role,
                         &["semantic-control"],
                         &format!("{}{}", if favorite { "★ " } else { "" }, element.label),
-                        true,
+                        element
+                            .action_descriptors()
+                            .iter()
+                            .any(|action| action.enabled),
                         element.state == "selected",
                     )
                     .on_hover_text(

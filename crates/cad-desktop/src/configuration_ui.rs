@@ -282,11 +282,22 @@ fn properties(ui: &mut egui::Ui, w: &mut Workspace, c: &mut Definition) -> bool 
 }
 fn dimension_cell(
     ui: &mut egui::Ui,
+    doc: &Document,
     owner: &str,
     c: &mut Definition,
     field: &configuration::DimensionField,
     resolved: Option<&configuration::Resolved>,
 ) -> bool {
+    let count_context = if field.kind == configuration::dimensions::FieldKind::Count {
+        Some(configuration::counts::preview_context(doc, owner, c))
+    } else {
+        None
+    };
+    let count_resolved = count_context
+        .as_ref()
+        .and_then(|context| context.as_ref().ok())
+        .and_then(|context| configuration::resolve(context, owner, &c.id).ok());
+    let resolved = count_resolved.as_ref().or(resolved);
     let inherited = resolved
         .and_then(|r| r.overrides.feature_dimensions.get(&field.feature))
         .and_then(|fields| fields.get(&field.path))
@@ -336,6 +347,25 @@ fn dimension_cell(
             );
         }
     });
+    if field.kind == configuration::dimensions::FieldKind::Count {
+        let count = configuration::counts::preview_count(doc, owner, c, field);
+        let (text, state) = match &count {
+            Ok(value) => (format!("→ {value}"), "resolved"),
+            Err(_) => ("Unresolved count".into(), "invalid"),
+        };
+        crate::presentation_controls::label(
+            ui,
+            &dimension_id(owner, &c.id, field, "resolved"),
+            "configuration-count-result",
+            &[state],
+            &text,
+            state,
+        )
+        .on_hover_text(match count {
+            Ok(_) => "Counts accept scalar parameters and equations, such as @copies * 2. The result must be a nonnegative integer within the operation's bounds.".into(),
+            Err(error) => error.to_string(),
+        });
+    }
     if changed {
         c.version = configuration::CONTRACT_VERSION;
     }
@@ -434,7 +464,7 @@ fn fields(
                             .id_salt(("configuration-dimensions", &feature.id))
                             .show(ui, |ui| {
                                 for dimension in dimensions {
-                                    changed |= dimension_cell(ui, owner, c, &dimension, resolved.as_ref());
+                                    changed |= dimension_cell(ui, doc, owner, c, &dimension, resolved.as_ref());
                                 }
                             });
                     }
@@ -879,8 +909,14 @@ fn table(ui: &mut egui::Ui, w: &mut Workspace, doc: &Document, owner: &str) {
                         }
                         for field in &dimensions {
                             ui.push_id((c.id.clone(), &field.feature, &field.path), |ui| {
-                                changed |=
-                                    dimension_cell(ui, owner, &mut c, field, resolved.as_ref());
+                                changed |= dimension_cell(
+                                    ui,
+                                    doc,
+                                    owner,
+                                    &mut c,
+                                    field,
+                                    resolved.as_ref(),
+                                );
                             });
                         }
                         for field in &sketch_fields {
@@ -1153,20 +1189,50 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
                 });
             }
         }
+        let count_context = if fields
+            .iter()
+            .any(|field| field.kind == configuration::dimensions::FieldKind::Count)
+        {
+            Some(configuration::counts::preview_context(doc, &owner, &c))
+        } else {
+            None
+        };
+        let count_resolved = count_context
+            .as_ref()
+            .and_then(|context| context.as_ref().ok())
+            .and_then(|context| configuration::resolve(context, &owner, &c.id).ok());
         for dimension in &fields {
             let explicit = c
                 .overrides
                 .feature_dimensions
                 .get(&dimension.feature)
                 .and_then(|fields| fields.get(&dimension.path));
+            let dimension_resolved =
+                if dimension.kind == configuration::dimensions::FieldKind::Count {
+                    count_resolved.as_ref().or(resolved.as_ref())
+                } else {
+                    resolved.as_ref()
+                };
             let expression = explicit
                 .or_else(|| {
-                    resolved
-                        .as_ref()
+                    dimension_resolved
                         .and_then(|r| r.overrides.feature_dimensions.get(&dimension.feature))
                         .and_then(|fields| fields.get(&dimension.path))
                 })
                 .unwrap_or(&dimension.expression);
+            let count = if dimension.kind == configuration::dimensions::FieldKind::Count {
+                Some(match count_context.as_ref() {
+                    Some(Ok(context)) => configuration::dimensions::count_value(
+                        context, &owner, dimension, expression,
+                    ),
+                    Some(Err(error)) => Err(cad_core::CadError::Invalid(error.to_string())),
+                    None => Err(cad_core::CadError::Invalid(
+                        "Count parameter context is missing".into(),
+                    )),
+                })
+            } else {
+                None
+            };
             for (field, value, editable) in [
                 ("override", serde_json::json!(explicit.is_some()), true),
                 (
@@ -1180,14 +1246,18 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
                     role: "configuration-dimension-field".into(),
                     label: format!("{} · {}{}", c.name, dimension.label, if field == "override" { " override" } else { "" }),
                     value: Some(if field == "override" { explicit.is_some().to_string() } else { expression.0.clone() }),
-                    state: if explicit.is_some() { "overridden" } else { "inherited" }.into(),
+                    state: if field == "expression" && count.as_ref().is_some_and(Result::is_err) { "invalid" } else if explicit.is_some() { "overridden" } else { "inherited" }.into(),
                     commands: Vec::new(),
                     relationships: vec![owner.clone(), format!("{owner}@{}", c.id), dimension.feature.clone()],
                     data: serde_json::json!({"contract":"tcad.configuration.dimension-field","version":configuration::FIELD_CONTRACT_VERSION,
                         "setter":"configuration-dimension","owner":owner,"configuration":c.id,"feature":dimension.feature,
                         "path":dimension.path,"field":field,"kind":if field=="override" {"boolean"}else if dimension.kind==configuration::dimensions::FieldKind::Count {"count"}else{"expression"},
                         "json":value,"editable":editable,"expression":true,"base_expression":dimension.expression.0,
-                        "current_pointer":dimension.pointer,"positional":dimension.positional,"value_kind":dimension.kind,"maximum":dimension.maximum,"integer_literal_required":dimension.kind==configuration::dimensions::FieldKind::Count,
+                        "current_pointer":dimension.pointer,"positional":dimension.positional,"value_kind":dimension.kind,"maximum":dimension.maximum,"integer_literal_required":false,
+                        "scalar_count_expression":dimension.kind==configuration::dimensions::FieldKind::Count,
+                        "maximum_expression_count":configuration::dimensions::MAX_EXPRESSION_COUNT,
+                        "resolved_count":count.as_ref().and_then(|result|result.as_ref().ok()),
+                        "count_error":count.as_ref().and_then(|result|result.as_ref().err()).map(ToString::to_string),
                         "accessibility_label":format!("{} {} {}",c.name,dimension.label,field)}),
                 });
             }
@@ -1248,7 +1318,13 @@ pub fn current_value(
             let base = fields
                 .iter()
                 .find(|field| field.feature == feature && field.path == path)?;
-            let resolved = configuration::resolve(w.session.visible(), owner, id).ok();
+            let resolved = if base.kind == configuration::dimensions::FieldKind::Count {
+                configuration::counts::preview_context(w.session.visible(), owner, &c)
+                    .and_then(|context| configuration::resolve(&context, owner, id))
+                    .ok()
+            } else {
+                configuration::resolve(w.session.visible(), owner, id).ok()
+            };
             Some(serde_json::json!(
                 explicit
                     .or_else(|| resolved

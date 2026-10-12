@@ -395,7 +395,7 @@ fn unique_name(doc: &cad_core::Document, base: &str) -> String {
     name
 }
 pub fn is_workspace(w: &Workspace) -> bool {
-    w.view.drawing_workspace || w.dialog.as_deref() == Some("drawings")
+    w.view.drawing_workspace || crate::command_palette::context_editor(w) == Some("drawings")
 }
 /// Enter a paper workspace without starting a model draft.
 pub fn open_workspace(w: &mut Workspace) -> bool {

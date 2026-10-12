@@ -83,3 +83,44 @@ and standard features; smooth thread-envelope limitations are disclosed.
 Verification is compilation, formatting and strict linting. No tests, assertion
 probes, app launches or interactive runs are performed. Difficult native kernel
 carrier/blend/Boolean work remains outside this session's implementation scope.
+
+
+## Fourth checkpoint
+
+Configuration contract 8 / dimension adapter 4 accepts scalar parameter equations
+for configured native counts, with exact unsigned literals retained, finite
+integrality/native bounds, staged configured parameter contexts and occurrence
+external-dependency checks. Count sources remain in configuration definitions;
+base operation fields remain ordinary native integers.
+
+Camera-view contract 1 retains f64 pose/projection intent, named save/edit/update/
+recall, perspective/orthographic navigation and native picking, independent of
+geometry, configurations and display states. Drawing layout contract 1 and paper
+interaction 5 add annotation cohorts, source-origin alignment/distribution/spacing,
+group translation, stable copied child IDs and guarded datum-consumer deletion.
+
+Material CSV retains complete typed properties/provenance, native SI density and
+flat grade/condition editing with bounded reads and fresh local identity imports.
+Changed local numeric values cannot retain identical borrowed provenance. Material
+and finish editors preserve invalid typed/source text across attempted selection
+changes. The semantic command palette preserves its return editor, current guards
+and distinct argument-bound context actions.
+
+Inspection report contract 1 adds cached world/component/native-coordinate-system
+frames, complete body/weld aggregation, source/last-valid/history qualification
+and bounded JSON reports. Unsupported history property caches remain unavailable.
+Personal finish defaults cache only successful exact-byte decoding proofs, while
+still verifying bounded source bytes and pinned hashes on every use.
+
+The indexed personal sketch-block library keeps exact pinned native packages,
+metadata/search/favorites and reversible archival independent of model source.
+Insertion uses the existing active-sketch resource/draft path and its native
+admission limits; invalid advanced source remains preserved. Implementation checks
+are compilation, formatting and strict linting. No tests, probes or app launches.
+
+The final source audit tightened material and appearance field identities,
+preserved actual sketch-source edits while refreshing untouched cached source,
+excluded pose-only assembly-motion previews from engineering reports and their
+cache keys, and applied saved hidden/ghost policies to reference rendering and
+picking. Command search includes named library/monitor/stack targets and current
+disabled reasons. Pan sensitivity follows the selected projection's visible span.

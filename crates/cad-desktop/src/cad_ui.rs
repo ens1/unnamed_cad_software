@@ -251,6 +251,10 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "viewport.fit",
             "viewport.normal-sketch",
             "lighting",
+            "camera-views",
+            "camera-view.save",
+            "camera-view.perspective",
+            "camera-view.orthographic",
         ],
         "Tools" => vec![
             "settings",
@@ -270,6 +274,7 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "inspection.sensors",
             "inspection.tolerance-stacks",
             "standard-parts",
+            "sketch-block-library",
             "appearances",
             "manufacturing",
             "drawings",
@@ -909,6 +914,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::camera_views_ui::current_source_is_valid(w) {
+        return Some("Correct the current named-view fields before applying");
+    }
     if !crate::properties_ui::current_source_is_valid(w) {
         return Some("Correct the current property fields before applying");
     }
@@ -1094,6 +1102,7 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
         });
         menu_button(ui, "View", |ui| {
             view_controls(ui, w);
+            crate::camera_views_ui::view_controls(ui, w);
         });
         menu_button(ui, "Tools", |ui| {
             for (label, command) in [
@@ -1114,6 +1123,7 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Design Monitors…", "inspection.sensors"),
                 ("Tolerance Stacks…", "inspection.tolerance-stacks"),
                 ("Standard Hardware…", "standard-parts"),
+                ("Sketch Block Library…", "sketch-block-library"),
                 ("Appearance · Colors and Textures…", "appearances"),
                 ("Studio Lighting…", "lighting"),
                 ("Manufacturing…", "manufacturing"),
@@ -2128,6 +2138,8 @@ pub fn confirmation_label(w: &Workspace) -> String {
         "Apply Tolerance Stacks".into()
     } else if w.fields.contains_key("standard-parts-tool") {
         "Insert Standard Hardware".into()
+    } else if crate::camera_views_ui::active(w) {
+        "Apply Named View".into()
     } else if w.fields.contains_key("sensor-tool") {
         "Apply Design Monitors".into()
     } else if w.fields.contains_key("display-state-editor") {
