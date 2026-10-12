@@ -1,8 +1,8 @@
 # Licenses
 
 This Rust implementation of the OpenEXR image format
-and the exrs crate are not affiliated with the 
-[OpenEXR project](https://www.openexr.com/) or the 
+and the exrs crate are not affiliated with the
+[OpenEXR project](https://www.openexr.com/) or the
 [ACADEMY SOFTWARE FOUNDATION](https://www.aswf.io/).
 
 

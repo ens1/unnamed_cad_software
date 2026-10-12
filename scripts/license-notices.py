@@ -36,7 +36,15 @@ for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version
                 break
         (destination / "PACKAGE.txt").write_text(f'{name}\nDeclared SPDX license: {package.get("license") or "See package"}\nUpstream: {package.get("repository") or package.get("homepage") or "See source"}\nLocked source: {package["source"]}\nDependency modifications retain the upstream license.\n')
     for candidate in candidates:
-        shutil.copyfile(candidate, destination / candidate.name)
+        # Preserve license wording while normalizing text-only line endings
+        # and trailing spacing for repository whitespace checks.
+        try:
+            text = candidate.read_bytes().decode("utf-8")
+        except UnicodeDecodeError:
+            shutil.copyfile(candidate, destination / candidate.name)
+        else:
+            normalized = "\n".join(line.rstrip(" \t\r") for line in text.split("\n"))
+            (destination / candidate.name).write_text(normalized, encoding="utf-8")
     if not candidates and not package["source"].startswith("git+"):
         (destination / "PACKAGE.txt").write_text(f'{name}\nDeclared SPDX license: {package.get("license") or "See package"}\nSource: {package.get("repository") or package.get("homepage") or package["source"]}\nThe published crate did not include a top-level license text.\n')
     links = ", ".join(f'[{p.name}](third-party-licenses/{name}/{p.name})' for p in sorted(destination.iterdir()))
