@@ -130,3 +130,33 @@ clone only the requested record; imports retain the owned snapshot API. This
 removes repeated full-catalog copies from individual editor callbacks without
 changing definitions, validation or source contracts. No runtime benchmark is
 claimed.
+
+## Final verification and handoff
+
+The completed source checkpoints are `df3f0be`, `28c872e`, `158c5ec`,
+`3ff53e5`, `3659a85` and `0eb8450`, pushed to the canonical private origin.
+Repository privacy was checked during the session; no additional repository or
+public dependency fork was needed. The final source checkpoint is `0eb8450`.
+
+Final `cargo check --workspace --locked`,
+`cargo clippy --workspace --locked -- -D warnings`,
+`cargo fmt --all --check` and staged whitespace checks passed. The final
+`scripts/package-macos.sh` build completed and its strict nested/bundle signature
+verification passed by **09:14 UTC**. `dist/TCAD.app` contains that source build,
+with distinct `TCAD`, `tcad-worker` and `tcad-cli` executable names. The only
+reported dependency diagnostic was the existing future-compatibility notice for
+`proc-macro-error2 2.0.1`; it did not fail compilation or strict workspace linting.
+
+No tests, assertion harnesses, probes, benchmarks, app launches or interactive
+acceptance runs were performed. Compilation and signing establish integration
+and packaging, not acceptance of real geometry, hardware interaction or visual
+fidelity. The [coverage inventory](mechanical-cad-coverage.md) records the
+remaining shared mechanical-CAD baseline; this session does not establish full
+completion.
+
+The difficult general blend/corner, Boolean, shell and loft-carrier work remains
+for the later Astra implementation. Practical future work includes broader
+feature/profile catalogs, shared library organization, named-model-view drawing
+associations, additional paper/standards coverage and migration of remaining
+native-only controls to individual semantic bindings. Existing explicit limits
+remain visible in each feature's documentation.

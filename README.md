@@ -114,6 +114,12 @@ The native schema remains 1 with additive omitted defaults. Current source contr
 
 No code tests, assertion probes or manual smoke tests were written or run for the expanded implementation. Final formatting checks, `cargo clippy --workspace --locked -- -D warnings` and `scripts/package-macos.sh` passed for adapter 21 / solver 12 on 2026-10-11. The finish shader also compiled against the pinned Bevy WESL imports and passed Naga IR validation for studio-lit clearcoat configurations with and without SSAO/prepass normals. These checks establish source integration and packaging; interactive acceptance remains with the user. The earlier user-directed cube exercise is preserved at `models/two-inch-cube/project.json` and is not acceptance evidence for the new capabilities.
 
+The [2026-10-12 development session](docs/development-session-2026-10-12.md)
+records the subsequent material/library and production-workflow checkpoints.
+Final locked workspace compilation, strict linting, formatting and macOS bundle
+signature verification passed at adapter 36 / solver 16. No tests, probes,
+benchmarks or app launches were performed for that session.
+
 See [visual finishes and textures](docs/visual-finishes.md), [native format](docs/native-format.md), [replaceable contracts](docs/architecture.md), [reference geometry](docs/reference-geometry.md), [assembly mates](docs/assembly-mates.md), [revolutions](docs/revolutions.md), [selected contours](docs/selected-contours.md), [feature order](docs/feature-order.md), [Shell provenance](docs/shell-provenance.md), [presentation resources](docs/presentation.md), and [dependency notices](THIRD_PARTY_NOTICES.md).
 
 The appearance v2 update on 2026-10-11 passed locked workspace compilation,
