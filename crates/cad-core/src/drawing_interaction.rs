@@ -11,7 +11,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
@@ -157,9 +157,58 @@ pub enum Action {
         kind: DimensionKind,
         first: Box<Anchor>,
         second: Box<Anchor>,
-        curve: Option<CurveReference>,
+        curve: Option<Box<CurveReference>>,
+        #[serde(default)]
+        second_curve: Option<Box<CurveReference>>,
         offset_mm: f64,
     },
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DimensionInference {
+    pub kind: DimensionKind,
+    pub edge_separation: bool,
+}
+/// Measurement intent belongs to the native drawing contract, not a widget.
+pub fn infer_dimension(
+    doc: &Document,
+    evaluation: &Evaluation,
+    source: &Drawing,
+    first: &ReferenceHit,
+    second: &ReferenceHit,
+) -> DimensionInference {
+    if first.view == second.view
+        && matches!(first.point, PointReference::EdgePoint { .. })
+        && matches!(second.point, PointReference::EdgePoint { .. })
+        && let (Some(a), Some(b)) = (&first.curve, &second.curve)
+        && let Ok((direction, _, _)) =
+            drawing::parallel_lines(doc, evaluation, source, &first.view, a, b)
+    {
+        return DimensionInference {
+            kind: if direction[0].abs() < 1e-8 {
+                DimensionKind::Horizontal
+            } else if direction[1].abs() < 1e-8 {
+                DimensionKind::Vertical
+            } else {
+                DimensionKind::Perpendicular
+            },
+            edge_separation: true,
+        };
+    }
+    let delta = [
+        second.paper_mm[0] - first.paper_mm[0],
+        second.paper_mm[1] - first.paper_mm[1],
+    ];
+    let tolerance = delta[0].hypot(delta[1]) * 1e-8;
+    DimensionInference {
+        kind: if delta[1].abs() <= tolerance && delta[0].abs() > tolerance {
+            DimensionKind::Horizontal
+        } else if delta[0].abs() <= tolerance && delta[1].abs() > tolerance {
+            DimensionKind::Vertical
+        } else {
+            DimensionKind::Aligned
+        },
+        edge_separation: false,
+    }
 }
 fn invalid(message: &str) -> CadError {
     CadError::Invalid(format!("Drawing interaction: {message}"))
@@ -386,6 +435,11 @@ pub fn build(
                             | DimensionKind::HoleCallout
                     )
                 {
+                    let separation = if dimension.options.second_curve.is_some() {
+                        drawing::edge_separation_points(doc, evaluation, source, dimension).ok()
+                    } else {
+                        None
+                    };
                     for (slot, fallback, reference) in [
                         (AnchorSlot::First, dimension.first, &dimension.options.first),
                         (
@@ -394,6 +448,18 @@ pub fn build(
                             &dimension.options.second,
                         ),
                     ] {
+                        if let Some((a, b)) = separation {
+                            handles.push(handle(
+                                &group.target,
+                                HandleKind::Anchor { slot: slot.clone() },
+                                projection.paper_projected(if slot == AnchorSlot::First {
+                                    a
+                                } else {
+                                    b
+                                }),
+                            ));
+                            continue;
+                        }
                         let model = drawing::point(doc, evaluation, source, fallback, reference)
                             .or_else(|error| {
                                 if rendered.diagnostics.contains_key(id) {
@@ -554,9 +620,10 @@ pub fn build(
             } else {
                 instance.mesh_key.clone()
             };
-            let Some(mesh) = evaluation.meshes.get(&key) else {
-                continue;
-            };
+            let mesh = evaluation.meshes.get(&key).ok_or_else(|| invalid(&format!(
+                "Drawing '{}' requires current evaluated geometry for '{}'; wait for the represented model to finish evaluation",
+                source.name, instance.name
+            )))?;
             for (view, projection) in &rendered.projections {
                 // Tessellated section intersection lines have no source B-rep edge identity.
                 if view == "section-z" {
@@ -805,9 +872,11 @@ pub fn nearest_reference(
                 })
             };
             let count = (carrier.control_points.len() * 8).clamp(32, 512);
-            let index = (0..=count).min_by(|a, b| {
+            let Some(index) = (0..=count).min_by(|a, b| {
                 distance(*a as f64 / count as f64).total_cmp(&distance(*b as f64 / count as f64))
-            })?;
+            }) else {
+                continue;
+            };
             let mut low = index.saturating_sub(1) as f64 / count as f64;
             let mut high = (index + 1).min(count) as f64 / count as f64;
             for _ in 0..24 {
@@ -820,11 +889,17 @@ pub fn nearest_reference(
                 }
             }
             let parameter = (low + high) * 0.5;
-            model = drawing::curve_point(carrier, parameter).ok()?;
-            paper = candidate
+            let Ok(model_point) = drawing::curve_point(carrier, parameter) else {
+                continue;
+            };
+            let Ok(paper_point) = candidate
                 .projection
-                .paper_point(&candidate.view, model)
-                .ok()?;
+                .paper_point(&candidate.view, model_point)
+            else {
+                continue;
+            };
+            model = model_point;
+            paper = paper_point;
             if let PointReference::EdgePoint {
                 parameter: saved, ..
             } = &mut point
@@ -924,6 +999,32 @@ fn dimension_axis(
     }
     if dimension.options.kind == DimensionKind::HoleCallout {
         return Ok([0.5, 0.5]);
+    }
+    if dimension.options.kind == DimensionKind::Perpendicular {
+        let (direction, a, b) = drawing::parallel_lines(
+            doc,
+            evaluation,
+            sheet,
+            &dimension.view,
+            dimension
+                .options
+                .curve
+                .as_ref()
+                .ok_or_else(|| invalid("Select the first straight edge"))?,
+            dimension
+                .options
+                .second_curve
+                .as_ref()
+                .ok_or_else(|| invalid("Select the second straight edge"))?,
+        )?;
+        let separation = (b[1] - a[1]) * direction[0] - (b[0] - a[0]) * direction[1];
+        if separation.abs() < 1e-9 {
+            return Err(invalid(
+                "The selected edges coincide in this view; repair their references first",
+            ));
+        }
+        let sign = separation.signum();
+        return Ok([-direction[0] * sign, -direction[1] * sign]);
     }
     let (a, b) = if let Some(curve) = &dimension.options.curve
         && matches!(
@@ -1255,6 +1356,50 @@ pub fn apply(
                         .iter_mut()
                         .find(|dimension| &dimension.id == id)
                         .ok_or_else(|| invalid("The dimension no longer exists"))?;
+                    if dimension.options.second_curve.is_some() {
+                        let PointReference::EdgePoint {
+                            edge,
+                            body,
+                            instance_path,
+                            ..
+                        } = reference
+                        else {
+                            return Err(invalid(
+                                "Reattach an edge-separation dimension to an exact straight model edge",
+                            ));
+                        };
+                        let curve = CurveReference::ModelEdge {
+                            edge: edge.clone(),
+                            body: body.clone(),
+                            instance_path: instance_path.clone(),
+                        };
+                        drawing::linear(doc, evaluation, source, &curve)?;
+                        match slot {
+                            AnchorSlot::First => dimension.options.curve = Some(curve),
+                            AnchorSlot::Second => dimension.options.second_curve = Some(curve),
+                            _ => {
+                                return Err(invalid(
+                                    "Edge separation needs a first or second edge reference",
+                                ));
+                            }
+                        }
+                        drawing::parallel_lines(
+                            doc,
+                            evaluation,
+                            source,
+                            &dimension.view,
+                            dimension
+                                .options
+                                .curve
+                                .as_ref()
+                                .ok_or_else(|| invalid("Select the first straight edge"))?,
+                            dimension
+                                .options
+                                .second_curve
+                                .as_ref()
+                                .ok_or_else(|| invalid("Select the second straight edge"))?,
+                        )?;
+                    }
                     match slot {
                         AnchorSlot::First => {
                             dimension.first = model;
@@ -1330,6 +1475,7 @@ pub fn apply(
             first,
             second,
             curve,
+            second_curve,
             offset_mm,
         } => {
             finite(&[*offset_mm])?;
@@ -1353,6 +1499,41 @@ pub fn apply(
                         .ok_or_else(|| invalid("Select an exact circular model edge"))?,
                 )?;
             }
+            if second_curve.is_some() || *kind == DimensionKind::Perpendicular {
+                if !matches!(
+                    kind,
+                    DimensionKind::Horizontal
+                        | DimensionKind::Vertical
+                        | DimensionKind::Perpendicular
+                ) {
+                    return Err(invalid(
+                        "Choose an edge-separation dimension type for two line carriers",
+                    ));
+                }
+                let (direction, first_line, second_line) = drawing::parallel_lines(
+                    doc,
+                    evaluation,
+                    source,
+                    view,
+                    curve
+                        .as_ref()
+                        .ok_or_else(|| invalid("Select the first straight edge"))?,
+                    second_curve
+                        .as_ref()
+                        .ok_or_else(|| invalid("Select the second straight edge"))?,
+                )?;
+                if (*kind == DimensionKind::Horizontal && direction[0].abs() > 1e-8)
+                    || (*kind == DimensionKind::Vertical && direction[1].abs() > 1e-8)
+                    || ((second_line[0] - first_line[0]) * direction[1]
+                        - (second_line[1] - first_line[1]) * direction[0])
+                        .abs()
+                        < 1e-9
+                {
+                    return Err(invalid(
+                        "The selected line carriers have zero or incompatible separation in this view",
+                    ));
+                }
+            }
             let first_point =
                 drawing::point(doc, evaluation, source, first.point, &first.reference)?;
             let second_point =
@@ -1369,7 +1550,8 @@ pub fn apply(
                     kind: kind.clone(),
                     first: first.reference.clone(),
                     second: second.reference.clone(),
-                    curve: curve.clone(),
+                    curve: curve.as_deref().cloned(),
+                    second_curve: second_curve.as_deref().cloned(),
                     ..Default::default()
                 },
             });

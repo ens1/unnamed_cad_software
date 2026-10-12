@@ -454,7 +454,7 @@ impl<'a> Fields<'a> {
         );
     }
     fn curve(&mut self, path: &str, optional: bool) {
-        let mut options = curve_choices(self.w);
+        let mut options = curve_choices(self.w, false);
         if optional {
             options.insert(0, choice("Choose circular geometry", Value::Null));
         }
@@ -481,12 +481,17 @@ impl<'a> Fields<'a> {
             }
         }
     }
+    fn line(&mut self, path: &str, label: &str) {
+        let mut options = curve_choices(self.w, true);
+        options.insert(0, choice("Choose straight geometry", Value::Null));
+        self.select(path, label, options);
+    }
 }
 fn occurrence_choices(w: &Workspace, definition: &str) -> Vec<Value> {
     let mut out = vec![choice("Resolve unique occurrence", Vec::<Id>::new())];
-    if let Some(e) = crate::drawing_ui::evaluation(w) {
+    if crate::drawing_ui::evaluation(w).is_some() {
         out.extend(
-            e.instances
+            crate::drawing_ui::represented_instances(w)
                 .iter()
                 .filter(|i| i.definition == definition)
                 .map(|i| choice(&i.name, &i.path)),
@@ -494,13 +499,48 @@ fn occurrence_choices(w: &Workspace, definition: &str) -> Vec<Value> {
     }
     out
 }
-fn curve_choices(w: &Workspace) -> Vec<Value> {
+fn curve_choices(w: &Workspace, straight: bool) -> Vec<Value> {
     let mut out = vec![];
-    if let Some(curve) = crate::drawing_ui::selected_curve(w) {
+    let source = active_sheet(w);
+    if let Some(curve) = crate::drawing_ui::selected_curve(w)
+        && let Some(evaluation) = crate::drawing_ui::evaluation(w)
+        && let Some(sheet) = &source
+        && if straight {
+            linear(w.session.visible(), evaluation, sheet, &curve).is_ok()
+        } else {
+            circular(w.session.visible(), evaluation, sheet, &curve).is_ok()
+        }
+    {
         out.push(choice("Selected model edge", curve));
     }
     if let Some(e) = crate::drawing_ui::evaluation(w) {
-        for instance in &e.instances {
+        for instance in &crate::drawing_ui::represented_instances(w) {
+            let mesh_key = if instance.mesh_key.is_empty() {
+                &instance.definition
+            } else {
+                &instance.mesh_key
+            };
+            if let Some(mesh) = e.meshes.get(mesh_key) {
+                for (index, edge) in mesh.edges.iter().enumerate() {
+                    let reference = CurveReference::ModelEdge {
+                        edge: edge.reference.clone(),
+                        body: edge.body.clone(),
+                        instance_path: instance.path.clone(),
+                    };
+                    if let Some(sheet) = &source
+                        && if straight {
+                            linear(w.session.visible(), e, sheet, &reference).is_ok()
+                        } else {
+                            circular(w.session.visible(), e, sheet, &reference).is_ok()
+                        }
+                    {
+                        out.push(choice(
+                            format!("{} / Edge {}", instance.name, index + 1),
+                            reference,
+                        ));
+                    }
+                }
+            }
             if let Some(part) = w.session.visible().parts.get(&instance.definition) {
                 let key = if instance.mesh_key.is_empty() {
                     &instance.definition
@@ -513,14 +553,27 @@ fn curve_choices(w: &Workspace) -> Vec<Value> {
                         .get(&format!("{key}::{}", feature.id))
                         .and_then(|s| s.solved.as_ref())
                     {
+                        let suppressed = cad_core::sketch_transform::suppressed_members(sketch);
                         for (member, m) in &sketch.members {
-                            if matches!(
-                                m.curve,
-                                cad_core::SketchCurve::Circle { .. }
-                                    | cad_core::SketchCurve::Arc { .. }
-                            ) {
+                            if suppressed.contains(member) {
+                                continue;
+                            }
+                            if if straight {
+                                matches!(m.curve, cad_core::SketchCurve::Line { .. })
+                            } else {
+                                matches!(
+                                    m.curve,
+                                    cad_core::SketchCurve::Circle { .. }
+                                        | cad_core::SketchCurve::Arc { .. }
+                                )
+                            } {
                                 out.push(choice(
-                                    format!("{} / {} · circle or arc", instance.name, feature.name),
+                                    format!(
+                                        "{} / {} · {}",
+                                        instance.name,
+                                        feature.name,
+                                        if straight { "line" } else { "circle or arc" }
+                                    ),
                                     CurveReference::SketchMember {
                                         sketch: part.reference(&feature.id),
                                         member: member.clone(),
@@ -728,7 +781,15 @@ fn sheet_fields(f: &mut Fields<'_>) {
 }
 fn view_fields(f: &mut Fields<'_>) {
     f.group("views", "Included views");
+    let resolved = crate::drawing_ui::evaluation(f.w).and_then(|evaluation| {
+        build_sheet_preview(f.w.session.visible(), evaluation, f.sheet, 0).ok()
+    });
     let views = view_keys(f.sheet);
+    f.note("projection-convention", if views.iter().any(|view| view == "front") {
+        "Third-angle projection: Top above Front, Right to the right. Automatic projected views share a standard drawing scale; saved placements and parent relationships remain editable."
+    } else {
+        "Independent views use standard fit scales. Include Front for automatic Top/Right projected alignment and a shared scale, or set an editable parent view relationship."
+    }, "ready");
     for key in VIEW_KEYS {
         let selected = views.iter().any(|v| v == key);
         let mut updated = views.clone();
@@ -749,6 +810,23 @@ fn view_fields(f: &mut Fields<'_>) {
             &format!("view-{key}"),
             &format!("{key} · placement and scale"),
         );
+        if let Some(layout) = resolved.as_ref().and_then(|sheet| sheet.views.get(key))
+            && let Some(scale) = layout.scale
+        {
+            f.note(
+                &format!("view/{key}/resolved-scale"),
+                &format!(
+                    "Resolved scale {}{}",
+                    scale_label(scale),
+                    layout
+                        .alignment
+                        .as_ref()
+                        .map(|alignment| format!(" · follows {}", alignment.parent))
+                        .unwrap_or_default()
+                ),
+                "ready",
+            );
+        }
         f.action(
             &format!("view/{key}/up"),
             "Move up",
@@ -824,7 +902,7 @@ fn view_fields(f: &mut Fields<'_>) {
         } else {
             f.note(
                 &format!("view/{key}/automatic"),
-                "Automatic fitting and placement",
+                "Automatic standard scale and projected placement. Enable Saved paper placement to override.",
                 "ready",
             );
         }
@@ -993,6 +1071,7 @@ fn dimension_fields(f: &mut Fields<'_>) {
         ("aligned", "Aligned"),
         ("horizontal", "Horizontal"),
         ("vertical", "Vertical"),
+        ("perpendicular", "Perpendicular edge separation"),
         ("angular", "Angular"),
         ("diameter", "Diameter"),
         ("radius", "Radius"),
@@ -1025,6 +1104,7 @@ fn dimension_fields(f: &mut Fields<'_>) {
             ("aligned", "Aligned"),
             ("horizontal", "Horizontal"),
             ("vertical", "Vertical"),
+            ("perpendicular", "Perpendicular edge separation"),
             ("angular", "Angular"),
             ("diameter", "Diameter"),
             ("radius", "Radius"),
@@ -1034,6 +1114,17 @@ fn dimension_fields(f: &mut Fields<'_>) {
     match d.options.kind {
         DimensionKind::Diameter | DimensionKind::Radius | DimensionKind::HoleCallout => {
             f.curve(&format!("{path}/options/curve"), true)
+        }
+        DimensionKind::Perpendicular | DimensionKind::Horizontal | DimensionKind::Vertical
+            if d.options.second_curve.is_some()
+                || d.options.kind == DimensionKind::Perpendicular =>
+        {
+            f.line(&format!("{path}/options/curve"), "First straight edge");
+            f.line(
+                &format!("{path}/options/second_curve"),
+                "Second straight edge",
+            );
+            f.note("perpendicular-intent", "Associative shortest separation between parallel edges in this view, independent of where you clicked along either edge.", "ready");
         }
         _ => {
             f.point(
@@ -2318,7 +2409,21 @@ fn optional_default(
                 band_mm: 5.
             }),
             "title_block" => json!(SheetFormat::default().title_block),
-            "scale" => json!(1.),
+            "scale" => {
+                let child = unescape(path.split('/').nth(2).unwrap_or("front"));
+                json!(
+                    crate::drawing_ui::evaluation(w)
+                        .and_then(|evaluation| build_sheet_preview(
+                            w.session.visible(),
+                            evaluation,
+                            sheet,
+                            0
+                        )
+                        .ok())
+                        .and_then(|paper| paper.views.get(&child).and_then(|layout| layout.scale))
+                        .unwrap_or(1.)
+                )
+            }
             "alignment" => {
                 let child = unescape(path.split('/').nth(2).unwrap_or("front"));
                 let parent = view_keys(sheet)
@@ -2534,6 +2639,15 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
     }
     if pointer == "/definition" {
         set_at(&mut source, "/exploded_view", Value::Null)?;
+    }
+    if pointer.ends_with("/options/kind")
+        && !matches!(
+            value.as_str(),
+            Some("horizontal" | "vertical" | "perpendicular")
+        )
+    {
+        let parent = pointer.rsplit_once('/').unwrap().0;
+        set_at(&mut source, &format!("{parent}/second_curve"), Value::Null)?;
     }
     if pointer.ends_with("/kind/scope") {
         let parent = pointer.rsplit_once('/').unwrap().0;

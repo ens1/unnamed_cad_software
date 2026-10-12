@@ -11,6 +11,23 @@ pub(crate) fn evaluation(w: &Workspace) -> Option<&cad_core::protocol::Evaluatio
         .or(w.session.evaluation.as_ref())
         .filter(|e| (e.valid || e.geometry_valid) && e.identity == w.session.identity())
 }
+/// Paper controls use the represented model's local placements, independently
+/// of the part/component currently displayed in the 3D workspace.
+pub(crate) fn represented_instances(w: &Workspace) -> Vec<cad_core::PlacedPart> {
+    let Some(evaluation) = evaluation(w) else {
+        return vec![];
+    };
+    let source = w
+        .fields
+        .get("drawing-preview")
+        .or_else(|| w.fields.get("drawing-active"))
+        .and_then(|key| sheet_source(w, key));
+    if let Some(sheet) = source {
+        sheet_instances(w.session.visible(), evaluation, &sheet).unwrap_or_default()
+    } else {
+        evaluation.instances.clone()
+    }
+}
 
 fn selected_path(w: &Workspace) -> Vec<String> {
     let Some(selected) = &w.selected else {
@@ -94,7 +111,8 @@ pub(crate) fn reference_choices(w: &Workspace) -> Vec<(PointReference, String)> 
         return out;
     };
     let doc = w.session.visible();
-    for instance in &e.instances {
+    let instances = represented_instances(w);
+    for instance in &instances {
         let Some(part) = doc.parts.get(&instance.definition) else {
             continue;
         };
@@ -107,7 +125,15 @@ pub(crate) fn reference_choices(w: &Workspace) -> Vec<(PointReference, String)> 
             let Some(geometry) = e.sketches.get(&format!("{key}::{}", feature.id)) else {
                 continue;
             };
+            let suppressed = geometry
+                .solved
+                .as_ref()
+                .map(cad_core::sketch_transform::suppressed_points)
+                .unwrap_or_default();
             for (point, p) in &geometry.points {
+                if suppressed.contains(point) {
+                    continue;
+                }
                 out.push((
                     PointReference::SketchPoint {
                         sketch: part.reference(&feature.id),
@@ -122,8 +148,11 @@ pub(crate) fn reference_choices(w: &Workspace) -> Vec<(PointReference, String)> 
             }
         }
     }
-    for weld in e.assembly_welds.values() {
-        let Some(mesh) = e.meshes.get(&weld.placement.mesh_key) else {
+    for placement in instances
+        .iter()
+        .filter(|placement| !doc.parts.contains_key(&placement.definition))
+    {
+        let Some(mesh) = e.meshes.get(&placement.mesh_key) else {
             continue;
         };
         for (index, edge) in mesh
@@ -138,11 +167,11 @@ pub(crate) fn reference_choices(w: &Workspace) -> Vec<(PointReference, String)> 
                         edge: edge.reference.clone(),
                         body: edge.body.clone(),
                         parameter,
-                        instance_path: weld.placement.path.clone(),
+                        instance_path: placement.path.clone(),
                     },
                     format!(
                         "{} / Bead Edge {} · {}",
-                        weld.placement.name,
+                        placement.name,
                         index + 1,
                         if parameter == 0. { "Start" } else { "Finish" }
                     ),
@@ -159,9 +188,9 @@ pub(crate) fn reference_choices(w: &Workspace) -> Vec<(PointReference, String)> 
                 PointReference::FaceOrigin {
                     face: face.reference.clone(),
                     body: face.body.clone(),
-                    instance_path: weld.placement.path.clone(),
+                    instance_path: placement.path.clone(),
                 },
-                format!("{} / Bead Plane {}", weld.placement.name, index + 1),
+                format!("{} / Bead Plane {}", placement.name, index + 1),
             ));
         }
     }

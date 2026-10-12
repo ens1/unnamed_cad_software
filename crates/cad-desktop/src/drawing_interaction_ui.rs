@@ -28,6 +28,7 @@ enum DimensionMode {
     Aligned,
     Horizontal,
     Vertical,
+    Perpendicular,
     Diameter,
     Radius,
 }
@@ -48,7 +49,7 @@ enum Tool {
 }
 struct Cache {
     geometry: cad_core::Document,
-    evaluation: Evaluation,
+    evaluation: Arc<Evaluation>,
     source: Drawing,
     page: u32,
     paper: Arc<cad_core::drawing::Sheet>,
@@ -88,6 +89,7 @@ pub struct State {
     grid_mm: f64,
     snapping: bool,
     dimension_mode: DimensionMode,
+    dimension_hint: Option<String>,
     errors: BTreeMap<String, String>,
     statuses: BTreeMap<String, (String, String)>,
 }
@@ -169,7 +171,7 @@ fn refresh(w: &Workspace, state: &mut State, source: &Drawing, page: u32) -> Res
         let scene = interaction::build(w.session.visible(), &evaluation, source, &paper, page)?;
         state.cache = Some(Cache {
             geometry: w.session.visible().clone(),
-            evaluation,
+            evaluation: Arc::new(evaluation),
             source: source.clone(),
             page,
             paper: Arc::new(paper),
@@ -593,7 +595,7 @@ fn end_capture(w: &mut Workspace, state: &mut State) {
     state.guides.clear();
 }
 fn identity(w: &Workspace) -> Value {
-    json!({"document":w.session.visible().id,"identity":w.session.identity(),"sheet":w.fields.get("drawing-preview"),"page":page(w),"editor":w.fields.get("drawing-editor-generation")})
+    json!({"contract":"tcad.drawing-interaction","version":interaction::CONTRACT_VERSION,"document":w.session.visible().id,"identity":w.session.identity(),"sheet":w.fields.get("drawing-preview"),"page":page(w),"editor":w.fields.get("drawing-editor-generation")})
 }
 fn field(
     w: &Workspace,
@@ -790,6 +792,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 "aligned",
                 "horizontal",
                 "vertical",
+                "perpendicular",
                 "diameter",
                 "radius",
             ]
@@ -798,6 +801,18 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             .collect(),
         ),
     ];
+    if let Some(hint) = &state.dimension_hint {
+        out.push(SemanticElement {
+            id: "drawing.dimension-inference".into(),
+            role: "drawing-dimension-inference".into(),
+            label: hint.clone(),
+            value: None,
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec![],
+            data: identity(w),
+        });
+    }
     if let Some(cache) = &state.cache {
         out.push(field(w,"page","Page",json!(page(w)),"integer",None,(0..cad_core::drawing_tables::page_count(&cache.source)).map(|p|json!({"label":if p==0{"Model sheet".into()}else{format!("Continuation {p}")},"value":p})).collect()));
         for target in &cache.scene.targets {
@@ -1014,7 +1029,14 @@ pub fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) -> Result
             }
             "dimension-mode" => {
                 w.drawing_interaction.dimension_mode = serde_json::from_value(value)?;
-                w.drawing_interaction.tool = Tool::Dimension { first: None };
+                if matches!(
+                    w.drawing_interaction.dimension_mode,
+                    DimensionMode::Diameter | DimensionMode::Radius
+                ) || !matches!(w.drawing_interaction.tool, Tool::Dimension { .. })
+                {
+                    w.drawing_interaction.tool = Tool::Dimension { first: None };
+                }
+                w.drawing_interaction.dimension_hint = None;
             }
             "page" => {
                 let source = sheet(w).ok_or_else(|| invalid("Select a drawing sheet"))?;
@@ -1202,6 +1224,35 @@ fn handle_class(kind: &HandleKind) -> &'static str {
         HandleKind::LeaderBend { .. } => "leader-elbow",
     }
 }
+fn dimension_label(action: &Action) -> &'static str {
+    let Action::CreateDimension { kind, .. } = action else {
+        return "Drawing";
+    };
+    dimension_kind_label(kind)
+}
+fn dimension_kind_label(kind: &DimensionKind) -> &'static str {
+    match kind {
+        DimensionKind::Aligned => "Aligned",
+        DimensionKind::Horizontal => "Horizontal",
+        DimensionKind::Vertical => "Vertical",
+        DimensionKind::Perpendicular => "Perpendicular",
+        DimensionKind::Diameter => "Diameter",
+        DimensionKind::Radius => "Radius",
+        DimensionKind::Angular => "Angular",
+        DimensionKind::HoleCallout => "Hole callout",
+    }
+}
+fn dimension_mode_label(mode: &DimensionMode) -> &'static str {
+    match mode {
+        DimensionMode::Auto => "Auto",
+        DimensionMode::Aligned => "Aligned",
+        DimensionMode::Horizontal => "Horizontal",
+        DimensionMode::Vertical => "Vertical",
+        DimensionMode::Perpendicular => "Perpendicular",
+        DimensionMode::Diameter => "Diameter",
+        DimensionMode::Radius => "Radius",
+    }
+}
 fn click_reference(
     w: &mut Workspace,
     state: &mut State,
@@ -1250,6 +1301,15 @@ fn click_reference(
                 cad_core::drawing::circular(w.session.visible(), &cache.evaluation, source, curve)
                     .is_ok()
             });
+            let inferred = first.as_ref().map(|first| {
+                interaction::infer_dimension(
+                    w.session.visible(),
+                    &cache.evaluation,
+                    source,
+                    first,
+                    &hit,
+                )
+            });
             let kind = match state.dimension_mode {
                 DimensionMode::Auto
                     if first.is_none()
@@ -1265,7 +1325,11 @@ fn click_reference(
                 DimensionMode::Radius => DimensionKind::Radius,
                 DimensionMode::Horizontal => DimensionKind::Horizontal,
                 DimensionMode::Vertical => DimensionKind::Vertical,
-                _ => DimensionKind::Aligned,
+                DimensionMode::Perpendicular => DimensionKind::Perpendicular,
+                DimensionMode::Auto => inferred
+                    .as_ref()
+                    .map_or(DimensionKind::Aligned, |inferred| inferred.kind.clone()),
+                DimensionMode::Aligned => DimensionKind::Aligned,
             };
             let curved = matches!(kind, DimensionKind::Diameter | DimensionKind::Radius);
             if curved && !circular {
@@ -1274,6 +1338,7 @@ fn click_reference(
                 ));
             }
             if first.is_none() && !curved {
+                state.dimension_hint = None;
                 state.tool = Tool::Dimension {
                     first: Some(Box::new(hit)),
                 };
@@ -1281,6 +1346,11 @@ fn click_reference(
                 return Ok(());
             }
             let first = first.unwrap_or_else(|| Box::new(hit.clone()));
+            let edge_separation = kind == DimensionKind::Perpendicular
+                || (state.dimension_mode == DimensionMode::Auto
+                    && inferred
+                        .as_ref()
+                        .is_some_and(|inferred| inferred.edge_separation));
             let make = |hit: &ReferenceHit| Anchor {
                 point: hit.model_point,
                 reference: Some(hit.point.clone()),
@@ -1290,12 +1360,28 @@ fn click_reference(
                 kind,
                 first: Box::new(make(&first)),
                 second: Box::new(make(&hit)),
-                curve: curved.then_some(hit.curve).flatten(),
+                curve: if edge_separation {
+                    first.curve.clone()
+                } else {
+                    curved.then_some(hit.curve.clone()).flatten()
+                }
+                .map(Box::new),
+                second_curve: edge_separation.then_some(hit.curve).flatten().map(Box::new),
                 offset_mm: 8.,
             };
             apply(w, state, &action)?;
             state.tool = Tool::Dimension { first: None };
-            w.status = "Dimension added; select geometry for another dimension".into();
+            let hint = format!(
+                "{}{} dimension added",
+                dimension_label(&action),
+                if edge_separation {
+                    " edge separation"
+                } else {
+                    ""
+                }
+            );
+            state.dimension_hint = Some(hint.clone());
+            w.status = format!("{hint}; select geometry for another dimension");
         }
         Tool::Select => {}
     }
@@ -1470,6 +1556,7 @@ pub fn frame(
     };
     let rendered = cache.paper.clone();
     let scene = cache.scene.clone();
+    let native_evaluation = cache.evaluation.clone();
     let key = view_key(&source, page(w));
     let view = state.views.entry(key.clone()).or_default();
     let (mut paper, mut scale) = fitted(view, viewport, rendered.paper_mm);
@@ -1967,6 +2054,41 @@ pub fn frame(
             );
         }
     }
+    let inferred_hint = if state.dimension_mode == DimensionMode::Auto
+        && let Tool::Dimension { first: Some(first) } = &state.tool
+        && let Some(pointer) = pointer.filter(|_| over)
+        && let Some(second) = interaction::nearest_reference(
+            &scene,
+            paper_point(paper, scale, pointer),
+            8. / scale as f64,
+            Some(&first.view),
+        ) {
+        let inferred = interaction::infer_dimension(
+            w.session.visible(),
+            &native_evaluation,
+            &source,
+            first,
+            &second,
+        );
+        Some(format!(
+            "Auto: {}{} · click to add · choose Aligned for point-to-point distance",
+            dimension_kind_label(&inferred.kind),
+            if inferred.edge_separation {
+                " edge separation"
+            } else {
+                ""
+            }
+        ))
+    } else {
+        None
+    };
+    if matches!(state.tool, Tool::Dimension { first: Some(_) }) {
+        state.dimension_hint = inferred_hint.clone();
+    }
+    let explicit_hint = format!(
+        "{}: pick the second reference on this view",
+        dimension_mode_label(&state.dimension_mode)
+    );
     let status = if let Some(capture) = &state.capture {
         if capture.viewport_id != viewport_id {
             "Drawing gesture active in another viewport"
@@ -1980,9 +2102,18 @@ pub fn frame(
         match &state.tool {
             Tool::Select => "Select or drag drawing items · pinch to zoom · two fingers to pan",
             Tool::Dimension { first: None } => {
-                "Pick a circular edge or the first dimension reference"
+                if matches!(
+                    state.dimension_mode,
+                    DimensionMode::Diameter | DimensionMode::Radius
+                ) {
+                    "Pick an exact circular edge"
+                } else {
+                    "Pick a circular edge or the first dimension reference"
+                }
             }
-            Tool::Dimension { first: Some(_) } => "Pick the second reference on this view",
+            Tool::Dimension { first: Some(_) } => {
+                inferred_hint.as_deref().unwrap_or(&explicit_hint)
+            }
             Tool::Reattach { .. } | Tool::ReattachCurve { .. } => {
                 "Pick replacement model geometry · Esc cancels reattachment"
             }

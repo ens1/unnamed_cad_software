@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod symbols;
 pub use symbols::*;
 
-pub const CONTRACT_VERSION: u32 = 6;
+pub const CONTRACT_VERSION: u32 = 7;
 pub const FORMAT_VERSION: u32 = 2;
 pub const VIEW_KEYS: [&str; 6] = [
     "front",
@@ -179,6 +179,8 @@ pub enum DimensionKind {
     Aligned,
     Horizontal,
     Vertical,
+    /// Shortest projected distance between two parallel exact line carriers.
+    Perpendicular,
     Diameter,
     Radius,
     Angular,
@@ -267,6 +269,10 @@ pub struct DimensionOptions {
     pub third_point: [f64; 3],
     #[serde(default)]
     pub curve: Option<CurveReference>,
+    /// A second line carrier preserves edge-to-edge measurement intent instead
+    /// of measuring the incidental pointer parameters used to select the edges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second_curve: Option<CurveReference>,
     #[serde(default)]
     pub hole_feature: Option<NodeRef>,
     #[serde(default)]
@@ -294,6 +300,7 @@ impl Default for DimensionOptions {
             third: None,
             third_point: [0.; 3],
             curve: None,
+            second_curve: None,
             hole_feature: None,
             tolerance: Tolerance::None,
             units: Units::Millimeters,
@@ -448,12 +455,14 @@ pub struct ViewProjection {
 }
 impl ViewProjection {
     pub fn paper_point(&self, key: &str, point: [f64; 3]) -> Result<[f64; 2]> {
-        let point = project(key, point)?;
-        Ok(std::array::from_fn(|axis| {
+        Ok(self.paper_projected(project(key, point)?))
+    }
+    pub fn paper_projected(&self, point: [f64; 2]) -> [f64; 2] {
+        std::array::from_fn(|axis| {
             self.rect_mm[axis]
                 + self.rect_mm[axis + 2] * 0.5
                 + (point[axis] - self.model_center[axis]) * self.scale
-        }))
+        })
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1095,7 +1104,7 @@ fn exploded_stage<'a>(
         invalid("Exploded view has no evaluated stage")
     })?))
 }
-pub(crate) fn sheet_instances(
+pub fn sheet_instances(
     doc: &Document,
     e: &Evaluation,
     sheet: &Drawing,
@@ -1401,6 +1410,175 @@ pub struct CircularGeometry {
     pub radius: f64,
     pub start: [f64; 3],
 }
+/// Exact, world-space straight carrier for associative edge separation.
+#[derive(Clone, Debug)]
+pub struct LinearGeometry {
+    pub start: [f64; 3],
+    pub end: [f64; 3],
+}
+pub fn linear(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    reference: &CurveReference,
+) -> Result<LinearGeometry> {
+    match reference {
+        CurveReference::ModelEdge {
+            edge,
+            body,
+            instance_path,
+        } => {
+            let (edge, place) = resolve_edge(doc, e, sheet, edge, body, instance_path)?;
+            let curve = edge
+                .curve
+                .as_ref()
+                .ok_or_else(|| invalid("Edge separation needs exact line data"))?;
+            let start = curve_point(curve, 0.)?;
+            let end = curve_point(curve, 1.)?;
+            let delta = Vector3::from(end) - Vector3::from(start);
+            let length = delta.norm();
+            // Positive rational weights put the complete curve in its control
+            // hull; collinearity therefore proves the whole carrier is a line.
+            if length < 1e-9
+                || curve
+                    .weights
+                    .iter()
+                    .any(|weight| !weight.is_finite() || *weight <= 0.)
+                || curve.control_points.iter().any(|point| {
+                    (Vector3::from(*point) - Vector3::from(start))
+                        .cross(&delta)
+                        .norm()
+                        > length * length.max(1.) * 1e-9
+                })
+            {
+                return Err(invalid(
+                    "Edge separation requires noncollapsed exact straight edges",
+                ));
+            }
+            Ok(LinearGeometry {
+                start: transform(start, place.matrix),
+                end: transform(end, place.matrix),
+            })
+        }
+        CurveReference::SketchMember {
+            sketch,
+            member,
+            instance_path,
+        } => {
+            let place = unique_placement(doc, e, sheet, &sketch.definition, instance_path)?;
+            let geometry = e
+                .sketches
+                .get(&format!("{}::{}", place.key, sketch.node))
+                .ok_or_else(|| invalid("The referenced sketch is missing or suppressed"))?;
+            let solved = geometry
+                .solved
+                .as_ref()
+                .ok_or_else(|| invalid("Exact solved sketch geometry is unavailable"))?;
+            if crate::sketch_transform::suppressed_members(solved).contains(member) {
+                return Err(invalid(
+                    "The referenced straight sketch member is suppressed",
+                ));
+            }
+            let source = solved
+                .members
+                .get(member)
+                .ok_or_else(|| invalid("The referenced sketch member was removed"))?;
+            let crate::SketchCurve::Line { start, end } = &source.curve else {
+                return Err(invalid("Edge separation requires straight sketch members"));
+            };
+            let at = |id: &str| -> Result<[f64; 3]> {
+                let point = geometry
+                    .points
+                    .get(id)
+                    .ok_or_else(|| invalid("The referenced sketch endpoint was removed"))?;
+                Ok(transform(
+                    std::array::from_fn(|axis| {
+                        geometry.plane.origin[axis]
+                            + geometry.plane.u[axis] * point[0]
+                            + geometry.plane.v[axis] * point[1]
+                    }),
+                    place.matrix,
+                ))
+            };
+            Ok(LinearGeometry {
+                start: at(start)?,
+                end: at(end)?,
+            })
+        }
+    }
+}
+/// Returns unit direction and origins in unscaled model-to-view coordinates.
+pub fn parallel_lines(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    view: &str,
+    first: &CurveReference,
+    second: &CurveReference,
+) -> Result<([f64; 2], [f64; 2], [f64; 2])> {
+    if first == second {
+        return Err(invalid("Select two different straight edges"));
+    }
+    let a = linear(doc, e, sheet, first)?;
+    let b = linear(doc, e, sheet, second)?;
+    let origin = project(view, a.start)?;
+    let other = project(view, b.start)?;
+    let end = project(view, a.end)?;
+    let other_end = project(view, b.end)?;
+    let delta = [end[0] - origin[0], end[1] - origin[1]];
+    let peer = [other_end[0] - other[0], other_end[1] - other[1]];
+    let length = delta[0].hypot(delta[1]);
+    let peer_length = peer[0].hypot(peer[1]);
+    if length < 1e-9
+        || peer_length < 1e-9
+        || (delta[0] * peer[1] - delta[1] * peer[0]).abs() > length * peer_length * 1e-8
+    {
+        return Err(invalid(
+            "The selected edges must be parallel and noncollapsed in this drawing view",
+        ));
+    }
+    Ok(([delta[0] / length, delta[1] / length], origin, other))
+}
+pub fn edge_separation_points(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    dimension: &DrawingDimension,
+) -> Result<([f64; 2], [f64; 2])> {
+    let (direction, first, second) = parallel_lines(
+        doc,
+        e,
+        sheet,
+        &dimension.view,
+        dimension
+            .options
+            .curve
+            .as_ref()
+            .ok_or_else(|| invalid("Select the first straight edge"))?,
+        dimension
+            .options
+            .second_curve
+            .as_ref()
+            .ok_or_else(|| invalid("Select the second straight edge"))?,
+    )?;
+    let picked = project(
+        &dimension.view,
+        point(doc, e, sheet, dimension.first, &dimension.options.first).unwrap_or(dimension.first),
+    )?;
+    let along = (picked[0] - first[0]) * direction[0] + (picked[1] - first[1]) * direction[1];
+    let a = [
+        first[0] + along * direction[0],
+        first[1] + along * direction[1],
+    ];
+    let other_along = (a[0] - second[0]) * direction[0] + (a[1] - second[1]) * direction[1];
+    Ok((
+        a,
+        [
+            second[0] + other_along * direction[0],
+            second[1] + other_along * direction[1],
+        ],
+    ))
+}
 pub fn circular(
     doc: &Document,
     e: &Evaluation,
@@ -1418,6 +1596,13 @@ pub fn circular(
                 .sketches
                 .get(&format!("{}::{}", place.key, sketch.node))
                 .ok_or_else(|| invalid("Circular sketch reference is missing or suppressed"))?;
+            if geometry.solved.as_ref().is_some_and(|sketch| {
+                crate::sketch_transform::suppressed_members(sketch).contains(member)
+            }) {
+                return Err(invalid(
+                    "The referenced circular sketch member is suppressed",
+                ));
+            }
             let member_curve = geometry.solved.as_ref().and_then(|sketch| {
                 sketch
                     .members
@@ -1924,6 +2109,31 @@ fn resolve_view_alignment(
     }
     resolved.insert(key.into());
     Ok(())
+}
+/// Familiar production ratios, choosing the largest that fits every linked
+/// view. Unusual part sizes extend the same 1/2/5 sequence by powers of ten.
+fn standard_scale(limit: f64) -> f64 {
+    let power = 10f64.powf(limit.log10().floor());
+    [1., 2., 5.]
+        .into_iter()
+        .map(|factor| factor * power)
+        .filter(|scale| *scale <= limit * (1. + 1e-12))
+        .fold(power, f64::max)
+}
+pub fn scale_label(scale: f64) -> String {
+    if (scale - 1.).abs() < 1e-9 {
+        return "1:1".into();
+    }
+    if scale > 1. {
+        return format!("{}:1", trim_number(scale));
+    }
+    format!("1:{}", trim_number(1. / scale))
+}
+fn trim_number(number: f64) -> String {
+    format!("{number:.3}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .into()
 }
 pub(crate) fn project(name: &str, p: [f64; 3]) -> Result<[f64; 2]> {
     Ok(match name {
@@ -2438,10 +2648,17 @@ fn dimension(
     );
     let first = if circular_dimension {
         d.first
+    } else if d.options.second_curve.is_some() || d.options.kind == DimensionKind::Perpendicular {
+        // Curve carriers define the measurement. Saved point references only
+        // place its extension along the carrier and may be repaired separately.
+        point(doc, e, sheet, d.first, &d.options.first).unwrap_or(d.first)
     } else {
         point(doc, e, sheet, d.first, &d.options.first)?
     };
-    let second = if circular_dimension {
+    let second = if circular_dimension
+        || d.options.second_curve.is_some()
+        || d.options.kind == DimensionKind::Perpendicular
+    {
         d.second
     } else {
         point(doc, e, sheet, d.second, &d.options.second)?
@@ -2450,7 +2667,58 @@ fn dimension(
     let mut b = view.screen(second)?;
     let mut value = (Vector3::from(second) - Vector3::from(first)).norm();
     let mut prefix = "";
-    if matches!(
+    if d.options.second_curve.is_some() || d.options.kind == DimensionKind::Perpendicular {
+        if !matches!(
+            d.options.kind,
+            DimensionKind::Horizontal | DimensionKind::Vertical | DimensionKind::Perpendicular
+        ) {
+            return Err(invalid(
+                "Two line carriers require an edge-separation dimension type",
+            ));
+        }
+        let (direction, carrier, peer) = parallel_lines(
+            doc,
+            e,
+            sheet,
+            &view.name,
+            d.options
+                .curve
+                .as_ref()
+                .ok_or_else(|| invalid("Select the first straight edge"))?,
+            d.options
+                .second_curve
+                .as_ref()
+                .ok_or_else(|| invalid("Select the second straight edge"))?,
+        )?;
+        if (d.options.kind == DimensionKind::Horizontal && direction[0].abs() > 1e-8)
+            || (d.options.kind == DimensionKind::Vertical && direction[1].abs() > 1e-8)
+        {
+            return Err(invalid(
+                "The edge carriers no longer support this axis separation; use Perpendicular or reattach the dimension",
+            ));
+        }
+        let picked = project(&view.name, first)?;
+        let first_along =
+            (picked[0] - carrier[0]) * direction[0] + (picked[1] - carrier[1]) * direction[1];
+        let origin = [
+            carrier[0] + first_along * direction[0],
+            carrier[1] + first_along * direction[1],
+        ];
+        a = [
+            a[0] + (origin[0] - picked[0]) * view.scale,
+            a[1] + (origin[1] - picked[1]) * view.scale,
+        ];
+        let along = (origin[0] - peer[0]) * direction[0] + (origin[1] - peer[1]) * direction[1];
+        let closest = [
+            peer[0] + along * direction[0],
+            peer[1] + along * direction[1],
+        ];
+        b = [
+            a[0] + (closest[0] - origin[0]) * view.scale,
+            a[1] + (closest[1] - origin[1]) * view.scale,
+        ];
+        value = (closest[0] - origin[0]).hypot(closest[1] - origin[1]);
+    } else if matches!(
         d.options.kind,
         DimensionKind::Diameter | DimensionKind::Radius | DimensionKind::HoleCallout
     ) {
@@ -2566,16 +2834,20 @@ fn dimension(
     }
     let (d1, d2) = match d.options.kind {
         DimensionKind::Horizontal => {
-            value = owner_parameter(doc, d)?.map(|(v, _)| v).unwrap_or(
-                (project(&view.name, second)?[0] - project(&view.name, first)?[0]).abs(),
-            );
+            if d.options.second_curve.is_none() {
+                value = owner_parameter(doc, d)?.map(|(v, _)| v).unwrap_or(
+                    (project(&view.name, second)?[0] - project(&view.name, first)?[0]).abs(),
+                );
+            }
             let y = a[1].max(b[1]) + d.offset_mm;
             ([a[0], y], [b[0], y])
         }
         DimensionKind::Vertical => {
-            value = owner_parameter(doc, d)?.map(|(v, _)| v).unwrap_or(
-                (project(&view.name, second)?[1] - project(&view.name, first)?[1]).abs(),
-            );
+            if d.options.second_curve.is_none() {
+                value = owner_parameter(doc, d)?.map(|(v, _)| v).unwrap_or(
+                    (project(&view.name, second)?[1] - project(&view.name, first)?[1]).abs(),
+                );
+            }
             let x = a[0].max(b[0]) + d.offset_mm;
             ([x, a[1]], [x, b[1]])
         }
@@ -3420,8 +3692,42 @@ fn build_sheet_mode(
     {
         return Err(invalid("Each named view can occur once per sheet"));
     }
-    let columns = if names.len() == 1 { 1 } else { 2 };
-    let rows = names.len().div_ceil(columns);
+    let orthographic = names.iter().any(|name| name == "front");
+    let extra_views = names
+        .iter()
+        .filter(|name| !matches!(name.as_str(), "front" | "top" | "right" | "isometric"))
+        .count();
+    let columns = if orthographic {
+        if names
+            .iter()
+            .any(|name| matches!(name.as_str(), "right" | "isometric"))
+        {
+            2
+        } else {
+            1
+        }
+    } else if names.len() == 1 {
+        1
+    } else {
+        2
+    };
+    let extra_rows = if orthographic {
+        extra_views.div_ceil(columns)
+    } else {
+        0
+    };
+    let rows = if orthographic {
+        if names
+            .iter()
+            .any(|name| matches!(name.as_str(), "top" | "isometric"))
+        {
+            extra_rows + 2
+        } else {
+            extra_rows + 1
+        }
+    } else {
+        names.len().div_ceil(columns)
+    };
     let footer_notes_height = if sheet.format.is_some() {
         10. + (sheet.annotations.len() + sheet.title_block.len()) as f64 * 3.5
     } else {
@@ -3459,6 +3765,10 @@ fn build_sheet_mode(
         [bounds[1][0], footer_height + 2.],
     );
     let mut prepared = BTreeMap::new();
+    // The automatic layout is disposable presentation data. Saving/dragging a
+    // resolved view copies its relationship into editable source; an explicit
+    // unlinked layout remains the user's independent override.
+    let mut effective = sheet.clone();
     for (index, name) in names.iter().enumerate() {
         let mut lines = world.clone();
         let mut view_curves = curves.clone();
@@ -3520,11 +3830,33 @@ fn build_sheet_mode(
             min = [-25., -25.];
             max = [25., 25.];
         }
+        let (column, row) = if orthographic {
+            match name.as_str() {
+                "front" => (0, extra_rows),
+                "top" => (0, extra_rows + 1),
+                "right" => (1, extra_rows),
+                "isometric" => (1, extra_rows + 1),
+                _ => {
+                    let extra_index = names[..index]
+                        .iter()
+                        .filter(|name| {
+                            !matches!(name.as_str(), "front" | "top" | "right" | "isometric")
+                        })
+                        .count();
+                    (
+                        extra_index.rem_euclid(columns),
+                        extra_rows - 1 - extra_index / columns,
+                    )
+                }
+            }
+        } else {
+            (index.rem_euclid(columns), rows - 1 - index / columns)
+        };
         let mut view = View {
             name: name.clone(),
             at: [
-                bounds[0][0] + 4. + index.rem_euclid(columns) as f64 * cell[0],
-                footer_height + 6. + (rows - 1 - index / columns) as f64 * cell[1],
+                bounds[0][0] + 4. + column as f64 * cell[0],
+                footer_height + 6. + row as f64 * cell[1],
             ],
             size: [cell[0] - 8., cell[1] - 10.],
             center: [min[0] / 2. + max[0] / 2., min[1] / 2. + max[1] / 2.],
@@ -3532,6 +3864,43 @@ fn build_sheet_mode(
                 .min((cell[1] - 10.) / (max[1] - min[1]).max(1.))
                 * 0.78,
         };
+        if !sheet.view_layouts.contains_key(name) {
+            effective.view_layouts.insert(
+                name.clone(),
+                ViewLayout {
+                    rect_mm: [view.at[0], view.at[1], view.size[0], view.size[1]],
+                    scale: None,
+                    alignment: if orthographic
+                        && sheet
+                            .view_layouts
+                            .get("front")
+                            .and_then(|layout| layout.alignment.as_ref())
+                            .is_none()
+                    {
+                        match name.as_str() {
+                            "top" => Some(ViewAlignment {
+                                parent: "front".into(),
+                                axis: ViewAlignmentAxis::Vertical,
+                                shared_scale: true,
+                            }),
+                            "right" => Some(ViewAlignment {
+                                parent: "front".into(),
+                                axis: ViewAlignmentAxis::Horizontal,
+                                shared_scale: true,
+                            }),
+                            "isometric" => Some(ViewAlignment {
+                                parent: "front".into(),
+                                axis: ViewAlignmentAxis::Free,
+                                shared_scale: true,
+                            }),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    },
+                },
+            );
+        }
         if name == "detail-front" {
             view.scale *= 2.;
             note = "Detail wireframe (automatic 2× view scale)".into();
@@ -3579,9 +3948,45 @@ fn build_sheet_mode(
         }
         prepared.insert(name.clone(), (view, lines, view_curves, note, min, max));
     }
+    validate_view_relationships(&effective)?;
+    for name in &names {
+        let layout = &effective.view_layouts[name];
+        if layout.scale.is_some()
+            || name == "detail-front"
+            || layout
+                .alignment
+                .as_ref()
+                .is_some_and(|alignment| alignment.shared_scale)
+        {
+            continue;
+        }
+        let limit = prepared
+            .iter()
+            .filter(|(candidate, _)| {
+                let mut key = candidate.as_str();
+                while let Some(parent) = effective
+                    .view_layouts
+                    .get(key)
+                    .and_then(|layout| layout.alignment.as_ref())
+                    .filter(|alignment| alignment.shared_scale)
+                {
+                    key = &parent.parent;
+                }
+                key == name
+            })
+            .map(|(_, (view, _, _, _, min, max))| {
+                (view.size[0] / (max[0] - min[0]).max(1.))
+                    .min(view.size[1] / (max[1] - min[1]).max(1.))
+                    * 0.78
+            })
+            .fold(f64::INFINITY, f64::min);
+        if let Some(view) = prepared.get_mut(name) {
+            view.0.scale = standard_scale(limit);
+        }
+    }
     let mut resolved = BTreeSet::new();
     for name in &names {
-        resolve_view_alignment(sheet, name, &mut prepared, &mut resolved)?;
+        resolve_view_alignment(&effective, name, &mut prepared, &mut resolved)?;
     }
     for name in &names {
         let (view, lines, view_curves, note, min, max) = prepared
@@ -3618,7 +4023,7 @@ fn build_sheet_mode(
             ViewLayout {
                 rect_mm: [x, y, width, height],
                 scale: Some(view.scale),
-                alignment: sheet
+                alignment: effective
                     .view_layouts
                     .get(name)
                     .and_then(|layout| layout.alignment.clone()),
@@ -3644,7 +4049,15 @@ fn build_sheet_mode(
             out,
             [view.at[0], view.at[1] + view.size[1] + 1.],
             2.4,
-            format!("{note}; scale {:.3}:1", view.scale),
+            format!(
+                "{note}; scale {}{}",
+                scale_label(view.scale),
+                if orthographic && matches!(name.as_str(), "front" | "top" | "right") {
+                    "; third-angle projection"
+                } else {
+                    ""
+                }
+            ),
         );
         for connector in exploded_lines {
             let a = view.screen(connector.start_mm)?;
@@ -3979,7 +4392,7 @@ pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation
             out.push(crate::presentation::SemanticElement {id:cell.id.clone(),role:"drawing-title-field".into(),label:cell.label.clone(),value:linked_text(doc,sheet,&cell.value).ok(),state:state.into(),commands:vec!["drawing.sheet-edit".into()],relationships:vec![sheet.id.clone(),sheet.definition.clone()],data:serde_json::json!({"contract":"tcad.drawing-sheet-format","version":FORMAT_VERSION,"sheet_id":sheet.id,"source":cell,"paper_units":"mm","linked_value":cell.value})});
         }
         for dimension in &sheet.dimensions {
-            out.push(crate::presentation::SemanticElement {id:dimension.id.clone(),role:"drawing-dimension".into(),label:format!("{:?} dimension",dimension.options.kind),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"dimension":dimension,"choices":{"kind":["aligned","horizontal","vertical","angular","diameter","radius","hole_callout"],"tolerance":["none","symmetric","deviation","limits","basic"],"units":["millimeters","inches"]}})});
+            out.push(crate::presentation::SemanticElement {id:dimension.id.clone(),role:"drawing-dimension".into(),label:format!("{:?} dimension",dimension.options.kind),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"dimension":dimension,"measurement_intent":if dimension.options.second_curve.is_some() || dimension.options.kind == DimensionKind::Perpendicular{"parallel_edge_separation"}else if matches!(dimension.options.kind,DimensionKind::Diameter|DimensionKind::Radius|DimensionKind::HoleCallout){"circular_carrier"}else{"point_references"},"curve_references":{"first":dimension.options.curve,"second":dimension.options.second_curve},"choices":{"kind":["aligned","horizontal","vertical","perpendicular","angular","diameter","radius","hole_callout"],"tolerance":["none","symmetric","deviation","limits","basic"],"units":["millimeters","inches"]}})});
         }
         for entity in &sheet.entities {
             out.push(crate::presentation::SemanticElement {id:entity.id.clone(),role:"drawing-annotation".into(),label:entity.kind.label().into(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.annotation-delete".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"annotation_id":entity.id,"annotation":entity,"symbol_contract":"tcad.drawing-symbol","symbol_version":SYMBOL_CONTRACT_VERSION,"actions":[{"command":"drawing.sheet-edit","label":"Edit annotation"},{"command":"drawing.annotation-delete","label":"Delete annotation"}]})});

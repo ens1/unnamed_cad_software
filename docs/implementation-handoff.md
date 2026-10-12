@@ -2,6 +2,14 @@
 
 The user resumed work after enabling Ultra; the earlier stop request is revoked. The latest target is the mainstream mechanical CAD capability set shared by SolidWorks, NX, Onshape and Creo, replacing full vendor parity. Completion is unclaimed. This handoff records saved source capabilities and their actual geometry/solver bounds. The continuation adds ribs, direct face edits, body filtering, reference curves, curve/sketch/table patterns, grouped dimensions, equation curves, tangent/bisector planes and supported STEP surface import. This continuation also adds exact tap-drill holes with explicit cosmetic thread intent/callouts, directed ruled and bounded matching mid-surfaces, drawing sheet formats/templates/linked title cells, saved paper view layout, and root-assembly exploded views shared by viewport and drawings. No code tests, assertion probes, manual smoke tests, export exercises or new interactive acceptance have been performed.
 
+The 2026-10-11 P1 follow-up implements current component/selection framing,
+compact responsive property editors, evaluated face-sketch framing, stable mate
+iteration, traced sheet stock, exact parallel-edge drawing dimensions, and
+shared-scale orthographic layouts. The current backend is adapter 35 / native
+solver 16, drawing contract 7 and paper interaction contract 2. See
+[P1 implementation details and validation](usability-p1-fixes.md). Interactive
+acceptance of these changes remains unperformed.
+
 ## Integrated source
 
 - Sketch Trim/Extend/Split with preserved analytic/rational geometry; arbitrary-axis symmetry; bounded point-on-curve, tangency and curvature contact on analytic line/arc/circle/ellipse/Bezier/positive clamped NURBS carriers. Saved normalized fixed/free contact parameters use exact derivatives and require regular tangents/C2 curvature locations. Driven/reference dimensions preserve their authored expression, measure the current geometry and add no solve equation. Arc length/included-angle and ellipse dimensions join the existing coordinate/length/angle modes. Rank/DOF and residual diagnostics are published; ambiguous or nonconvergent definitions block Apply.
