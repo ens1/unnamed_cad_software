@@ -76,6 +76,7 @@ pub struct ModelSettings {
     pub evaluation_tolerance_mm: f64,
     /// Applied to subsequently created part definitions; existing assignments are preserved.
     pub default_new_part_finish: Id,
+    pub production: crate::production::Preferences,
 }
 impl Default for ModelSettings {
     fn default() -> Self {
@@ -86,12 +87,14 @@ impl Default for ModelSettings {
             angle_decimal_places: 2,
             evaluation_tolerance_mm: 0.15,
             default_new_part_finish: crate::appearance::default_finish(),
+            production: Default::default(),
         }
     }
 }
 impl ModelSettings {
     /// Validate portable scalar preferences without requiring an owning document.
     pub fn validate_values(&self) -> Result<()> {
+        self.production.validate()?;
         if self.version != CONTRACT_VERSION {
             return Err(CadError::Invalid(format!(
                 "Unsupported model settings contract version {}",

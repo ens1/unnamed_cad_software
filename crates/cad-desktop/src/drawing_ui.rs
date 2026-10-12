@@ -1,15 +1,17 @@
 //! Compact drawing controls and the same vector sheet used by PDF/DXF export.
 use crate::Workspace;
-use bevy_egui::egui::{self, Color32, Stroke};
+use bevy_egui::egui;
 use cad_core::{Drawing, commands::Command, drawing::*};
 
 pub(crate) fn evaluation(w: &Workspace) -> Option<&cad_core::protocol::Evaluation> {
     w.session
         .draft
         .as_ref()
-        .and_then(|d| d.preview_evaluation())
+        .and_then(|d| d.evaluation.as_ref())
         .or(w.session.evaluation.as_ref())
+        .filter(|e| (e.valid || e.geometry_valid) && e.identity == w.session.identity())
 }
+
 fn selected_path(w: &Workspace) -> Vec<String> {
     let Some(selected) = &w.selected else {
         return vec![];
@@ -376,6 +378,10 @@ pub(crate) fn drawing_context(w: &mut Workspace) -> bool {
     true
 }
 pub(crate) fn select_sheet(w: &mut Workspace, key: &str) {
+    if w.fields.get("drawing-preview").is_none_or(|id| id != key) {
+        crate::drawing_interaction_ui::escape(w);
+        w.fields.insert("drawing-page".into(), "0".into());
+    }
     w.fields.insert("drawing-preview".into(), key.into());
     w.fields.insert("drawing-active".into(), key.into());
 }
@@ -505,6 +511,7 @@ fn add_symbol(w: &mut Workspace, requested: Option<&str>, command: &str) {
             .cloned()
             .unwrap_or_else(|| view_keys(&sheet)[0].clone()),
         offset_mm: [15., 15.],
+        leader_points_mm: vec![],
         kind,
     };
     w.fields
@@ -714,152 +721,16 @@ pub(crate) fn sheet_command(w: &mut Workspace, key: &str, command: &str) {
     semantic_action(w, &element, command);
 }
 pub fn editor(ui: &mut egui::Ui, w: &mut Workspace) {
+    crate::drawing_interaction_ui::show_controls(ui, w);
     crate::drawing_editor_ui::show(ui, w);
 }
 
-pub fn preview(w: &Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
-    if w.dialog.as_deref() != Some("drawings") {
-        return false;
-    }
-    let Some(id) = w.fields.get("drawing-preview") else {
-        return false;
-    };
-    let Some(sheet) = w.session.visible().drawings.iter().find(|d| &d.id == id) else {
-        return false;
-    };
-    let region = cad_core::presentation::Region {
-        id: sheet.id.clone(),
-        role: "drawing-sheet".into(),
-        component: None,
-        rect: [rect.left(), rect.top(), rect.width(), rect.height()],
-        classes: vec!["paper".into(), "preview".into()],
-        resizable: false,
-    };
-    let style = w.theme.properties(
-        &region,
-        &w.view.active_layout,
-        if w.session.draft.as_ref().is_some_and(|draft| draft.pending) {
-            "pending"
-        } else {
-            "ready"
-        },
-    );
-    if style.get("display").is_some_and(|value| value == "none") {
-        return true;
-    }
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0., ui.visuals().faint_bg_color);
-    let Some(e) = evaluation(w) else {
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            "Preparing drawing geometry…",
-            egui::FontId::proportional(14.),
-            ui.visuals().text_color(),
-        );
-        return true;
-    };
-    match build_sheet(w.session.visible(), e, sheet) {
-        Ok(sheet) => {
-            let scale = ((rect.width() - 24.) / sheet.paper_mm[0] as f32)
-                .min((rect.height() - 24.) / sheet.paper_mm[1] as f32);
-            let size = egui::vec2(
-                sheet.paper_mm[0] as f32 * scale,
-                sheet.paper_mm[1] as f32 * scale,
-            );
-            let paper = egui::Rect::from_center_size(rect.center(), size);
-            painter.rect_filled(
-                paper,
-                0.,
-                style
-                    .get("background")
-                    .and_then(|value| crate::ui::color(value))
-                    .unwrap_or(Color32::from_rgb(250, 249, 243)),
-            );
-            let at = |p: [f64; 2]| {
-                egui::pos2(
-                    paper.left() + p[0] as f32 * scale,
-                    paper.bottom() - p[1] as f32 * scale,
-                )
-            };
-            let stroke = Stroke::new(
-                style
-                    .get("stroke-width")
-                    .and_then(|value| value.trim_end_matches("px").parse::<f32>().ok())
-                    .filter(|value| value.is_finite() && *value > 0.)
-                    .unwrap_or((0.16 * scale).max(0.7)),
-                style
-                    .get("color")
-                    .and_then(|value| crate::ui::color(value))
-                    .unwrap_or(Color32::from_rgb(25, 27, 28)),
-            );
-            for primitive in sheet.primitives {
-                match primitive {
-                    Primitive::Polyline { points, dashed } => {
-                        for pair in points.windows(2) {
-                            let a = at(pair[0]);
-                            let b = at(pair[1]);
-                            if dashed {
-                                let delta = b - a;
-                                let length = delta.length();
-                                let mut start = 0.;
-                                let mut index = 0;
-                                while start < length {
-                                    let end = (start
-                                        + if index % 2 == 0 { 4. * scale } else { scale })
-                                    .min(length);
-                                    painter.line_segment(
-                                        [a + delta * start / length, a + delta * end / length],
-                                        stroke,
-                                    );
-                                    start = end + scale;
-                                    index += 1;
-                                }
-                            } else {
-                                painter.line_segment([a, b], stroke);
-                            }
-                        }
-                    }
-                    Primitive::Text { at: p, size, text } => {
-                        painter.text(
-                            at(p),
-                            egui::Align2::LEFT_BOTTOM,
-                            text,
-                            egui::FontId::proportional((size as f32 * scale).max(1.)),
-                            stroke.color,
-                        );
-                    }
-                    Primitive::Spline { curve } => {
-                        if let Ok(points) = display_curve(&curve) {
-                            for pair in points.windows(2) {
-                                painter.line_segment([at(pair[0]), at(pair[1])], stroke);
-                            }
-                        }
-                    }
-                    Primitive::Circle { center, radius } => {
-                        painter.circle_stroke(at(center), radius as f32 * scale, stroke);
-                    }
-                }
-            }
-            if w.session.draft.as_ref().is_some_and(|d| d.pending) {
-                painter.text(
-                    rect.left_top() + egui::vec2(10., 10.),
-                    egui::Align2::LEFT_TOP,
-                    "Updating drawing preview…",
-                    egui::FontId::proportional(12.),
-                    ui.visuals().text_color(),
-                );
-            }
-        }
-        Err(error) => {
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                error.to_string(),
-                egui::FontId::proportional(13.),
-                ui.visuals().text_color(),
-            );
-        }
-    }
-    true
+pub fn preview(
+    w: &mut Workspace,
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    response: &egui::Response,
+    viewport_id: &str,
+) -> bool {
+    crate::drawing_interaction_ui::frame(w, ui, rect, response, viewport_id)
 }

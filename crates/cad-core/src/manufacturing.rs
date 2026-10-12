@@ -15,66 +15,27 @@ pub struct BomRow {
     pub configuration: Option<Id>,
 }
 pub fn bom(doc: &Document) -> Result<Vec<BomRow>> {
-    let mut rows: BTreeMap<(Id, Option<Id>), BomRow> = BTreeMap::new();
-    for instance in doc.placed_parts()? {
-        if instance.bom_excluded {
-            continue;
-        }
-        let part = crate::configuration::effective_part(
-            doc,
-            &instance.definition,
-            instance.configuration.as_deref(),
-        )?;
-        let configured = instance
-            .configuration
-            .as_ref()
-            .map(|c| crate::configuration::resolve(doc, &instance.definition, c))
-            .transpose()?;
-        let options = configured
-            .as_ref()
-            .map(|c| c.overrides.bom.clone())
-            .unwrap_or_default();
-        if options.exclude.unwrap_or(false) {
-            continue;
-        }
-        let part_number = match options.name.unwrap_or_default() {
-            crate::configuration::BomName::Document => part
-                .properties
-                .get("part_number")
-                .cloned()
-                .unwrap_or_else(|| part.name.clone()),
-            crate::configuration::BomName::Configuration => configured
-                .as_ref()
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| part.name.clone()),
-            crate::configuration::BomName::Custom => options
-                .part_number
-                .filter(|v| !v.trim().is_empty())
-                .ok_or_else(|| {
-                    CadError::Invalid("A configured custom BOM number is required".into())
-                })?,
-        };
-        let key = (part.id.clone(), instance.configuration.clone());
-        let row = rows.entry(key).or_insert(BomRow {
-            definition: part.id.clone(),
-            part_number,
-            description: options.description.unwrap_or_else(|| {
-                part.properties
-                    .get("description")
-                    .cloned()
-                    .unwrap_or(part.name)
-            }),
-            material: doc
-                .materials
-                .get(&part.material)
-                .map(|m| m.name.clone())
-                .unwrap_or(part.material),
-            quantity: 0,
-            configuration: instance.configuration,
-        });
-        row.quantity += 1;
-    }
-    Ok(rows.into_values().collect())
+    Ok(crate::bom::rows(doc, &crate::bom::Options::default())?
+        .into_iter()
+        .map(|row| BomRow {
+            definition: row.definition,
+            part_number: row.part_number,
+            description: row.description,
+            material: row.material,
+            quantity: row.quantity,
+            configuration: row.configuration,
+        })
+        .collect())
+}
+/// Configurable native BOM contract. The legacy `bom` API remains parts-only.
+pub fn bom_with_options(
+    doc: &Document,
+    options: &crate::bom::Options,
+) -> Result<Vec<crate::bom::Row>> {
+    crate::bom::rows(doc, options)
+}
+pub fn csv_with_options(doc: &Document, options: &crate::bom::Options) -> Result<String> {
+    crate::bom::csv(doc, options)
 }
 
 pub fn csv(doc: &Document) -> Result<String> {
@@ -538,14 +499,10 @@ pub struct CutListRow {
     pub blank_bounds_exact: Option<bool>,
 }
 pub fn cut_list(doc: &Document) -> Result<Vec<CutListRow>> {
-    let mut grouped: BTreeMap<(Id, Option<Id>), usize> = BTreeMap::new();
-    for instance in doc.placed_parts()? {
-        if !instance.bom_excluded {
-            *grouped
-                .entry((instance.definition, instance.configuration))
-                .or_default() += 1;
-        }
-    }
+    let grouped = crate::bom::rows(doc, &crate::bom::Options::default())?
+        .into_iter()
+        .map(|row| ((row.definition, row.configuration), row.quantity))
+        .collect::<BTreeMap<_, _>>();
     let mut rows = Vec::new();
     for ((definition, configuration), quantity) in grouped {
         let p = crate::configuration::effective_part(doc, &definition, configuration.as_deref())?;
@@ -607,6 +564,23 @@ pub fn cut_list_evaluated(doc: &Document, evaluation: &Evaluation) -> Result<Vec
     let mut rows = cut_list(doc)?;
     append_native_cut_list(doc, evaluation, None, &[], None, &mut rows)?;
     Ok(rows)
+}
+/// Source-linked stock grouping and customizable manufacturing columns.
+pub fn cut_list_with_options(
+    doc: &Document,
+    evaluation: &Evaluation,
+    options: &crate::cut_list::Options,
+) -> Result<Vec<crate::cut_list::Group>> {
+    crate::cut_list::rows(doc, evaluation, options)
+}
+pub fn cut_list_csv_with_options(
+    doc: &Document,
+    evaluation: &Evaluation,
+    options: &crate::cut_list::Options,
+    units: crate::drawing::Units,
+    precision: usize,
+) -> Result<String> {
+    crate::cut_list::csv(doc, evaluation, options, units, precision)
 }
 /// Native drawing rows admitted only after occurrence/configuration/output filtering.
 /// The row limit is an error boundary, never a truncation into a complete table.

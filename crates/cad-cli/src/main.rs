@@ -113,12 +113,23 @@ fn checked(
     root: &std::path::Path,
     tolerance: Option<f64>,
 ) -> Result<cad_core::protocol::Evaluation> {
-    e.evaluate(
+    let evaluation = e.evaluate(
         identity(d, e),
         d,
         root,
         tolerance.unwrap_or(d.settings.evaluation_tolerance_mm),
-    )
+    )?;
+    if !evaluation.valid {
+        return Err(CadError::Invalid(
+            evaluation
+                .diagnostics
+                .iter()
+                .map(|d| d.message.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+    }
+    Ok(evaluation)
 }
 fn run() -> Result<()> {
     let args = Args::parse();
@@ -196,7 +207,8 @@ fn run() -> Result<()> {
             println!("Saved revision {}", d.revision);
         }
         Action::Bom { project, output } => {
-            let csv = cad_core::manufacturing::csv(&FileStore.load(&project)?)?;
+            let document = FileStore.load(&project)?;
+            let csv = cad_core::bom::csv(&document, &document.settings.production.bom)?;
             if let Some(path) = output {
                 atomic_write(&path, csv.as_bytes())?;
             } else {

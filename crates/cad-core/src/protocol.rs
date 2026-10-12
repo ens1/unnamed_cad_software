@@ -181,6 +181,10 @@ pub struct Evaluation {
     pub instances: Vec<PlacedPart>,
     pub diagnostics: Vec<Diagnostic>,
     pub valid: bool,
+    /// Complete current native geometry can remain usable for repairing an invalid
+    /// drawing. This never authorizes Apply or export; those require `valid`.
+    #[serde(default)]
+    pub geometry_valid: bool,
     pub elapsed_ms: u64,
     #[serde(default)]
     pub sketches: BTreeMap<String, EvaluatedSketch>,

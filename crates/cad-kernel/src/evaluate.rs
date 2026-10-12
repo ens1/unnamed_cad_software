@@ -188,6 +188,7 @@ impl<K: KernelAdapter> Evaluator<K> {
             instances,
             diagnostics,
             valid: false,
+            geometry_valid: false,
             elapsed_ms,
             sketches,
             references,
@@ -1409,12 +1410,13 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             &meshes,
             &self.body_sets,
         )?;
-        let evaluated = Evaluation {
+        let mut evaluated = Evaluation {
             identity,
             meshes,
             instances,
             diagnostics: vec![],
             valid: true,
+            geometry_valid: true,
             elapsed_ms: start.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
             sketches,
             references,
@@ -1433,7 +1435,16 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             history: std::sync::Arc::new(history),
             operation_preview: None,
         };
-        cad_core::drawing::validate_evaluation(document, &evaluated)?;
+        // Preserve only complete current native geometry for explicit drawing
+        // repair. A drawing failure still rejects this document for Apply/export.
+        if let Err(error) = cad_core::drawing::validate_evaluation(document, &evaluated) {
+            evaluated.valid = false;
+            evaluated.diagnostics.push(Diagnostic {
+                severity: "error".into(),
+                target: None,
+                message: error.to_string(),
+            });
+        }
         Ok(evaluated)
     }
     fn export(
@@ -1454,6 +1465,16 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             backend: self.fingerprint().into(),
         };
         let evaluated = self.evaluate(identity, document, root, tolerance)?;
+        if !evaluated.valid {
+            return Err(CadError::Invalid(
+                evaluated
+                    .diagnostics
+                    .iter()
+                    .map(|d| d.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ));
+        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -1480,11 +1501,15 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             ),
             "cutlist" => cad_core::persistence::atomic_write(
                 path,
-                cad_core::manufacturing::cut_list_csv_evaluated(document, &evaluated)?.as_bytes(),
+                cad_core::production::cut_list_csv(document, &evaluated)?.as_bytes(),
             ),
             "csv" | "bom" => cad_core::persistence::atomic_write(
                 path,
-                cad_core::manufacturing::csv(document)?.as_bytes(),
+                cad_core::production::bom_csv(document, &evaluated)?.as_bytes(),
+            ),
+            _ if format.starts_with("drawing-table-csv:") => cad_core::persistence::atomic_write(
+                path,
+                cad_core::production::export_table(document, &evaluated, format)?.as_bytes(),
             ),
             "json" => {
                 cad_core::persistence::atomic_write(path, &serde_json::to_vec_pretty(&evaluated)?)

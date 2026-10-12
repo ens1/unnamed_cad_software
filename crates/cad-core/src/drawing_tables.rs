@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const CONTRACT_VERSION: u32 = 2;
+pub const CONTRACT_VERSION: u32 = 3;
 pub const MAX_RESERVATIONS: usize = 100_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -78,6 +78,22 @@ impl TableKind {
         }
     }
 }
+/// One editable portion of a table. Row ranges refer to the complete current
+/// ordered source table, before paging; no source row is copied or truncated.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Segment {
+    pub id: Id,
+    pub page: u32,
+    pub start_row: usize,
+    /// None includes the remaining current rows, accommodating later additions.
+    pub row_count: Option<usize>,
+    pub position_mm: [f64; 2],
+    #[serde(default = "repeat_header")]
+    pub repeat_header: bool,
+}
+fn repeat_header() -> bool {
+    true
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Table {
     pub id: Id,
@@ -96,6 +112,12 @@ pub struct Table {
     /// Stable source keys; absent rows remain reserved in their saved order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub row_order: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub segments: Vec<Segment>,
+    #[serde(default)]
+    pub bom_options: crate::bom::Options,
+    #[serde(default)]
+    pub cut_list_options: crate::cut_list::Options,
 }
 impl Table {
     pub fn new(kind: TableKind) -> Self {
@@ -118,14 +140,20 @@ impl Table {
             item_numbers: BTreeMap::new(),
             reserve_space: true,
             row_order: vec![],
+            segments: vec![],
+            bom_options: Default::default(),
+            cut_list_options: Default::default(),
         }
     }
 }
 #[derive(Clone, Debug)]
 pub struct Item {
+    pub key: String,
     pub definition: Id,
     pub configuration: Option<Id>,
     pub number: u32,
+    pub depth: usize,
+    pub occurrences: Vec<crate::bom::Occurrence>,
     pub quantity: usize,
     pub cells: Vec<String>,
 }
@@ -145,6 +173,10 @@ pub enum RowSource {
         configuration: Option<Id>,
         point: Option<Id>,
     },
+    StockGroup {
+        key: String,
+        sources: Vec<crate::cut_list::Source>,
+    },
     CutList {
         output: NodeRef,
         configuration: Option<Id>,
@@ -159,12 +191,15 @@ pub struct SourceRow {
     pub cells: Vec<String>,
     /// World-space designed entry point for a hole label, never a fitted mesh center.
     pub position_mm: Option<[f64; 3]>,
+    #[serde(default)]
+    pub quantity: Option<usize>,
 }
 #[derive(Clone, Debug)]
 pub struct TableGeometry {
     pub primitives: Vec<Primitive>,
     pub bounds_mm: [[f64; 2]; 2],
     pub reserve_space: bool,
+    pub segment: Option<Id>,
 }
 
 fn invalid(message: impl ToString) -> CadError {
@@ -236,9 +271,32 @@ pub fn validate(table: &Table) -> Result<()> {
             "Every saved source-row order entry needs a retained positive row-number reservation",
         ));
     }
+    if table.segments.len() > 1024
+        || table.segments.iter().any(|s| {
+            s.id.is_empty()
+                || s.page > 1023
+                || s.start_row > 10000
+                || s.row_count.is_some_and(|n| n == 0 || n > 10000)
+                || s.position_mm.iter().any(|v| !v.is_finite())
+        })
+        || table
+            .segments
+            .iter()
+            .map(|s| &s.id)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != table.segments.len()
+    {
+        return Err(invalid(
+            "Table splits need distinct identities, finite paper positions and bounded pages and row ranges",
+        ));
+    }
     match &table.kind {
-        TableKind::BillOfMaterials if table.column_widths_mm.len() != 5 => {
-            return Err(invalid("BOM tables have five columns"));
+        TableKind::BillOfMaterials => {
+            crate::bom::validate(&table.bom_options)?;
+            if table.column_widths_mm.len() != table.bom_options.columns.len() {
+                return Err(invalid("BOM columns and saved widths must agree"));
+            }
         }
         TableKind::Revisions { rows } => {
             if table.column_widths_mm.len() != 4 || rows.len() > 10000 {
@@ -298,7 +356,8 @@ pub fn validate(table: &Table) -> Result<()> {
             precision,
             ..
         } => {
-            if table.column_widths_mm.len() != 8
+            crate::cut_list::validate(&table.cut_list_options)?;
+            if table.column_widths_mm.len() != table.cut_list_options.columns.len()
                 || scope.is_empty()
                 || *precision > 8
                 || sources.len() > 10000
@@ -378,6 +437,19 @@ pub fn validate_sources(doc: &Document, table: &Table) -> Result<()> {
                             ));
                         }
                     }
+                    crate::drawing::PointReference::CurveCenter { curve } => {
+                        let source = match curve.as_ref() {
+                            crate::drawing::CurveReference::SketchMember { sketch, .. } => sketch,
+                            crate::drawing::CurveReference::ModelEdge { edge, .. } => {
+                                &edge.producer
+                            }
+                        };
+                        if feature(source).is_none() {
+                            return Err(invalid(
+                                "Hole-table center datum producer was removed; reattach it explicitly",
+                            ));
+                        }
+                    }
                     crate::drawing::PointReference::EdgePoint { edge, body, .. }
                     | crate::drawing::PointReference::FaceOrigin {
                         face: edge, body, ..
@@ -426,10 +498,14 @@ pub fn content(doc: &Document, evaluation: &Evaluation, table: &Table) -> Result
     let mut items = Vec::new();
     let (headers, rows) = match &table.kind {
         TableKind::BillOfMaterials => {
+            let source_rows = crate::bom::rows_with_placements(
+                doc,
+                &table.bom_options,
+                Some(&evaluation.assemblies),
+            )?;
             let mut next = table.item_numbers.values().max().copied().unwrap_or(0);
-            for row in crate::manufacturing::bom(doc)? {
-                let key = item_key(&row.definition, row.configuration.as_deref());
-                let number = if let Some(number) = table.item_numbers.get(&key) {
+            for row in source_rows {
+                let number = if let Some(number) = table.item_numbers.get(&row.key) {
                     *number
                 } else {
                     next = next
@@ -437,26 +513,39 @@ pub fn content(doc: &Document, evaluation: &Evaluation, table: &Table) -> Result
                         .ok_or_else(|| invalid("BOM item numbering exceeds the native range"))?;
                     next
                 };
-                let cells = vec![
-                    number.to_string(),
-                    row.part_number,
-                    row.description,
-                    row.quantity.to_string(),
-                    row.material,
-                ];
+                let mut cells = crate::bom::cells(&row, &table.bom_options.columns, number);
+                if table.bom_options.mode == crate::bom::Mode::Indented
+                    && let Some(index) = table.bom_options.columns.iter().position(|column| {
+                        matches!(
+                            column,
+                            crate::bom::Column::PartNumber | crate::bom::Column::Description
+                        )
+                    })
+                {
+                    cells[index] = format!("{}{}", "  ".repeat(row.depth.min(256)), cells[index]);
+                }
                 items.push(Item {
+                    key: row.key,
                     definition: row.definition,
                     configuration: row.configuration,
                     number,
                     quantity: row.quantity,
                     cells,
+                    depth: row.depth,
+                    occurrences: row.occurrences,
                 });
             }
-            items.sort_by_key(|row| row.number);
+            // Hierarchical traversal order is the definition-owned tree; numeric
+            // reservations do not flatten children away from their parents.
+            if table.bom_options.mode != crate::bom::Mode::Indented {
+                items.sort_by_key(|row| row.number);
+            }
             (
-                vec!["Item", "Part number", "Description", "Qty", "Material"]
-                    .into_iter()
-                    .map(str::to_string)
+                table
+                    .bom_options
+                    .columns
+                    .iter()
+                    .map(|column| column.label().to_string())
                     .collect(),
                 items.iter().map(|r| r.cells.clone()).collect(),
             )
@@ -543,16 +632,14 @@ pub fn content(doc: &Document, evaluation: &Evaluation, table: &Table) -> Result
 pub fn pin_item_numbers(doc: &Document, evaluation: &Evaluation, table: &mut Table) -> Result<()> {
     if matches!(table.kind, TableKind::BillOfMaterials) {
         for row in content(doc, evaluation, table)?.items {
-            table.item_numbers.insert(
-                item_key(&row.definition, row.configuration.as_deref()),
-                row.number,
-            );
+            table.item_numbers.insert(row.key, row.number);
         }
     }
     Ok(())
 }
 fn source_key(source: &RowSource) -> Result<String> {
     Ok(match source {
+        RowSource::StockGroup { key, .. } => key.clone(),
         RowSource::CutList {
             configuration,
             member,
@@ -569,7 +656,7 @@ pub fn row_id(table: &Table, key: &str) -> Id {
 pub fn owned_row_ids(table: &Table) -> Vec<Id> {
     if matches!(
         table.kind,
-        TableKind::Holes { .. } | TableKind::WeldmentCutList { .. }
+        TableKind::BillOfMaterials | TableKind::Holes { .. } | TableKind::WeldmentCutList { .. }
     ) {
         table
             .item_numbers
@@ -972,6 +1059,7 @@ fn hole_content(doc: &Document, e: &Evaluation, sheet: &Drawing, table: &Table) 
                 detail,
             ],
             position_mm: Some(center),
+            quantity: None,
         });
     }
     let unit = unit_name(units);
@@ -1239,98 +1327,253 @@ fn cut_list_content(
             }
         }
     }
-    let reservations = allocate(table, &potential)?;
+    // Keep authored member reservations even when a stock group is temporarily
+    // absent, while current grouped rows retain all of their exact occurrences.
+    let mut reservations = allocate(table, &potential)?;
+    let rows = crate::manufacturing::native_cut_list_for_drawing(
+        &scoped,
+        e,
+        &represented,
+        sources,
+        10000,
+    )?;
+    let groups = crate::cut_list::group(&scoped, e, rows, &table.cut_list_options)?;
+    let current_sources: Vec<_> = groups
+        .iter()
+        .map(|group| RowSource::StockGroup {
+            key: group.key.clone(),
+            sources: group.sources.clone(),
+        })
+        .collect();
+    let mut reserved_table = table.clone();
+    reserved_table.item_numbers = reservations;
+    reservations = allocate(&reserved_table, &current_sources)?;
+    let first_sources: Vec<_> = groups
+        .iter()
+        .filter_map(|group| group.sources.first().cloned())
+        .collect();
+    let positions = crate::cut_list::source_points(&scoped, e, &first_sources)?;
     let mut entries = vec![];
-    // Source properties and quantities use assembled placements, even for an exploded sheet.
-    for row in
-        crate::manufacturing::native_cut_list_for_drawing(&scoped, e, &represented, sources, 10000)?
-    {
-        let Some(member) = row.member_reference else {
-            continue;
-        };
-        let output = NodeRef {
-            definition: row.definition.clone(),
-            node: row.feature.clone(),
-        };
-        admit_rows(entries.len(), 1, 10000)?;
-        let source = RowSource::CutList {
-            output,
-            configuration: row.configuration.clone(),
-            member,
-        };
-        let key = source_key(&source)?;
-        let number = *reservations.get(&key).ok_or_else(|| {
-            invalid("Current cut-list member is missing from its stable source reservation")
-        })?;
-        let section = row
-            .section
-            .as_ref()
-            .and_then(|s| {
-                doc.parts.get(&s.definition).and_then(|p| {
-                    p.features
-                        .iter()
-                        .find(|f| f.id == s.node)
-                        .map(|f| f.name.clone())
-                        .or_else(|| p.sketches.get(&s.node).map(|s| s.name.clone()))
-                })
-            })
-            .unwrap_or_else(|| {
-                row.section
-                    .as_ref()
-                    .map(|s| s.node.clone())
-                    .unwrap_or_default()
-            });
-        let angle = |v: Option<f64>| -> Result<String> {
-            let v =
-                v.ok_or_else(|| invalid("A native cut-list member has no resolved end angle"))?;
-            if !v.is_finite() {
-                return Err(invalid("A native cut-list angle is nonfinite"));
-            }
-            Ok(format!("{:.*}", *precision, v.to_degrees()))
-        };
-        entries.push(SourceRow {
-            key,
+    for group in groups {
+        let number = reservations[&group.key];
+        let mut cells = crate::cut_list::cells(
+            &group,
+            &table.cut_list_options.columns,
             number,
-            source,
-            cells: vec![
-                number.to_string(),
-                row.description,
-                section,
-                size(row.length_mm, units, *precision)?,
-                angle(row.start_cut_angle_rad)?,
-                angle(row.end_cut_angle_rad)?,
-                row.quantity.to_string(),
-                row.material,
-            ],
-            position_mm: None,
+            *units,
+            *precision,
+        );
+        // Display authored profile names, retaining the portable source refs in
+        // the row contract rather than exposing opaque IDs as the primary UI.
+        for (index, column) in table.cut_list_options.columns.iter().enumerate() {
+            if *column == crate::cut_list::Column::Section
+                && let Some(section) = &group.row.section
+                && let Some(part) = doc.parts.get(&section.definition)
+                && let Some(name) = part
+                    .features
+                    .iter()
+                    .find(|f| f.id == section.node)
+                    .map(|f| &f.name)
+                    .or_else(|| part.sketches.get(&section.node).map(|s| &s.name))
+            {
+                cells[index] = name.clone();
+            }
+        }
+        let position_mm = group
+            .sources
+            .first()
+            .and_then(|source| positions.get(source))
+            .copied();
+        entries.push(SourceRow {
+            key: group.key.clone(),
+            number,
+            source: RowSource::StockGroup {
+                key: group.key,
+                sources: group.sources,
+            },
+            cells,
+            position_mm,
+            quantity: Some(group.quantity),
         });
     }
-    if entries
-        .iter()
-        .map(|r| &r.key)
-        .collect::<BTreeSet<_>>()
-        .len()
-        != entries.len()
-    {
-        return Err(crate::CadError::Unsupported("A cut-list table cannot merge independent visible branches of the same native member lineage; select one output or place separate tables".into()));
-    }
     let unit = unit_name(units);
-    Ok(source_content(
-        table,
-        vec![
-            "Item".into(),
-            "Member".into(),
-            "Section".into(),
-            format!("Developed / stock ({unit})"),
-            "Start (deg)".into(),
-            "Finish (deg)".into(),
-            "Qty".into(),
-            "Material".into(),
-        ],
-        entries,
-        reservations,
-    ))
+    let headers = table
+        .cut_list_options
+        .columns
+        .iter()
+        .map(|column| match column {
+            crate::cut_list::Column::Length
+            | crate::cut_list::Column::BendRadius
+            | crate::cut_list::Column::StockWidth
+            | crate::cut_list::Column::StockHeight
+            | crate::cut_list::Column::Thickness => format!("{} ({unit})", column.label()),
+            crate::cut_list::Column::StartCutAngle
+            | crate::cut_list::Column::EndCutAngle
+            | crate::cut_list::Column::BendSweep => format!("{} (deg)", column.label()),
+            _ => column.label().to_string(),
+        })
+        .collect();
+    Ok(source_content(table, headers, entries, reservations))
 }
+/// Follow the same drawn occurrence placement as reference-based dimensions,
+/// including a saved exploded state. Manufacturing quantities stay assembled.
+pub fn balloon_source_point(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    source: &crate::cut_list::Source,
+) -> Result<[f64; 3]> {
+    let scoped = crate::drawing::scoped_document(doc, e, sheet);
+    let point = crate::cut_list::source_point(&scoped, e, source)?;
+    let instance = crate::configuration::placed_parts(&scoped, Some(&e.assemblies))?
+        .into_iter()
+        .find(|instance| {
+            instance.path == source.occurrence_path
+                && instance.definition == source.output.definition
+                && instance.configuration == source.configuration
+        })
+        .ok_or_else(|| invalid("Balloon source occurrence/configuration is absent"))?;
+    let original = nalgebra::Matrix4::from_fn(|row, column| instance.matrix[row][column]);
+    let local = original
+        .try_inverse()
+        .ok_or_else(|| invalid("Balloon occurrence has a singular placement"))?
+        * nalgebra::Vector4::new(point[0], point[1], point[2], 1.);
+    let (_, matrix) = crate::drawing::table_placement(
+        doc,
+        e,
+        sheet,
+        &source.output.definition,
+        &source.occurrence_path,
+    )?;
+    let drawn = nalgebra::Matrix4::from_fn(|row, column| matrix[row][column]) * local;
+    if !drawn.iter().all(|coordinate| coordinate.is_finite()) || (drawn.w - 1.).abs() > 1e-8 {
+        return Err(invalid(
+            "Balloon source produced an invalid paper-view placement",
+        ));
+    }
+    Ok([drawn.x, drawn.y, drawn.z])
+}
+pub fn reference_occurrence(reference: &crate::drawing::PointReference) -> (&str, &[Id]) {
+    use crate::drawing::{CurveReference, PointReference};
+    match reference {
+        PointReference::SketchPoint {
+            sketch,
+            instance_path,
+            ..
+        } => (&sketch.definition, instance_path),
+        PointReference::EdgePoint {
+            edge,
+            instance_path,
+            ..
+        } => (&edge.producer.definition, instance_path),
+        PointReference::FaceOrigin {
+            face,
+            instance_path,
+            ..
+        } => (&face.producer.definition, instance_path),
+        PointReference::CurveCenter { curve } => match curve.as_ref() {
+            CurveReference::SketchMember {
+                sketch,
+                instance_path,
+                ..
+            } => (&sketch.definition, instance_path),
+            CurveReference::ModelEdge {
+                edge,
+                instance_path,
+                ..
+            } => (&edge.producer.definition, instance_path),
+        },
+    }
+}
+pub fn reference_matches_source(
+    reference: &crate::drawing::PointReference,
+    source: &crate::cut_list::Source,
+) -> bool {
+    let (definition, path) = reference_occurrence(reference);
+    definition == source.output.definition && path == source.occurrence_path
+}
+pub fn reference_matches_item(
+    doc: &Document,
+    reference: &crate::drawing::PointReference,
+    item: &Item,
+) -> bool {
+    let (definition, path) = reference_occurrence(reference);
+    item.occurrences.iter().any(|occurrence| {
+        if doc.assemblies.contains_key(&item.definition) {
+            path.starts_with(&occurrence.path)
+        } else {
+            path == occurrence.path && definition == item.definition
+        }
+    })
+}
+pub fn row_contains_source(row: &SourceRow, source: &crate::cut_list::Source) -> bool {
+    match &row.source {
+        RowSource::StockGroup { sources, .. } => sources.contains(source),
+        RowSource::CutList {
+            output,
+            configuration,
+            member,
+        } => {
+            output == &source.output
+                && configuration == &source.configuration
+                && member == &source.member
+        }
+        _ => false,
+    }
+}
+pub fn row_quantity(row: &SourceRow) -> usize {
+    row.quantity.unwrap_or(1)
+}
+pub fn auto_cut_list_balloons(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    table: &Table,
+    view: &str,
+) -> Result<Vec<crate::drawing::Annotation>> {
+    if !matches!(table.kind, TableKind::WeldmentCutList { .. }) {
+        return Err(invalid(
+            "Auto cut-list balloons require a native weldment cut-list table",
+        ));
+    }
+    if !crate::drawing::view_keys(sheet)
+        .iter()
+        .any(|key| key == view)
+    {
+        return Err(invalid("Choose a present drawing view"));
+    }
+    let content = content_for_sheet(doc, e, sheet, table)?;
+    let mut balloons = vec![];
+    for row in content.entries {
+        if sheet.entities.iter().any(|entity|matches!(&entity.kind,crate::drawing::AnnotationKind::CutListBalloon{table:existing,row_key,..} if existing==&table.id&&row_key==&row.key)) {continue;}
+        let RowSource::StockGroup { sources, .. } = &row.source else {
+            continue;
+        };
+        let source = sources
+            .first()
+            .ok_or_else(|| invalid("A current stock row has no exact source occurrence"))?
+            .clone();
+        let point = balloon_source_point(doc, e, sheet, &source)?;
+        balloons.push(crate::drawing::Annotation {
+            id: crate::id(),
+            view: view.into(),
+            offset_mm: [20., 15. + (balloons.len() % 5) as f64 * 8.],
+            leader_points_mm: vec![],
+            kind: crate::drawing::AnnotationKind::CutListBalloon {
+                target: crate::drawing::Anchor {
+                    point,
+                    reference: None,
+                },
+                table: table.id.clone(),
+                row_key: row.key,
+                source,
+                show_quantity: true,
+            },
+        });
+    }
+    Ok(balloons)
+}
+
 pub fn content_for_sheet(
     doc: &Document,
     evaluation: &Evaluation,
@@ -1382,7 +1625,9 @@ pub fn reconcile_reservations(doc: &mut Document) -> Result<()> {
     if !doc.drawings.iter().flat_map(|s| &s.tables).any(|t| {
         matches!(
             t.kind,
-            TableKind::Holes { .. } | TableKind::WeldmentCutList { .. }
+            TableKind::BillOfMaterials
+                | TableKind::Holes { .. }
+                | TableKind::WeldmentCutList { .. }
         )
     }) {
         return Ok(());
@@ -1394,7 +1639,9 @@ pub fn reconcile_reservations(doc: &mut Document) -> Result<()> {
         if !sheet.tables.iter().any(|t| {
             matches!(
                 t.kind,
-                TableKind::Holes { .. } | TableKind::WeldmentCutList { .. }
+                TableKind::BillOfMaterials
+                    | TableKind::Holes { .. }
+                    | TableKind::WeldmentCutList { .. }
             )
         }) {
             continue;
@@ -1410,6 +1657,31 @@ pub fn reconcile_reservations(doc: &mut Document) -> Result<()> {
             validate(table)?;
             let mut sources = vec![];
             match &table.kind {
+                TableKind::BillOfMaterials => {
+                    let mut source_scope = doc.clone();
+                    source_scope.root = sheet.definition.clone();
+                    let rows = crate::bom::rows(&source_scope, &table.bom_options)?;
+                    let mut numbers = table.item_numbers.clone();
+                    let mut next = numbers.values().copied().max().unwrap_or(0);
+                    let mut order = table.row_order.clone();
+                    let mut seen: BTreeSet<_> = order.iter().cloned().collect();
+                    for row in rows {
+                        if !numbers.contains_key(&row.key) {
+                            next = next
+                                .checked_add(1)
+                                .ok_or_else(|| invalid("BOM numbering exceeds the native range"))?;
+                            numbers.insert(row.key.clone(), next);
+                        }
+                        if seen.insert(row.key.clone()) {
+                            order.push(row.key);
+                        }
+                    }
+                    if numbers.len() > MAX_RESERVATIONS {
+                        return Err(invalid("BOM reservations exceed their bounded limit"));
+                    }
+                    updates.push((sheet_index, table_index, numbers, order));
+                    continue;
+                }
                 TableKind::Holes {
                     features,
                     configuration,
@@ -1592,17 +1864,240 @@ fn cell_lines(value: &str, width: f64, size: f64) -> Vec<String> {
     }
     lines
 }
+/// Lay out full rows using exactly the same wrapping and row-height rules as
+/// final vectors. Every page is emitted by drawing::sheets; no clipping occurs.
+pub fn paginate(
+    doc: &Document,
+    evaluation: &Evaluation,
+    sheet: &Drawing,
+    table: &mut Table,
+    first_page: u32,
+) -> Result<()> {
+    if first_page > 1023 {
+        return Err(invalid("At most 1024 pages are supported"));
+    }
+    let content = content_for_sheet(doc, evaluation, sheet, table)?;
+    let bounds = crate::drawing::paper_bounds(sheet);
+    let position = table.position_mm;
+    let max_y = if sheet.format.is_some() {
+        bounds[1][1] - 8.
+    } else {
+        sheet.paper_mm[1] - 16.
+    };
+    let width: f64 = table.column_widths_mm.iter().sum();
+    if position[0] < bounds[0][0]
+        || position[1] < bounds[0][1]
+        || position[0] + width > bounds[1][0]
+    {
+        return Err(invalid(
+            "Move or resize the table to fit the paper width before paginating",
+        ));
+    }
+    let height = |row: &[String]| -> f64 {
+        table.row_height_mm.max(
+            row.iter()
+                .zip(&table.column_widths_mm)
+                .map(|(cell, width)| cell_lines(cell, *width, table.text_size_mm).len())
+                .max()
+                .unwrap_or(1) as f64
+                * table.text_size_mm
+                * 1.4
+                + 2.,
+        )
+    };
+    let overhead = table.row_height_mm + height(&content.headers);
+    let available = max_y - position[1];
+    if !available.is_finite() || overhead >= available {
+        return Err(invalid(
+            "Table title and headers do not fit this paper position",
+        ));
+    }
+    let mut segments = vec![];
+    let mut start = 0;
+    let mut used = overhead;
+    let mut page = first_page;
+    for (index, row) in content.rows.iter().enumerate() {
+        let row_height = height(row);
+        if overhead + row_height > available {
+            return Err(invalid(
+                "A wrapped table row is taller than a complete page; widen its columns or reduce text size",
+            ));
+        }
+        if used + row_height > available {
+            segments.push(Segment {
+                id: crate::id(),
+                page,
+                start_row: start,
+                row_count: Some(index - start),
+                position_mm: position,
+                repeat_header: true,
+            });
+            start = index;
+            used = overhead;
+            page += 1;
+            if page > 1023 {
+                return Err(invalid("Table pagination exceeds 1024 pages"));
+            }
+        }
+        used += row_height;
+    }
+    segments.push(Segment {
+        id: crate::id(),
+        page,
+        start_row: start,
+        row_count: None,
+        position_mm: position,
+        repeat_header: true,
+    });
+    // Preserve presentation identities for pages that remain after repagination.
+    for segment in &mut segments {
+        if let Some(old) = table
+            .segments
+            .iter()
+            .find(|old| old.page == segment.page && old.start_row == segment.start_row)
+        {
+            segment.id = old.id.clone();
+        }
+    }
+    table.segments = segments;
+    Ok(())
+}
+pub fn page_count(sheet: &Drawing) -> u32 {
+    sheet
+        .tables
+        .iter()
+        .flat_map(|t| &t.segments)
+        .map(|s| s.page)
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+fn validate_segments(table: &Table, rows: usize) -> Result<()> {
+    if table.segments.is_empty() {
+        return Ok(());
+    }
+    let mut next = 0;
+    for (i, segment) in table.segments.iter().enumerate() {
+        if segment.start_row != next
+            || (segment.row_count.is_none() && i + 1 != table.segments.len())
+        {
+            return Err(invalid(
+                "Table segments must cover every ordered row once in consecutive ranges; only the last may include remaining rows",
+            ));
+        }
+        let count = segment.row_count.unwrap_or(rows.saturating_sub(next));
+        next = next
+            .checked_add(count)
+            .ok_or_else(|| invalid("Segment range exceeds the native row bound"))?;
+        if next > rows || (count == 0 && rows != 0) {
+            return Err(invalid(
+                "A table split references absent rows; repaginate after removing source rows",
+            ));
+        }
+    }
+    if next != rows {
+        return Err(invalid(
+            "Table splits must include every current row; repaginate the table",
+        ));
+    }
+    Ok(())
+}
+pub fn geometries_for_page(
+    doc: &Document,
+    evaluation: &Evaluation,
+    sheet: &Drawing,
+    table: &Table,
+    page: u32,
+) -> Result<Vec<TableGeometry>> {
+    let content = content_for_sheet(doc, evaluation, sheet, table)?;
+    validate_segments(table, content.rows.len())?;
+    if table.segments.is_empty() {
+        return if page == 0 {
+            Ok(vec![geometry_rows(
+                sheet,
+                table,
+                table.position_mm,
+                content.headers,
+                content.rows,
+                None,
+            )?])
+        } else {
+            Ok(vec![])
+        };
+    }
+    table
+        .segments
+        .iter()
+        .filter(|segment| segment.page == page)
+        .map(|segment| {
+            let end = segment.start_row
+                + segment
+                    .row_count
+                    .unwrap_or(content.rows.len() - segment.start_row);
+            geometry_rows(
+                sheet,
+                table,
+                segment.position_mm,
+                if segment.repeat_header {
+                    content.headers.clone()
+                } else {
+                    vec![]
+                },
+                content.rows[segment.start_row..end].to_vec(),
+                Some(segment.id.clone()),
+            )
+        })
+        .collect()
+}
+/// Compatibility aggregate: only the source page's split segments. Layout uses
+/// geometries_for_page so separate portions reserve separate rectangles.
 pub fn geometry(
     doc: &Document,
     evaluation: &Evaluation,
     sheet: &Drawing,
     table: &Table,
 ) -> Result<TableGeometry> {
-    let content = content_for_sheet(doc, evaluation, sheet, table)?;
-    let mut rows = vec![content.headers];
-    rows.extend(content.rows);
+    let geometries = geometries_for_page(doc, evaluation, sheet, table, 0)?;
+    let mut bounds = [[f64::INFINITY; 2], [f64::NEG_INFINITY; 2]];
+    let mut primitives = vec![];
+    for geometry in geometries {
+        for (corner, values) in bounds.iter_mut().enumerate() {
+            for (axis, value) in values.iter_mut().enumerate() {
+                *value = if corner == 0 {
+                    value.min(geometry.bounds_mm[corner][axis])
+                } else {
+                    value.max(geometry.bounds_mm[corner][axis])
+                };
+            }
+        }
+        primitives.extend(geometry.primitives);
+    }
+    if primitives.is_empty() {
+        bounds = [table.position_mm; 2];
+    }
+    Ok(TableGeometry {
+        primitives,
+        bounds_mm: bounds,
+        reserve_space: table.reserve_space,
+        segment: None,
+    })
+}
+fn geometry_rows(
+    sheet: &Drawing,
+    table: &Table,
+    position: [f64; 2],
+    headers: Vec<String>,
+    cells: Vec<Vec<String>>,
+    segment: Option<Id>,
+) -> Result<TableGeometry> {
+    let mut rows = if headers.is_empty() {
+        vec![]
+    } else {
+        vec![headers]
+    };
+    rows.extend(cells);
     let width: f64 = table.column_widths_mm.iter().sum();
-    let min = table.position_mm;
+    let min = position;
     let bounds = crate::drawing::paper_bounds(sheet);
     let max_y = if sheet.format.is_some() {
         bounds[1][1] - 8.
@@ -1694,6 +2189,7 @@ pub fn geometry(
         primitives: out,
         bounds_mm: [min, max],
         reserve_space: table.reserve_space,
+        segment,
     })
 }
 
@@ -1701,11 +2197,17 @@ pub fn semantic_elements(
     sheet: &Drawing,
     state: &str,
 ) -> Vec<crate::presentation::SemanticElement> {
-    sheet.tables.iter().map(|table| crate::presentation::SemanticElement {
+    let mut elements:Vec<_> = sheet.tables.iter().map(|table| crate::presentation::SemanticElement {
         id:table.id.clone(), role:"drawing-table".into(), label:table.title.clone(), value:None,
         state:state.into(), commands:vec!["drawing.sheet-edit".into()], relationships:vec![sheet.id.clone(),sheet.definition.clone()],
-        data:serde_json::json!({"contract":"tcad.drawing-tables","version":CONTRACT_VERSION,"sheet_id":sheet.id,"table_id":table.id,"source":table,"paper_units":"mm","editable":true,"bom_scope":"grouped_part_and_configuration","numbering":"saved_source_reservations","ordering":"saved_source_keys_then_reserved_number","hole_scope":"designed_features_solved_positions_one_occurrence_orthographic_datum","cut_list_scope":"native_evaluated_members_configured_material_assembled_quantity"}),
-    }).collect()
+        data:serde_json::json!({"contract":"tcad.drawing-tables","version":CONTRACT_VERSION,"sheet_id":sheet.id,"table_id":table.id,"source":table,"paper_units":"mm","editable":true,"bom_scope":table.bom_options.mode,"bom_grouping":table.bom_options.grouping,"stock_grouping":table.cut_list_options.grouping,"page_count":page_count(sheet),"numbering":"saved_source_reservations","ordering":"saved_source_keys_then_reserved_number","hole_scope":"designed_features_solved_positions_one_occurrence_orthographic_datum","cut_list_scope":"native_member_and_accessory_occurrences_configured_material_finish_and_assembled_quantity"}),
+    }).collect();
+    for table in &sheet.tables {
+        for segment in &table.segments {
+            elements.push(crate::presentation::SemanticElement {id:segment.id.clone(),role:"drawing-table-segment".into(),label:format!("{} · page {}",table.title,segment.page+1),value:Some(format!("Rows {}–{}",segment.start_row+1,segment.row_count.map(|count|(segment.start_row+count).to_string()).unwrap_or_else(||"last".into()))),state:state.into(),commands:vec!["drawing.sheet-edit".into()],relationships:vec![sheet.id.clone(),table.id.clone()],data:serde_json::json!({"contract":"tcad.drawing-tables","version":CONTRACT_VERSION,"sheet_id":sheet.id,"table_id":table.id,"segment":segment,"paper_units":"mm","editable_fields":["page","position_mm","repeat_header"]})});
+        }
+    }
+    elements
 }
 pub fn evaluated_semantic_rows(
     doc: &Document,
@@ -1714,6 +2216,32 @@ pub fn evaluated_semantic_rows(
 ) -> Vec<crate::presentation::SemanticElement> {
     let mut elements = vec![];
     for sheet in &doc.drawings {
+        for table in sheet
+            .tables
+            .iter()
+            .filter(|table| matches!(table.kind, TableKind::BillOfMaterials))
+        {
+            let current = evaluation.and_then(|e| content_for_sheet(doc, e, sheet, table).ok());
+            let active: BTreeMap<_, _> = current
+                .as_ref()
+                .map(|content| {
+                    content
+                        .items
+                        .iter()
+                        .map(|row| (row.key.as_str(), row))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut keys: BTreeSet<_> = table.item_numbers.keys().cloned().collect();
+            keys.extend(active.keys().map(|key| key.to_string()));
+            for key in keys {
+                let row = active.get(key.as_str()).copied();
+                let number = row
+                    .map(|row| row.number)
+                    .or_else(|| table.item_numbers.get(&key).copied());
+                elements.push(crate::presentation::SemanticElement {id:row_id(table,&key),role:"drawing-table-row".into(),label:format!("BOM item {}",number.unwrap_or(0)),value:row.map(|row|row.cells.join(" · ")),state:if row.is_some(){state}else if current.is_some(){"suppressed"}else{"unavailable"}.into(),commands:vec!["drawing.sheet-edit".into()],relationships:vec![sheet.id.clone(),table.id.clone()].into_iter().chain(row.map(|row|row.definition.clone())).collect(),data:serde_json::json!({"contract":"tcad.drawing-tables","version":CONTRACT_VERSION,"sheet_id":sheet.id,"table_id":table.id,"key":key,"number":number,"definition":row.map(|row|&row.definition),"configuration":row.map(|row|&row.configuration),"depth":row.map(|row|row.depth),"occurrences":row.map(|row|&row.occurrences),"cells":row.map(|row|&row.cells),"reserved":true,"active":row.is_some(),"editable_fields":["number"]})});
+            }
+        }
         for table in sheet.tables.iter().filter(|t| {
             matches!(
                 t.kind,
@@ -1746,6 +2274,18 @@ pub fn evaluated_semantic_rows(
                             vec![sheet.id.clone(), table.id.clone(), feature.node.clone()]
                                 .into_iter()
                                 .chain(point.iter().cloned())
+                                .collect()
+                        }
+                        RowSource::StockGroup { sources, .. } => {
+                            vec![sheet.id.clone(), table.id.clone()]
+                                .into_iter()
+                                .chain(sources.iter().flat_map(|source| {
+                                    [
+                                        source.output.node.clone(),
+                                        source.member.group.node.clone(),
+                                        source.member.member.clone(),
+                                    ]
+                                }))
                                 .collect()
                         }
                         RowSource::CutList { output, member, .. } => vec![

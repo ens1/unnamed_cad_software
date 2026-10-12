@@ -2,7 +2,7 @@ use crate::*;
 use bevy_egui::{EguiContexts, egui};
 use cad_core::{
     commands::Command,
-    persistence::{FileStore, ProjectStore, atomic_write},
+    persistence::{FileStore, ProjectStore},
     presentation::{Region, SemanticElement},
     version_control::{Git, VersionControl},
     *,
@@ -252,7 +252,7 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
             .sketch
             .as_ref()
             .is_some_and(|s| s.drag.is_some() || s.edit.is_some());
-        if crate::assembly_motion_ui::cancel_drag(w) {
+        if crate::drawing_interaction_ui::escape(w) || crate::assembly_motion_ui::cancel_drag(w) {
             ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
             });
@@ -286,7 +286,9 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
     }
     if shortcuts.3 && !ctx.egui_wants_keyboard_input() {
         w.selection_popup = None;
-        if w.sketch.is_some() {
+        if crate::drawing_interaction_ui::active(w) {
+            crate::drawing_interaction_ui::escape(w);
+        } else if w.sketch.is_some() {
             crate::sketch::undo_point(w);
         } else if w.tool_checkpoint.is_some() {
             w.cancel_tool();
@@ -320,7 +322,11 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
         w.open_editor("commands");
     }
     if shortcuts.6 && !ctx.egui_wants_keyboard_input() {
-        viewport::fit(w, shortcuts.4);
+        if w.dialog.as_deref() == Some("drawings") {
+            crate::drawing_interaction_ui::action(w, "drawing.interact-fit", None);
+        } else {
+            viewport::fit(w, shortcuts.4);
+        }
     }
     w.peek = shortcuts.7;
 }
@@ -653,6 +659,7 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
             context.texture,
             ui.max_rect(),
             context.viewport_index,
+            &context.region.id,
         )
     });
     registry.register("assembly-editor", |ui, w, _| assembly_editor(ui, w));
@@ -768,6 +775,13 @@ pub(crate) fn semantic_element(
         });
         return;
     }
+    if matches!(
+        element.role.as_str(),
+        "production-field" | "production-action"
+    ) {
+        crate::production_ui::semantic_control(ui, w, element);
+        return;
+    }
     if element.role == "navigation-preference" {
         crate::navigation::semantic_control(ui, w, element);
         return;
@@ -862,6 +876,12 @@ pub(crate) fn semantic_element(
     }
 }
 pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
+    if crate::drawing_interaction_ui::active(w)
+        && !matches!(command, "draft.cancel" | "operation.cancel" | "tool.cancel")
+    {
+        w.status = "Finish or cancel the paper gesture before using another command".into();
+        return;
+    }
     if crate::settings::action(w, command) {
         return;
     }
@@ -880,10 +900,17 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         }
         return;
     }
+    if command == "production.action" {
+        if let Err(error) = crate::production_ui::dispatch(w, element) {
+            w.status = error.to_string();
+        }
+        return;
+    }
     if crate::reference_repair_ui::action(w, command, Some(&element.data))
         || crate::sketch_relations_ui::semantic_action(w, element, command)
         || crate::feature_order_ui::action(w, command, Some(&element.data))
         || crate::operation_editor_ui::action(w, command, Some(&element.data))
+        || crate::drawing_interaction_ui::action(w, command, Some(&element.data))
         || crate::drawing_editor_ui::action(w, command, Some(&element.data))
         || crate::assembly_motion_ui::action(w, command, Some(&element.data))
         || crate::assembly_tools_ui::action(w, command, Some(&element.data))
@@ -1046,6 +1073,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     setter,
                     "operation-editor"
                         | "drawing-editor"
+                        | "drawing-interaction"
+                        | "production"
                         | "configuration-dimension"
                         | "assembly-weld"
                         | "assembly-copy"
@@ -1247,7 +1276,9 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     || crate::assembly_welds_ui::field_is_invalid(w, element)
                     || crate::operation_editor_ui::field_is_invalid(w, element)
                     || crate::drawing_editor_ui::field_is_invalid(w, element)
-                    || crate::configuration_ui::field_is_invalid(w, element);
+                    || crate::drawing_interaction_ui::field_is_invalid(w, element)
+                    || crate::configuration_ui::field_is_invalid(w, element)
+                    || crate::production_ui::field_is_invalid(w, element);
                 let text = w.fields.entry(key).or_insert(current.clone());
                 let editor = if element.data.get("multiline").and_then(Value::as_bool) == Some(true)
                 {
@@ -1322,6 +1353,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         crate::assembly_welds_ui::field_error(w, element, error.clone());
         crate::operation_editor_ui::field_error(w, element, error.clone());
         crate::drawing_editor_ui::field_error(w, element, error.clone());
+        crate::drawing_interaction_ui::field_error(w, element, error.clone());
+        crate::production_ui::record_field_error(w, element, error.clone());
         crate::configuration_ui::field_error(w, element, error.clone());
         crate::appearances_ui::field_error(w, element, error);
     }
@@ -1333,6 +1366,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::appearances_ui::field_error(w, element, None);
                 crate::operation_editor_ui::field_error(w, element, None);
                 crate::drawing_editor_ui::field_error(w, element, None);
+                crate::drawing_interaction_ui::field_error(w, element, None);
+                crate::production_ui::record_field_error(w, element, None);
                 crate::configuration_ui::field_error(w, element, None);
             }
             Err(error) => {
@@ -1342,6 +1377,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::appearances_ui::field_error(w, element, Some(error.to_string()));
                 crate::operation_editor_ui::field_error(w, element, Some(error.to_string()));
                 crate::drawing_editor_ui::field_error(w, element, Some(error.to_string()));
+                crate::drawing_interaction_ui::field_error(w, element, Some(error.to_string()));
+                crate::production_ui::record_field_error(w, element, Some(error.to_string()));
                 crate::configuration_ui::field_error(w, element, Some(error.to_string()));
             }
         }
@@ -1379,6 +1416,7 @@ fn model_view(
     texture: egui::TextureId,
     r: egui::Rect,
     index: usize,
+    viewport_id: &str,
 ) {
     if index == 0 {
         let scale = ui.ctx().pixels_per_point();
@@ -1393,7 +1431,7 @@ fn model_view(
             .fit_to_exact_size(r.size())
             .sense(egui::Sense::click_and_drag()),
     );
-    if crate::drawing_ui::preview(w, ui, r) {
+    if crate::drawing_ui::preview(w, ui, r, &response, viewport_id) {
         return;
     }
     let toolbar = crate::presentation_controls::overlay_rect_state(
@@ -1661,6 +1699,12 @@ fn reference_repair_blocks(w: &mut Workspace, command: &str) -> bool {
 }
 
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if crate::drawing_interaction_ui::active(w)
+        && !matches!(cmd, "draft.cancel" | "operation.cancel" | "tool.cancel")
+    {
+        w.status = "Finish or cancel the paper gesture before using another command".into();
+        return;
+    }
     if crate::settings::action(w, cmd) {
         return;
     }
@@ -1674,6 +1718,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || crate::selection_ui::set_action(w, cmd)
         || crate::feature_order_ui::action(w, cmd, None)
         || crate::operation_editor_ui::action(w, cmd, None)
+        || crate::drawing_interaction_ui::action(w, cmd, None)
         || crate::drawing_editor_ui::action(w, cmd, None)
         || crate::assembly_motion_ui::action(w, cmd, None)
         || crate::assembly_tools_ui::action(w, cmd, None)
@@ -1942,6 +1987,12 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         "file.export" => export(w, false),
         "file.export-flat-pattern" => export_format(w, "flat-pattern-dxf", "flat-pattern.dxf"),
         "file.export-cutlist" => export_format(w, "cutlist", "cutlist.csv"),
+        "file.export-bom" => export_format(w, "bom", "bom.csv"),
+        "production.edit" => {
+            if let Err(error) = crate::production_ui::begin(w) {
+                w.status = error.to_string();
+            }
+        }
         "file.release" => export(w, true),
         "part.new" => new_part(w),
         "sketch.new" => {
@@ -1975,7 +2026,13 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
             w.requested = None;
             w.status = "Restarting geometry evaluation".into();
         }
-        "viewport.fit" => viewport::fit(w, false),
+        "viewport.fit" => {
+            if w.dialog.as_deref() == Some("drawings") {
+                crate::drawing_interaction_ui::action(w, "drawing.interact-fit", None);
+            } else {
+                viewport::fit(w, false);
+            }
+        }
         "selection.isolate" => w.isolate(),
         _ => w.status = format!("Unknown command: {cmd}"),
     }
@@ -3520,41 +3577,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::mate_ui::show(ui, w, &assembly_id);
 }
 fn bom(ui: &mut egui::Ui, w: &mut Workspace) {
-    let doc = w.session.visible();
-    if let Ok(rows) = cad_core::manufacturing::bom(doc) {
-        egui::ScrollArea::both().show(ui, |ui| {
-            egui::Grid::new("bom").striped(true).show(ui, |ui| {
-                for heading in [
-                    "Part number",
-                    "Description",
-                    "Material",
-                    "Quantity",
-                    "Configuration",
-                ] {
-                    ui.strong(heading);
-                }
-                ui.end_row();
-                for r in rows {
-                    ui.label(r.part_number);
-                    ui.label(r.description);
-                    ui.label(r.material);
-                    ui.label(r.quantity.to_string());
-                    ui.label(r.configuration.unwrap_or_default());
-                    ui.end_row();
-                }
-            });
-        });
-    }
-    if ui.button("Export committed BOM").clicked()
-        && let Some(path) = rfd::FileDialog::new().set_file_name("bom.csv").save_file()
-    {
-        match cad_core::manufacturing::csv(&w.session.committed)
-            .and_then(|s| atomic_write(&path, s.as_bytes()))
-        {
-            Ok(()) => w.status = format!("Wrote {}", path.display()),
-            Err(e) => w.status = e.to_string(),
-        }
-    }
+    crate::production_ui::show(ui, w);
 }
 fn materials(ui: &mut egui::Ui, w: &mut Workspace) {
     let doc = w.session.visible().clone();

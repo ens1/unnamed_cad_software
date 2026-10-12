@@ -751,6 +751,10 @@ fn load_files(
 }
 
 fn install(w: &mut Workspace, candidate: Candidate, paths: BTreeSet<PathBuf>) {
+    // A layout reload invalidates paper hit geometry; retain earlier drawing edits.
+    if crate::drawing_interaction_ui::active(w) {
+        crate::drawing_interaction_ui::escape(w);
+    }
     crate::assembly_motion_ui::finish_drag(w);
     // Release the obsolete hit geometry while keeping the current pending edit.
     crate::sketch_handles::end(w);

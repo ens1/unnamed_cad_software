@@ -859,7 +859,13 @@ fn retarget_drawing_occurrence(
             {
                 reaches = true;
             }
-            let Some(i) = a.instances.get(key) else {
+            let Some(i) = a.instances.get(key).or_else(|| {
+                a.component_patterns
+                    .values()
+                    .flat_map(|pattern| &pattern.occurrences)
+                    .find(|reservation| &reservation.instance == key)
+                    .and_then(|reservation| a.instances.get(&reservation.seed))
+            }) else {
                 return false;
             };
             definition = &i.definition;
@@ -883,10 +889,14 @@ fn retarget_drawing_occurrence(
         let Some(reference) = source else {
             return Ok(false);
         };
+        if let PointReference::CurveCenter { curve: reference } = reference {
+            return curve(reference, reaches, ids);
+        }
         let path = match reference {
             PointReference::SketchPoint { instance_path, .. }
             | PointReference::EdgePoint { instance_path, .. }
             | PointReference::FaceOrigin { instance_path, .. } => instance_path,
+            PointReference::CurveCenter { .. } => unreachable!("Curve center is handled above"),
         };
         if !reaches(path) {
             return Ok(false);
@@ -909,14 +919,288 @@ fn retarget_drawing_occurrence(
         remap(source, ids)?;
         Ok(true)
     }
+    fn split_reservation(
+        table: &mut crate::drawing_tables::Table,
+        old: &str,
+        new: &str,
+        retain_old: bool,
+        targets: &mut std::collections::BTreeMap<Id, Id>,
+    ) -> Result<()> {
+        if old == new {
+            return Ok(());
+        }
+        let mut next = table.item_numbers.values().max().copied().unwrap_or(0);
+        let number = if let Some(number) = table.item_numbers.get(new).copied() {
+            number
+        } else if !retain_old && let Some(number) = table.item_numbers.get(old).copied() {
+            number
+        } else {
+            next = next.checked_add(1).ok_or_else(|| {
+                CadError::Invalid("Manufacturing row numbering exceeds the native range".into())
+            })?;
+            next
+        };
+        if !retain_old {
+            table.item_numbers.remove(old);
+            for key in &mut table.row_order {
+                if key == old {
+                    *key = new.into();
+                }
+            }
+            targets.insert(
+                crate::drawing_tables::row_id(table, old),
+                crate::drawing_tables::row_id(table, new),
+            );
+        }
+        table.item_numbers.insert(new.into(), number);
+        if !table.row_order.iter().any(|key| key == new) {
+            table.row_order.push(new.into());
+        }
+        let mut used = std::collections::BTreeSet::new();
+        table.row_order.retain(|key| used.insert(key.clone()));
+        Ok(())
+    }
+    fn retained_definition(
+        assemblies: &std::collections::BTreeMap<Id, Assembly>,
+        root: &str,
+        wanted: &str,
+    ) -> bool {
+        let mut pending = vec![root];
+        let mut visited = std::collections::BTreeSet::new();
+        while let Some(definition) = pending.pop() {
+            if definition == wanted {
+                return true;
+            }
+            if !visited.insert(definition) {
+                continue;
+            }
+            if let Some(assembly) = assemblies.get(definition) {
+                let generated = crate::component_pattern::generated(assembly);
+                // Suppression, exclusion and pattern count do not retire source
+                // occurrences. Generated records are copies of retained seeds;
+                // ignore their possibly stale prepared definition and walk the
+                // ordinary seed occurrences, including nested pattern chains.
+                pending.extend(
+                    assembly
+                        .instances
+                        .values()
+                        .filter(|instance| !generated.contains(&instance.id))
+                        .map(|instance| instance.definition.as_str()),
+                );
+            }
+        }
+        false
+    }
     let mut ids = nodes.clone();
     ids.insert(old.into(), new.into());
     let assemblies = document.assemblies.clone();
+    let before = document.clone();
+    let mut after = before.clone();
+    after
+        .assemblies
+        .get_mut(assembly)
+        .and_then(|assembly| assembly.instances.get_mut(instance))
+        .ok_or_else(|| CadError::Invalid("Unique manufacturing occurrence is missing".into()))?
+        .definition = new.into();
     let mut row_targets = std::collections::BTreeMap::new();
     for sheet in &mut document.drawings {
         let root = sheet.definition.clone();
         let reaches = |path: &[Id]| path_enters(&assemblies, &root, path, assembly, instance);
+        let mut scoped_before = before.clone();
+        scoped_before.root = root.clone();
+        let mut scoped_after = after.clone();
+        scoped_after.root = root.clone();
+        let before_occurrences = scoped_before.placed_parts()?;
+        let after_occurrences = scoped_after.placed_parts()?;
+        let retains_old_definition = retained_definition(&after.assemblies, &root, old);
+        let affected = before_occurrences
+            .iter()
+            .any(|occurrence| reaches(&occurrence.path));
+        let mut manufacturing_keys =
+            std::collections::BTreeMap::<Id, std::collections::BTreeMap<String, String>>::new();
         for table in &mut sheet.tables {
+            if affected
+                && matches!(
+                    table.kind,
+                    crate::drawing_tables::TableKind::BillOfMaterials
+                )
+            {
+                let old_rows = crate::bom::rows(&scoped_before, &table.bom_options)?;
+                let new_rows = crate::bom::rows(&scoped_after, &table.bom_options)?;
+                let mut next = table.item_numbers.values().max().copied().unwrap_or(0);
+                for row in &old_rows {
+                    if !table.item_numbers.contains_key(&row.key) {
+                        next = next.checked_add(1).ok_or_else(|| {
+                            CadError::Invalid("BOM numbering exceeds the native range".into())
+                        })?;
+                        table.item_numbers.insert(row.key.clone(), next);
+                    }
+                }
+                for row in old_rows.iter().filter(|row| row.definition == old) {
+                    let paths = row
+                        .occurrences
+                        .iter()
+                        .filter(|occurrence| reaches(&occurrence.path))
+                        .map(|occurrence| &occurrence.path)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    if paths.is_empty() {
+                        continue;
+                    }
+                    let successors = new_rows
+                        .iter()
+                        .filter(|row| {
+                            row.definition == new
+                                && row
+                                    .occurrences
+                                    .iter()
+                                    .any(|occurrence| paths.contains(&occurrence.path))
+                        })
+                        .collect::<Vec<_>>();
+                    if successors.len() != 1 {
+                        return Err(CadError::Invalid(
+                            "Unique BOM occurrence has ambiguous successor row grouping".into(),
+                        ));
+                    }
+                    let successor = &successors[0].key;
+                    split_reservation(
+                        table,
+                        &row.key,
+                        successor,
+                        retains_old_definition
+                            || new_rows.iter().any(|candidate| candidate.key == row.key),
+                        &mut row_targets,
+                    )?;
+                    manufacturing_keys
+                        .entry(table.id.clone())
+                        .or_default()
+                        .insert(row.key.clone(), successor.clone());
+                }
+            }
+            if affected
+                && let crate::drawing_tables::TableKind::WeldmentCutList {
+                    scope,
+                    configuration,
+                    sources,
+                    ..
+                } = &mut table.kind
+            {
+                let retain_old = retains_old_definition;
+                let in_scope = scope == &root || scope == old;
+                // A table restricted to one named part configuration cannot
+                // express two definitions after a split. Retain that explicit
+                // scope; its affected balloon reports a reattachment diagnostic.
+                let can_expand = scope == &root || configuration.is_none() || !retain_old;
+                if in_scope && can_expand {
+                    if scope == old {
+                        if retain_old {
+                            if sources.is_empty()
+                                && let Some(part) = before.parts.get(old)
+                            {
+                                sources.extend(
+                                    part.features
+                                        .iter()
+                                        .filter(|feature| {
+                                            part.outputs.contains(&feature.id)
+                                                && matches!(
+                                                    feature.operation,
+                                                    crate::Operation::Weldment { .. }
+                                                )
+                                        })
+                                        .map(|feature| part.reference(&feature.id)),
+                                );
+                                // A configured suppression can expose an earlier
+                                // native carrier than the saved base frontier.
+                                // Keep both source choices so scope expansion
+                                // does not erase the currently represented stock.
+                                let configurations = before_occurrences
+                                    .iter()
+                                    .filter(|occurrence| occurrence.definition == old)
+                                    .map(|occurrence| occurrence.configuration.clone())
+                                    .collect::<std::collections::BTreeSet<_>>();
+                                for configuration in configurations {
+                                    let configured_part = crate::configuration::effective_part(
+                                        &scoped_before,
+                                        old,
+                                        configuration.as_deref(),
+                                    )?;
+                                    sources.extend(
+                                        configured_part
+                                            .features
+                                            .iter()
+                                            .filter(|feature| {
+                                                !feature.suppressed
+                                                    && configured_part.outputs.contains(&feature.id)
+                                                    && matches!(
+                                                        feature.operation,
+                                                        crate::Operation::Weldment { .. }
+                                                    )
+                                            })
+                                            .map(|feature| configured_part.reference(&feature.id)),
+                                    );
+                                }
+                            }
+                            *scope = root.clone();
+                            *configuration = None;
+                        } else {
+                            *scope = new.into();
+                        }
+                    }
+                    let mut additions = vec![];
+                    for source in sources.iter_mut().filter(|source| source.definition == old) {
+                        let mut replacement = source.clone();
+                        remap(&mut replacement, &ids)?;
+                        if retain_old {
+                            additions.push(replacement);
+                        } else {
+                            *source = replacement;
+                        }
+                    }
+                    sources.extend(additions);
+                    sources.sort();
+                    sources.dedup();
+                    let keys = table.item_numbers.keys().cloned().collect::<Vec<_>>();
+                    for key in keys {
+                        let Ok(value) = serde_json::from_str::<serde_json::Value>(&key) else {
+                            continue;
+                        };
+                        let member = value.get("member").or_else(|| value.get("source"));
+                        let is_owned = member
+                            .and_then(|member| member.get("group"))
+                            .and_then(|group| group.get("definition"))
+                            .and_then(serde_json::Value::as_str)
+                            == Some(old);
+                        if !is_owned {
+                            continue;
+                        }
+                        let configured = value
+                            .get("configuration")
+                            .and_then(serde_json::Value::as_str);
+                        if value.get("kind").and_then(serde_json::Value::as_str) == Some("cut_list")
+                            && !before_occurrences.iter().any(|occurrence| {
+                                occurrence.definition == old
+                                    && occurrence.configuration.as_deref() == configured
+                                    && reaches(&occurrence.path)
+                            })
+                        {
+                            continue;
+                        }
+                        let replacement =
+                            crate::library::remap_manufacturing_row_key(&key, &ids, true)?;
+                        let remaining = retains_old_definition
+                            || after_occurrences.iter().any(|occurrence| {
+                                occurrence.definition == old
+                                    && !occurrence.bom_excluded
+                                    && (configured.is_none()
+                                        || occurrence.configuration.as_deref() == configured)
+                            });
+                        split_reservation(table, &key, &replacement, remaining, &mut row_targets)?;
+                        manufacturing_keys
+                            .entry(table.id.clone())
+                            .or_default()
+                            .insert(key, replacement);
+                    }
+                }
+            }
             let retarget = if let crate::drawing_tables::TableKind::Holes {
                 features,
                 instance_path,
@@ -967,10 +1251,50 @@ fn retarget_drawing_occurrence(
         for annotation in &mut sheet.entities {
             match &mut annotation.kind {
                 AnnotationKind::Balloon {
-                    target, definition, ..
+                    target,
+                    table,
+                    row_key,
+                    definition,
+                    configuration,
+                    ..
                 } => {
                     if point(&mut target.reference, &reaches, &ids)? && definition == old {
+                        let key = row_key.clone().unwrap_or_else(|| {
+                            crate::bom::item_key(definition, configuration.as_deref())
+                        });
+                        if let Some(replacement) = manufacturing_keys
+                            .get(table)
+                            .and_then(|keys| keys.get(&key))
+                        {
+                            *row_key = Some(replacement.clone());
+                        }
                         *definition = new.into();
+                    }
+                }
+                AnnotationKind::CutListBalloon {
+                    target,
+                    table,
+                    row_key,
+                    source,
+                    ..
+                } => {
+                    point(&mut target.reference, &reaches, &ids)?;
+                    if reaches(&source.occurrence_path) {
+                        if let Some(replacement) = manufacturing_keys
+                            .get(table)
+                            .and_then(|keys| keys.get(row_key))
+                        {
+                            *row_key = replacement.clone();
+                        } else if row_key.starts_with('{') {
+                            let next =
+                                crate::library::remap_manufacturing_row_key(row_key, &ids, true)?;
+                            // Geometry-only stock groups retain the same key;
+                            // identity-bound groups use a new reserved row.
+                            if next == *row_key {
+                                *row_key = next;
+                            }
+                        }
+                        remap(source, &ids)?;
                     }
                 }
                 AnnotationKind::Leader { target, .. }

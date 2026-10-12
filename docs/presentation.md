@@ -469,3 +469,6 @@ center recognition remains in the geometry worker; cached guides retain only one
 analytic frame, occurrence, styling and semantic description. Transient semantic
 snapshots reject changed evaluation or view contexts. Duplicated custom viewport
 regions do not clear the pointer-owning region's cache.
+
+
+Drawing paper editing publishes `drawing-interaction-field` and `drawing-paper-item` descriptors and source-owned handles. `drawing.interact-*` commands and the `drawing-interaction` value adapter resolve current document/sheet/page/editor identity before mutating source. Production controls publish their own semantic values/actions, with configured BOM/stock content independent of widget placement. Paper camera zoom/pan and selection are disposable presentation state; paper dimensions, printed scales, alignment relationships and leader offsets are drawing intent. See [paper interaction](drawing-paper-interaction.md) and [production controls](drawing-production.md).

@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod symbols;
 pub use symbols::*;
 
-pub const CONTRACT_VERSION: u32 = 5;
-pub const FORMAT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 6;
+pub const FORMAT_VERSION: u32 = 2;
 pub const VIEW_KEYS: [&str; 6] = [
     "front",
     "top",
@@ -132,12 +132,33 @@ impl Default for SheetFormat {
         }
     }
 }
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewAlignmentAxis {
+    #[default]
+    Free,
+    /// Keep projected model origins on the same horizontal paper line.
+    Horizontal,
+    /// Keep projected model origins on the same vertical paper line.
+    Vertical,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ViewAlignment {
+    pub parent: String,
+    #[serde(default)]
+    pub axis: ViewAlignmentAxis,
+    #[serde(default)]
+    pub shared_scale: bool,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct ViewLayout {
     /// Bottom-left X/Y and width/height of the projection area, in paper mm.
     pub rect_mm: [f64; 4],
     /// Paper mm / model mm. None retains fitting to the saved rectangle.
     pub scale: Option<f64>,
+    /// Saved source relationship; resolved positions are disposable projection data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alignment: Option<ViewAlignment>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SheetTemplate {
@@ -163,7 +184,7 @@ pub enum DimensionKind {
     Angular,
     HoleCallout,
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Units {
     #[default]
@@ -191,6 +212,8 @@ pub enum Tolerance {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PointReference {
+    /// A proved circular carrier center; it follows the native curve and occurrence.
+    CurveCenter { curve: Box<CurveReference> },
     SketchPoint {
         sketch: NodeRef,
         point: Id,
@@ -351,9 +374,19 @@ pub enum AnnotationKind {
         second: Box<Anchor>,
         extension_mm: f64,
     },
+    CutListBalloon {
+        target: Anchor,
+        table: Id,
+        row_key: String,
+        source: crate::cut_list::Source,
+        #[serde(default)]
+        show_quantity: bool,
+    },
     Balloon {
         target: Anchor,
         table: Id,
+        #[serde(default)]
+        row_key: Option<String>,
         definition: Id,
         #[serde(default)]
         configuration: Option<Id>,
@@ -372,6 +405,7 @@ impl AnnotationKind {
             Self::CenterMark { .. } => "Center mark",
             Self::CenterLine { .. } => "Centerline",
             Self::Balloon { .. } => "BOM balloon",
+            Self::CutListBalloon { .. } => "Cut-list balloon",
         }
     }
 }
@@ -381,6 +415,9 @@ pub struct Annotation {
     pub view: String,
     #[serde(default)]
     pub offset_mm: [f64; 2],
+    /// Ordered paper-mm elbow offsets relative to the current model attachment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub leader_points_mm: Vec<[f64; 2]>,
     pub kind: AnnotationKind,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -404,12 +441,35 @@ pub enum Primitive {
     },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ViewProjection {
+    pub rect_mm: [f64; 4],
+    pub model_center: [f64; 2],
+    pub scale: f64,
+}
+impl ViewProjection {
+    pub fn paper_point(&self, key: &str, point: [f64; 3]) -> Result<[f64; 2]> {
+        let point = project(key, point)?;
+        Ok(std::array::from_fn(|axis| {
+            self.rect_mm[axis]
+                + self.rect_mm[axis + 2] * 0.5
+                + (point[axis] - self.model_center[axis]) * self.scale
+        }))
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sheet {
     pub id: Id,
     pub name: String,
     pub paper_mm: [f64; 2],
     pub primitives: Vec<Primitive>,
     pub views: BTreeMap<String, ViewLayout>,
+    #[serde(default)]
+    pub projections: BTreeMap<String, ViewProjection>,
+    #[serde(default)]
+    pub groups: Vec<crate::drawing_interaction::PrimitiveGroup>,
+    /// Preview-only diagnostics; production export still rejects these source errors.
+    #[serde(default)]
+    pub diagnostics: BTreeMap<Id, String>,
 }
 #[derive(Clone)]
 struct Placement {
@@ -642,15 +702,25 @@ pub fn linked_text(doc: &Document, sheet: &Drawing, value: &LinkedText) -> Resul
                 .ok_or_else(|| invalid("Title material is missing"))?
         }
         LinkedText::SheetName => sheet.name.clone(),
-        LinkedText::SheetNumber => format!(
-            "{} / {}",
-            doc.drawings
+        LinkedText::SheetNumber => {
+            let (master, page) = sheet
+                .id
+                .rsplit_once("::continuation:")
+                .and_then(|(id, index)| index.parse::<u32>().ok().map(|page| (id, page)))
+                .unwrap_or((&sheet.id, 0));
+            let preceding: u32 = doc
+                .drawings
                 .iter()
-                .position(|d| d.id == sheet.id)
-                .map(|i| i + 1)
-                .unwrap_or(1),
-            doc.drawings.len().max(1)
-        ),
+                .take_while(|d| d.id != master)
+                .map(crate::drawing_tables::page_count)
+                .sum();
+            let total: u32 = doc
+                .drawings
+                .iter()
+                .map(crate::drawing_tables::page_count)
+                .sum();
+            format!("{} / {}", preceding + page + 1, total.max(1))
+        }
         LinkedText::SourceRevision => doc.revision.to_string(),
         LinkedText::SourceFingerprint => doc.fingerprint(),
     };
@@ -669,6 +739,7 @@ fn owned_ids(sheet: &Drawing) -> BTreeSet<Id> {
         .chain(sheet.tables.iter().flat_map(|t| {
             std::iter::once(t.id.clone())
                 .chain(crate::drawing_tables::owned_row_ids(t))
+                .chain(t.segments.iter().map(|segment| segment.id.clone()))
                 .chain(match &t.kind {
                     crate::drawing_tables::TableKind::Revisions { rows } => {
                         rows.iter().map(|r| r.id.clone()).collect::<Vec<_>>()
@@ -697,7 +768,7 @@ fn guard_retired(doc: &Document, owner: &str, retired: &BTreeSet<Id>) -> Result<
         .iter()
         .filter(|s| s.id != owner)
         .flat_map(|s| &s.entities)
-        .any(|a| matches!(&a.kind,AnnotationKind::Balloon{table,..} if retired.contains(table)))
+        .any(|a| matches!(&a.kind,AnnotationKind::Balloon{table,..}|AnnotationKind::CutListBalloon{table,..} if retired.contains(table)))
     {
         return Err(invalid(
             "A retired table is referenced by a balloon on another sheet",
@@ -713,6 +784,14 @@ pub fn validate_document(doc: &Document) -> Result<()> {
         for table in &sheet.tables {
             crate::drawing_tables::validate_sources(doc, table)?;
         }
+        let mut source_scope = doc.clone();
+        source_scope.root = sheet.definition.clone();
+        for entity in &sheet.entities {
+            if let AnnotationKind::CutListBalloon { source, .. } = &entity.kind {
+                crate::cut_list::validate_source(&source_scope, source)?;
+            }
+        }
+
         if !doc.parts.contains_key(&sheet.definition)
             && !doc.assemblies.contains_key(&sheet.definition)
         {
@@ -822,6 +901,9 @@ pub fn duplicate_sheet(doc: &mut Document, key: &str, name: String) -> Result<Id
         let next = crate::id();
         tables.insert(table.id.clone(), next.clone());
         table.id = next;
+        for segment in &mut table.segments {
+            segment.id = crate::id();
+        }
         if let crate::drawing_tables::TableKind::Revisions { rows } = &mut table.kind {
             for row in rows {
                 row.id = crate::id();
@@ -830,7 +912,9 @@ pub fn duplicate_sheet(doc: &mut Document, key: &str, name: String) -> Result<Id
     }
     for annotation in &mut sheet.entities {
         annotation.id = crate::id();
-        if let AnnotationKind::Balloon { table, .. } = &mut annotation.kind {
+        if let AnnotationKind::Balloon { table, .. }
+        | AnnotationKind::CutListBalloon { table, .. } = &mut annotation.kind
+        {
             *table = tables
                 .get(table)
                 .cloned()
@@ -867,6 +951,16 @@ pub fn set_views(sheet: &mut Drawing, views: Vec<String>) -> Result<()> {
             "Move or delete dimensions and annotations before removing their view",
         ));
     }
+    if sheet.view_layouts.values().any(|layout| {
+        layout
+            .alignment
+            .as_ref()
+            .is_some_and(|alignment| !views.contains(&alignment.parent))
+    }) {
+        return Err(invalid(
+            "Break or reparent aligned views before removing their parent view",
+        ));
+    }
     sheet.views = views;
     sheet
         .view_layouts
@@ -887,7 +981,7 @@ impl SheetTemplate {
         }
     }
     pub fn validate(&self) -> Result<()> {
-        if self.version != FORMAT_VERSION
+        if !(1..=FORMAT_VERSION).contains(&self.version)
             || self.name.trim().is_empty()
             || !text_valid(&self.name)
             || self.views.is_empty()
@@ -977,7 +1071,7 @@ fn exploded_stage<'a>(
         invalid("Exploded view has no evaluated stage")
     })?))
 }
-fn sheet_instances(
+pub(crate) fn sheet_instances(
     doc: &Document,
     e: &Evaluation,
     sheet: &Drawing,
@@ -1172,7 +1266,7 @@ fn resolve_edge<'a>(
     }
     Ok((candidates[0], place))
 }
-fn curve_point(curve: &crate::sketch_edit::Curve3, t: f64) -> Result<[f64; 3]> {
+pub(crate) fn curve_point(curve: &crate::sketch_edit::Curve3, t: f64) -> Result<[f64; 3]> {
     let xy = crate::sketch_edit::Curve2 {
         control_points: curve.control_points.iter().map(|p| [p[0], p[1]]).collect(),
         weights: curve.weights.clone(),
@@ -1198,6 +1292,7 @@ pub fn point(
         return Ok(fallback);
     };
     match reference {
+        PointReference::CurveCenter { curve } => Ok(circular(doc, e, sheet, curve)?.center),
         PointReference::SketchPoint {
             sketch,
             point,
@@ -1534,6 +1629,23 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
             ));
         }
     }
+    validate_view_relationships(sheet)?;
+    let pages: BTreeSet<_> = sheet
+        .tables
+        .iter()
+        .flat_map(|table| &table.segments)
+        .map(|segment| segment.page)
+        .filter(|page| *page > 0)
+        .collect();
+    if pages
+        .iter()
+        .copied()
+        .ne(1..=pages.last().copied().unwrap_or(0))
+    {
+        return Err(invalid(
+            "Continuation pages must be consecutive; repaginate or move sections to fill absent page offsets",
+        ));
+    }
     let mut datums = std::collections::BTreeSet::new();
     let mut hole_prefixes = BTreeSet::new();
     for table in &sheet.tables {
@@ -1543,6 +1655,11 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
             ));
         }
         crate::drawing_tables::validate(table)?;
+        for segment in &table.segments {
+            if !ids.insert(segment.id.clone()) {
+                return Err(invalid("Table segments need unique sheet-owned identities"));
+            }
+        }
         for row_id in crate::drawing_tables::owned_row_ids(table) {
             if !ids.insert(row_id) {
                 return Err(invalid(
@@ -1591,14 +1708,52 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
         if annotation.id.is_empty()
             || !ids.insert(annotation.id.clone())
             || annotation.offset_mm.iter().any(|v| !v.is_finite())
+            || annotation.leader_points_mm.len() > 64
+            || annotation
+                .leader_points_mm
+                .iter()
+                .flatten()
+                .any(|v| !v.is_finite())
         {
             return Err(invalid(
                 "Annotations require unique identities and finite label offsets",
             ));
         }
+        if !annotation.leader_points_mm.is_empty()
+            && !matches!(
+                annotation.kind,
+                AnnotationKind::Leader { .. }
+                    | AnnotationKind::Datum { .. }
+                    | AnnotationKind::GeometricTolerance { .. }
+                    | AnnotationKind::Balloon { .. }
+                    | AnnotationKind::CutListBalloon { .. }
+            )
+        {
+            return Err(invalid(
+                "Elbow leaders are supported for notes, datums, geometric tolerances and balloons; this symbol has its own fixed routing",
+            ));
+        }
         match &annotation.kind {
             AnnotationKind::SurfaceFinish { symbol, .. } => symbol.validate()?,
             AnnotationKind::WeldSymbol { symbol, .. } => symbol.validate()?,
+            AnnotationKind::CutListBalloon {
+                table,
+                row_key,
+                source,
+                ..
+            } => {
+                let saved = sheet.tables.iter().find(|t| &t.id == table && matches!(t.kind, crate::drawing_tables::TableKind::WeldmentCutList { .. })).ok_or_else(|| invalid("A cut-list balloon must retain its cut-list table; reattach or remove balloons before deleting their table"))?;
+                if row_key.is_empty()
+                    || row_key.len() > 8192
+                    || !saved.item_numbers.contains_key(row_key)
+                    || source.occurrence_path.len() > 256
+                    || source.output.definition != source.member.group.definition
+                {
+                    return Err(invalid(
+                        "Cut-list balloons need a retained row reservation and a portable member/occurrence source",
+                    ));
+                }
+            }
             AnnotationKind::Balloon { table, .. }
                 if !sheet.tables.iter().any(|t| {
                     &t.id == table
@@ -1643,6 +1798,7 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
             AnnotationKind::Leader { target, .. }
             | AnnotationKind::Datum { target, .. }
             | AnnotationKind::Balloon { target, .. }
+            | AnnotationKind::CutListBalloon { target, .. }
             | AnnotationKind::SurfaceFinish { target, .. }
             | AnnotationKind::WeldSymbol { target, .. }
             | AnnotationKind::GeometricTolerance { target, .. } => vec![target],
@@ -1668,6 +1824,80 @@ struct View {
     size: [f64; 2],
     center: [f64; 2],
     scale: f64,
+}
+type PreparedView = (
+    View,
+    Vec<Vec<[f64; 3]>>,
+    Vec<Option<crate::sketch_edit::Curve3>>,
+    String,
+    [f64; 2],
+    [f64; 2],
+);
+fn validate_view_relationships(sheet: &Drawing) -> Result<()> {
+    let keys = view_keys(sheet);
+    for child in &keys {
+        let mut seen = BTreeSet::new();
+        let mut current = child.as_str();
+        while let Some(alignment) = sheet
+            .view_layouts
+            .get(current)
+            .and_then(|layout| layout.alignment.as_ref())
+        {
+            if !keys.contains(&alignment.parent)
+                || !seen.insert(current.to_owned())
+                || alignment.parent == current
+            {
+                return Err(invalid(
+                    "View alignment needs a different existing parent and an acyclic relationship",
+                ));
+            }
+            current = &alignment.parent;
+        }
+    }
+    Ok(())
+}
+fn resolve_view_alignment(
+    sheet: &Drawing,
+    key: &str,
+    prepared: &mut BTreeMap<String, PreparedView>,
+    resolved: &mut BTreeSet<String>,
+) -> Result<()> {
+    if resolved.contains(key) {
+        return Ok(());
+    }
+    if let Some(alignment) = sheet
+        .view_layouts
+        .get(key)
+        .and_then(|layout| layout.alignment.as_ref())
+    {
+        resolve_view_alignment(sheet, &alignment.parent, prepared, resolved)?;
+        let parent = prepared
+            .get(&alignment.parent)
+            .ok_or_else(|| invalid("Missing aligned parent view"))?
+            .0
+            .clone();
+        let child = &mut prepared
+            .get_mut(key)
+            .ok_or_else(|| invalid("Missing aligned child view"))?
+            .0;
+        if alignment.shared_scale {
+            child.scale = parent.scale;
+        }
+        let axis = match alignment.axis {
+            ViewAlignmentAxis::Free => None,
+            ViewAlignmentAxis::Horizontal => Some(1),
+            ViewAlignmentAxis::Vertical => Some(0),
+        };
+        if let Some(axis) = axis {
+            // Align the projected model origin, not the independently fitted bounding-box centers.
+            child.at[axis] = parent.at[axis] + parent.size[axis] * 0.5
+                - parent.center[axis] * parent.scale
+                + child.center[axis] * child.scale
+                - child.size[axis] * 0.5;
+        }
+    }
+    resolved.insert(key.into());
+    Ok(())
 }
 pub(crate) fn project(name: &str, p: [f64; 3]) -> Result<[f64; 2]> {
     Ok(match name {
@@ -2438,6 +2668,74 @@ fn characteristic(out: &mut Vec<Primitive>, at: [f64; 2], kind: &GeometricCharac
         }
     }
 }
+fn balloon(
+    out: &mut Vec<Primitive>,
+    entity: &Annotation,
+    target: [f64; 2],
+    offset: [f64; 2],
+    number: u32,
+    quantity: Option<usize>,
+) -> Result<()> {
+    let at = [target[0] + offset[0], target[1] + offset[1]];
+    let value = number.to_string();
+    let radius = (value.len() as f64 * 0.9 + 1.5).max(3.);
+    let approach = entity
+        .leader_points_mm
+        .last()
+        .map(|offset| [target[0] + offset[0], target[1] + offset[1]])
+        .unwrap_or(target);
+    let delta = [approach[0] - at[0], approach[1] - at[1]];
+    let distance = delta[0].hypot(delta[1]);
+    if distance <= radius + 1e-8 {
+        return Err(invalid(
+            "Move the balloon label away from its attachment point",
+        ));
+    }
+    let rim = [
+        at[0] + delta[0] * radius / distance,
+        at[1] + delta[1] * radius / distance,
+    ];
+    leader_polyline(out, entity, target, rim, true);
+    out.push(Primitive::Circle { center: at, radius });
+    text(
+        out,
+        [at[0] - value.len() as f64 * 0.8, at[1] - 1.],
+        2.7,
+        value,
+    );
+    if let Some(quantity) = quantity {
+        text(
+            out,
+            [at[0] + radius + 1., at[1] - 1.],
+            2.5,
+            format!("{quantity}x"),
+        );
+    }
+    Ok(())
+}
+pub(crate) fn leader_polyline(
+    out: &mut Vec<Primitive>,
+    entity: &Annotation,
+    target: [f64; 2],
+    end: [f64; 2],
+    arrowhead: bool,
+) {
+    let mut points = vec![target];
+    points.extend(
+        entity
+            .leader_points_mm
+            .iter()
+            .map(|p| [target[0] + p[0], target[1] + p[1]]),
+    );
+    points.push(end);
+    if arrowhead {
+        arrow(out, target, points[1]);
+    }
+    out.push(Primitive::Polyline {
+        points,
+        dashed: false,
+    });
+}
 fn annotation(
     doc: &Document,
     e: &Evaluation,
@@ -2469,9 +2767,67 @@ fn annotation(
                 out,
             )?;
         }
+        AnnotationKind::CutListBalloon {
+            target,
+            table,
+            row_key,
+            source,
+            show_quantity,
+        } => {
+            let table = sheet
+                .tables
+                .iter()
+                .find(|t| {
+                    &t.id == table
+                        && matches!(
+                            t.kind,
+                            crate::drawing_tables::TableKind::WeldmentCutList { .. }
+                        )
+                })
+                .ok_or_else(|| invalid("Cut-list balloon requires its source cut-list table"))?;
+            let content = crate::drawing_tables::content_for_sheet(doc, e, sheet, table)?;
+            let row = content
+                .entries
+                .iter()
+                .find(|row| &row.key == row_key)
+                .ok_or_else(|| {
+                    invalid("The cut-list balloon row is no longer active; reattach it explicitly")
+                })?;
+            if !crate::drawing_tables::row_contains_source(row, source) {
+                return Err(invalid(
+                    "Cut-list balloon member/occurrence no longer belongs to its selected row; reattach it explicitly",
+                ));
+            }
+            if target.reference.as_ref().is_some_and(|reference| {
+                !crate::drawing_tables::reference_matches_source(reference, source)
+            }) {
+                return Err(invalid(
+                    "Cut-list balloon attachment belongs to another occurrence; choose a matching stock source or reattach its leader",
+                ));
+            }
+            let point = if target.reference.is_some() {
+                anchor(doc, e, sheet, target)?
+            } else {
+                crate::drawing_tables::balloon_source_point(doc, e, sheet, source)?
+            };
+            let target = view.screen(point)?;
+            balloon(
+                out,
+                entity,
+                target,
+                entity.offset_mm,
+                row.number,
+                if *show_quantity {
+                    Some(crate::drawing_tables::row_quantity(row))
+                } else {
+                    None
+                },
+            )?;
+        }
         AnnotationKind::Balloon {
             target,
             table,
+            row_key,
             definition,
             configuration,
             show_quantity,
@@ -2486,48 +2842,47 @@ fn annotation(
                 .ok_or_else(|| invalid("Balloon requires a BOM table on the same sheet"))?;
             let scoped = scoped_document(doc, e, sheet);
             let content = crate::drawing_tables::content(&scoped, e, table)?;
+            if row_key.is_none()
+                && content
+                    .items
+                    .iter()
+                    .filter(|row| {
+                        &row.definition == definition && &row.configuration == configuration
+                    })
+                    .count()
+                    > 1
+            {
+                return Err(invalid(
+                    "This component appears in multiple hierarchical/finish BOM rows; select an exact row for its balloon",
+                ));
+            }
             let row = content
                 .items
                 .iter()
-                .find(|row| &row.definition == definition && &row.configuration == configuration)
+                .find(|row| {
+                    &row.definition == definition
+                        && &row.configuration == configuration
+                        && row_key.as_ref().is_none_or(|key| key == &row.key)
+                })
                 .ok_or_else(|| {
                     invalid("Balloon component/configuration is absent or excluded from its BOM")
                 })?;
-            let target = view.screen(anchor(doc, e, sheet, target)?)?;
-            let at = [
-                target[0] + entity.offset_mm[0],
-                target[1] + entity.offset_mm[1],
-            ];
-            let value = row.number.to_string();
-            let radius = (value.len() as f64 * 0.9 + 1.5).max(3.);
-            let delta = [target[0] - at[0], target[1] - at[1]];
-            let distance = delta[0].hypot(delta[1]);
-            if distance <= radius + 1e-8 {
+            if target.reference.as_ref().is_some_and(|reference| {
+                !crate::drawing_tables::reference_matches_item(&scoped, reference, row)
+            }) {
                 return Err(invalid(
-                    "Move the balloon label away from its attachment point",
+                    "BOM balloon attachment belongs to another component branch; select a matching row or reattach its leader",
                 ));
             }
-            let rim = [
-                at[0] + delta[0] * radius / distance,
-                at[1] + delta[1] * radius / distance,
-            ];
-            line(out, target, rim);
-            arrow(out, target, rim);
-            out.push(Primitive::Circle { center: at, radius });
-            text(
+            let target = view.screen(anchor(doc, e, sheet, target)?)?;
+            balloon(
                 out,
-                [at[0] - value.len() as f64 * 0.8, at[1] - 1.],
-                2.7,
-                value,
-            );
-            if *show_quantity {
-                text(
-                    out,
-                    [at[0] + radius + 1., at[1] - 1.],
-                    2.5,
-                    format!("{}x", row.quantity),
-                );
-            }
+                entity,
+                target,
+                entity.offset_mm,
+                row.number,
+                show_quantity.then_some(row.quantity),
+            )?;
         }
         AnnotationKind::Leader {
             target,
@@ -2542,7 +2897,7 @@ fn annotation(
                 target[0] + entity.offset_mm[0],
                 target[1] + entity.offset_mm[1],
             ];
-            line(out, target, at);
+            leader_polyline(out, entity, target, at, false);
             if matches!(entity.kind, AnnotationKind::Datum { .. }) {
                 rectangle(
                     out,
@@ -2559,7 +2914,12 @@ fn annotation(
                     dashed: false,
                 });
             } else {
-                arrow(out, target, at);
+                let first = entity
+                    .leader_points_mm
+                    .first()
+                    .map(|p| [target[0] + p[0], target[1] + p[1]])
+                    .unwrap_or(at);
+                arrow(out, target, first);
             }
             for (i, line) in value.lines().enumerate() {
                 text(out, [at[0] + 1., at[1] - i as f64 * 4.], 3., line);
@@ -2598,8 +2958,7 @@ fn annotation(
                 target[0] + entity.offset_mm[0],
                 target[1] + entity.offset_mm[1],
             ];
-            line(out, target, at);
-            arrow(out, target, at);
+            leader_polyline(out, entity, target, at, true);
             rectangle(out, at, [6., 6.]);
             characteristic(out, at, kind);
             let zone = format!("{}{value:.3}", if *diameter { "Ø" } else { "" });
@@ -2718,18 +3077,124 @@ pub fn sheets(doc: &Document, e: &Evaluation) -> Result<Vec<Sheet>> {
     } else {
         doc.drawings.clone()
     };
-    definitions
-        .iter()
-        .map(|sheet| build_sheet(doc, e, sheet))
-        .collect()
+    let mut pages = vec![];
+    for sheet in &definitions {
+        for page in 0..crate::drawing_tables::page_count(sheet) {
+            pages.push(build_sheet_page(doc, e, sheet, page)?);
+        }
+    }
+    Ok(pages)
 }
 pub fn validate_evaluation(doc: &Document, e: &Evaluation) -> Result<()> {
     for sheet in &doc.drawings {
-        build_sheet(doc, e, sheet)?;
+        for page in 0..crate::drawing_tables::page_count(sheet) {
+            build_sheet_page(doc, e, sheet, page)?;
+        }
     }
     Ok(())
 }
+pub fn build_sheet_page(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    page: u32,
+) -> Result<Sheet> {
+    if page == 0 {
+        return build_sheet(doc, e, sheet);
+    }
+    if page >= crate::drawing_tables::page_count(sheet) {
+        return Err(invalid("Requested continuation page is absent"));
+    }
+    build_continuation_sheet(doc, e, sheet, page)
+}
+fn build_continuation_sheet(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    page: u32,
+) -> Result<Sheet> {
+    validate_definition(sheet)?;
+    let mut page_definition = sheet.clone();
+    page_definition.id = format!("{}::continuation:{page}", sheet.id);
+    page_definition.name = format!("{} · continuation {}", sheet.name, page + 1);
+    let mut result = Sheet {
+        id: page_definition.id.clone(),
+        name: page_definition.name.clone(),
+        paper_mm: sheet.paper_mm,
+        primitives: format_geometry(doc, &page_definition)?,
+        views: BTreeMap::new(),
+        projections: BTreeMap::new(),
+        groups: vec![],
+        diagnostics: BTreeMap::new(),
+    };
+    if sheet.format.is_none() {
+        rectangle(
+            &mut result.primitives,
+            [8., 8.],
+            [sheet.paper_mm[0] - 16., sheet.paper_mm[1] - 16.],
+        );
+        text(
+            &mut result.primitives,
+            [12., sheet.paper_mm[1] - 13.],
+            3.5,
+            &page_definition.name,
+        );
+        text(
+            &mut result.primitives,
+            [12., 10.],
+            2.5,
+            format!("Source {} | page {}", sheet.name, page + 1),
+        );
+    }
+    for table in &sheet.tables {
+        for geometry in crate::drawing_tables::geometries_for_page(doc, e, sheet, table, page)? {
+            let primitive_start = result.primitives.len();
+            let primitive_count = geometry.primitives.len();
+            result.primitives.extend(geometry.primitives);
+            result
+                .groups
+                .push(crate::drawing_interaction::PrimitiveGroup {
+                    target: if let Some(segment) = geometry.segment {
+                        crate::drawing_interaction::Target::TableSegment {
+                            table: table.id.clone(),
+                            segment,
+                        }
+                    } else {
+                        crate::drawing_interaction::Target::Table {
+                            id: table.id.clone(),
+                        }
+                    },
+                    view: None,
+                    primitive_start,
+                    primitive_count,
+                });
+        }
+    }
+    Ok(result)
+}
 pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sheet> {
+    build_sheet_mode(doc, e, sheet, false)
+}
+/// Broken associative annotations stay selectable on paper while they are being
+/// repaired. Placeholder vectors are explicitly diagnostic and never exported.
+pub fn build_sheet_preview(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    page: u32,
+) -> Result<Sheet> {
+    if page == 0 {
+        build_sheet_mode(doc, e, sheet, true)
+    } else {
+        build_sheet_page(doc, e, sheet, page)
+    }
+}
+fn build_sheet_mode(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    repair: bool,
+) -> Result<Sheet> {
     validate_definition(sheet)?;
     if sheet.paper_mm.iter().any(|v| !v.is_finite() || *v < 50.) {
         return Err(invalid("Drawing paper dimensions must be at least 50 mm"));
@@ -2740,6 +3205,9 @@ pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sh
         paper_mm: sheet.paper_mm,
         primitives: vec![],
         views: BTreeMap::new(),
+        projections: BTreeMap::new(),
+        groups: vec![],
+        diagnostics: BTreeMap::new(),
     };
     let out = &mut result.primitives;
     if sheet.format.is_some() {
@@ -2756,12 +3224,22 @@ pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sh
     let tables = sheet
         .tables
         .iter()
-        .map(|table| crate::drawing_tables::geometry(doc, e, sheet, table))
-        .collect::<Result<Vec<_>>>()?;
+        .map(|table| {
+            crate::drawing_tables::geometries_for_page(doc, e, sheet, table, 0).map(|geometries| {
+                geometries
+                    .into_iter()
+                    .map(|geometry| (table.id.clone(), geometry))
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
     if let Some(title) = title_bounds(sheet)
         && tables
             .iter()
-            .any(|table| rectangles_overlap(title, table.bounds_mm))
+            .any(|(_, table)| rectangles_overlap(title, table.bounds_mm))
     {
         return Err(invalid(
             "A drawing table overlaps the title block; move the table above or beside it",
@@ -2837,8 +3315,8 @@ pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sh
     };
     let footer_height = tables
         .iter()
-        .filter(|table| table.reserve_space)
-        .map(|table| table.bounds_mm[1][1] + footer_notes_height)
+        .filter(|(_, table)| table.reserve_space)
+        .map(|(_, table)| table.bounds_mm[1][1] + footer_notes_height)
         .fold(footer_base + footer_notes_height, f64::max);
     let cell = if sheet.format.is_some() {
         [
@@ -2861,6 +3339,7 @@ pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sh
         [bounds[0][0], footer_height + 2.],
         [bounds[1][0], footer_height + 2.],
     );
+    let mut prepared = BTreeMap::new();
     for (index, name) in names.iter().enumerate() {
         let mut lines = world.clone();
         let mut view_curves = curves.clone();
@@ -2955,6 +3434,10 @@ pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sh
                 note = "Detail wireframe (clipped to saved paper rectangle)".into();
             }
             if layout.scale.is_some()
+                && !layout
+                    .alignment
+                    .as_ref()
+                    .is_some_and(|alignment| alignment.shared_scale)
                 && name != "detail-front"
                 && ((max[0] - min[0]) * view.scale > view.size[0]
                     || (max[1] - min[1]) * view.scale > view.size[1])
@@ -2970,13 +3453,54 @@ pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sh
                 "A drawing view produced a nonfinite or nonpositive projection scale",
             ));
         }
+        prepared.insert(name.clone(), (view, lines, view_curves, note, min, max));
+    }
+    let mut resolved = BTreeSet::new();
+    for name in &names {
+        resolve_view_alignment(sheet, name, &mut prepared, &mut resolved)?;
+    }
+    for name in &names {
+        let (view, lines, view_curves, note, min, max) = prepared
+            .remove(name)
+            .ok_or_else(|| invalid("Missing prepared view"))?;
+        let [x, y] = view.at;
+        let [width, height] = view.size;
+        if x < bounds[0][0]
+            || y < footer_height + 6.
+            || x + width > bounds[1][0]
+            || y + height + 7. > bounds[1][1]
+        {
+            return Err(invalid(format!(
+                "Aligned view '{name}' falls outside its drawable paper area; move or resize the parent/child view"
+            )));
+        }
+        if name != "detail-front"
+            && ((max[0] - min[0]) * view.scale > width || (max[1] - min[1]) * view.scale > height)
+        {
+            return Err(invalid(format!(
+                "View '{name}' does not fit its inherited scale; enlarge its paper rectangle or release shared scale"
+            )));
+        }
         result.views.insert(
             name.clone(),
             ViewLayout {
-                rect_mm: [view.at[0], view.at[1], view.size[0], view.size[1]],
+                rect_mm: [x, y, width, height],
                 scale: Some(view.scale),
+                alignment: sheet
+                    .view_layouts
+                    .get(name)
+                    .and_then(|layout| layout.alignment.clone()),
             },
         );
+        result.projections.insert(
+            name.clone(),
+            ViewProjection {
+                rect_mm: [x, y, width, height],
+                model_center: view.center,
+                scale: view.scale,
+            },
+        );
+        let view_start = out.len();
         text(out, [view.at[0], view.at[1] + view.size[1] + 4.], 3.5, name);
         text(
             out,
@@ -3083,18 +3607,62 @@ pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sh
             }
         }
         for d in sheet.dimensions.iter().filter(|d| d.view == *name) {
-            dimension(doc, e, sheet, &view, d, out).map_err(|error| {
-                invalid(format!("{} / Dimension {}: {error}", sheet.name, d.id))
-            })?;
+            let start = out.len();
+            if let Err(error) = dimension(doc, e, sheet, &view, d, out) {
+                let message = format!("{} / Dimension {}: {error}", sheet.name, d.id);
+                if !repair {
+                    return Err(invalid(message));
+                }
+                out.truncate(start);
+                let at = view
+                    .screen(d.first)
+                    .unwrap_or([view.at[0] + 4., view.at[1] + 4.]);
+                text(out, at, 2.8, "DIMENSION: REATTACH REFERENCE");
+                result.diagnostics.insert(d.id.clone(), message);
+            }
+            result
+                .groups
+                .push(crate::drawing_interaction::PrimitiveGroup {
+                    target: crate::drawing_interaction::Target::Dimension { id: d.id.clone() },
+                    view: Some(name.clone()),
+                    primitive_start: start,
+                    primitive_count: out.len() - start,
+                });
         }
         for entity in sheet.entities.iter().filter(|entity| entity.view == *name) {
-            annotation(doc, e, sheet, &view, entity, out).map_err(|error| {
-                invalid(format!(
-                    "{} / Annotation {}: {error}",
-                    sheet.name, entity.id
-                ))
-            })?;
+            let start = out.len();
+            if let Err(error) = annotation(doc, e, sheet, &view, entity, out) {
+                let message = format!("{} / Annotation {}: {error}", sheet.name, entity.id);
+                if !repair {
+                    return Err(invalid(message));
+                }
+                out.truncate(start);
+                let at = [
+                    view.at[0] + 4. + entity.offset_mm[0],
+                    view.at[1] + 4. + entity.offset_mm[1],
+                ];
+                text(out, at, 2.8, "ANNOTATION: REATTACH REFERENCE");
+                result.diagnostics.insert(entity.id.clone(), message);
+            }
+            result
+                .groups
+                .push(crate::drawing_interaction::PrimitiveGroup {
+                    target: crate::drawing_interaction::Target::Annotation {
+                        id: entity.id.clone(),
+                    },
+                    view: Some(name.clone()),
+                    primitive_start: start,
+                    primitive_count: out.len() - start,
+                });
         }
+        result
+            .groups
+            .push(crate::drawing_interaction::PrimitiveGroup {
+                target: crate::drawing_interaction::Target::View { key: name.clone() },
+                view: Some(name.clone()),
+                primitive_start: view_start,
+                primitive_count: out.len() - view_start,
+            });
     }
     if sheet.dimensions.iter().any(|d| !names.contains(&d.view))
         || sheet.entities.iter().any(|a| !names.contains(&a.view))
@@ -3134,8 +3702,21 @@ pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sh
             note,
         );
     }
-    for table in tables {
+    for (id, table) in tables {
+        let start = out.len();
         out.extend(table.primitives);
+        result
+            .groups
+            .push(crate::drawing_interaction::PrimitiveGroup {
+                target: if let Some(segment) = table.segment {
+                    crate::drawing_interaction::Target::TableSegment { table: id, segment }
+                } else {
+                    crate::drawing_interaction::Target::Table { id }
+                },
+                view: None,
+                primitive_start: start,
+                primitive_count: out.len() - start,
+            });
     }
     if out.iter().any(|p| match p {
         Primitive::Polyline { points, .. } => points.iter().flatten().any(|v| !v.is_finite()),
@@ -3243,7 +3824,7 @@ pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation
         out.push(crate::presentation::SemanticElement {id:sheet.id.clone(),role:"drawing-sheet".into(),label:sheet.name.clone(),value:Some(format!("Sheet {} / {}",index+1,doc.drawings.len())),state:state.into(),commands,relationships:vec![sheet.definition.clone()].into_iter().chain(sheet.exploded_view.iter().cloned()).collect(),data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"sheet":sheet,"paper_units":"mm","template_contract":"tcad.drawing-sheet-template","template_version":FORMAT_VERSION})});
         out.push(crate::presentation::SemanticElement {id:format!("{}::format",sheet.id),role:"drawing-sheet-format".into(),label:"Sheet format and linked title block".into(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-format-load".into(),"drawing.sheet-template-save".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing-sheet-format","version":FORMAT_VERSION,"sheet_id":sheet.id,"format":sheet.format,"paper_units":"mm","vectors":format_geometry(doc,sheet).ok()})});
         for key in view_keys(sheet) {
-            out.push(crate::presentation::SemanticElement {id:view_id(sheet,&key),role:"drawing-view".into(),label:key.clone(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-preview".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"sheet_id":sheet.id,"view_key":key,"layout":sheet.view_layouts.get(&key),"paper_units":"mm","identity_scope":"sheet","exploded_view":sheet.exploded_view})});
+            out.push(crate::presentation::SemanticElement {id:view_id(sheet,&key),role:"drawing-view".into(),label:key.clone(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-preview".into()],relationships:vec![sheet.id.clone()].into_iter().chain(sheet.view_layouts.get(&key).and_then(|layout|layout.alignment.as_ref()).map(|alignment|view_id(sheet,&alignment.parent))).collect(),data:serde_json::json!({"sheet_id":sheet.id,"view_key":key,"layout":sheet.view_layouts.get(&key),"paper_units":"mm","identity_scope":"sheet","exploded_view":sheet.exploded_view})});
         }
         for cell in sheet
             .format

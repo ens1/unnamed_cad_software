@@ -456,11 +456,10 @@ fn remap_source_inner(
         match key {
             "id" | "definition" | "root" | "configuration" | "parent" | "node" | "material"
             | "finish" | "resource" | "instance" | "relative_to" | "sketch" | "outputs"
-            | "profile_order" | "path" | "instance_path" | "seed" | "seeds" | "mate" | "source"
-            | "sources" | "segments" | "entities" | "point" | "member" | "members" | "points"
-            | "through" | "controls" | "lines" | "trim" | "arc" | "arcs" | "anchor" | "support" => {
-                true
-            }
+            | "profile_order" | "path" | "instance_path" | "occurrence_path" | "parent_path"
+            | "seed" | "seeds" | "mate" | "source" | "sources" | "segments" | "entities"
+            | "point" | "member" | "members" | "points" | "through" | "controls" | "lines"
+            | "trim" | "arc" | "arcs" | "anchor" | "support" => true,
             "base_color" | "normal" | "roughness" | "metallic" | "occlusion" | "height" => {
                 field == "textures" && object.get(key).is_some_and(serde_json::Value::is_string)
             }
@@ -470,9 +469,8 @@ fn remap_source_inner(
                     == Some("placement_pattern")
             }
             "dynamic_excluded" | "target_vertex" | "path_member" | "path_start_vertex"
-            | "vertex" | "start_vertex" | "source_members" | "outer_members" | "region_member" => {
-                true
-            }
+            | "gusset_contour" | "vertex" | "start_vertex" | "source_members" | "outer_members"
+            | "region_member" => true,
             "first" | "second" => {
                 object.contains_key("first_origin") && object.contains_key("second_origin")
             }
@@ -594,7 +592,9 @@ fn remap_source_inner(
                     if !(key == "path" && value.is_string() && child_field == key.as_str()) {
                         walk(&mut value, mapping, child_field, refs, owned_features)?;
                     }
-                    let key = if field == "__feature_dimension_fields" {
+                    let key = if field == "item_numbers" {
+                        remap_manufacturing_row_key(&key, mapping, owned_features)?
+                    } else if field == "__feature_dimension_fields" {
                         key.split('/')
                             .map(|segment| {
                                 let decoded = segment.replace("~1", "/").replace("~0", "~");
@@ -657,8 +657,27 @@ fn remap_source_inner(
                 }
             }
             serde_json::Value::String(text) => {
-                if is_reference && let Some(id) = mapping.get(text) {
-                    *text = id.clone();
+                if matches!(field, "row_order" | "row_key") {
+                    *text = remap_manufacturing_row_key(text, mapping, owned_features)?;
+                    return Ok(());
+                }
+                if is_reference {
+                    if let Some(id) = mapping.get(text) {
+                        *text = id.clone();
+                    } else if !owned_features {
+                        fn member(text: &str, mapping: &BTreeMap<String, String>) -> String {
+                            if let Some(id) = mapping.get(text) {
+                                return id.clone();
+                            }
+                            for prefix in ["gusset-contour-", "legacy-circle-"] {
+                                if let Some(id) = text.strip_prefix(prefix) {
+                                    return format!("{prefix}{}", member(id, mapping));
+                                }
+                            }
+                            text.into()
+                        }
+                        *text = member(text, mapping);
+                    }
                 }
                 for (old, new) in mapping {
                     *text = text.replace(&format!("@{old}::"), &format!("@{new}::"));
@@ -669,6 +688,54 @@ fn remap_source_inner(
         Ok(())
     }
     walk(value, mapping, field, false, owned_features)
+}
+
+/// Saved manufacturing row manifests carry identities explicitly; the
+/// production geometry digest is invariant under ownership changes.
+pub(crate) fn remap_manufacturing_row_key(
+    key: &str,
+    mapping: &BTreeMap<String, String>,
+    owned_features: bool,
+) -> Result<String> {
+    if key.starts_with('{') {
+        let mut value: serde_json::Value = serde_json::from_str(key)?;
+        remap_source_inner(&mut value, mapping, "", owned_features)?;
+        return Ok(serde_json::to_string(&value)?);
+    }
+    // Legacy opaque stock hashes lack a remappable identity manifest. Retain
+    // the reservation; current source validation requires explicit reattachment
+    // when the imported/unique production group cannot prove the same binding.
+    if key.starts_with("stock:") || key.starts_with("bom:") {
+        return Ok(key.into());
+    }
+    let candidates = mapping
+        .iter()
+        .filter_map(|(old, new)| {
+            key.strip_prefix(&format!("{old}@"))
+                .map(|configuration| (new, configuration))
+        })
+        .collect::<Vec<_>>();
+    if candidates.len() > 1 {
+        return Err(CadError::Unsupported(
+            "Ambiguous legacy BOM row identity cannot be safely remapped; reattach this table row"
+                .into(),
+        ));
+    }
+    if let Some((definition, configuration)) = candidates.first() {
+        let configuration = if owned_features {
+            *configuration
+        } else {
+            mapping
+                .get(*configuration)
+                .map(String::as_str)
+                .unwrap_or(configuration)
+        };
+        return Ok(crate::bom::item_key(
+            definition,
+            (!configuration.is_empty()).then_some(configuration),
+        ));
+    }
+    Ok(key.into())
 }
 
 /// Construction roles may embed source identities; they are versioned grammar,

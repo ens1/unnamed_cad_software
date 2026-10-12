@@ -115,11 +115,11 @@ fn choices(values: &[(&str, &str)]) -> Vec<Value> {
         .collect()
 }
 
-struct Fields<'a> {
-    w: &'a Workspace,
-    sheet: &'a Drawing,
+pub(crate) struct Fields<'a> {
+    pub(crate) w: &'a Workspace,
+    pub(crate) sheet: &'a Drawing,
     source: Value,
-    out: Vec<SemanticElement>,
+    pub(crate) out: Vec<SemanticElement>,
     group: String,
 }
 impl<'a> Fields<'a> {
@@ -176,12 +176,13 @@ impl<'a> Fields<'a> {
                         | "datums"
                         | "column_widths_mm"
                         | "row_order"
+                        | "leader_points_mm"
                 );
             }
         }
         (identity.join("/"), json!(address))
     }
-    fn group(&mut self, key: &str, label: &str) {
+    pub(crate) fn group(&mut self, key: &str, label: &str) {
         self.group = key.into();
         let mut data = self.data();
         data["classes"] = json!(["drawing-group", key]);
@@ -250,23 +251,30 @@ impl<'a> Fields<'a> {
         let value = self.source.pointer(path).cloned().unwrap_or(Value::Null);
         self.emit(path, label, value, options, unit);
     }
-    fn text(&mut self, path: &str, label: &str, multiline: bool) {
+    pub(crate) fn text(&mut self, path: &str, label: &str, multiline: bool) {
         self.field(path, label, vec![], None);
         if let Some(e) = self.out.last_mut() {
             e.data["multiline"] = json!(multiline);
         }
     }
-    fn number(&mut self, path: &str, label: &str, unit: &str, min: Option<f64>, max: Option<f64>) {
+    pub(crate) fn number(
+        &mut self,
+        path: &str,
+        label: &str,
+        unit: &str,
+        min: Option<f64>,
+        max: Option<f64>,
+    ) {
         self.field(path, label, vec![], Some(unit));
         if let Some(e) = self.out.last_mut() {
             e.data["minimum"] = json!(min);
             e.data["maximum"] = json!(max);
         }
     }
-    fn toggle(&mut self, path: &str, label: &str) {
+    pub(crate) fn toggle(&mut self, path: &str, label: &str) {
         self.field(path, label, vec![], None);
     }
-    fn select(&mut self, path: &str, label: &str, mut options: Vec<Value>) {
+    pub(crate) fn select(&mut self, path: &str, label: &str, mut options: Vec<Value>) {
         let value = self.source.pointer(path).cloned().unwrap_or(Value::Null);
         if (path.ends_with("/value") || path.ends_with("/tolerance"))
             && let Some(kind) = value.get("kind").and_then(Value::as_str)
@@ -313,7 +321,14 @@ impl<'a> Fields<'a> {
             }
         }
     }
-    fn action(&mut self, key: &str, label: &str, mutation: Value, enabled: bool, reason: &str) {
+    pub(crate) fn action(
+        &mut self,
+        key: &str,
+        label: &str,
+        mutation: Value,
+        enabled: bool,
+        reason: &str,
+    ) {
         let id = self.id(&format!("action/{key}"));
         let available = enabled && self.w.settings.is_none();
         let mut data = self.data();
@@ -332,7 +347,7 @@ impl<'a> Fields<'a> {
             data,
         });
     }
-    fn note(&mut self, key: &str, label: &str, state: &str) {
+    pub(crate) fn note(&mut self, key: &str, label: &str, state: &str) {
         self.out.push(SemanticElement {
             id: self.id(&format!("note/{key}")),
             role: "drawing-editor-help".into(),
@@ -344,7 +359,7 @@ impl<'a> Fields<'a> {
             data: self.data(),
         });
     }
-    fn coordinates(&mut self, path: &str, labels: &[&str], unit: &str) {
+    pub(crate) fn coordinates(&mut self, path: &str, labels: &[&str], unit: &str) {
         for (i, label) in labels.iter().enumerate() {
             self.number(&format!("{path}/{i}"), label, unit, None, None);
         }
@@ -756,12 +771,48 @@ fn view_fields(f: &mut Fields<'_>) {
                 &["Paper X", "Paper Y", "View width", "View height"],
                 "mm",
             );
-            f.optional(
-                &format!("{path}/scale"),
-                "Fixed model-to-paper scale",
-                "scale",
-            );
-            if f.sheet.view_layouts[key].scale.is_some() {
+            let shared_scale = f.sheet.view_layouts[key]
+                .alignment
+                .as_ref()
+                .is_some_and(|alignment| alignment.shared_scale);
+            if !shared_scale {
+                f.optional(
+                    &format!("{path}/scale"),
+                    "Fixed model-to-paper scale",
+                    "scale",
+                );
+            } else {
+                f.note(
+                    &format!("view/{key}/inherited-scale"),
+                    "Model-to-paper scale follows the parent view",
+                    "ready",
+                );
+            }
+            let relationship = format!("{path}/alignment");
+            f.optional(&relationship, "Parent view relationship", "alignment");
+            if let Some(alignment) = &f.sheet.view_layouts[key].alignment {
+                f.select(
+                    &format!("{relationship}/parent"),
+                    "Parent view",
+                    views
+                        .iter()
+                        .filter(|parent| *parent != key)
+                        .map(|parent| choice(parent, parent))
+                        .collect(),
+                );
+                f.select(
+                    &format!("{relationship}/axis"),
+                    "Paper alignment",
+                    choices(&[
+                        ("free", "Free placement"),
+                        ("horizontal", "Horizontal projected origin"),
+                        ("vertical", "Vertical projected origin"),
+                    ]),
+                );
+                f.toggle(&format!("{relationship}/shared_scale"), "Use parent scale");
+                f.note(&format!("view/{key}/relationship-note"), &format!("Aligned to {}. Dragging preserves the saved relationship; disable it for independent placement.", alignment.parent), "ready");
+            }
+            if !shared_scale && f.sheet.view_layouts[key].scale.is_some() {
                 f.number(
                     &format!("{path}/scale"),
                     "Scale (paper/model)",
@@ -1154,6 +1205,7 @@ fn annotation_fields(f: &mut Fields<'_>) {
         ("center_mark", "Center mark"),
         ("center_line", "Centerline"),
         ("balloon", "BOM balloon"),
+        ("cut_list_balloon", "Cut-list balloon"),
         ("surface_finish", "Surface finish"),
         ("weld_symbol", "Weld symbol"),
     ] {
@@ -1292,10 +1344,76 @@ fn annotation_fields(f: &mut Fields<'_>) {
                 Some(1000.),
             );
         }
+        AnnotationKind::CutListBalloon {
+            table,
+            row_key,
+            source,
+            ..
+        } => {
+            f.anchor(&format!("{path}/kind/target"), "Stock-member target");
+            f.select(
+                &format!("{path}/kind/table"),
+                "Cut-list table",
+                f.sheet
+                    .tables
+                    .iter()
+                    .filter(|table| matches!(table.kind, TableKind::WeldmentCutList { .. }))
+                    .map(|table| choice(&table.title, &table.id))
+                    .collect(),
+            );
+            let rows = f
+                .sheet
+                .tables
+                .iter()
+                .find(|item| &item.id == table)
+                .and_then(|table| {
+                    crate::drawing_ui::evaluation(f.w).and_then(|evaluation| {
+                        content_for_sheet(f.w.session.visible(), evaluation, f.sheet, table).ok()
+                    })
+                });
+            let options = rows
+                .map(|content| {
+                    content
+                        .entries
+                        .into_iter()
+                        .flat_map(|row| {
+                            let candidates = match &row.source {
+                                RowSource::StockGroup { sources, .. } => sources.clone(),
+                                _ => vec![],
+                            };
+                            candidates.into_iter().map(move |source| {
+                                choice(
+                                    format!(
+                                        "{} · {}",
+                                        row.number,
+                                        source.occurrence_path.join("/")
+                                    ),
+                                    json!({"row_key":row.key,"source":source}),
+                                )
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            f.emit(
+                &format!("{path}/kind"),
+                "Stock row / occurrence",
+                json!({"row_key":row_key,"source":source}),
+                options,
+                None,
+            );
+            let id = f.id(&format!("{}/stock-source", f.address(&path).0));
+            if let Some(element) = f.out.last_mut() {
+                element.id = id;
+                element.data["compound"] = json!("cut_list_balloon_item");
+            }
+            f.toggle(&format!("{path}/kind/show_quantity"), "Show quantity");
+        }
         AnnotationKind::Balloon {
             table,
             definition,
             configuration,
+            row_key,
             ..
         } => {
             f.anchor(&format!("{path}/kind/target"), "Balloon target");
@@ -1309,11 +1427,11 @@ fn annotation_fields(f: &mut Fields<'_>) {
                     .map(|t| choice(&t.title, &t.id))
                     .collect(),
             );
-            let options=f.sheet.tables.iter().find(|t|&t.id==table).and_then(|table|crate::drawing_ui::evaluation(f.w).and_then(|e|content_for_sheet(f.w.session.visible(),e,f.sheet,table).ok())).map(|content|content.items.into_iter().map(|row|choice(format!("{} · {}",row.number,row.cells.get(1).map(String::as_str).unwrap_or("Component")),json!({"definition":row.definition,"configuration":row.configuration}))).collect()).unwrap_or_default();
+            let options=f.sheet.tables.iter().find(|t|&t.id==table).and_then(|table|crate::drawing_ui::evaluation(f.w).and_then(|e|content_for_sheet(f.w.session.visible(),e,f.sheet,table).ok())).map(|content|content.items.into_iter().map(|row|choice(format!("{} · {}",row.number,row.cells.get(1).map(String::as_str).unwrap_or("Component")),json!({"definition":row.definition,"configuration":row.configuration,"row_key":row.key}))).collect()).unwrap_or_default();
             f.emit(
                 &format!("{path}/kind"),
                 "Component / configuration",
-                json!({"definition":definition,"configuration":configuration}),
+                json!({"definition":definition,"configuration":configuration,"row_key":row_key}),
                 options,
                 None,
             );
@@ -1334,6 +1452,33 @@ fn annotation_fields(f: &mut Fields<'_>) {
             &["Paper offset X", "Paper offset Y"],
             "mm",
         );
+    }
+    if matches!(
+        a.kind,
+        AnnotationKind::Leader { .. }
+            | AnnotationKind::Datum { .. }
+            | AnnotationKind::Balloon { .. }
+            | AnnotationKind::CutListBalloon { .. }
+            | AnnotationKind::GeometricTolerance { .. }
+    ) {
+        f.group("leader-elbows", "Leader elbows");
+        for (elbow, _) in a.leader_points_mm.iter().enumerate() {
+            f.coordinates(
+                &format!("{path}/leader_points_mm/{elbow}"),
+                &["Elbow X from target", "Elbow Y from target"],
+                "mm",
+            );
+            f.action(
+                &format!("annotation/{}/elbow/{elbow}/remove", a.id),
+                "Remove elbow",
+                json!({"kind":"remove","pointer":format!("{path}/leader_points_mm"),"index":elbow}),
+                true,
+                "Close Settings first",
+            );
+        }
+        f.action(&format!("annotation/{}/elbow/add", a.id), "Add elbow",
+            json!({"kind":"append","pointer":format!("{path}/leader_points_mm"),"value":[a.offset_mm[0] * 0.5, a.offset_mm[1] * 0.5]}),
+            a.leader_points_mm.len() < 64, "A leader can have at most 64 elbows");
     }
     f.action(
         &format!("annotation/{}/remove", a.id),
@@ -1423,6 +1568,7 @@ fn table_fields(f: &mut Fields<'_>) {
             Some(1000.),
         );
     }
+    crate::drawing_table_ui::production_fields(f, table, &path);
     match &table.kind {
         TableKind::BillOfMaterials => source_rows(f, table, &path),
         TableKind::Revisions { rows } => {
@@ -1728,13 +1874,7 @@ fn source_rows(f: &mut Fields<'_>, table: &Table, path: &str) {
                 content
                     .items
                     .into_iter()
-                    .map(|row| {
-                        (
-                            item_key(&row.definition, row.configuration.as_deref()),
-                            row.cells,
-                            row.number,
-                        )
-                    })
+                    .map(|row| (row.key.clone(), row.cells, row.number))
                     .collect::<Vec<_>>()
             } else {
                 content
@@ -2005,9 +2145,7 @@ pub fn current_source_is_valid(w: &Workspace) -> bool {
                     .and_then(|e| content_for_sheet(w.session.visible(), e, &staged, table).ok())
                     .is_none_or(|content| {
                         content.entries.iter().any(|entry| entry.key == row)
-                            || content.items.iter().any(|item| {
-                                item_key(&item.definition, item.configuration.as_deref()) == row
-                            })
+                            || content.items.iter().any(|item| item.key == row)
                     });
             }
             let source = json!(staged);
@@ -2105,7 +2243,12 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
                 .join(" ")
         ))
     } else if element.data.get("compound").and_then(Value::as_str) == Some("balloon_item") {
-        Some(json!({"definition":value["definition"],"configuration":value["configuration"]}))
+        Some(
+            json!({"definition":value["definition"],"configuration":value["configuration"],"row_key":value["row_key"]}),
+        )
+    } else if element.data.get("compound").and_then(Value::as_str) == Some("cut_list_balloon_item")
+    {
+        Some(json!({"row_key":value["row_key"],"source":value["source"]}))
     } else if element.data.get("compound").and_then(Value::as_str) == Some("hole_model") {
         Some(value.as_array()?.first()?.get("definition")?.clone())
     } else {
@@ -2152,6 +2295,7 @@ fn default_view(w: &Workspace, sheet: &Drawing, key: &str) -> ViewLayout {
             height,
         ],
         scale: None,
+        alignment: None,
     }
 }
 fn optional_default(
@@ -2175,6 +2319,25 @@ fn optional_default(
             }),
             "title_block" => json!(SheetFormat::default().title_block),
             "scale" => json!(1.),
+            "alignment" => {
+                let child = unescape(path.split('/').nth(2).unwrap_or("front"));
+                let parent = view_keys(sheet)
+                    .into_iter()
+                    .find(|key| key != &child)
+                    .ok_or_else(|| {
+                        invalid("Add another view before creating a parent relationship")
+                    })?;
+                let axis = match (child.as_str(), parent.as_str()) {
+                    ("top", "front") | ("front", "top") => ViewAlignmentAxis::Vertical,
+                    ("right", "front") | ("front", "right") => ViewAlignmentAxis::Horizontal,
+                    _ => ViewAlignmentAxis::Free,
+                };
+                json!(ViewAlignment {
+                    parent,
+                    axis,
+                    shared_scale: true
+                })
+            }
             "view" => json!(default_view(
                 w,
                 sheet,
@@ -2308,6 +2471,16 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
         Some("balloon_item") => {
             set_at(
                 &mut source,
+                &format!("{pointer}/target/reference"),
+                Value::Null,
+            )?;
+            set_at(
+                &mut source,
+                &format!("{pointer}/row_key"),
+                value["row_key"].clone(),
+            )?;
+            set_at(
+                &mut source,
                 &format!("{pointer}/definition"),
                 value["definition"].clone(),
             )?;
@@ -2315,6 +2488,24 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
                 &mut source,
                 &format!("{pointer}/configuration"),
                 value["configuration"].clone(),
+            )?;
+        }
+        Some("cut_list_balloon_item") => {
+            set_at(
+                &mut source,
+                &format!("{pointer}/row_key"),
+                value["row_key"].clone(),
+            )?;
+            set_at(
+                &mut source,
+                &format!("{pointer}/source"),
+                value["source"].clone(),
+            )?;
+            // Changing the stock occurrence must retire an old attachment explicitly.
+            set_at(
+                &mut source,
+                &format!("{pointer}/target/reference"),
+                Value::Null,
             )?;
         }
         Some("hole_model") => {
@@ -2354,6 +2545,18 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
         set_at(&mut source, &format!("{parent}/configuration"), Value::Null)?;
     }
     sheet = serde_json::from_value(source)?;
+    if (pointer.contains("/bom_options/") || pointer.contains("/cut_list_options/"))
+        && let Some(evaluation) = crate::drawing_ui::evaluation(w)
+    {
+        let context = sheet.clone();
+        let index = pointer
+            .split('/')
+            .nth(2)
+            .and_then(|index| index.parse::<usize>().ok());
+        if let Some(table) = index.and_then(|index| sheet.tables.get_mut(index)) {
+            pin_source_rows(w.session.visible(), evaluation, &context, table)?;
+        }
+    }
     if pointer.contains("/item_numbers/") {
         w.fields.insert(
             "drawing-row".into(),
@@ -2471,6 +2674,7 @@ fn create_annotation(w: &Workspace, sheet: &Drawing, kind: &str) -> Result<Annot
             extension_mm: 3.,
         },
         "balloon" => crate::drawing_table_ui::default_balloon(w, sheet, target)?,
+        "cut_list_balloon" => crate::drawing_table_ui::default_cut_list_balloon(w, sheet, target)?,
         "surface_finish" => AnnotationKind::SurfaceFinish {
             target,
             symbol: SurfaceFinish::default(),
@@ -2482,6 +2686,7 @@ fn create_annotation(w: &Workspace, sheet: &Drawing, kind: &str) -> Result<Annot
         _ => return Err(invalid("Unsupported drawing annotation type")),
     };
     Ok(Annotation {
+        leader_points_mm: vec![],
         id: cad_core::id(),
         view: selected_view(sheet),
         offset_mm: [15., 15.],
@@ -2545,6 +2750,11 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
         }
         let mut sheet = crate::drawing_ui::sheet_source(w, &sheet_id)
             .ok_or_else(|| invalid("The drawing sheet no longer exists"))?;
+        if crate::drawing_table_ui::apply_action(w, &mut sheet, mutation)? {
+            validate_definition(&sheet)?;
+            publish(w, sheet);
+            return Ok(());
+        }
         match kind {
             "paper" => sheet.paper_mm = serde_json::from_value(mutation["value"].clone())?,
             "orientation" => sheet.paper_mm.swap(0, 1),
@@ -2629,7 +2839,7 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                     .ok_or_else(|| invalid("Missing table"))?;
                 sheet.tables.retain(|t| t.id != table);
                 sheet.entities.retain(
-                    |a| !matches!(&a.kind,AnnotationKind::Balloon{table:source,..}if source==table),
+                    |a| !matches!(&a.kind,AnnotationKind::Balloon{table:source,..} | AnnotationKind::CutListBalloon{table:source,..} if source==table),
                 );
             }
             "table-refresh" => {

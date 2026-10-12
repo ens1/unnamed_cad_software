@@ -14,6 +14,7 @@ mod contours_ui;
 mod curve_pattern_ui;
 mod direct_edit_ui;
 mod drawing_editor_ui;
+mod drawing_interaction_ui;
 mod drawing_table_ui;
 mod drawing_ui;
 mod exploded_views_ui;
@@ -33,6 +34,7 @@ mod placement_pattern_ui;
 mod presentation_composition;
 mod presentation_controls;
 mod presentation_resources;
+mod production_ui;
 mod reference_curves_ui;
 mod reference_repair_ui;
 mod reference_ui;
@@ -79,7 +81,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/33;solver/tcad-native-lm/15";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/34;solver/tcad-native-lm/15";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -94,6 +96,7 @@ pub struct Workspace {
     pub assembly_motion: Option<assembly_motion_ui::State>,
     pub assembly_copy: Option<assembly_copy_ui::State>,
     pub sketch_analysis: sketch_analysis_ui::State,
+    pub drawing_interaction: drawing_interaction_ui::State,
     pub jobs: background::Jobs,
     pub worker: worker::WorkerClient,
     pub exporter: worker::WorkerClient,
@@ -234,6 +237,7 @@ impl Workspace {
             assembly_motion: None,
             assembly_copy: None,
             sketch_analysis: sketch_analysis_ui::State::default(),
+            drawing_interaction: drawing_interaction_ui::State::default(),
             jobs: background::Jobs::new(),
             worker: worker::WorkerClient::new(),
             exporter: worker::WorkerClient::new(),
@@ -310,6 +314,11 @@ impl Workspace {
         self.session.visible().settings.evaluation_tolerance_mm
     }
     pub fn dispatch(&mut self, c: cad_core::commands::Command) {
+        if drawing_interaction_ui::active(self) {
+            self.status =
+                "Finish or cancel the current paper gesture before changing source".into();
+            return;
+        }
         if self.settings.is_some() {
             self.status = "Close Settings before editing the model".into();
             return;
@@ -330,6 +339,16 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !production_ui::current_source_is_valid(self) {
+            self.status = "Correct the current production fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !drawing_interaction_ui::current_source_is_valid(self) {
+            self.status = "Finish or cancel the current drawing gesture and correct its fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !assembly_tools_ui::valid(self) {
             self.status = "Validate the current assembly group or copy before applying".into();
             self.confirm_requested = false;
@@ -435,6 +454,8 @@ impl Workspace {
                 self.status = "Applied as one undoable change".into();
                 self.requested = Some(self.session.identity());
                 self.fields.clear();
+                drawing_interaction_ui::reset(self);
+                production_ui::reset(self);
                 if let Some(feature) = self.after_confirm.take() {
                     ui::feature_preset(self, &feature);
                 }
@@ -446,6 +467,8 @@ impl Workspace {
         assembly_tools_ui::cancel(self);
         assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
+        drawing_interaction_ui::reset(self);
+        production_ui::reset(self);
         assembly_motion_ui::cancel(self);
         reference_repair_ui::reset(self);
         navigation::stop(self);
@@ -564,6 +587,8 @@ impl Workspace {
         assembly_tools_ui::cancel(self);
         assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
+        drawing_interaction_ui::reset(self);
+        production_ui::reset(self);
         assembly_motion_ui::cancel(self);
         reference_repair_ui::reset(self);
         navigation::stop(self);
@@ -624,6 +649,16 @@ impl Workspace {
         self.status = "Operation cancelled".into();
     }
     pub fn confirm_tool(&mut self) {
+        if !production_ui::current_source_is_valid(self) {
+            self.status = "Correct the current production fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !drawing_interaction_ui::current_source_is_valid(self) {
+            self.status = "Finish or cancel the current drawing gesture and correct its fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !assembly_tools_ui::valid(self) {
             self.status = "Validate the current assembly group or copy before applying".into();
             self.confirm_requested = false;
@@ -724,7 +759,8 @@ impl Workspace {
             || self.fields.contains_key("assembly-weld-editor")
             || self.fields.contains_key("exploded-view-editor")
             || self.fields.contains_key("assembly-inspection-editor")
-            || self.fields.contains_key("appearance-tool"))
+            || self.fields.contains_key("appearance-tool")
+            || self.fields.contains_key("production-editor"))
             && self.session.draft.is_none()
         {
             assembly_tools_ui::cancel(self);
@@ -735,6 +771,7 @@ impl Workspace {
             self.fields.clear();
             self.confirm_requested = false;
             self.rendered_key.clear();
+            production_ui::reset(self);
             self.status = "Editor closed; source unchanged".into();
             return;
         }

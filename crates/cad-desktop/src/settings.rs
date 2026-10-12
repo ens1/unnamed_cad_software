@@ -18,6 +18,9 @@ pub struct State {
 }
 
 pub fn open(w: &mut Workspace, category: Option<&str>) {
+    if crate::drawing_interaction_ui::active(w) {
+        crate::drawing_interaction_ui::escape(w);
+    }
     crate::assembly_motion_ui::cancel_drag(w);
     navigation::stop(w);
     w.selection_popup = None;

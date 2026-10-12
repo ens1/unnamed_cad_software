@@ -406,6 +406,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             elements.push(element);
         }
     }
+    elements.extend(crate::drawing_interaction_ui::semantics(w));
+    elements.extend(crate::production_ui::semantics(w));
+    elements.extend(crate::production_ui::row_semantics(w));
     elements.extend(crate::feature_order_ui::semantics(w));
     elements.extend(crate::assembly_motion_ui::semantics(w));
     for element in crate::cad_ui::semantics(w) {
@@ -622,6 +625,11 @@ impl ValueAdapters {
                 "Close Settings before editing another field".into(),
             ));
         }
+        if crate::drawing_interaction_ui::active(w) {
+            return Err(cad_core::CadError::Invalid(
+                "Finish or cancel the current paper gesture before editing fields".into(),
+            ));
+        }
         let descriptor = element.value_descriptor();
         if !descriptor.editable {
             return Err(cad_core::CadError::Invalid(
@@ -666,6 +674,16 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "production",
+        crate::production_ui::set_field,
+        crate::production_ui::field_value,
+    );
+    adapters.register(
+        "drawing-interaction",
+        crate::drawing_interaction_ui::set_value,
+        crate::drawing_interaction_ui::current_value,
+    );
     adapters.register(
         "assembly-group",
         crate::assembly_groups_ui::set_value,

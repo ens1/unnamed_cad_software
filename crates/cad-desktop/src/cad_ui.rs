@@ -226,6 +226,7 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "file.export-drawing-dxf",
             "file.export-flat-pattern",
             "file.export-cutlist",
+            "file.export-bom",
         ],
         "Edit" => vec![
             "document.undo",
@@ -877,6 +878,12 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::production_ui::current_source_is_valid(w) {
+        return Some("Correct the current production fields before applying");
+    }
+    if !crate::drawing_interaction_ui::current_source_is_valid(w) {
+        return Some("Finish or cancel the drawing gesture and correct its fields before applying");
+    }
     if !crate::drawing_editor_ui::current_source_is_valid(w) {
         return Some("Correct the current drawing fields before applying");
     }
@@ -988,6 +995,9 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
             {
                 ui::action(w, "file.export-flat-pattern");
                 ui.close();
+            }
+            if menu_action(ui, "file.export-bom", "Export BOM CSV…", true).clicked() {
+                ui::action(w, "file.export-bom");
             }
             if menu_action(ui, "file.export-cutlist", "Export Cut List CSV…", true).clicked() {
                 ui::action(w, "file.export-cutlist");

@@ -1080,6 +1080,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("file.export", "Export"),
     ("file.export-flat-pattern", "Export Flat Pattern DXF"),
     ("file.export-cutlist", "Export Cut List CSV"),
+    ("file.export-bom", "Export BOM CSV"),
+    ("production.edit", "Production Report Preferences"),
     ("file.release", "Create immutable release"),
     ("part.new", "Create part"),
     ("sketch.new", "Planar sketch"),
