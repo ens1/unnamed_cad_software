@@ -24,6 +24,19 @@ adjacent heights produce the exposed horizontal caps. Native wall carriers,
 shared cap edges, generator edges and vertices are retained or constructed once.
 No mesh supplies the result geometry or material classification.
 
+Section membership uses a shared half-open ray rule at the actual native
+vertices. Circular intervals are divided at analytic horizontal extrema, so
+the rule does not compare independently rounded intersection angles to exact
+zero/one endpoint parameters. Straight-ray orientation uses adaptive exact
+determinants; circular branch membership uses an exact dyadic squared-distance
+expansion instead of a rounded square-root hit. Unresolved finite arithmetic
+returns a diagnostic. These predicates classify the partition; the original
+native curves still construct every output edge.
+
+The same planar loop constructor serves contact joins and layered Booleans.
+Its errors now identify an operand section or an upper/lower output transition
+and its height. A failed subtractive cap is no longer labeled a boss contact.
+
 The checked arrangement uses adaptive exact line orientation and outward-rounded
 intersection arithmetic. Uncertain near-parallel or near-tangent cases return a
 specific diagnostic instead of silently dropping a possible crossing. Native

@@ -329,6 +329,7 @@ fn finish_batches<'a>(
                 edges: vec![],
                 bounds: source.bounds,
                 volume_mm3: source.volume_mm3,
+                body_counts: None,
             };
             let mut vertex_map = BTreeMap::new();
             let mut positions = vec![];

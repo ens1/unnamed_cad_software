@@ -87,55 +87,88 @@ impl Segment {
             terms.iter().map(|x| x.abs()).sum::<f64>() / 2.,
         )
     }
-    fn crossings(&self, p: Point2) -> usize {
+    fn crossings(&self, p: Point2) -> Result<usize> {
         match self.kind {
-            Kind::Line => usize::from(
-                (self.a.y > p.y) != (self.b.y > p.y)
-                    && self.a.x + (p.y - self.a.y) * (self.b.x - self.a.x) / (self.b.y - self.a.y)
-                        > p.x,
-            ),
+            Kind::Line => {
+                if (self.a.y > p.y) == (self.b.y > p.y) {
+                    return Ok(0);
+                }
+                let coord = |p: Point2| robust::Coord { x: p.x, y: p.y };
+                let side = robust::orient2d(coord(self.a), coord(self.b), coord(p));
+                Ok(usize::from(if self.b.y > self.a.y {
+                    side > 0.
+                } else {
+                    side < 0.
+                }))
+            }
             Kind::Arc {
                 center,
                 radius,
                 sweep,
             } => {
-                let dy = p.y - center.y;
-                let discriminant = radius * radius - dy * dy;
-                // A tangent ray does not cross the contour.
-                if discriminant <= 0. {
-                    return 0;
+                // Split at the analytic horizontal extrema. Each resulting
+                // interval lies on one monotone circular branch. The parity
+                // rule compares the actual shared native endpoints, exactly
+                // as the line rule does: no independently rounded atan2 hit
+                // may count an endpoint twice or omit its neighboring arc.
+                let start = (self.a.y - center.y).atan2(self.a.x - center.x);
+                let end = start + sweep;
+                let low = start.min(end);
+                let high = start.max(end);
+                let first =
+                    ((low - std::f64::consts::FRAC_PI_2) / std::f64::consts::PI).ceil() as i32;
+                let last =
+                    ((high - std::f64::consts::FRAC_PI_2) / std::f64::consts::PI).floor() as i32;
+                let mut pieces = vec![(0., self.a), (1., self.b)];
+                for index in first..=last {
+                    let angle =
+                        std::f64::consts::FRAC_PI_2 + f64::from(index) * std::f64::consts::PI;
+                    let t = (angle - start) / sweep;
+                    if t > 0. && t < 1. {
+                        pieces.push((
+                            t,
+                            Point2::new(
+                                center.x,
+                                center.y + if index % 2 == 0 { radius } else { -radius },
+                            ),
+                        ));
+                    }
                 }
-                let dx = discriminant.sqrt();
-                [-dx, dx]
-                    .into_iter()
-                    .filter(|x| {
-                        let q = Point2::new(center.x + x, p.y);
-                        if q.x <= p.x {
-                            return false;
+                pieces.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut count = 0;
+                for pair in pieces.windows(2) {
+                    let ((ta, a), (tb, b)) = (pair[0], pair[1]);
+                    if (a.y > p.y) == (b.y > p.y) {
+                        continue;
+                    }
+                    if p.y == a.y || p.y == b.y {
+                        let endpoint = if p.y == a.y { a } else { b };
+                        count += usize::from(endpoint.x > p.x);
+                        continue;
+                    }
+                    // An interval between extrema occupies a single left or
+                    // right semicircle. Its analytic angular midpoint selects
+                    // that known branch; no interior geometry is sampled.
+                    let right = (start + sweep * (ta + (tb - ta) * 0.5)).cos() > 0.;
+                    if right && p.x <= center.x {
+                        count += 1;
+                    } else if !right && p.x >= center.x {
+                        continue;
+                    } else {
+                        let side = checked::circle_side(p, center, radius)?;
+                        if side == std::cmp::Ordering::Equal {
+                            return Err(unsupported(
+                                "A circular ray origin lies on an unresolved native boundary interval",
+                            ));
                         }
-                        // Ray parity needs strict interval membership. The
-                        // contact splitter's geometric endpoint snapping would
-                        // admit a hit just outside an arc and double-count a
-                        // neighboring line at a mixed line/arc vertex.
-                        let start = self.a - center;
-                        let hit = q - center;
-                        let angle = cross(start, hit).atan2(start.dot(hit));
-                        let directed = if sweep > 0. {
-                            angle.rem_euclid(std::f64::consts::TAU)
+                        count += usize::from(if right {
+                            side == std::cmp::Ordering::Less
                         } else {
-                            -(-angle).rem_euclid(std::f64::consts::TAU)
-                        };
-                        let t = directed / sweep;
-                        let derivative = x * sweep;
-                        if derivative == 0. {
-                            return false;
-                        }
-                        // The same half-open rule as the linear ray predicate.
-                        (t > 0. && t < 1.)
-                            || (t == 0. && derivative > 0.)
-                            || (t == 1. && derivative < 0.)
-                    })
-                    .count()
+                            side == std::cmp::Ordering::Greater
+                        });
+                    }
+                }
+                Ok(count)
             }
         }
     }
@@ -261,20 +294,30 @@ pub(crate) enum Location {
     Outside,
     Boundary,
 }
-pub(crate) fn locate(p: Point2, region: &[Segment]) -> Location {
-    if region.iter().any(|segment| segment.fraction(p).is_some()) {
-        Location::Boundary
-    } else if region
-        .iter()
-        .map(|segment| segment.crossings(p))
-        .sum::<usize>()
-        % 2
-        == 1
+pub(crate) fn locate(p: Point2, region: &[Segment]) -> Result<Location> {
+    if [p.x, p.y]
+        .into_iter()
+        .any(|value| !value.is_finite() || value.abs() > 1e12)
     {
+        return Err(unsupported(
+            "A planar classification point exceeds its finite coordinate bound",
+        ));
+    }
+    for segment in region {
+        checked::validate(segment)?;
+    }
+    if region.iter().any(|segment| segment.fraction(p).is_some()) {
+        return Ok(Location::Boundary);
+    }
+    let mut crossings = 0;
+    for segment in region {
+        crossings += segment.crossings(p)?;
+    }
+    Ok(if crossings % 2 == 1 {
         Location::Inside
     } else {
         Location::Outside
-    }
+    })
 }
 
 struct Source {
@@ -345,19 +388,27 @@ pub(crate) fn wire_from_parts(
     selected: Vec<Edge>,
     frame: &Frame,
     normal_sign: f64,
+    context: &str,
 ) -> Result<Vec<Vec<Wire>>> {
+    // The same checked loop constructor serves planar joins and layered
+    // Boolean sections/caps. Identify the actual consumer in diagnostics;
+    // a failed subtractive transition must not be mislabeled a boss join.
+    let invalid = |message: &str| CadError::Invalid(format!("Geometry: {context}: {message}"));
+    let unsupported = |message: &str| CadError::Unsupported(format!("{context}: {message}"));
     let mut outgoing: HashMap<VertexId, usize> = HashMap::new();
     let mut incoming = HashSet::new();
     for (index, edge) in selected.iter().enumerate() {
         if outgoing.insert(edge.front().id(), index).is_some() || !incoming.insert(edge.back().id())
         {
             return Err(unsupported(
-                "Contact would create touching or branching cap boundaries",
+                "Selected intervals create touching or branching planar boundaries",
             ));
         }
     }
     if outgoing.keys().any(|vertex| !incoming.contains(vertex)) {
-        return Err(invalid("Contact cap arrangement contains an open boundary"));
+        return Err(invalid(
+            "Selected intervals contain an open planar boundary",
+        ));
     }
     let mut used = HashSet::new();
     let mut loops = Vec::new();
@@ -372,20 +423,20 @@ pub(crate) fn wire_from_parts(
                 if index == start {
                     break;
                 }
-                return Err(invalid("Contact cap traversal joined a different loop"));
+                return Err(invalid("Planar boundary traversal joined a different loop"));
             }
             let edge = &selected[index];
             wire.push_back(edge.clone());
             index = *outgoing
                 .get(&edge.back().id())
-                .ok_or_else(|| invalid("Contact cap traversal lost an endpoint"))?;
+                .ok_or_else(|| invalid("Planar boundary traversal lost an endpoint"))?;
         }
         let segments = wire
             .iter()
             .map(|edge| {
                 frame
                     .segment(edge)?
-                    .ok_or_else(|| invalid("A split contact boundary lost its analytic carrier"))
+                    .ok_or_else(|| invalid("A split planar boundary lost its analytic carrier"))
             })
             .collect::<Result<Vec<_>>>()?;
         let (mut area, mut correction, mut magnitude) = (0., 0., 0.);
@@ -400,7 +451,7 @@ pub(crate) fn wire_from_parts(
         let area = area * normal_sign;
         if !area.is_finite() || area.abs() <= (EPS * EPS).max(64. * f64::EPSILON * magnitude) {
             return Err(unsupported(
-                "Contact produces a collapsed or numerically unresolved cap region",
+                "Selected intervals produce a collapsed or numerically unresolved planar region",
             ));
         }
         loops.push((wire, segments, area));
@@ -415,13 +466,17 @@ pub(crate) fn wire_from_parts(
             continue;
         }
         let point = segments[0].at(0.5);
-        let index = groups
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, outer, _))| locate(point, outer) == Location::Inside)
-            .min_by(|(_, a), (_, b)| a.2.total_cmp(&b.2))
+        let mut enclosing = None;
+        for (index, (_, outer, outer_area)) in groups.iter().enumerate() {
+            if locate(point, outer)? == Location::Inside
+                && enclosing.is_none_or(|(_, area)| *outer_area < area)
+            {
+                enclosing = Some((index, *outer_area));
+            }
+        }
+        let index = enclosing
             .map(|(index, _)| index)
-            .ok_or_else(|| invalid("Contact inner wire has no enclosing cap region"))?;
+            .ok_or_else(|| invalid("A planar inner wire has no enclosing material region"))?;
         groups[index].0.push(wire);
     }
     Ok(groups.into_iter().map(|(wires, _, _)| wires).collect())
@@ -646,7 +701,7 @@ pub(super) fn contact(
             let segment = frame
                 .segment(edge)?
                 .ok_or_else(|| invalid("Split contact lost its carrier"))?;
-            match locate(segment.at(0.5), &contours[1 - side]) {
+            match locate(segment.at(0.5), &contours[1 - side])? {
                 Location::Outside => selected[side].push(edge.clone()),
                 Location::Inside => {
                     overlap = true;
@@ -667,10 +722,14 @@ pub(super) fn contact(
     let mut caps = Vec::new();
     for (side, selected) in selected.into_iter().enumerate() {
         let original = if side == 0 { &support.face } else { cap };
-        for (component, wires) in
-            wire_from_parts(selected, &frame, if side == 0 { 1. } else { -1. })?
-                .into_iter()
-                .enumerate()
+        for (component, wires) in wire_from_parts(
+            selected,
+            &frame,
+            if side == 0 { 1. } else { -1. },
+            "planar boss join contact cap",
+        )?
+        .into_iter()
+        .enumerate()
         {
             let face = Face::try_new(wires, original.oriented_surface()).map_err(invalid)?;
             trimmed.push(ContactFace {

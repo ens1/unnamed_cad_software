@@ -633,7 +633,12 @@ fn section(
     }
     // Degree-two oriented cycles and consistent outer/hole nesting are required
     // before the ray parity predicate can classify complete interval interiors.
-    wire_from_parts(edges, frame, 1.)?;
+    wire_from_parts(
+        edges,
+        frame,
+        1.,
+        &format!("prismatic Boolean operand {} section at {z} mm", side + 1),
+    )?;
     arrangement
         .atoms
         .iter()
@@ -646,7 +651,7 @@ fn section(
                 });
             }
             spend(work, contour.len())?;
-            match locate(atom.segment.at(0.5), &contour) {
+            match locate(atom.segment.at(0.5), &contour)? {
                 Location::Inside => Ok(Sides {
                     left: true,
                     right: true,
@@ -871,7 +876,15 @@ fn construct(a: Stock, b: Stock, frame: &Frame, mode: Mode) -> Result<Output> {
                 axes: frame.axes,
                 normal: frame.normal,
             };
-            for wires in wire_from_parts(edges, &cap_frame, if upward { 1. } else { -1. })? {
+            for wires in wire_from_parts(
+                edges,
+                &cap_frame,
+                if upward { 1. } else { -1. },
+                &format!(
+                    "prismatic Boolean {} transition at {elevation} mm",
+                    if upward { "upper" } else { "lower" },
+                ),
+            )? {
                 spend(&mut work, arrangement.atoms.len())?;
                 // A transition can combine or extend several coplanar source
                 // regions. Reusing an arbitrary source Plane would falsely

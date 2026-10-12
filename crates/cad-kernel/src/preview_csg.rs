@@ -182,6 +182,55 @@ struct Node {
     back: Option<Box<Node>>,
 }
 impl Node {
+    fn partition_plane(polygons: &[Polygon], budget: &mut Budget) -> Result<Plane> {
+        // A plane is an exact polygon carrier; only its ordering is heuristic.
+        // Picking the first triangle produces a nearly linear tree on curved
+        // stock and can exhaust depth even for a small bore or fillet preview.
+        // Bound both the candidate set and scoring sample independently of
+        // input tessellation. The full split still uses every polygon below.
+        let candidates = polygons.len().min(12);
+        let samples = polygons.len().min(128);
+        let mut best = (usize::MAX, polygons[0].plane);
+        for candidate in 0..candidates {
+            let index = candidate * (polygons.len() - 1) / (candidates - 1).max(1);
+            let plane = polygons[index].plane;
+            let (mut front, mut back, mut spanning) = (0usize, 0usize, 0usize);
+            for sample in 0..samples {
+                let polygon = &polygons[sample * (polygons.len() - 1) / (samples - 1).max(1)];
+                budget.spend(polygon.vertices.len())?;
+                let mut sides = 0;
+                for vertex in &polygon.vertices {
+                    let distance = plane.normal.dot(vertex.position) - plane.offset;
+                    if !distance.is_finite() {
+                        return Err(unavailable());
+                    }
+                    sides |= if distance < -budget.epsilon {
+                        2
+                    } else if distance > budget.epsilon {
+                        1
+                    } else {
+                        0
+                    };
+                }
+                match sides {
+                    1 => front += 1,
+                    2 => back += 1,
+                    3 => {
+                        front += 1;
+                        back += 1;
+                        spanning += 1;
+                    }
+                    _ => {}
+                }
+            }
+            let score = spanning * 4 + front.abs_diff(back);
+            if score < best.0 {
+                best = (score, plane);
+            }
+        }
+        Ok(best.1)
+    }
+
     fn invert(&mut self) {
         for polygon in &mut self.polygons {
             polygon.flip();
@@ -205,7 +254,14 @@ impl Node {
         if depth > MAX_DEPTH || polygons.len() > MAX_POLYGONS {
             return Err(unavailable());
         }
-        let plane = *self.plane.get_or_insert(polygons[0].plane);
+        let plane = match self.plane {
+            Some(plane) => plane,
+            None => {
+                let plane = Self::partition_plane(&polygons, budget)?;
+                self.plane = Some(plane);
+                plane
+            }
+        };
         let (mut front, mut back, mut opposite) = (Vec::new(), Vec::new(), Vec::new());
         for polygon in polygons {
             plane.split(
@@ -360,6 +416,7 @@ fn mesh(
         edges: Vec::new(),
         bounds: [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]],
         volume_mm3: 0.,
+        body_counts: None,
     };
     let mut signed_volume = 0.;
     for polygon in polygons {

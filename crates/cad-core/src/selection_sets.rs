@@ -48,7 +48,7 @@ impl Mode {
 }
 
 pub fn same_reference(a: &TopologyRef, b: &TopologyRef) -> bool {
-    a.topology == b.topology && a.producer == b.producer && a.role == b.role
+    crate::provenance::equivalent(a, b).unwrap_or(false)
 }
 fn unavailable(reason: &str) -> CadError {
     CadError::Unsupported(reason.into())

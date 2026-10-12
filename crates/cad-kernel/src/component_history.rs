@@ -14,22 +14,32 @@ fn unsupported(message: &str) -> CadError {
 }
 
 pub(super) fn budget_error() -> CadError {
-    unsupported("The source ancestry exceeds its bounded topology/serialization work")
+    unsupported("Published topology history storage budget exhausted (64 MiB)")
+}
+pub(super) fn face_limit_error() -> CadError {
+    unsupported("Distinct native face budget exhausted (16384 faces)")
+}
+pub(super) fn edge_limit_error() -> CadError {
+    unsupported("Distinct native edge budget exhausted (65536 edges)")
 }
 
 pub(super) struct Budget {
     bytes: usize,
     work: usize,
+    references: BTreeMap<(NodeRef, String, String), String>,
 }
 impl Budget {
     pub(super) fn new() -> Self {
         Self {
             bytes: MAX_STEP_BYTES,
             work: MAX_WORK,
+            references: BTreeMap::new(),
         }
     }
     pub(super) fn charge(&mut self, count: usize) -> Result<()> {
-        self.work = self.work.checked_sub(count).ok_or_else(budget_error)?;
+        self.work = self.work.checked_sub(count).ok_or_else(|| {
+            unsupported("Topology traversal budget exhausted (1048576 work units)")
+        })?;
         Ok(())
     }
     pub(super) fn encoded(&mut self, value: &impl serde::Serialize) -> Result<String> {
@@ -56,16 +66,36 @@ impl Budget {
             bytes: Vec::new(),
             remaining: &mut self.bytes,
         };
-        serde_json::to_writer(&mut buffer, value).map_err(|_| budget_error())?;
-        String::from_utf8(buffer.bytes).map_err(|_| budget_error())
+        serde_json::to_writer(&mut buffer, value)
+            .map_err(|_| unsupported("Topology step serialization budget exhausted (16 MiB)"))?;
+        String::from_utf8(buffer.bytes)
+            .map_err(|_| CadError::Invalid("Topology provenance serialization is not UTF-8".into()))
     }
     pub(super) fn reference(&mut self, reference: &TopologyRef) -> Result<String> {
         self.charge(1)?;
-        // Bound normalization/parsing before constructing an expanded value.
-        if reference.role.len() > self.bytes {
-            return Err(budget_error());
+        if reference.role.len() > MAX_STEP_BYTES {
+            return Err(unsupported(
+                "Source descriptor input exceeds 16 MiB before normalization",
+            ));
         }
-        self.encoded(&construction_reference(reference)?)
+        let key = (
+            reference.producer.clone(),
+            reference.role.clone(),
+            reference.topology.clone(),
+        );
+        if let Some(encoded) = self.references.get(&key) {
+            return Ok(encoded.clone());
+        }
+        // Bound normalization/parsing before constructing an expanded value.
+        self.bytes = self
+            .bytes
+            .checked_sub(reference.role.len())
+            .ok_or_else(|| {
+                unsupported("Distinct source descriptor storage budget exhausted (16 MiB)")
+            })?;
+        let encoded = self.encoded(&construction_reference(reference)?)?;
+        self.references.insert(key, encoded.clone());
+        Ok(encoded)
     }
 }
 
@@ -115,6 +145,31 @@ struct Incidence {
     edge_faces: HashMap<EdgeId, HashSet<FaceId>>,
     vertex_edges: HashMap<VertexId, HashSet<EdgeId>>,
 }
+
+/// Incidence records refer to a descriptor table instead of embedding an
+/// escaped, complete JSON descriptor at every boundary/endpoint occurrence.
+#[derive(Default)]
+struct SourceTable {
+    indices: BTreeMap<String, usize>,
+    references: Vec<serde_json::Value>,
+}
+impl SourceTable {
+    fn source(&mut self, encoded: &str) -> Result<serde_json::Value> {
+        let index = if let Some(index) = self.indices.get(encoded) {
+            *index
+        } else {
+            let index = self.references.len();
+            self.references.push(serde_json::from_str(encoded)?);
+            self.indices.insert(encoded.into(), index);
+            index
+        };
+        Ok(serde_json::json!({"$tcad.source":index}))
+    }
+    fn signature(self, value: serde_json::Value, budget: &mut Budget) -> Result<String> {
+        let closure = cad_core::provenance::indexed_closure(value, self.references)?;
+        budget.encoded(&closure)
+    }
+}
 impl Incidence {
     fn new(shells: &[&Shell], budget: &mut Budget) -> Result<Self> {
         let mut result = Self {
@@ -129,7 +184,7 @@ impl Incidence {
                 continue;
             }
             if result.faces.len() > 16_384 {
-                return Err(budget_error());
+                return Err(face_limit_error());
             }
             for edge in face.edge_iter() {
                 budget.charge(1)?;
@@ -143,7 +198,7 @@ impl Incidence {
                     .entry(edge.id())
                     .or_insert_with(|| edge.clone());
                 if result.edges.len() > 65_536 {
-                    return Err(budget_error());
+                    return Err(edge_limit_error());
                 }
                 for vertex in [edge.absolute_front(), edge.absolute_back()] {
                     result
@@ -173,11 +228,12 @@ fn constructed(
     let signature = signature
         .map(serde_json::from_str::<serde_json::Value>)
         .transpose()?;
-    let payload = budget.encoded(&serde_json::json!({
+    let payload = cad_core::provenance::construction_payload(serde_json::json!({
         "sources": sources,
         "purpose": {"operation":"topology", "constructor":constructor, "source_signature":signature},
         "topology":kind,
     }))?;
+    let payload = budget.encoded(&payload)?;
     Ok(TopologyRef {
         producer: owner.clone(),
         role: format!("construction:{payload}"),
@@ -235,7 +291,16 @@ fn original_endpoints(
             }
         }
         if complete && !edge_keys.is_empty() && !face_keys.is_empty() {
-            let key = budget.encoded(&(edge_keys, face_keys))?;
+            let mut table = SourceTable::default();
+            let edges = edge_keys
+                .into_iter()
+                .map(|source| table.source(source))
+                .collect::<Result<Vec<_>>>()?;
+            let faces = face_keys
+                .into_iter()
+                .map(|source| table.source(source))
+                .collect::<Result<Vec<_>>>()?;
+            let key = table.signature(serde_json::json!([edges, faces]), budget)?;
             groups.entry(key).or_default().push(*vertex);
         }
     }
@@ -388,6 +453,7 @@ struct Snapshot<'a> {
 }
 impl Snapshot<'_> {
     fn face(&self, id: FaceId, budget: &mut Budget) -> Result<Option<String>> {
+        let mut table = SourceTable::default();
         let mut wires = Vec::new();
         for wire in self.topology.faces[&id].boundaries() {
             if wire.is_empty() {
@@ -413,19 +479,25 @@ impl Snapshot<'_> {
                 };
                 neighbors.sort_unstable();
                 neighbors.dedup();
-                boundary.push((source.as_str(), neighbors));
+                let source = table.source(source)?;
+                let neighbors = neighbors
+                    .into_iter()
+                    .map(|source| table.source(source))
+                    .collect::<Result<Vec<_>>>()?;
+                boundary.push((source, neighbors));
             }
-            boundary.sort_unstable();
+            boundary.sort_by_cached_key(|value| serde_json::json!(value).to_string());
             wires.push(boundary);
         }
         if wires.is_empty() {
             return Ok(None);
         }
-        wires.sort_unstable();
-        budget.encoded(&wires).map(Some)
+        wires.sort_by_cached_key(|value| serde_json::json!(value).to_string());
+        table.signature(serde_json::json!(wires), budget).map(Some)
     }
 
     fn edge(&self, id: EdgeId, budget: &mut Budget) -> Result<Option<String>> {
+        let mut table = SourceTable::default();
         let adjacent = &self.topology.edge_faces[&id];
         if adjacent.is_empty() || adjacent.len() > 2 {
             return Ok(None);
@@ -440,6 +512,10 @@ impl Snapshot<'_> {
         };
         incident.sort_unstable();
         incident.dedup();
+        let incident = incident
+            .into_iter()
+            .map(|source| table.source(source))
+            .collect::<Result<Vec<_>>>()?;
         let edge = &self.topology.edges[&id];
         let mut ends = Vec::new();
         for vertex in [edge.absolute_front(), edge.absolute_back()] {
@@ -467,12 +543,24 @@ impl Snapshot<'_> {
                 .get(&vertex.id())
                 .into_iter()
                 .flatten()
-                .map(String::as_str)
-                .collect::<Vec<_>>();
+                .map(|encoded| {
+                    serde_json::from_str::<serde_json::Value>(encoded).map_err(CadError::from)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let faces = faces
+                .into_iter()
+                .map(|source| table.source(source))
+                .collect::<Result<Vec<_>>>()?;
+            let edges = edges
+                .into_iter()
+                .map(|source| table.source(source))
+                .collect::<Result<Vec<_>>>()?;
             ends.push((faces, edges, original));
         }
-        ends.sort_unstable();
-        budget.encoded(&(incident, ends)).map(Some)
+        ends.sort_by_cached_key(|value| serde_json::json!(value).to_string());
+        table
+            .signature(serde_json::json!([incident, ends]), budget)
+            .map(Some)
     }
 }
 
@@ -494,7 +582,9 @@ pub(super) fn verify_unique(history: &TopologyHistory, budget: &mut Budget) -> R
         }
     }
     if history_size(history) > MAX_HISTORY_BYTES {
-        return Err(budget_error());
+        return Err(unsupported(
+            "Published topology history storage budget exhausted (64 MiB)",
+        ));
     }
     Ok(())
 }

@@ -58,7 +58,7 @@ fn resolved(p: Pair) -> Result<Point2> {
         p[1].low + (p[1].high - p[1].low) * 0.5,
     ))
 }
-fn validate(segment: &Segment) -> Result<()> {
+pub(super) fn validate(segment: &Segment) -> Result<()> {
     let valid = |p: Point2| {
         [p.x, p.y]
             .into_iter()
@@ -187,6 +187,36 @@ fn grow(expansion: &mut Vec<f64>, mut value: f64) {
         output.push(value);
     }
     *expansion = output;
+}
+// Compare a dyadic query point to a dyadic circular carrier without forming a
+// rounded ray root. FMA retains every product's tail; the expansion's last
+// component supplies the exact sign when products stay clear of underflow.
+pub(super) fn circle_side(p: Point2, center: Point2, radius: f64) -> Result<std::cmp::Ordering> {
+    let mut expansion = Vec::new();
+    for (parts, sign) in [
+        (difference_expansion(p.x, center.x), 1.),
+        (difference_expansion(p.y, center.y), 1.),
+        ([0., radius], -1.),
+    ] {
+        for a in parts {
+            for b in parts {
+                if a == 0. || b == 0. {
+                    continue;
+                }
+                let product = a * b;
+                if !product.is_finite() || product.abs() < 1e-250 {
+                    return Err(unsupported(
+                        "circular ray classification exceeds its exact finite arithmetic bound",
+                    ));
+                }
+                grow(&mut expansion, a.mul_add(b, -product) * sign);
+                grow(&mut expansion, product * sign);
+            }
+        }
+    }
+    Ok(expansion
+        .last()
+        .map_or(std::cmp::Ordering::Equal, |value| value.total_cmp(&0.)))
 }
 fn circle_root(p: Point2, center: Point2, radius: f64) -> bool {
     let mut expansion = Vec::new();

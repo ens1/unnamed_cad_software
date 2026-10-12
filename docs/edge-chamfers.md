@@ -1,6 +1,6 @@
 # Native edge chamfers
 
-This document describes the simultaneous convex-stock clipping constructor.
+This document describes the simultaneous planar-corner clipping constructor.
 The current dispatcher also handles local concave/convex wedges, pocket/cavity
 chains and complete cylindrical/conical rims; see
 [Native edge treatments](edge-treatments.md) for current coverage and limits.
@@ -32,6 +32,31 @@ control bounds prove it remains inside every setback. Inner wires stay attached
 to their original planar carrier. A chamfer that intersects a curved pocket,
 cuts a void, separates its source body, or splits a concave wall into disconnected
 regions reports that limitation instead of manufacturing a shell from a mesh.
+
+A merged boss can extend above the plate's top plane, making the whole body
+non-convex while its outer plate corner remains convex. This constructor also
+admits that bounded planar neighborhood: native edge winding and oriented
+wall normals establish the convex material side, and each endpoint must have
+two straight neighboring edges and a real third planar terminal face. The
+complete local faces must remain behind those four source support planes.
+Analytic setback/terminal intersections form the six vertices of a bounded
+triangular removal prism. Outward interval projections must separate every
+unrelated native face and void from that removal region. A distant boss or bore
+may cross the infinite diagonal bevel plane; its original face is retained
+without clipping when it is separated from the bounded removal prism.
+
+Only the affected source faces and intersecting bevel faces are clipped in
+this local mode. Trimmed source faces retain their authored identities through
+successive planes. Previously created bevel caps participate in a later
+adjoining corner, while a separated cap at a distant selected edge stays
+unchanged. The same shared-shell boundary constructor closes the exact corner;
+this is not a sequence of independently chamfered edges. The original global
+supporting-stock path remains available for globally convex topology. Uncertain
+separation, reentrant supports, non-planar terminal faces and consumed terminal
+edges remain rejected. A shared four-million-work proof budget covers the whole
+selection, including endpoint incidence, original carrier projections and later
+bevel-cap separation; it does not reset for each edge. Admission is bounded to
+512 selected edges and 4,096 source faces.
 
 Native construction records retained and trimmed wall ancestry and constructs
 new bevel references from the selected authored edges and incident wall

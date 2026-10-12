@@ -221,11 +221,11 @@ fn validate_section(
                 }
             }
         }
-        if locate(section.at(0.5), &base) == Location::Inside {
+        if locate(section.at(0.5), &base)? == Location::Inside {
             return Err(invalid("Returned flange penetrates the supporting blank"));
         }
     }
-    if locate(Point2::new(-1e-5, thickness * 0.5), &segments) == Location::Inside {
+    if locate(Point2::new(-1e-5, thickness * 0.5), &segments)? == Location::Inside {
         return Err(invalid("Formed flange encloses supporting blank material"));
     }
     Ok(())

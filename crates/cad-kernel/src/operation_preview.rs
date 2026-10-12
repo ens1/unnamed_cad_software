@@ -117,6 +117,21 @@ fn difference(source: &[Solid], tools: &[Solid], tolerance: f64) -> Result<Vec<S
                 }
                 if let Some(exact) = crate::planar::convex_difference(&piece, tool)? {
                     next.extend(exact.bodies);
+                } else if let Some(output) = crate::prismatic_boolean::binary(
+                    &piece,
+                    tool,
+                    crate::boolean_ops::Mode::Difference,
+                )? {
+                    // Disposable differences use the same exact layered
+                    // arrangement as modeling, without publishing its history
+                    // or inserting these bodies into authoritative caches.
+                    // Coincident caps and circular walls must not fall back
+                    // to generic intersection seeding for ordinary bosses,
+                    // bores and multi-region cuts.
+                    if let Some(cut) = output.solid {
+                        crate::validation::solid(&cut)?;
+                        next.push(cut);
+                    }
                 } else {
                     let cut = monstertruck::solid::difference(&piece, tool, tolerance)
                         .map_err(unsupported)?;

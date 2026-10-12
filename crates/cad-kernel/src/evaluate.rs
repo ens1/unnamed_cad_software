@@ -777,6 +777,7 @@ impl<K: KernelAdapter> Evaluator<K> {
             edges: vec![],
             bounds: [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]],
             volume_mm3: 0.,
+            body_counts: None,
         };
         let mut bodies = vec![];
         let mut surfaces = vec![];
@@ -820,6 +821,11 @@ impl<K: KernelAdapter> Evaluator<K> {
         if all.positions.is_empty() {
             all.bounds = [[0.; 3]; 2];
         }
+        all.body_counts = Some(cad_core::protocol::BodyCounts {
+            version: cad_core::protocol::BODY_COUNTS_VERSION,
+            solids: bodies.len(),
+            surfaces: surfaces.len(),
+        });
         Ok((all, bodies, surfaces))
     }
     fn history_output(

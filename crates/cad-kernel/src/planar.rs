@@ -713,6 +713,221 @@ struct BevelPlane {
     origin: Point3,
     normal: Vector3,
     sources: Vec<TopologyRef>,
+    /// A bounded non-convex-stock constructor clips only these source walls
+    /// and previously constructed bevel caps. Retained descendants preserve
+    /// these authored references while their transient face IDs change.
+    local: Option<LocalSetback>,
+}
+#[derive(Clone)]
+struct LocalSetback {
+    walls: Vec<TopologyRef>,
+    removals: Vec<RemovalBounds>,
+}
+#[derive(Clone)]
+struct RemovalBounds {
+    origin: Point3,
+    projections: Vec<(Vector3, (f64, f64))>,
+}
+fn charge_chamfer_proof(work: &mut usize, cost: usize) -> Result<()> {
+    *work = work.saturating_add(cost);
+    if *work > 4_000_000 {
+        return Err(CadError::Unsupported(
+            "Chamfer corner separation exceeds the operation's proof budget".into(),
+        ));
+    }
+    Ok(())
+}
+impl RemovalBounds {
+    fn separates(&self, bounds: &crate::native_bounds::Enclosure) -> Result<bool> {
+        self.projections
+            .iter()
+            .try_fold(false, |separated, (direction, removal)| {
+                let boundary = bounds.projection(self.origin, *direction)?;
+                Ok(separated
+                    || boundary.0 > removal.1 + EPSILON
+                    || boundary.1 < removal.0 - EPSILON)
+            })
+    }
+}
+
+/// A boss or pocket can make an otherwise ordinary plate non-convex without
+/// changing the sharp outer corner. Certify that bounded neighborhood instead
+/// of requiring every source face to lie behind both infinite wall planes.
+/// The actual setback may change only the two support walls and their real
+/// terminal faces. Complete native bounds separate every other face from the
+/// bounded removal prism, even when a distant boss crosses the infinite bevel
+/// plane. The profile vertices are analytic plane intersections, not samples.
+fn local_convex_setback(
+    solid: &Solid,
+    edge: &Edge,
+    walls: &[BoundaryPlane; 2],
+    setback: (Point3, Vector3),
+    distances: [f64; 2],
+    history: &ShellHistory,
+    work: &mut usize,
+) -> Result<Option<LocalSetback>> {
+    let (origin, normal) = setback;
+    let occurrence = walls[0]
+        .face
+        .edge_iter()
+        .find(|candidate| candidate.id() == edge.id())
+        .ok_or_else(|| CadError::Invalid("Chamfer source edge is absent from its wall".into()))?;
+    let direction = (occurrence.back().point() - occurrence.front().point()).normalize();
+    // The outward wall normals and native wire direction identify a convex
+    // material wedge; nearby control points alone do not establish its side.
+    if walls[0].normal.cross(walls[1].normal).dot(direction) <= EPSILON {
+        return Ok(None);
+    }
+    let mut local = walls
+        .iter()
+        .map(|wall| wall.face.id())
+        .collect::<HashSet<_>>();
+    let axis = (edge.back().point() - edge.front().point()).normalize();
+    let cosine = walls[0].normal.dot(walls[1].normal).clamp(-1., 1.);
+    let sine = (1. - cosine * cosine).max(0.).sqrt();
+    let offsets = [
+        -(walls[1].normal - walls[0].normal * cosine) * (distances[0] / sine),
+        -(walls[0].normal - walls[1].normal * cosine) * (distances[1] / sine),
+    ];
+    let mut terminals = Vec::new();
+    let mut vertices = Vec::new();
+    for (end, vertex) in [edge.front(), edge.back()].into_iter().enumerate() {
+        let mut incident = Vec::new();
+        for face in solid.face_iter() {
+            for candidate in face.vertex_iter() {
+                charge_chamfer_proof(work, 1)?;
+                if candidate.id() == vertex.id() {
+                    incident.push(face);
+                    break;
+                }
+            }
+        }
+        if incident.len() != 3 {
+            return Ok(None);
+        }
+        let Some(terminal) = incident
+            .iter()
+            .find(|face| walls.iter().all(|wall| wall.face.id() != face.id()))
+        else {
+            return Ok(None);
+        };
+        let Some(plane) = boundary_plane(terminal)? else {
+            return Ok(None);
+        };
+        let denominator = axis.dot(plane.normal);
+        if (end == 0 && denominator >= -EPSILON) || (end == 1 && denominator <= EPSILON) {
+            return Ok(None);
+        }
+        vertices.push(vertex.point());
+        for (side, wall) in walls.iter().enumerate() {
+            let mut neighbours = Vec::new();
+            for candidate in terminal.edge_iter() {
+                charge_chamfer_proof(work, 1)?;
+                if candidate.front().id() != vertex.id() && candidate.back().id() != vertex.id() {
+                    continue;
+                }
+                for other in wall.face.edge_iter() {
+                    charge_chamfer_proof(work, 1)?;
+                    if other.id() == candidate.id() {
+                        neighbours.push(candidate);
+                        break;
+                    }
+                }
+            }
+            let [neighbour] = neighbours.as_slice() else {
+                return Ok(None);
+            };
+            if !straight_edge(neighbour)? {
+                return Ok(None);
+            }
+            let offset = offsets[side];
+            let point = vertex.point() + offset - axis * (offset.dot(plane.normal) / denominator);
+            let other = if neighbour.front().id() == vertex.id() {
+                neighbour.back()
+            } else {
+                neighbour.front()
+            };
+            let span = other.point() - vertex.point();
+            let length = span.magnitude();
+            let fraction = (point - vertex.point()).dot(span) / (length * length);
+            if ![point.x, point.y, point.z, fraction]
+                .iter()
+                .all(|value| value.is_finite())
+                || fraction <= EPSILON / length
+                || fraction >= 1. - EPSILON / length
+                || (point - vertex.point() - span * fraction).magnitude() > EPSILON
+                || (point - origin).dot(normal).abs() > EPSILON
+            {
+                return Err(CadError::Invalid(
+                    "Chamfer setback consumes or leaves a terminal edge; reduce the distances"
+                        .into(),
+                ));
+            }
+            vertices.push(point);
+        }
+        local.insert(terminal.id());
+        terminals.push(plane);
+    }
+    let supports = walls.iter().chain(&terminals).collect::<Vec<_>>();
+    // The four real support planes bound the source endpoint neighborhood.
+    // Requiring its complete faces behind those planes excludes a reentrant
+    // support that would make a local half-space clip affect another region.
+    for face in solid.face_iter() {
+        if !local.contains(&face.id()) {
+            continue;
+        }
+        let bounds = crate::native_bounds::face(face)?;
+        charge_chamfer_proof(work, bounds.len().saturating_mul(supports.len()))?;
+        for support in &supports {
+            if bounds.projection(support.origin, support.normal)?.1 > EPSILON {
+                return Ok(None);
+            }
+        }
+    }
+    let prism = crate::native_bounds::Enclosure::from_hull(vertices)?;
+    for support in &supports {
+        if prism.projection(support.origin, support.normal)?.1 > EPSILON {
+            return Ok(None);
+        }
+    }
+    let projections = [
+        Vector3::unit_x(),
+        Vector3::unit_y(),
+        Vector3::unit_z(),
+        normal,
+    ]
+    .into_iter()
+    .chain(supports.iter().map(|plane| plane.normal))
+    .map(|direction| {
+        Ok((
+            direction,
+            prism.projection(edge.front().point(), direction)?,
+        ))
+    })
+    .collect::<Result<Vec<_>>>()?;
+    let removal = RemovalBounds {
+        origin: edge.front().point(),
+        projections,
+    };
+    for face in solid.face_iter() {
+        if local.contains(&face.id()) {
+            continue;
+        }
+        let bounds = crate::native_bounds::face(face)?;
+        charge_chamfer_proof(work, bounds.len().saturating_mul(removal.projections.len()))?;
+        if !removal.separates(&bounds)? {
+            return Err(CadError::Unsupported(
+                "Chamfer bounded setback reaches an unrelated boundary; reduce the distances or select another edge".into(),
+            ));
+        }
+    }
+    Ok(Some(LocalSetback {
+        walls: local
+            .into_iter()
+            .map(|id| history.face(id))
+            .collect::<Result<_>>()?,
+        removals: vec![removal],
+    }))
 }
 
 fn simple_polygon(vertices: &[Vertex], normal: Vector3) -> bool {
@@ -875,9 +1090,17 @@ fn bevel_boundaries(shell: &Shell, plane: &BevelPlane) -> Result<Vec<Wire>> {
     Ok(boundaries)
 }
 
-// Keep the negative half-space. Straight positive rational carriers are trimmed
-// to actual lines; curved pocket faces survive only with a full inside proof.
-fn clip(solid: &Solid, plane: &BevelPlane, history: &mut ShellHistory) -> Result<Solid> {
+// Keep the negative half-space on globally supporting stock or on the certified
+// local support neighborhood. Straight positive rational carriers are trimmed
+// to actual lines; unrelated curved carriers survive only with a full inside
+// or bounded-removal separation proof.
+fn clip(
+    solid: &Solid,
+    plane: &BevelPlane,
+    history: &mut ShellHistory,
+    bevels: &mut HashSet<FaceId>,
+    work: &mut usize,
+) -> Result<Solid> {
     let signed = |p: Point3| (p - plane.origin).dot(plane.normal);
     let Some(exterior) = solid.boundaries().first() else {
         return Err(CadError::Invalid(
@@ -887,12 +1110,13 @@ fn clip(solid: &Solid, plane: &BevelPlane, history: &mut ShellHistory) -> Result
     // Enclosed void shells need no modification when their complete carriers are
     // disjoint from the bevel. Intersecting one needs a general curved Boolean.
     for cavity in solid.boundaries().iter().skip(1) {
-        if cavity
-            .iter()
-            .map(|face| wholly_inside(face, plane.origin, plane.normal))
-            .collect::<Result<Vec<_>>>()?
-            .iter()
-            .any(|inside| !inside)
+        if plane.local.is_none()
+            && cavity
+                .iter()
+                .map(|face| wholly_inside(face, plane.origin, plane.normal))
+                .collect::<Result<Vec<_>>>()?
+                .iter()
+                .any(|inside| !inside)
         {
             return Err(CadError::Unsupported(
                 "Chamfer intersects an enclosed void boundary; reduce the distances or select another edge".into(),
@@ -913,6 +1137,30 @@ fn clip(solid: &Solid, plane: &BevelPlane, history: &mut ShellHistory) -> Result
         if wholly_inside(face, plane.origin, plane.normal)? {
             faces.push(face.clone());
             continue;
+        }
+        if let Some(local) = &plane.local
+            && !local.walls.contains(&history.face(face.id())?)
+        {
+            // Original unrelated faces were separated before any clipping.
+            // A previous bevel can share this corner or belong to a distant
+            // selected edge. Clip it only if its complete bound is not
+            // separated from every bounded removal region for this plane.
+            let separated = if bevels.contains(&face.id()) {
+                let bounds = crate::native_bounds::face(face)?;
+                local.removals.iter().try_fold(true, |separated, removal| {
+                    charge_chamfer_proof(
+                        work,
+                        bounds.len().saturating_mul(removal.projections.len()),
+                    )?;
+                    Ok::<_, CadError>(separated && removal.separates(&bounds)?)
+                })?
+            } else {
+                true
+            };
+            if separated {
+                faces.push(face.clone());
+                continue;
+            }
         }
         changed = true;
         let carrier = boundary_plane(face)?;
@@ -1001,6 +1249,9 @@ fn clip(solid: &Solid, plane: &BevelPlane, history: &mut ShellHistory) -> Result
         let trimmed = Face::try_new(wires, face.oriented_surface())
             .map_err(|error| CadError::Invalid(format!("Chamfer wall trimming: {error}")))?;
         history.retain_face(trimmed.id(), face.id())?;
+        if bevels.contains(&face.id()) {
+            bevels.insert(trimmed.id());
+        }
         faces.push(trimmed);
     }
     if !changed {
@@ -1024,6 +1275,7 @@ fn clip(solid: &Solid, plane: &BevelPlane, history: &mut ShellHistory) -> Result
         &plane.sources,
         serde_json::json!({"operation":"chamfer","constructor":"edge_setback"}),
     )?;
+    bevels.insert(cap.id());
     faces.push(cap);
     if faces.connected_components().len() != 1 {
         return Err(CadError::Unsupported(
@@ -1057,6 +1309,14 @@ pub(crate) fn chamfer(
             "Chamfer requires selected edges and a finite positive distance above the modeling tolerance".into(),
         ));
     }
+    if selected.len() > cad_core::edge_features::MAX_SELECTED_EDGES
+        || solid.face_iter().take(4097).count() > 4096
+    {
+        return Err(CadError::Unsupported(
+            "Chamfer selection exceeds the planar corner complexity limit".into(),
+        ));
+    }
+    let mut proof_work = 0usize;
     let selected = selected.iter().copied().collect::<HashSet<_>>();
     let mut seen = HashSet::new();
     let mut planes: Vec<BevelPlane> = Vec::new();
@@ -1115,16 +1375,18 @@ pub(crate) fn chamfer(
         if spec.flip {
             faces.swap(0, 1);
         }
-        let normals = faces
+        let walls = faces
             .iter()
-            .map(|face| -> Result<Vector3> {
-                boundary_plane(face)?
-                    .map(|plane| plane.normal)
-                    .ok_or_else(|| {
-                        CadError::Unsupported("Chamfer edge must adjoin proven planar faces".into())
-                    })
+            .map(|face| -> Result<BoundaryPlane> {
+                boundary_plane(face)?.ok_or_else(|| {
+                    CadError::Unsupported("Chamfer edge must adjoin proven planar faces".into())
+                })
             })
             .collect::<Result<Vec<_>>>()?;
+        let walls: [BoundaryPlane; 2] = walls
+            .try_into()
+            .map_err(|_| CadError::Invalid("Chamfer requires exactly two adjacent walls".into()))?;
+        let normals = walls.each_ref().map(|wall| wall.normal);
         let cosine = normals[0].dot(normals[1]);
         let sine = (1. - cosine * cosine).max(0.).sqrt();
         if sine < EPSILON {
@@ -1150,19 +1412,17 @@ pub(crate) fn chamfer(
         }
         let sum = normals[0] * spec.distance + normals[1] * second;
         let anchor = edge.front().point();
-        if stock_bounds
+        let supporting_stock = !stock_bounds
             .iter()
             .map(|bounds| {
+                charge_chamfer_proof(&mut proof_work, bounds.len().saturating_mul(normals.len()))?;
                 normals.iter().try_fold(false, |outside, normal| {
                     Ok(outside || bounds.projection(anchor, *normal)?.1 > EPSILON)
                 })
             })
             .collect::<Result<Vec<_>>>()?
             .into_iter()
-            .any(|outside| outside)
-        {
-            return Ok(None);
-        }
+            .any(|outside| outside);
         let origin = anchor - sum * (spec.distance * second * sine / sum.magnitude2());
         let normal = sum.normalize();
         if ![origin.x, origin.y, origin.z, normal.x, normal.y, normal.z]
@@ -1173,6 +1433,23 @@ pub(crate) fn chamfer(
                 "Chamfer distances are too large to construct a finite setback".into(),
             ));
         }
+        let local = if supporting_stock {
+            None
+        } else {
+            let Some(local) = local_convex_setback(
+                solid,
+                &edge,
+                &walls,
+                (origin, normal),
+                [spec.distance, second],
+                history,
+                &mut proof_work,
+            )?
+            else {
+                return Ok(None);
+            };
+            Some(local)
+        };
         let mut sources = vec![history.edge(edge.id())?];
         sources.extend(
             faces
@@ -1189,11 +1466,23 @@ pub(crate) fn chamfer(
                     plane.sources.push(source);
                 }
             }
+            match (&mut plane.local, local) {
+                (Some(existing), Some(current)) => {
+                    for wall in current.walls {
+                        if !existing.walls.contains(&wall) {
+                            existing.walls.push(wall);
+                        }
+                    }
+                    existing.removals.extend(current.removals);
+                }
+                _ => plane.local = None,
+            }
         } else {
             planes.push(BevelPlane {
                 origin,
                 normal,
                 sources,
+                local,
             });
         }
     }
@@ -1201,8 +1490,9 @@ pub(crate) fn chamfer(
         return Ok(None);
     }
     let mut result = solid.clone();
+    let mut bevels = HashSet::new();
     for plane in planes {
-        result = clip(&result, &plane, history)?;
+        result = clip(&result, &plane, history, &mut bevels, &mut proof_work)?;
     }
     Ok(Some(result))
 }

@@ -175,43 +175,7 @@ pub(crate) struct TopologyHistory {
     unresolved_surfaces: BTreeSet<String>,
 }
 pub(crate) fn construction_reference(reference: &TopologyRef) -> Result<serde_json::Value> {
-    fn normalize(value: &mut serde_json::Value) -> Result<()> {
-        match value {
-            serde_json::Value::Object(object) => {
-                if let Some(serde_json::Value::String(role)) = object.get("role") {
-                    let parsed = [
-                        "pattern:",
-                        "hole-position:",
-                        "hole-intersection:",
-                        "construction:",
-                    ]
-                    .into_iter()
-                    .find_map(|prefix| {
-                        role.strip_prefix(prefix)
-                            .filter(|payload| payload.trim_start().starts_with('{'))
-                            .map(|payload| (prefix, payload))
-                    });
-                    if let Some((prefix, payload)) = parsed {
-                        let intent: serde_json::Value = serde_json::from_str(payload)?;
-                        object.insert("role".into(),serde_json::json!({"contract":prefix.trim_end_matches(':'),"intent":intent}));
-                    }
-                }
-                for child in object.values_mut() {
-                    normalize(child)?;
-                }
-            }
-            serde_json::Value::Array(array) => {
-                for child in array {
-                    normalize(child)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-    let mut value = serde_json::json!({"producer":reference.producer,"role":reference.role,"topology":reference.topology});
-    normalize(&mut value)?;
-    Ok(value)
+    cad_core::provenance::normalized_reference(reference)
 }
 impl TopologyHistory {
     pub(crate) fn inherit_face(&mut self, face: FaceId, reference: TopologyRef) {
@@ -271,9 +235,9 @@ impl TopologyHistory {
             producer: owner.clone(),
             role: format!(
                 "construction:{}",
-                serde_json::to_string(
-                    &serde_json::json!({"sources":sources,"purpose":purpose,"topology":"face"})
-                )?
+                serde_json::to_string(&cad_core::provenance::construction_payload(
+                    serde_json::json!({"sources":sources,"purpose":purpose,"topology":"face"})
+                )?)?
             ),
             topology: "face".into(),
             signature: None,
@@ -298,9 +262,9 @@ impl TopologyHistory {
             producer: owner.clone(),
             role: format!(
                 "construction:{}",
-                serde_json::to_string(
-                    &serde_json::json!({"sources":sources,"purpose":purpose,"topology":"edge"})
-                )?
+                serde_json::to_string(&cad_core::provenance::construction_payload(
+                    serde_json::json!({"sources":sources,"purpose":purpose,"topology":"edge"})
+                )?)?
             ),
             topology: "edge".into(),
             signature: None,
@@ -740,6 +704,21 @@ fn shell_bounds(shell: &Shell) -> [[f64; 3]; 2] {
     }
     bounds
 }
+/// Compare saved tree roles and compact closure roles through the same
+/// application-owned identity, without using numerical signatures as aliases.
+fn matches_reference(
+    source: &TopologyRef,
+    wanted: &TopologyRef,
+    canonical: &serde_json::Value,
+) -> Result<bool> {
+    if source.producer != wanted.producer || source.topology != wanted.topology {
+        return Ok(false);
+    }
+    if source.role == wanted.role {
+        return Ok(true);
+    }
+    Ok(construction_reference(source)? == *canonical)
+}
 fn resolve_shape_edges(
     shape: &Shape,
     refs: &[TopologyRef],
@@ -774,11 +753,12 @@ fn resolve_boundary_edges(
 ) -> Result<Vec<EdgeId>> {
     let mut resolved = vec![];
     for r in refs {
+        let wanted = construction_reference(r)?;
         let mut candidates = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for edge in edges.iter().filter(|edge| seen.insert(edge.id())) {
             let matches = if let Some(origin) = history.and_then(|h| h.edges.get(&edge.id())) {
-                origin.producer == r.producer && origin.role == r.role
+                matches_reference(origin, r, &wanted)?
             } else if let Some(wanted) = &r.signature {
                 let sig = edge_signature(edge)?;
                 sig.center
@@ -823,16 +803,12 @@ fn resolve_faces(
         if reference.topology != "face" {
             return Err(err("This operation requires face references"));
         }
-        let candidates = solids
-            .iter()
-            .flat_map(|s| s.face_iter())
-            .filter(|face| {
-                if let Some(origin) = history.and_then(|h| h.faces.get(&face.id())) {
-                    return origin.producer == reference.producer && origin.role == reference.role;
-                }
-                let Some(signature) = &reference.signature else {
-                    return false;
-                };
+        let wanted = construction_reference(reference)?;
+        let mut candidates = std::collections::HashSet::new();
+        for face in solids.iter().flat_map(|solid| solid.face_iter()) {
+            let matches = if let Some(origin) = history.and_then(|h| h.faces.get(&face.id())) {
+                matches_reference(origin, reference, &wanted)?
+            } else if let Some(signature) = &reference.signature {
                 let points = face.vertex_iter().map(|v| v.point()).collect::<Vec<_>>();
                 let center = points.iter().fold(Vector3::zero(), |s, p| s + p.to_vec())
                     / points.len().max(1) as f64;
@@ -857,9 +833,13 @@ fn resolve_faces(
                     .zip(signature.center)
                     .all(|(a, b)| (a - b).abs() <= signature.tolerance)
                     && (area - signature.measure).abs() <= signature.tolerance
-            })
-            .map(|f| f.id())
-            .collect::<std::collections::HashSet<_>>();
+            } else {
+                false
+            };
+            if matches {
+                candidates.insert(face.id());
+            }
+        }
         if candidates.len() != 1 {
             return Err(err(format!(
                 "Face reference {} is {} ({} candidates); select an explicit replacement",
@@ -935,7 +915,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/36;solver/tcad-native-lm/16"
+        "monstertruck/0.4.1+fc2306852a46;adapter/37;solver/tcad-native-lm/16"
     }
     fn clear_weld_joint_previews(&self) {
         self.weld_joints.borrow_mut().clear();
@@ -2195,6 +2175,11 @@ impl KernelAdapter for MonstertruckAdapter {
                 edges: vec![],
                 bounds: [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]],
                 volume_mm3: 0.,
+                body_counts: Some(cad_core::protocol::BodyCounts {
+                    version: cad_core::protocol::BODY_COUNTS_VERSION,
+                    solids: 0,
+                    surfaces: 0,
+                }),
             };
             let history = self.histories.borrow();
             let history = history
@@ -2208,10 +2193,15 @@ impl KernelAdapter for MonstertruckAdapter {
                 let reference = history
                     .edge_source(edge.id())
                     .ok_or_else(|| err("Reference curve edge has no constructor ancestry"))?;
-                if !evaluated.pieces.iter().any(|piece| {
-                    piece.reference.producer == reference.producer
-                        && piece.reference.role == reference.role
-                }) {
+                let wanted = construction_reference(&reference)?;
+                let mut matching_piece = false;
+                for piece in &evaluated.pieces {
+                    if matches_reference(&piece.reference, &reference, &wanted)? {
+                        matching_piece = true;
+                        break;
+                    }
+                }
+                if !matching_piece {
                     return Err(err(
                         "Reference curve display has no matching native piece definition",
                     ));
@@ -2246,6 +2236,17 @@ impl KernelAdapter for MonstertruckAdapter {
             .boundary_shells()
             .ok_or_else(|| err("Cannot tessellate a sketch or datum as a body"))?;
         let solid_volume = matches!(shape, Shape::Bodies(_));
+        let body_counts = cad_core::protocol::BodyCounts {
+            version: cad_core::protocol::BODY_COUNTS_VERSION,
+            solids: match shape {
+                Shape::Bodies(bodies) => bodies.len(),
+                _ => 0,
+            },
+            surfaces: match shape {
+                Shape::Surfaces(surfaces) => surfaces.len(),
+                _ => 0,
+            },
+        };
         let mut mesh = MeshData {
             positions: vec![],
             normals: vec![],
@@ -2254,6 +2255,7 @@ impl KernelAdapter for MonstertruckAdapter {
             edges: vec![],
             bounds: [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]],
             volume_mm3: 0.,
+            body_counts: Some(body_counts),
         };
         let mut native_vertices = std::collections::HashMap::new();
         let mut boundary_token = 0u32;
@@ -2721,19 +2723,24 @@ impl MonstertruckAdapter {
         let names = history
             .get(body)
             .ok_or_else(|| err("Face source provenance is unavailable"))?;
+        let wanted = construction_reference(reference)?;
         let mut seen = std::collections::HashSet::new();
-        let faces: Vec<_> = shape
+        let mut faces = Vec::new();
+        for face in shape
             .boundary_shells()
             .ok_or_else(|| err("Select a solid or surface body"))?
             .into_iter()
-            .flat_map(|s| s.iter())
-            .filter(|f| {
-                seen.insert(f.id())
-                    && names.faces.get(&f.id()).is_some_and(|r| {
-                        r.producer == reference.producer && r.role == reference.role
-                    })
-            })
-            .collect();
+            .flat_map(|shell| shell.iter())
+        {
+            if !seen.insert(face.id()) {
+                continue;
+            }
+            if let Some(source) = names.faces.get(&face.id())
+                && matches_reference(source, reference, &wanted)?
+            {
+                faces.push(face);
+            }
+        }
         if faces.len() != 1 {
             return Err(err(
                 "Face reference is missing or ambiguous; select an explicit replacement",
@@ -2842,7 +2849,7 @@ impl MonstertruckAdapter {
                     continue;
                 }
                 if seen_faces.len() > 16_384 {
-                    return Err(budget_error());
+                    return Err(component_history::face_limit_error());
                 }
                 let carrier = budget.encoded(&face.surface())?;
                 let source = generated.face_source(face.id()).or_else(|| {
@@ -2863,7 +2870,7 @@ impl MonstertruckAdapter {
                     continue;
                 }
                 if seen_edges.len() > 65_536 {
-                    return Err(budget_error());
+                    return Err(component_history::edge_limit_error());
                 }
                 let carrier = budget.encoded(&edge.curve())?;
                 let source = generated.edge_source(edge.id()).or_else(|| {
@@ -2894,7 +2901,7 @@ impl MonstertruckAdapter {
                 continue;
             }
             if seen_faces.len() > 16_384 {
-                return Err(budget_error());
+                return Err(component_history::face_limit_error());
             }
             let carrier = budget.encoded(&face.surface())?;
             output_faces.insert(face.id(), carrier.clone());
@@ -2912,7 +2919,7 @@ impl MonstertruckAdapter {
                 continue;
             }
             if seen_edges.len() > 65_536 {
-                return Err(budget_error());
+                return Err(component_history::edge_limit_error());
             }
             let curve = edge.curve();
             let carrier = budget.encoded(&curve)?;
@@ -3097,26 +3104,31 @@ impl MonstertruckAdapter {
                         continue;
                     }
                     let geometry = budget.encoded(&face.surface())?;
-                    let source = generated
-                        .faces
-                        .get(&face.id())
-                        .cloned()
-                        .or_else(|| {
-                            inherited_faces.get(&face.id()).cloned().or_else(|| {
-                                (!scale_copy)
-                                    .then(|| unique_origin(surface_origins.get(&geometry)))
-                                    .flatten()
-                            })
+                    let source = generated.faces.get(&face.id()).cloned().or_else(|| {
+                        inherited_faces.get(&face.id()).cloned().or_else(|| {
+                            (!scale_copy)
+                                .then(|| unique_origin(surface_origins.get(&geometry)))
+                                .flatten()
                         })
-                        .filter(|r| {
-                            // A shell opening rim is a new face even on the removed carrier.
-                            !matches!(op, Operation::Shell { removed_faces, .. }
-                            if removed_faces.iter().any(|removed|
-                                removed.producer == r.producer && removed.role == r.role))
-                        });
+                    });
                     if let Some(source) = source {
-                        budget.reference(&source)?;
-                        history.inherit_face(face.id(), source);
+                        // A shell opening rim is a new face even on the
+                        // removed carrier. Legacy saved source roles compare
+                        // through the bounded canonical closure as well.
+                        let mut removed_source = false;
+                        if let Operation::Shell { removed_faces, .. } = op {
+                            let wanted = construction_reference(&source)?;
+                            for removed in removed_faces {
+                                if matches_reference(removed, &source, &wanted)? {
+                                    removed_source = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if !removed_source {
+                            budget.reference(&source)?;
+                            history.inherit_face(face.id(), source);
+                        }
                     }
                 }
             }
@@ -3241,22 +3253,22 @@ fn carrier_intersection_origin(
         serde_json::from_str::<serde_json::Value>(&budget.reference(&second)?)?,
     ];
     carriers.sort_by_key(serde_json::Value::to_string);
+    let payload = if hole {
+        serde_json::json!({"carriers":carriers})
+    } else {
+        serde_json::json!({
+            "sources":carriers,
+            "purpose":{"operation":"boolean","constructor":"carrier_intersection"},
+            "topology":"edge"
+        })
+    };
+    let payload = budget.encoded(&cad_core::provenance::construction_payload(payload)?)?;
     Ok(Some(TopologyRef {
         producer: owner.clone(),
         role: if hole {
-            format!(
-                "hole-intersection:{}",
-                budget.encoded(&serde_json::json!({"carriers":carriers}))?
-            )
+            format!("hole-intersection:{payload}")
         } else {
-            format!(
-                "construction:{}",
-                budget.encoded(&serde_json::json!({
-                    "sources":carriers,
-                    "purpose":{"operation":"boolean","constructor":"carrier_intersection"},
-                    "topology":"edge"
-                }))?
-            )
+            format!("construction:{payload}")
         },
         topology: "edge".into(),
         signature: None,
@@ -3292,6 +3304,7 @@ impl MonstertruckAdapter {
         inputs: &BTreeMap<NodeRef, Shape>,
     ) -> Result<CadPlane> {
         let histories = self.histories.borrow();
+        let wanted = construction_reference(reference)?;
         let mut matches = vec![];
         for (key, shape) in inputs
             .iter()
@@ -3300,9 +3313,9 @@ impl MonstertruckAdapter {
             if let (Some(history), Some(shells)) = (histories.get(key), shape.boundary_shells()) {
                 for shell in shells {
                     for face in shell.iter() {
-                        if history.faces.get(&face.id()).is_some_and(|r| {
-                            r.producer == reference.producer && r.role == reference.role
-                        }) && matches!(face.surface(), Surface::Plane(_))
+                        if let Some(source) = history.faces.get(&face.id())
+                            && matches_reference(source, reference, &wanted)?
+                            && matches!(face.surface(), Surface::Plane(_))
                             && !matches.iter().any(|f: &Face| f.id() == face.id())
                         {
                             matches.push(face.clone());
@@ -3341,7 +3354,7 @@ impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
             .adapter
             .face_source(body, face.id())
             .ok_or_else(|| err("Tangent plane face has no construction provenance"))?;
-        if origin.producer != reference.producer || origin.role != reference.role {
+        if !cad_core::provenance::equivalent(&origin, reference)? {
             return Err(err(
                 "Tangent plane face did not resolve by its saved construction identity",
             ));
@@ -3615,7 +3628,7 @@ impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
             .adapter
             .edge_source(body, edge.id())
             .ok_or_else(|| err("Reference Point edge has no construction provenance"))?;
-        if origin.producer != reference.producer || origin.role != reference.role {
+        if !cad_core::provenance::equivalent(&origin, reference)? {
             return Err(err(
                 "Reference Point edge did not resolve by its saved construction identity",
             ));

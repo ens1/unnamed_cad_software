@@ -7,6 +7,15 @@ use std::{
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME: usize = 256 * 1024 * 1024;
 pub const OPERATION_PREVIEW_VERSION: u32 = 2;
+pub const BODY_COUNTS_VERSION: u32 = 1;
+/// Disposable inventory reported from native solids/surface bodies. Shells,
+/// optical batches and output features are not individual solid bodies.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+pub struct BodyCounts {
+    pub version: u32,
+    pub solids: usize,
+    pub surfaces: usize,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RequestIdentity {
     pub protocol: u32,
@@ -26,6 +35,8 @@ pub struct MeshData {
     pub edges: Vec<EdgeData>,
     pub bounds: [[f64; 3]; 2],
     pub volume_mm3: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_counts: Option<BodyCounts>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FaceRange {

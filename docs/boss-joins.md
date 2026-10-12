@@ -48,6 +48,12 @@ strict inset, complete-outline continuation and line/arc contact arrangements.
   rebuilt from the resulting loops. This covers crossing hole boundaries when
   the line/arc arrangement resolves to closed, nonbranching regions. The inset
   fast path still requires strict separation from existing stock holes.
+- Material classification shares the native endpoint half-open ray rule with
+  layered Booleans. Circular arcs split only at analytic horizontal extrema;
+  line orientation and circular branch side comparisons avoid rounded ray
+  intersections. A circular endpoint is owned by its actual shared vertex,
+  rather than by an independently reconstructed angle equal to zero or one.
+  Unresolved finite arithmetic remains an explicit error.
 - Separated bosses can attach to the same original face, including separate
   selected material contours. A stepped or hollow stock can have other material
   above the contact plane when every outgoing stock face has a positive native

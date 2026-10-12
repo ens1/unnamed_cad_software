@@ -43,6 +43,7 @@ pub mod placement_pattern;
 pub mod presentation;
 pub mod production;
 pub mod protocol;
+pub mod provenance;
 pub mod reference_curves;
 pub mod reference_geometry;
 pub mod reference_repair;

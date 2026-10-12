@@ -77,7 +77,7 @@ pub(crate) fn seam(
             }
             let edge = edges[0].absolute_clone();
             let actual = adapter.boundary_edge_reference(body, &edge)?;
-            if actual.producer != reference.producer || actual.role != reference.role {
+            if !cad_core::provenance::equivalent(&actual, reference)? {
                 return Err(invalid(
                     "The seam did not resolve by its saved construction ancestry",
                 ));
@@ -132,26 +132,25 @@ pub(crate) fn seam(
                         .ok_or_else(|| invalid("The saved reference seam piece was removed"))
                 })
                 .transpose()?;
-            paths[0]
-                .iter()
-                .filter_map(|edge| {
-                    let source = adapter.edge_source(feature, edge.id());
-                    if wanted.is_some_and(|wanted| {
-                        source.as_ref().is_none_or(|source| {
-                            source.producer != wanted.producer || source.role != wanted.role
-                        })
-                    }) {
-                        return None;
+            let wanted_identity = wanted
+                .map(cad_core::provenance::normalized_reference)
+                .transpose()?;
+            let mut pieces = Vec::new();
+            for edge in &paths[0] {
+                let source = adapter.edge_source(feature, edge.id());
+                if let Some(wanted_identity) = &wanted_identity {
+                    let Some(source) = &source else {
+                        continue;
+                    };
+                    if cad_core::provenance::normalized_reference(source)? != *wanted_identity {
+                        continue;
                     }
-                    Some(
-                        source
-                            .map(|source| (edge.oriented_curve(), source))
-                            .ok_or_else(|| {
-                                invalid("The seam curve has no saved construction ancestry")
-                            }),
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?
+                }
+                let source = source
+                    .ok_or_else(|| invalid("The seam curve has no saved construction ancestry"))?;
+                pieces.push((edge.oriented_curve(), source));
+            }
+            pieces
         }
     };
     if pieces.is_empty() || pieces.len() > 4096 {
@@ -663,18 +662,16 @@ fn planar_contact(
         }
         partitions.sort_by(f64::total_cmp);
         partitions.dedup_by(|a, b| (*a - *b).abs() <= 1e-12);
-        if [0., 1.]
-            .into_iter()
-            .chain(
-                partitions
-                    .windows(2)
-                    .map(|range| (range[0] + range[1]) * 0.5),
-            )
-            .any(|t| locate(segment.at(t), &region) == Location::Outside)
-        {
-            return Err(invalid(
-                "The bead toe extends outside the selected support's trimmed boundaries; reduce size or end offsets, or replace the support",
-            ));
+        for t in [0., 1.].into_iter().chain(
+            partitions
+                .windows(2)
+                .map(|range| (range[0] + range[1]) * 0.5),
+        ) {
+            if locate(segment.at(t), &region)? == Location::Outside {
+                return Err(invalid(
+                    "The bead toe extends outside the selected support's trimmed boundaries; reduce size or end offsets, or replace the support",
+                ));
+            }
         }
     }
     Ok(())

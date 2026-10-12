@@ -13,6 +13,14 @@ authority.
   two remaining walls may be drafted when their dihedral angles to the common
   wall agree. Chamfers clip all selected supporting setbacks together, so
   adjacent bevels share their corner topology.
+  Simultaneous chamfers also admit an outer planar corner on non-convex stock,
+  such as a plate carrying a tall merged boss. Its actual three-face terminal
+  neighborhoods and four bounded support planes establish a convex removal
+  prism. Complete native projection bounds protect unrelated bosses, holes,
+  voids and earlier treatments. Only the source support/terminal faces and
+  intersecting bevel caps are clipped; a distant carrier is retained even when
+  it crosses the bevel's infinite plane. Separated earlier bevel caps remain
+  intact while adjoining caps share the new corner topology.
   Later round features may retain earlier curved trims on those planar walls:
   only the newly selected endpoint neighborhoods must still have three straight
   edges and three supporting planar faces. Complete native enclosures protect

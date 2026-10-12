@@ -725,12 +725,11 @@ fn remap_source_inner(
                     carriers.sort_by_cached_key(serde_json::Value::to_string);
                 }
                 if object.get("contract").and_then(|v| v.as_str()) == Some("construction")
-                    && let Some(sources) = object
-                        .get_mut("intent")
-                        .and_then(|value| value.get_mut("sources"))
-                        .and_then(serde_json::Value::as_array_mut)
+                    && let Some(intent) = object.get_mut("intent")
                 {
-                    sources.sort_by_cached_key(serde_json::Value::to_string);
+                    // Source sets can also be explicit indexed constructor
+                    // tables. Reordering must rewrite the constructor indices.
+                    crate::provenance::canonicalize(intent)?;
                 }
                 if let Some(members) = object
                     .get_mut("source_members")
@@ -849,18 +848,37 @@ fn remap_role(
     let Some((prefix, payload)) = role.split_once(':') else {
         return Ok(role.into());
     };
+    if prefix == "member" {
+        // Sheet-stock source descriptors use the authored sketch member as
+        // their leaf role. Whole-document import namespaces that member;
+        // Make Unique retains member IDs while replacing feature owners.
+        return Ok(format!(
+            "member:{}",
+            (!owned_features)
+                .then(|| mapping.get(payload))
+                .flatten()
+                .map(String::as_str)
+                .unwrap_or(payload)
+        ));
+    }
     if !matches!(
         prefix,
         "pattern" | "hole-position" | "hole-intersection" | "construction"
     ) {
         return Ok(role.into());
     }
-    if payload.starts_with('{') {
-        let mut value: serde_json::Value = serde_json::from_str(payload)
+    if payload.trim_start().starts_with('{') {
+        let value: serde_json::Value = serde_json::from_str(payload)
             .map_err(|_| CadError::Invalid("Malformed saved construction-role payload".into()))?;
+        // Expand legacy embedded descriptor strings only into bounded table
+        // entries, so ownership changes visit every actual source identity.
+        let mut value = crate::provenance::construction_payload(value)?;
         remap_source_inner(&mut value, mapping, "", owned_features)?;
+        let root = value.get_mut("root").ok_or_else(|| {
+            CadError::Invalid("Saved source closure has no construction intent".into())
+        })?;
         if prefix == "hole-intersection" {
-            let carriers = value
+            let carriers = root
                 .get_mut("carriers")
                 .and_then(serde_json::Value::as_array_mut)
                 .ok_or_else(|| {
@@ -874,14 +892,17 @@ fn remap_role(
             carriers.sort_by_cached_key(serde_json::Value::to_string);
         }
         if prefix == "construction" {
-            let sources = value
+            let sources = root
                 .get_mut("sources")
                 .and_then(serde_json::Value::as_array_mut)
                 .ok_or_else(|| {
                     CadError::Invalid("Constructed topology role has no source identities".into())
                 })?;
-            sources.sort_by_cached_key(serde_json::Value::to_string);
+            // The shared encoder canonicalizes sources and their explicit
+            // constructor indices together after all identity remapping.
+            let _ = sources;
         }
+        let value = crate::provenance::construction_payload(value)?;
         return Ok(format!("{prefix}:{}", serde_json::to_string(&value)?));
     }
     match prefix {
