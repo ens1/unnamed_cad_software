@@ -60,6 +60,9 @@ fn point_on_trim(edge: &Edge, old: VertexId, replacement: &Vertex) -> Result<()>
 }
 
 impl Terminations {
+    pub(super) fn closed(&self) -> bool {
+        self.ends.is_empty()
+    }
     pub(super) fn discover(
         solid: &Solid,
         rims: &[Rim],

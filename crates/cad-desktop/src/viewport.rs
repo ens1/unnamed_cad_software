@@ -1312,6 +1312,11 @@ pub fn sync_scene(
                     .map(|instance| (&instance.path, &instance.matrix))
                     .collect::<Vec<_>>(),
                 &w.view.history_cursor,
+                crate::fabrication_sources_ui::input_body(&w),
+                crate::selection_ui::edge_feature(&w).and_then(|feature| {
+                    crate::selection_ui::edge_selection(&feature).map(|(body, _)| body.clone())
+                }),
+                &w.edge_selection_path,
             ))
             .unwrap_or_default()
         })

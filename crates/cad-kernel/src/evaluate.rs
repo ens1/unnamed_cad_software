@@ -639,6 +639,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         // A failed rebuild may have updated adapter provenance. Never reuse its prior cache key.
         self.last_source.clear();
         self.adapter.clear_weld_joint_previews();
+        self.adapter.clear_operation_previews();
         let report =
             crate::assemblies::build_shapes_report(&self.adapter, &solved, root, tolerance, true)?;
         if !report.failures.is_empty() {

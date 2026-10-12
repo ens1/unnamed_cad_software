@@ -996,6 +996,41 @@ fn construct(a: Stock, b: Stock, frame: &Frame, mode: Mode) -> Result<Output> {
 
 /// `None` means a different native backend is needed. An output with no solid is
 /// a proven empty set. Errors after recognition never use sampled geometry.
+/// Admission only, using the same native recognizer and canonical axis as the
+/// layered constructor. Local edits must not preempt an existing provenance
+/// grammar merely because they could also build an equivalent boundary.
+pub(crate) fn admits_along(a: &Solid, b: &Solid, mut normal: Vector3) -> Result<bool> {
+    if a.face_iter().count().saturating_add(b.face_iter().count()) > MAX_FACES
+        || !normal.magnitude2().is_finite()
+        || normal.magnitude2() <= 1e-18
+    {
+        return Ok(false);
+    }
+    normal = normal.normalize();
+    let major = (0..3)
+        .max_by(|a, b| normal[*a].abs().total_cmp(&normal[*b].abs()))
+        .unwrap_or(2);
+    if normal[major] < 0. {
+        normal = -normal;
+    }
+    let Some(origin) = a.vertex_iter().next().map(|vertex| vertex.point()) else {
+        return Ok(false);
+    };
+    let u = normal
+        .cross(if normal.x.abs() < 0.8 {
+            Vector3::unit_x()
+        } else {
+            Vector3::unit_y()
+        })
+        .normalize();
+    let frame = Frame {
+        origin,
+        axes: [u, normal.cross(u)],
+        normal,
+    };
+    Ok(recognize(a, 0, &frame)?.is_some() && recognize(b, 1, &frame)?.is_some())
+}
+
 pub(crate) fn binary(a: &Solid, b: &Solid, mode: Mode) -> Result<Option<Output>> {
     if a.face_iter().count().saturating_add(b.face_iter().count()) > MAX_FACES {
         return Ok(None);

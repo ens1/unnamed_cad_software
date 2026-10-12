@@ -147,6 +147,27 @@ pub(crate) fn insert_cut(
     upper: &Face,
     axis: Vector3,
 ) -> Result<Option<CutOutput>> {
+    if let Some(output) = insert_convex_cut(solid, lower, upper, axis)? {
+        return Ok(Some(output));
+    }
+    let tool = match crate::extrusion::between_caps(lower, upper, axis) {
+        Ok(tool) => tool,
+        Err(CadError::Unsupported(_)) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    match crate::prismatic_boolean::admits_along(solid, &tool, axis) {
+        Ok(true) => return Ok(None),
+        Ok(false) | Err(CadError::Unsupported(_)) => {}
+        Err(error) => return Err(error),
+    }
+    crate::local_pockets::cut_from_caps(solid, lower, upper, axis)
+}
+fn insert_convex_cut(
+    solid: &Solid,
+    lower: &Face,
+    upper: &Face,
+    axis: Vector3,
+) -> Result<Option<CutOutput>> {
     if solid.boundaries().len() != 1 {
         return Ok(None);
     }
@@ -1100,7 +1121,7 @@ fn clip(
     history: &mut ShellHistory,
     bevels: &mut HashSet<FaceId>,
     work: &mut usize,
-) -> Result<Solid> {
+) -> Result<(Solid, Option<Vec<Solid>>)> {
     let signed = |p: Point3| (p - plane.origin).dot(plane.normal);
     let Some(exterior) = solid.boundaries().first() else {
         return Err(CadError::Invalid(
@@ -1131,6 +1152,7 @@ fn clip(
     let mut vertices = exterior.vertex_iter().collect::<Vec<_>>();
     let mut intersections = HashMap::new();
     let mut faces = Shell::new();
+    let mut removed = Some(Shell::new());
     let mut changed = false;
     for face in exterior {
         let boundaries = face.boundaries();
@@ -1181,6 +1203,7 @@ fn clip(
             ));
         }
         let mut polygon = Vec::new();
+        let mut discarded = Vec::new();
         for edge in &boundaries[0] {
             let a = edge.front();
             let b = edge.back();
@@ -1210,10 +1233,62 @@ fn clip(
                     let segment = edge_between(&mut edge_cache, front, back);
                     history.retain_edge(segment.id(), edge.id())?;
                 }
-                polygon.push(vertex);
+                polygon.push(vertex.clone());
+                discarded.push(vertex);
             }
             if inside_b {
                 polygon.push(b.clone());
+            } else {
+                discarded.push(b.clone());
+            }
+        }
+        if let Some(shell) = &mut removed {
+            let capture = crate::constructor_delta::capture(|| {
+                discarded.dedup_by(|a, b| a.id() == b.id());
+                if discarded
+                    .first()
+                    .zip(discarded.last())
+                    .is_some_and(|(a, b)| a.id() == b.id())
+                {
+                    discarded.pop();
+                }
+                if discarded.len() < 3
+                    || polygon_area(&discarded.iter().map(Vertex::point).collect::<Vec<_>>())
+                        .magnitude()
+                        <= EPSILON * EPSILON
+                {
+                    return Ok(None);
+                }
+                let normal = carrier
+                    .as_ref()
+                    .ok_or_else(|| {
+                        CadError::Unsupported("Material wall is not provably planar".into())
+                    })?
+                    .normal;
+                if !simple_polygon(&discarded, normal) {
+                    return Err(CadError::Unsupported(
+                        "Material removal splits a wall boundary".into(),
+                    ));
+                }
+                let wire = Wire::from(
+                    (0..discarded.len())
+                        .map(|i| {
+                            edge_between(
+                                &mut edge_cache,
+                                &discarded[i],
+                                &discarded[(i + 1) % discarded.len()],
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                );
+                Face::try_new(vec![wire], face.oriented_surface())
+                    .map(Some)
+                    .map_err(|e| CadError::Invalid(format!("Material wall trimming: {e}")))
+            });
+            match capture {
+                Some(Some(face)) => shell.push(face),
+                Some(None) => (),
+                None => removed = None,
             }
         }
         polygon.dedup_by(|a, b| a.id() == b.id());
@@ -1255,7 +1330,7 @@ fn clip(
         faces.push(trimmed);
     }
     if !changed {
-        return Ok(solid.clone());
+        return Ok((solid.clone(), Some(vec![])));
     }
     if faces.is_empty() {
         return Err(CadError::Invalid(
@@ -1276,6 +1351,9 @@ fn clip(
         serde_json::json!({"operation":"chamfer","constructor":"edge_setback"}),
     )?;
     bevels.insert(cap.id());
+    if let Some(removed) = &mut removed {
+        removed.push(cap.inverse());
+    }
     faces.push(cap);
     if faces.connected_components().len() != 1 {
         return Err(CadError::Unsupported(
@@ -1287,7 +1365,21 @@ fn clip(
     let result = Solid::try_new(shells)
         .map_err(|error| CadError::Invalid(format!("Chamfer corner construction: {error}")))?;
     crate::validation::solid(&result)?;
-    Ok(result)
+    let removed = removed.and_then(|removed| {
+        crate::constructor_delta::capture(|| {
+            removed
+                .connected_components()
+                .into_iter()
+                .map(|shell| {
+                    let solid = Solid::try_new(vec![shell])
+                        .map_err(|e| CadError::Invalid(format!("Material removal closure: {e}")))?;
+                    crate::validation::solid(&solid)?;
+                    Ok(solid)
+                })
+                .collect::<Result<Vec<_>>>()
+        })
+    });
+    Ok((result, removed))
 }
 
 pub(crate) struct ChamferSpec {
@@ -1491,8 +1583,18 @@ pub(crate) fn chamfer(
     }
     let mut result = solid.clone();
     let mut bevels = HashSet::new();
+    let mut removed = Some(Vec::new());
     for plane in planes {
-        result = clip(&result, &plane, history, &mut bevels, &mut proof_work)?;
+        let (next, delta) = clip(&result, &plane, history, &mut bevels, &mut proof_work)?;
+        result = next;
+        match (removed.as_mut(), delta) {
+            (Some(removed), Some(delta)) => removed.extend(delta),
+            _ => removed = None,
+        }
     }
+    let native = removed.and_then(|pieces| {
+        crate::constructor_delta::capture(|| crate::constructor_delta::removal(pieces))
+    });
+    history.capture_material(Ok(native));
     Ok(Some(result))
 }

@@ -34,6 +34,18 @@ pub fn begin_save_as(w: &mut Workspace) {
         w.status = "Name the saved copy, then confirm the current validated document".into();
     }
 }
+
+/// A user-chosen file/folder name is the initial document-name proposal.
+/// It remains an editable, cancelable draft until the shared confirmation.
+pub fn propose_save_name(w: &mut Workspace, name: &str) {
+    if !pending_save_as(w) || validate_name(name).is_err() {
+        return;
+    }
+    w.fields.insert(NAME.into(), name.trim().into());
+    if let Err(error) = submit(w) {
+        w.status = error.to_string();
+    }
+}
 pub fn confirmation_label(w: &Workspace) -> &'static str {
     if pending_save_as(w) {
         "Save Named Copy"

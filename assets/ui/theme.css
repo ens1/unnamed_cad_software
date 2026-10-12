@@ -667,3 +667,9 @@
   stroke-width: 2px;
   opacity: 0.85;
 }
+[role=sketch-issue] {
+  font-size: 10px;
+  min-target-size: 24px;
+  border-radius: 3px;
+}
+[role=sketch-issue][state=selected] { color: var(--accent); }

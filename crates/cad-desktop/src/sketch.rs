@@ -1979,6 +1979,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         }
         ui.small("Open members may define a sweep path. Closed contours define solids; nested contours define holes. Construction members never generate solid geometry.");
     }
+    crate::sketch_issues_ui::controls(ui, w);
     crate::sketch_ui::secondary_controls(ui, w);
     if let Some(entity) = clicked_entity {
         let continue_dimension = w.fields.contains_key("smart-dimension-mode")

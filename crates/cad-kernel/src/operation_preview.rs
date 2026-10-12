@@ -206,6 +206,20 @@ fn exact_solids(
         representation: PreviewRepresentation::ExactBrep,
     })
 }
+pub(crate) fn constructed(
+    adapter: &MonstertruckAdapter,
+    native: &crate::constructor_delta::Native,
+    owner: &NodeRef,
+    tolerance: f64,
+) -> Result<OperationPreviewChange> {
+    admit(&native.added, &native.removed)?;
+    Ok(OperationPreviewChange {
+        added: mesh(adapter, native.added.clone(), owner, tolerance)?,
+        removed: mesh(adapter, native.removed.clone(), owner, tolerance)?,
+        diagnostics: vec![],
+        representation: PreviewRepresentation::ExactBrep,
+    })
+}
 
 fn surfaces(
     adapter: &MonstertruckAdapter,

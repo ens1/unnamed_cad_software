@@ -20,7 +20,7 @@ struct Triangle {
     sign: f64,
 }
 #[derive(Default)]
-pub struct Cache {
+struct Index {
     key: String,
     triangles: Vec<Triangle>,
     cells: Vec<Vec<usize>>,
@@ -35,6 +35,117 @@ pub struct Cache {
     last_build: Option<u64>,
     epoch: u64,
     bias_mm: f64,
+    triangle_budget: usize,
+    reference_budget: usize,
+}
+/// Four contexts share aggregate storage and one ~1.5 ms frame-time slice.
+#[derive(Default)]
+pub struct Cache {
+    entries: Vec<Entry>,
+    source: String,
+    clock: u64,
+    epoch: u64,
+    last_build: Option<u64>,
+}
+struct Entry {
+    rect: [u32; 4],
+    index: Index,
+    clock: u64,
+    seen: u64,
+}
+impl Cache {
+    fn index(&mut self, w: &Workspace, rect: Rect) -> &mut Index {
+        let source = key(w, Rect::ZERO);
+        if source != self.source {
+            self.source = source;
+            self.epoch = self.epoch.wrapping_add(1);
+            for entry in &mut self.entries {
+                entry.index = Index::default();
+            }
+        }
+        let previous = self.entries.len();
+        self.entries
+            .retain(|entry| w.display_mesh.frame.saturating_sub(entry.seen) <= 8);
+        if self.entries.len() != previous {
+            self.epoch = self.epoch.wrapping_add(1);
+        }
+        self.clock = self.clock.wrapping_add(1);
+        let rect_key = [
+            rect.min.x.to_bits(),
+            rect.min.y.to_bits(),
+            rect.max.x.to_bits(),
+            rect.max.y.to_bits(),
+        ];
+        let slot = if let Some(slot) = self.entries.iter().position(|e| e.rect == rect_key) {
+            slot
+        } else {
+            if self.entries.len() == 4 {
+                let oldest = self
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, e)| e.clock)
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                self.entries.remove(oldest);
+                self.epoch = self.epoch.wrapping_add(1);
+            }
+            self.entries.push(Entry {
+                rect: rect_key,
+                index: Index::default(),
+                clock: self.clock,
+                seen: w.display_mesh.frame,
+            });
+            self.entries.len() - 1
+        };
+        let triangles = MAX_TRIANGLES.saturating_sub(
+            self.entries
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != slot)
+                .map(|(_, e)| e.index.triangles.len())
+                .sum(),
+        );
+        let references = MAX_REFERENCES.saturating_sub(
+            self.entries
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != slot)
+                .map(|(_, e)| e.index.references)
+                .sum(),
+        );
+        let entry = &mut self.entries[slot];
+        entry.clock = self.clock;
+        entry.seen = w.display_mesh.frame;
+        if entry.index.exhausted
+            && (triangles > entry.index.triangle_budget
+                || references > entry.index.reference_budget)
+        {
+            entry.index = Index::default();
+            self.epoch = self.epoch.wrapping_add(1);
+        }
+        entry.index.triangle_budget = triangles;
+        entry.index.reference_budget = references;
+        entry.index.refresh(w, rect, false);
+        let pending = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                !e.index.complete
+                    && !e.index.exhausted
+                    && w.display_mesh.frame.saturating_sub(e.seen) <= 1
+            })
+            .map(|(i, _)| i)
+            .collect::<Vec<_>>();
+        let chosen =
+            !pending.is_empty() && pending[w.display_mesh.frame as usize % pending.len()] == slot;
+        if chosen && self.last_build != Some(w.display_mesh.frame) {
+            self.last_build = Some(w.display_mesh.frame);
+            self.entries[slot].index.refresh(w, rect, true);
+        }
+        &mut self.entries[slot].index
+    }
 }
 fn point(w: &Workspace, rect: Rect, world: [f64; 3]) -> Option<Point> {
     let pose = crate::camera_views_ui::current(w);
@@ -146,10 +257,11 @@ fn key(w: &Workspace, rect: Rect) -> String {
             })
             .collect::<Vec<_>>()
     });
+    let fabrication = crate::fabrication_sources_ui::input_body(w);
     let body = crate::selection_ui::edge_feature(w)
         .and_then(|f| crate::selection_ui::edge_selection(&f).map(|(body, _)| body.clone()));
     format!(
-        "{:?}:{rect:?}:{:?}:{:?}:{:?}:{:?}:{}:{instances:?}:{body:?}:{:?}",
+        "{:?}:{rect:?}:{:?}:{:?}:{:?}:{:?}:{}:{instances:?}:{body:?}:{fabrication:?}:{:?}",
         crate::camera_views_ui::current(w),
         e.map(|e| &e.identity),
         selection.map(|e| &e.identity),
@@ -159,7 +271,7 @@ fn key(w: &Workspace, rect: Rect) -> String {
         w.edge_selection_path
     )
 }
-impl Cache {
+impl Index {
     fn ranges(&self, rect: Rect, a: Point, b: Point) -> Option<[(usize, usize); 2]> {
         let lo = [
             a.x.min(b.x).max(f64::from(rect.min.x)),
@@ -217,7 +329,7 @@ impl Cache {
         };
         let count = (x1 - x0 + 1).saturating_mul(y1 - y0 + 1);
         *references = references.saturating_add(count);
-        if *references > MAX_REFERENCES || self.triangles.len() >= MAX_TRIANGLES {
+        if *references > self.reference_budget || self.triangles.len() >= self.triangle_budget {
             return false;
         }
         let index = self.triangles.len();
@@ -229,8 +341,8 @@ impl Cache {
         }
         true
     }
-    fn refresh(&mut self, w: &Workspace, rect: Rect) {
-        let key = key(w, rect);
+    fn refresh(&mut self, w: &Workspace, rect: Rect, build: bool) {
+        let key = format!("{}:{:?}", key(w, rect), w.viewport_size);
         if self.key != key {
             self.epoch = self.epoch.wrapping_add(1);
             self.key = key;
@@ -252,7 +364,11 @@ impl Cache {
             }
             self.cells = vec![Vec::new(); self.columns * self.rows];
         }
-        if self.complete || self.exhausted || self.last_build == Some(w.display_mesh.frame) {
+        if !build
+            || self.complete
+            || self.exhausted
+            || self.last_build == Some(w.display_mesh.frame)
+        {
             return;
         }
         let started = Instant::now();
@@ -428,7 +544,7 @@ pub fn visible(w: &Workspace, rect: Rect, world: [f64; 3], work: &mut usize) -> 
     let Ok(mut cache) = w.overlay_depth.lock() else {
         return false;
     };
-    cache.refresh(w, rect);
+    let cache = cache.index(w, rect);
     if !cache.complete {
         return false;
     }
@@ -455,7 +571,7 @@ pub fn segments(
     let Ok(mut cache) = w.overlay_depth.lock() else {
         return Vec::new();
     };
-    cache.refresh(w, rect);
+    let cache = cache.index(w, rect);
     if !cache.complete {
         return Vec::new();
     }
@@ -492,6 +608,13 @@ pub fn token(w: &Workspace, rect: Rect) -> (u64, bool, bool) {
     let Ok(mut cache) = w.overlay_depth.lock() else {
         return (0, false, true);
     };
-    cache.refresh(w, rect);
-    (cache.epoch, cache.complete, cache.exhausted)
+    let (index_epoch, complete, exhausted) = {
+        let index = cache.index(w, rect);
+        (index.epoch, index.complete, index.exhausted)
+    };
+    (
+        cache.epoch.wrapping_mul(65537).wrapping_add(index_epoch),
+        complete,
+        exhausted,
+    )
 }

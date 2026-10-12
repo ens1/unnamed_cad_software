@@ -61,10 +61,15 @@ Occluded intervals merge before visible segments are drawn.
 
 A tiled index limits each line query to crossed screen cells, rather than
 scanning every model triangle for each sample. It is cached by source identity,
-camera, viewport, history, input-body selection, placement/visibility state and
-display-detail epoch. Index construction yields after approximately 1.5 ms and
-continues on later frames, with 500,000 source triangles and 2,000,000 tile
-references as hard storage/work bounds. Optional visible-depth decoration is
+camera, viewport/render aspect, history, edge/fabrication input-body selection,
+placement/visibility state and display-detail epoch. Up to four viewport
+contexts retain independent indexes. They share one approximately 1.5 ms frame
+slice and aggregate limits of 500,000 stored triangles and 2,000,000 tile
+references; those budgets are not multiplied by the number of user-defined
+viewports. Index work continues on later frames, alternating pending active
+contexts. Inactive contexts expire, and evicted contexts rebuild when used.
+Each index also bounds source traversal to 500,000 triangles.
+Optional visible-depth decoration is
 omitted while the current index is incomplete or exhausted. Hover-cache tokens
 expire initial misses when the index completes, including a stationary pointer.
 Explicit X-ray overlays remain available and bypass depth clipping.

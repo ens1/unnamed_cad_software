@@ -1255,6 +1255,7 @@ fn attempt_native(
     let mut diagnostic = None;
     for constructor in 0..4 {
         let mut candidate = history.clone();
+        let material_captures = candidate.material_captures();
         let result = match constructor {
             0 => concave_treatment::construct(solid, selected, spec, treatment, &mut candidate),
             1 => local_blend::construct(solid, selected, spec, treatment, &mut candidate),
@@ -1268,6 +1269,9 @@ fn attempt_native(
         };
         match result {
             Ok(Some(output)) => {
+                if candidate.material_captures() == material_captures {
+                    candidate.invalidate_material();
+                }
                 *history = candidate;
                 return Ok(Some(output));
             }
@@ -1759,6 +1763,7 @@ fn circular(
     }
     let mut connectors: HashMap<VertexId, Edge> = HashMap::new();
     let mut bevels: HashMap<FaceId, Vec<Face>> = HashMap::new();
+    let mut material_strips = Vec::new();
     for rim in &rims {
         let old_oriented = rim
             .cap
@@ -1857,12 +1862,13 @@ fn circular(
         let wire = Wire::from(vec![
             plane.inverse(),
             connectors[&old_oriented.front().id()].clone(),
-            wall,
+            wall.clone(),
             connectors[&old_oriented.back().id()].inverse(),
         ]);
         let face = Face::try_new(vec![wire], Surface::NurbsSurface(surface))
             .map_err(|_| invalid("The conical strip has inconsistent shared boundaries"))?;
         history.construct_face(face.id(), &[history.edge(rim.edge.id())?, history.face(rim.cap.id())?, history.face(rim.wall)?], serde_json::json!({"operation":treatment.name(),"constructor":match treatment { Treatment::Chamfer => "exact_conical_rim", Treatment::Fillet => "exact_toroidal_rim" },"column":rim.column}))?;
+        material_strips.push((rim.edge.id(), old_oriented, plane, wall, face.clone()));
         bevels.entry(rim.cap.id()).or_default().push(face);
     }
     output_faces.extend(terminals.rebuild(&cap_edges, &seam_edges, &connectors, history)?);
@@ -1885,5 +1891,81 @@ fn circular(
     let result = Solid::try_new(shells)
         .map_err(|_| invalid("Circular setback boundaries do not close the body"))?;
     crate::validation::solid(&result)?;
+    history.capture_material(Ok(crate::constructor_delta::capture(|| {
+        turned_material(&rims, &walls, &material_strips, terminals.closed())
+    })
+    .flatten()));
     Ok(Some(result))
+}
+
+/// The constructor's original/trimmed rails and actual blend close the changed
+/// annular band. Every seam is shared; no before/after whole-body Boolean runs.
+fn turned_material(
+    rims: &[Rim],
+    walls: &HashMap<FaceId, Wall>,
+    strips: &[(EdgeId, Edge, Edge, Edge, Face)],
+    closed: bool,
+) -> Result<Option<crate::constructor_delta::Native>> {
+    if !closed {
+        return Ok(None);
+    }
+    let mut planar_seams = HashMap::<VertexId, Edge>::new();
+    let mut turned_seams = HashMap::<VertexId, Edge>::new();
+    let mut added = Shell::new();
+    let mut removed = Shell::new();
+    for (id, old, plane, turned, blend) in strips {
+        let rim = rims
+            .iter()
+            .find(|r| r.edge.id() == *id)
+            .ok_or_else(|| invalid("Material band lost its source rim"))?;
+        for (source, planar, wall) in [
+            (old.front(), plane.front(), turned.front()),
+            (old.back(), plane.back(), turned.back()),
+        ] {
+            planar_seams
+                .entry(source.id())
+                .or_insert_with(|| builder::line(source, planar));
+            turned_seams
+                .entry(source.id())
+                .or_insert_with(|| builder::line(source, wall));
+        }
+        let cap_wire = Wire::from(vec![
+            old.clone(),
+            planar_seams[&old.back().id()].clone(),
+            plane.inverse(),
+            planar_seams[&old.front().id()].inverse(),
+        ]);
+        let wall_wire = Wire::from(vec![
+            turned.clone(),
+            turned_seams[&old.back().id()].inverse(),
+            old.inverse(),
+            turned_seams[&old.front().id()].clone(),
+        ]);
+        let cap = Face::try_new(vec![cap_wire], rim.cap.oriented_surface())
+            .map_err(|e| invalid(&format!("Material cap band: {e}")))?;
+        let wall = Face::try_new(vec![wall_wire], walls[&rim.wall].face.oriented_surface())
+            .map_err(|e| invalid(&format!("Material wall band: {e}")))?;
+        let faces = [cap, wall, blend.inverse()];
+        if rim.axial_side < 0. {
+            removed.extend(faces);
+        } else {
+            added.extend(faces.into_iter().map(|f| f.inverse()));
+        }
+    }
+    let solids = |shell: Shell| -> Result<Vec<Solid>> {
+        shell
+            .connected_components()
+            .into_iter()
+            .map(|component| {
+                let solid = Solid::try_new(vec![component])
+                    .map_err(|e| invalid(&format!("Material band closure: {e}")))?;
+                crate::validation::solid(&solid)?;
+                Ok(solid)
+            })
+            .collect()
+    };
+    Ok(Some(crate::constructor_delta::Native {
+        added: solids(added)?,
+        removed: solids(removed)?,
+    }))
 }

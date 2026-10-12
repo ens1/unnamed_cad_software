@@ -25,6 +25,9 @@ pub(crate) struct ShellHistory {
     edges: HashMap<EdgeId, TopologyRef>,
     original_adjacency: Vec<(EdgeId, Vec<FaceId>)>,
     generated: TopologyHistory,
+    material: crate::constructor_delta::Native,
+    material_complete: bool,
+    material_captures: usize,
 }
 fn unavailable(message: &str) -> CadError {
     CadError::Unsupported(format!("Shell provenance: {message}"))
@@ -103,10 +106,35 @@ impl ShellHistory {
             edges,
             original_adjacency: adjacency.into_iter().collect(),
             generated: TopologyHistory::default(),
+            material: Default::default(),
+            material_complete: true,
+            material_captures: 0,
         })
     }
     pub(crate) fn owner(&self) -> &NodeRef {
         &self.owner
+    }
+    pub(crate) fn material_captures(&self) -> usize {
+        self.material_captures
+    }
+    pub(crate) fn invalidate_material(&mut self) {
+        self.material_complete = false;
+    }
+    pub(crate) fn capture_material(
+        &mut self,
+        result: Result<Option<crate::constructor_delta::Native>>,
+    ) {
+        match result {
+            Ok(Some(delta)) => {
+                self.material.added.extend(delta.added);
+                self.material.removed.extend(delta.removed);
+                self.material_captures += 1;
+            }
+            _ => self.material_complete = false,
+        }
+    }
+    pub(crate) fn material(&self) -> Option<crate::constructor_delta::Native> {
+        (self.material_complete && self.material_captures > 0).then(|| self.material.clone())
     }
     pub(crate) fn face(&self, id: FaceId) -> Result<TopologyRef> {
         self.faces

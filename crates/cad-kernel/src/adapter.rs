@@ -45,6 +45,7 @@ impl Shape {
 pub trait KernelAdapter {
     fn fingerprint(&self) -> &str;
     fn clear_weld_joint_previews(&self) {}
+    fn clear_operation_previews(&self) {}
     fn weld_joint_previews(&self) -> Vec<cad_core::weld_beads::JointPreview> {
         vec![]
     }
@@ -161,6 +162,7 @@ pub trait KernelAdapter {
 }
 #[derive(Default)]
 pub struct MonstertruckAdapter {
+    material_deltas: std::cell::RefCell<BTreeMap<NodeRef, crate::constructor_delta::Record>>,
     histories: std::cell::RefCell<BTreeMap<NodeRef, TopologyHistory>>,
     tables: std::cell::RefCell<BTreeMap<String, (monstertruck::step::load::Table, f64)>>,
     weld_joints: std::cell::RefCell<BTreeMap<NodeRef, cad_core::weld_beads::JointPreview>>,
@@ -915,10 +917,13 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/39;solver/tcad-native-lm/16"
+        "monstertruck/0.4.1+fc2306852a46;adapter/40;solver/tcad-native-lm/16"
     }
     fn clear_weld_joint_previews(&self) {
         self.weld_joints.borrow_mut().clear();
+    }
+    fn clear_operation_previews(&self) {
+        self.material_deltas.borrow_mut().clear();
     }
     fn weld_joint_previews(&self) -> Vec<cad_core::weld_beads::JointPreview> {
         self.weld_joints.borrow().values().cloned().collect()
@@ -2148,6 +2153,14 @@ impl KernelAdapter for MonstertruckAdapter {
         owner: &NodeRef,
         tolerance: f64,
     ) -> Result<cad_core::protocol::OperationPreviewChange> {
+        if let (Shape::Bodies(before), Shape::Bodies(after)) = (before, after)
+            && let Some(record) = self.material_deltas.borrow().get(owner)
+            && record.matches(before, after)
+            && let Ok(change) =
+                crate::operation_preview::constructed(self, &record.change, owner, tolerance)
+        {
+            return Ok(change);
+        }
         crate::operation_preview::delta(self, before, after, owner, tolerance)
     }
     fn assembly_weld(
@@ -2550,6 +2563,7 @@ impl MonstertruckAdapter {
         generated: &mut TopologyHistory,
     ) -> Result<Shape> {
         use cad_core::edge_features::ChamferMethod;
+        self.material_deltas.borrow_mut().remove(owner);
         let (body, references, quantity, name) = match operation {
             Operation::Fillet {
                 body,
@@ -2630,6 +2644,8 @@ impl MonstertruckAdapter {
             None
         };
         let mut result = Vec::with_capacity(source.len());
+        let mut material = crate::constructor_delta::Native::default();
+        let mut material_complete = true;
         for solid in source {
             let mut seen = std::collections::HashSet::new();
             let local = solid
@@ -2660,8 +2676,42 @@ impl MonstertruckAdapter {
                 "{name}: This selection needs an unresolved carrier transition or corner junction; no complete native blend can be constructed for the selected edges"
             )))?;
             crate::validation::solid(&output)?;
+            let native = history.material().or_else(|| {
+                specification.as_ref().and_then(|_| {
+                    crate::constructor_delta::capture(|| {
+                        crate::constructor_delta::straight_bevel(solid, &output, &local)
+                    })
+                    .flatten()
+                })
+            });
+            if let Some(delta) = native {
+                material.added.extend(delta.added);
+                material.removed.extend(delta.removed);
+            } else {
+                material_complete = false;
+            }
             generated.merge(history.finish(std::slice::from_ref(&output))?);
             result.push(output);
+        }
+        if material_complete {
+            let record = crate::constructor_delta::Record::new(source, &result, material);
+            // Constructor regions are optional display caches. Keep their
+            // aggregate native faces/source keys bounded even in large trees.
+            const MAX_STORAGE: usize = 65_536;
+            if record.storage() <= MAX_STORAGE {
+                let mut records = self.material_deltas.borrow_mut();
+                if records.len() >= 128
+                    || records
+                        .values()
+                        .map(crate::constructor_delta::Record::storage)
+                        .sum::<usize>()
+                        .saturating_add(record.storage())
+                        > MAX_STORAGE
+                {
+                    records.clear();
+                }
+                records.insert(owner.clone(), record);
+            }
         }
         Ok(Shape::Bodies(result))
     }

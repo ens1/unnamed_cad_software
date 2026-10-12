@@ -117,24 +117,23 @@ pub fn summary(w: &Workspace) -> Option<(String, String)> {
     if !active(w) || w.view.original || w.view.history_cursor.is_some() {
         return None;
     }
-    let retained = w
-        .session
-        .draft
-        .as_ref()
-        .is_some_and(|draft| draft.pending || draft.error.is_some());
-    let invalid = w
-        .session
-        .draft
-        .as_ref()
-        .is_some_and(|draft| draft.error.is_some());
+    let invalid_source = !crate::quantity_display::source_fields_valid(w)
+        || w.fields.contains_key("feature-source-invalid");
+    let retained = invalid_source
+        || w.session
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.pending || draft.error.is_some());
+    let invalid = invalid_source
+        || w.session
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.error.is_some());
     let Some(preview) = displayed(w) else {
         if w.preview_error
             .as_ref()
             .is_some_and(|(key, _)| Some(key) == w.requested_preview.as_ref())
-            || w.session
-                .draft
-                .as_ref()
-                .is_some_and(|draft| draft.error.is_some())
+            || invalid
         {
             return Some((
                 "unavailable".into(),
@@ -267,6 +266,23 @@ pub fn viewport_status(ui: &mut bevy_egui::egui::Ui, w: &Workspace, rect: bevy_e
 
 pub fn tooltip(w: &Workspace) -> String {
     let mut messages = Vec::new();
+    if let Some(error) = w
+        .session
+        .draft
+        .as_ref()
+        .and_then(|draft| draft.error.as_deref())
+    {
+        messages.push(error);
+    }
+    if let Some(error) = w.fields.get("feature-source-error") {
+        messages.push(error);
+    }
+    messages.extend(
+        w.fields
+            .iter()
+            .filter(|(key, _)| key.starts_with("presentation-field-error:"))
+            .map(|(_, error)| error.as_str()),
+    );
     if let Some(preview) = displayed(w) {
         messages.extend(
             preview
@@ -295,11 +311,12 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         return vec![];
     };
     let preview = displayed(w);
-    let retained = w
-        .session
-        .draft
-        .as_ref()
-        .is_some_and(|draft| draft.pending || draft.error.is_some());
+    let retained = !crate::quantity_display::source_fields_valid(w)
+        || w.fields.contains_key("feature-source-invalid")
+        || w.session
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.pending || draft.error.is_some());
     let mut elements = vec![SemanticElement {
         id: "workspace.operation-preview".into(),
         role: "operation-preview-status".into(),

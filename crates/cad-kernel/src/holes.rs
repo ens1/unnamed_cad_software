@@ -150,11 +150,17 @@ pub(crate) fn operation(
     let bounds = if definition.end == End::ThroughAll {
         Some(
             body.iter()
-                .map(crate::adapter::solid_control_points)
+                .map(crate::native_bounds::solid)
                 .collect::<Result<Vec<_>>>()?
                 .into_iter()
                 .flatten()
-                .map(|p| p.to_vec().dot(axis))
+                .map(|bound| {
+                    bound
+                        .projection(Point3::origin(), axis)
+                        .map(|(_, high)| high)
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
                 .fold(f64::NEG_INFINITY, f64::max),
         )
     } else {

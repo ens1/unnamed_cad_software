@@ -73,6 +73,7 @@ mod sketch_dimensions_ui;
 mod sketch_edit_ui;
 mod sketch_equation_ui;
 mod sketch_handles;
+mod sketch_issues_ui;
 mod sketch_overlay;
 mod sketch_relations_ui;
 mod sketch_ui;
@@ -105,7 +106,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/39;solver/tcad-native-lm/16";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/40;solver/tcad-native-lm/16";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,

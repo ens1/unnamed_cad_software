@@ -135,11 +135,21 @@ fn binary_impl(
     }
     // Layered reconstruction creates explicit partitions. Only feature paths
     // carrying their construction history may publish those descendants.
-    if let Some((scope, context)) = context
-        && let Some(output) = crate::prismatic_boolean::binary(a, b, mode)?
+    if let Some((scope, context)) = context {
+        if let Some(output) = crate::prismatic_boolean::binary(a, b, mode)? {
+            crate::prismatic_boolean::record_history(&output, scope, context)?;
+            return Ok(output.solid);
+        }
+        if matches!(mode, Mode::Difference)
+            && let Some(output) = crate::local_pockets::difference(a, b)?
+        {
+            crate::local_pockets::record_history(&output, scope, context)?;
+            return local_stock(output);
+        }
+    } else if matches!(mode, Mode::Difference)
+        && let Some(output) = crate::local_pockets::difference(a, b)?
     {
-        crate::prismatic_boolean::record_history(&output, scope, context)?;
-        return Ok(output.solid);
+        return local_stock(output);
     }
     let output = match mode {
         Mode::Union => monstertruck::solid::or(a, b, tolerance),
@@ -152,6 +162,15 @@ fn binary_impl(
     }
     crate::validation::solid(&output)?;
     Ok(Some(output))
+}
+
+fn local_stock(mut output: crate::planar::CutOutput) -> Result<Option<Solid>> {
+    if output.bodies.len() != 1 {
+        return Err(invalid(
+            "A contained local pocket must retain exactly one native stock container",
+        ));
+    }
+    Ok(Some(output.bodies.remove(0)))
 }
 
 pub(crate) fn union(a: &Solid, b: &Solid, tolerance: f64) -> Result<Solid> {

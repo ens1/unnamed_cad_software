@@ -407,6 +407,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::settings_ui::semantics(w));
     elements.extend(crate::operation_preview::semantics(w));
     elements.extend(crate::sketch_overlay::semantics(w));
+    elements.extend(crate::sketch_issues_ui::semantics(w));
     elements.extend(crate::body_inventory::semantics(w));
     elements.extend(crate::document_identity_ui::semantics(w));
     elements.extend(crate::operation_editor_ui::semantics(w));

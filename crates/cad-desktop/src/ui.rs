@@ -723,6 +723,9 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
         }
     });
     registry.register("sketch-editor", |ui, w, _| crate::sketch::controls(ui, w));
+    registry.register("sketch-issues", |ui, w, _| {
+        crate::sketch_issues_ui::controls(ui, w)
+    });
     registry.register("viewport-toolbar", |ui, w, _| {
         crate::workspace_controls::toolbar(ui, w)
     });
@@ -969,7 +972,8 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         crate::display_states_ui::semantic_action(w, element, command);
         return;
     }
-    if crate::fabrication_sources_ui::action(w, command, &element.data)
+    if crate::sketch_issues_ui::action(w, command, &element.data)
+        || crate::fabrication_sources_ui::action(w, command, &element.data)
         || crate::weld_beads_ui::action(w, command, Some(&element.data))
         || crate::sketch_block_library_ui::action(w, command, Some(&element.data))
         || crate::command_palette::action(w, command, Some(&element.data))
@@ -2405,6 +2409,18 @@ fn save(w: &mut Workspace, choose: bool) -> bool {
         };
         crate::document_identity_ui::begin_save_as(w);
         if crate::document_identity_ui::pending_save_as(w) {
+            if let Some(name) = path
+                .parent()
+                .and_then(|folder| folder.file_name())
+                .and_then(|name| name.to_str())
+            {
+                let proposed = if name.to_ascii_lowercase().ends_with(".tcad") {
+                    &name[..name.len() - 5]
+                } else {
+                    name
+                };
+                crate::document_identity_ui::propose_save_name(w, proposed);
+            }
             w.fields.insert(
                 "document-identity-save-as-path".into(),
                 path.to_string_lossy().into_owned(),

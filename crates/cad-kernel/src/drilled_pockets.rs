@@ -284,7 +284,7 @@ pub(crate) fn cut(solid: &Solid, drills: &[Drill]) -> Result<Option<Cut>> {
         }
     }
     let Some(planes) = stock(solid) else {
-        return Ok(None);
+        return local_cut(solid, drills);
     };
     let mut pockets = Vec::new();
     for drill in drills {
@@ -353,5 +353,125 @@ pub(crate) fn cut(solid: &Solid, drills: &[Drill]) -> Result<Option<Cut>> {
     }
     let result = Solid::try_new(vec![shell]).map_err(invalid)?;
     crate::validation::solid(&result)?;
+    Ok(Some((result, tools)))
+}
+
+fn disk(drill: &Drill, depth: f64, radius: f64) -> Result<Face> {
+    let radial = drill
+        .axis
+        .cross(if drill.axis.x.abs() < 0.9 {
+            Vector3::unit_x()
+        } else {
+            Vector3::unit_y()
+        })
+        .normalize();
+    let center = drill.origin + drill.axis * depth;
+    let wire: Wire = primitive::circle(center + radial * radius, center, drill.axis, 4);
+    builder::try_attach_plane(vec![wire]).map_err(invalid)
+}
+
+fn local_tool(
+    solid: &Solid,
+    drill: &Drill,
+    budget: &mut crate::local_pockets::Budget,
+) -> Result<Option<Solid>> {
+    let planes = crate::local_pockets::planes_with_budget(solid, budget)?;
+    let first = drill.stations[0].0;
+    let last = drill.stations.last().unwrap().0;
+    let mut entries = vec![];
+    for plane in &planes {
+        if plane.normal.dot(drill.axis) > -1. + ANGULAR
+            || plane.normal.cross(drill.axis).magnitude() > ANGULAR
+        {
+            continue;
+        }
+        let depth = (plane.origin - drill.origin).dot(plane.normal) / drill.axis.dot(plane.normal);
+        if !depth.is_finite() || depth < first || depth >= last - EPS {
+            continue;
+        }
+        let Some(radius) = radius_at(&drill.stations, depth) else {
+            continue;
+        };
+        if budget.covered(&plane.face, &disk(drill, depth, radius)?)? {
+            entries.push(depth);
+        }
+    }
+    entries.sort_by(f64::total_cmp);
+    if entries.len() > 1 && (entries[0] - entries[1]).abs() <= EPS {
+        return Ok(None);
+    }
+    let Some(start) = entries.first().copied() else {
+        return Ok(None);
+    };
+    let mut exits = vec![];
+    for plane in &planes {
+        if plane.normal.dot(drill.axis) < 1. - ANGULAR
+            || plane.normal.cross(drill.axis).magnitude() > ANGULAR
+        {
+            continue;
+        }
+        let depth = (plane.origin - drill.origin).dot(plane.normal) / drill.axis.dot(plane.normal);
+        if !depth.is_finite() || depth <= start + EPS || depth > last {
+            continue;
+        }
+        let Some(radius) = radius_at(&drill.stations, depth) else {
+            continue;
+        };
+        if budget.covered(&plane.face, &disk(drill, depth, radius)?)? {
+            exits.push(depth);
+        }
+    }
+    exits.sort_by(f64::total_cmp);
+    if exits.len() > 1 && (exits[0] - exits[1]).abs() <= EPS {
+        return Ok(None);
+    }
+    let end = exits.first().copied().unwrap_or(last);
+    let Some(stations) = clipped(&drill.stations, start, end) else {
+        return Ok(None);
+    };
+    Ok(Some(crate::holes::tool(
+        drill.origin,
+        drill.axis,
+        &stations,
+    )?))
+}
+
+fn local_cut(solid: &Solid, drills: &[Drill]) -> Result<Option<Cut>> {
+    let mut result = solid.clone();
+    let mut tools = vec![];
+    let mut budget = crate::local_pockets::Budget::new();
+    for drill in drills {
+        let original = crate::holes::tool(drill.origin, drill.axis, &drill.stations)?;
+        match crate::prismatic_boolean::admits_along(&result, &original, drill.axis) {
+            Ok(true) => return Ok(None),
+            Ok(false) | Err(CadError::Unsupported(_)) => {}
+            Err(error) => return Err(error),
+        }
+        let prepared = match local_tool(&result, drill, &mut budget) {
+            Ok(prepared) => prepared,
+            Err(CadError::Unsupported(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let Some(tool) = prepared else {
+            return Ok(None);
+        };
+        let Some(mut cut) = crate::local_pockets::insert_tool_with_budget(
+            &result,
+            &tool,
+            drill.axis,
+            &original,
+            &mut budget,
+        )?
+        else {
+            return Ok(None);
+        };
+        if cut.bodies.len() != 1 {
+            return Err(invalid(
+                "A contained local drill unexpectedly split its stock",
+            ));
+        }
+        result = cut.bodies.remove(0);
+        tools.push((drill.point.clone(), tool));
+    }
     Ok(Some((result, tools)))
 }
