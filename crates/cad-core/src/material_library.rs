@@ -146,17 +146,28 @@ pub fn export_json(catalog: &Catalog) -> Result<String> {
     Ok(json)
 }
 pub fn bundled_catalog() -> Result<Catalog> {
-    // Embedded content cannot change within a running build. Validate once;
-    // callers still receive an owned snapshot that they may safely edit.
+    bundled_catalog_ref().cloned()
+}
+/// Immutable validated embedded source, shared by read-only browser lookups.
+/// Imports and custom edits should use the existing owned bundled_catalog API.
+pub fn bundled_catalog_ref() -> Result<&'static Catalog> {
     static CATALOG: std::sync::OnceLock<std::result::Result<Catalog, String>> =
         std::sync::OnceLock::new();
     CATALOG
         .get_or_init(|| parse_json(BUNDLED_JSON).map_err(|error| error.to_string()))
-        .clone()
-        .map_err(CadError::Invalid)
+        .as_ref()
+        .map_err(|message| CadError::Invalid(message.clone()))
+}
+/// Lookup by exact catalog identity without cloning unrelated records.
+pub fn bundled_material(id: &str) -> Result<&'static Material> {
+    bundled_catalog_ref()?
+        .materials
+        .iter()
+        .find(|material| material.id == id)
+        .ok_or_else(|| CadError::Invalid("The requested catalog material does not exist".into()))
 }
 pub fn instantiate(catalog_id: &str) -> Result<Material> {
-    bundled_catalog()?.instantiate(catalog_id)
+    bundled_catalog_ref()?.instantiate(catalog_id)
 }
 pub fn delete_material(document: &mut Document, material: &str) -> Result<()> {
     materials::delete_material(document, material)

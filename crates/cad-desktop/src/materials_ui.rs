@@ -66,7 +66,9 @@ fn selected(w: &Workspace) -> Option<Material> {
         w.session.visible().materials.get(id).cloned()
     } else {
         let id = key.strip_prefix("catalog:")?;
-        catalog().into_iter().find(|material| material.id == id)
+        cad_core::material_library::bundled_material(id)
+            .ok()
+            .cloned()
     }
 }
 fn record_field(element: &SemanticElement) -> bool {
@@ -117,7 +119,9 @@ fn bound_material(w: &Workspace, element: &SemanticElement) -> Option<Material> 
         w.session.visible().materials.get(id)?.clone()
     } else {
         let id = record_key.strip_prefix("catalog:")?;
-        catalog().into_iter().find(|material| material.id == id)?
+        cad_core::material_library::bundled_material(id)
+            .ok()?
+            .clone()
     };
     (element.data["material"] == material.id).then_some(material)
 }
@@ -182,7 +186,7 @@ fn select(w: &mut Workspace, next: &str) -> Result<()> {
         .is_some_and(|id| w.session.visible().materials.contains_key(id))
         || next
             .strip_prefix("catalog:")
-            .is_some_and(|id| catalog().iter().any(|material| material.id == id))
+            .is_some_and(|id| cad_core::material_library::bundled_material(id).is_ok())
     {
         choose(w, next.into());
         Ok(())
@@ -915,9 +919,9 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                     if !(text
                         .strip_prefix("project:")
                         .is_some_and(|id| w.session.visible().materials.contains_key(id))
-                        || text
-                            .strip_prefix("catalog:")
-                            .is_some_and(|id| catalog().iter().any(|material| material.id == id)))
+                        || text.strip_prefix("catalog:").is_some_and(|id| {
+                            cad_core::material_library::bundled_material(id).is_ok()
+                        }))
                     {
                         return Err(CadError::Invalid(
                             "Choose a current project or catalog material".into(),

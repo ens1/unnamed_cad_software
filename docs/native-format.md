@@ -177,3 +177,57 @@ Defaulted Drawing workspace/page/navigation/selection fields belong to saved
 retain fidelity/source information outside paper vectors. Existing native CAD
 definitions retain their schema and readable identities; see
 [P2 implementation details](usability-p2-fixes.md).
+
+## Additive library and production contracts — 2026-10-12
+
+These additions retain native schema 1. Empty maps, absent provenance and
+unchanged defaults are omitted where declared by the normative Rust types.
+Earlier contract notes above describe their introduction; current versions
+below supersede those notes.
+
+- Engineering-material contract 1 adds optional typed SI properties and
+  metadata with source, basis, grade, condition and temperature qualifiers.
+  Material-library contract 1 and material-CSV contract 1 carry those same
+  records; import plans preserve existing assigned identities. Model settings
+  add `default_new_part_material` with the legacy default omitted. Personal
+  defaults retain portable snapshots outside model source. See
+  [materials](material-library.md) and [CSV](material-csv.md).
+- Appearance contract 4 includes finish metadata, authored manufacturing
+  requirements, native `Part.face_finishes` and optional pinned
+  `Lighting.environment`. Optical finish/texture values remain independent of
+  engineering materials. HDR filtering and GPU images are disposable derived
+  data. Personal finish defaults retain verified texture packages, copied into
+  each new document's resource storage. See [finishes](visual-finishes.md),
+  [HDR environments](hdr-environments.md) and [settings](settings.md).
+- `Assembly.display_states` is an omitted-empty version 1 map with complete
+  occurrence paths, optional configuration scope and per-channel visibility/
+  finish inheritance. Drawings can associate a saved state. Mechanical
+  placements and totals remain independent. See [display states](display-states.md).
+- Configuration contract 8 / dimension-field adapter 4 retains stable driving
+  sketch-dimension and native count overrides. Configured scalar count
+  expressions resolve only after configured parameter scopes are staged;
+  native integers remain authoritative. See
+  [configured dimensions](configuration-dimensions.md).
+- Drawing contract 10 adds ordinate/baseline/chain groups, datum targets,
+  composite/stacked frames and revision clouds with native associations.
+  Paper interaction 5 and layout 1 carry annotation cohorts and f64 paper
+  actions; they do not convert display vectors into CAD geometry. See
+  [GD&T](drawing-gdt.md), [clouds](drawing-revision-clouds.md) and
+  [paper layout](drawing-paper-layout.md).
+- `Document.sensors`, `Document.tolerance_stacks` and `Document.camera_views`
+  are omitted-empty version 1 maps. Monitor and tolerance reports carry source
+  identity and remain derived. Named camera recall changes presentation only.
+  See [monitors](design-monitors.md), [stacks](tolerance-stacks.md) and
+  [camera views](camera-views.md).
+- `Part.standard_part` is optional sourced envelope provenance, separate from
+  subsequent edits to ordinary sketch/feature definitions. The indexed personal
+  sketch-block catalog is a separate version 1 store of exact pinned native
+  packages; insertion uses portable block-resource contract 1. See
+  [hardware](standard-hardware.md) and [block libraries](sketch-block-library.md).
+- Cached inspection report 1 owns frame/scope/source qualification and f64
+  engineering results. It excludes pose-only previews and rejects missing
+  native property caches; no report becomes authoritative saved geometry.
+  See [mass properties](mass-properties.md).
+
+Kernel implementation identity remains adapter 36 / native solver 16. These
+contracts contain no Bevy, image, renderer or Monstertruck object handles.

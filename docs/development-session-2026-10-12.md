@@ -124,3 +124,9 @@ excluded pose-only assembly-motion previews from engineering reports and their
 cache keys, and applied saved hidden/ghost policies to reference rendering and
 picking. Command search includes named library/monitor/stack targets and current
 disabled reasons. Pan sensitivity follows the selected projection's visible span.
+
+Read-only material lookups borrow the immutable validated bundled catalog and
+clone only the requested record; imports retain the owned snapshot API. This
+removes repeated full-catalog copies from individual editor callbacks without
+changing definitions, validation or source contracts. No runtime benchmark is
+claimed.
