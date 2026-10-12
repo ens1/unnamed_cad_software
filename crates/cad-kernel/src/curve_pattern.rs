@@ -57,7 +57,10 @@ fn source_path(
 ) -> Result<NativePath> {
     match &definition.path {
         Path::ReferenceCurve { feature } => {
-            let Some(Shape::ReferenceCurves { paths, evaluated }) = inputs.get(feature) else {
+            let Some(Shape::ReferenceCurves {
+                paths, evaluated, ..
+            }) = inputs.get(feature)
+            else {
                 return Err(invalid(
                     "The selected reference curve is missing or suppressed",
                 ));
@@ -95,6 +98,26 @@ fn source_path(
             member,
             start_vertex,
         } => {
+            if crate::sketch3d::spatial(inputs, profile).is_some() {
+                let (wire, sources) = crate::sketch3d::selected_path(
+                    adapter,
+                    inputs,
+                    profile,
+                    member.as_deref(),
+                    start_vertex.as_deref(),
+                )?;
+                return Ok(NativePath {
+                    closed: wire.is_closed(),
+                    pieces: wire
+                        .iter()
+                        .zip(sources)
+                        .map(|(edge, source)| Piece {
+                            curve: edge.oriented_curve(),
+                            source,
+                        })
+                        .collect(),
+                });
+            }
             let (mut sketch, plane) = crate::extrusion::source(adapter, doc, profile, inputs)?;
             let aliases = cad_core::sketch_relations::topological_point_aliases(&sketch, 1e-6)?;
             let material = sketch

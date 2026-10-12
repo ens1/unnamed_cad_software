@@ -229,7 +229,9 @@ below supersede those notes.
   native property caches; no report becomes authoritative saved geometry.
   See [mass properties](mass-properties.md).
 
-Current kernel implementation identity is adapter 41 / native solver 16. These
+Current kernel implementation identity is adapter 42 / native solver 17. These
 contracts contain no Bevy, image, renderer or Monstertruck object handles.
 
 Weldment placement v3 adds omitted-default rolled-section `profile_offset` and explicit `member_mode`, plus optional `library_profile` source snapshots. Portable catalog v1 contains original polygon/circle contours and named locating points; selecting a section instantiates an ordinary local sketch with exact fixed millimetre constraints. A saved origin survives catalog removal and local ID remapping. Empty explicit selections are valid recovery/draft source but fail native member evaluation; legacy empty selections retain their complete-path semantics. See [structural member profiles](structural-member-profiles.md).
+
+Spatial sketch contract v1 adds `Operation::Sketch3d { definition }`, embedding a stable-ID f64 XYZ point/member/constraint source. Existing plane-local sketches remain unchanged. The workplane is explicit reference-frame intent; editor input planes are transient. Native evaluated spatial output is source/configuration qualified and has default-empty motion/residual diagnostics. `SolveSketch3d` requests carry document/feature/editor/sequence identity and transient XYZ drag goals through a persistent worker. Solved seeds retain point identity and free contact parameters; no drag goal becomes saved source. Existing sketch-member/point/axis source kinds resolve spatial native inputs explicitly. See [3D sketch source and editing](sketch3d.md) and [native consumers and limits](sketch3d-native-geometry.md).

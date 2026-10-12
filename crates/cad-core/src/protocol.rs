@@ -199,6 +199,10 @@ pub struct Evaluation {
     pub elapsed_ms: u64,
     #[serde(default)]
     pub sketches: BTreeMap<String, EvaluatedSketch>,
+    /// Solved spatial sketch source and disposable display/diagnostic data.
+    /// Native curve references remain independent from these polylines.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub spatial_sketches: BTreeMap<String, crate::sketch3d::Evaluated>,
     /// Parametric datum display and selection geometry; source intent remains in document features.
     #[serde(default)]
     pub references: BTreeMap<String, crate::reference_geometry::EvaluatedReference>,
@@ -278,6 +282,15 @@ pub enum WorkerRequest {
         owner: Id,
         sketch: Box<crate::Sketch>,
     },
+    /// Transient spatial cursor goals. These are never saved sketch relations.
+    SolveSketch3d {
+        identity: RequestIdentity,
+        document: Document,
+        feature: crate::NodeRef,
+        editor: Id,
+        sequence: u64,
+        targets: Vec<crate::sketch3d::DragTarget>,
+    },
     ManipulateAssembly {
         identity: RequestIdentity,
         document: Document,
@@ -326,6 +339,21 @@ pub enum WorkerResponse {
         owner: Id,
         sketch: Id,
         analysis: Box<crate::sketch_diagnostics::Analysis>,
+    },
+    Sketch3dSolved {
+        identity: RequestIdentity,
+        feature: crate::NodeRef,
+        editor: Id,
+        sequence: u64,
+        solved: Box<crate::sketch3d::Definition>,
+        report: crate::solver::SolveReport,
+    },
+    Sketch3dSolveFailed {
+        identity: RequestIdentity,
+        feature: crate::NodeRef,
+        editor: Id,
+        sequence: u64,
+        message: String,
     },
     AssemblyManipulated {
         identity: RequestIdentity,

@@ -14,6 +14,12 @@
   --workspace: #D5D9DF;
 }
 
+[role=sketch3d-member] { color: var(--reference); stroke-width: 1.5px; }
+[role=sketch3d-member].construction { color: #9178A5; }
+[role=sketch3d-member][state=selected], [role=sketch3d-handle][state=selected],
+[role=sketch3d-point-handle][state=selected] { color: var(--active); stroke-width: 3px; }
+[role=sketch3d-tool][state=selected] { background: var(--active); color: #FFFFFF; }
+
 [role=selection-actions] {
   background: var(--panel);
   padding: 8px;

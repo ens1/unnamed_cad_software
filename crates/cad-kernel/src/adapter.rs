@@ -30,6 +30,7 @@ pub enum Shape {
     ReferenceCurves {
         paths: Vec<Wire>,
         evaluated: cad_core::reference_curves::Evaluated,
+        spatial: Option<Box<cad_core::sketch3d::Evaluated>>,
     },
     Bodies(Vec<Solid>),
 }
@@ -44,6 +45,13 @@ impl Shape {
 }
 pub trait KernelAdapter {
     fn fingerprint(&self) -> &str;
+    fn spatial_sketch(&self, _shape: &Shape) -> Option<cad_core::sketch3d::Evaluated> {
+        None
+    }
+    fn spatial_sketch_input(&self, _owner: &NodeRef) -> Option<cad_core::sketch3d::Evaluated> {
+        None
+    }
+    fn clear_spatial_sketch_inputs(&self) {}
     fn clear_weld_joint_previews(&self) {}
     fn clear_operation_previews(&self) {}
     fn weld_joint_previews(&self) -> Vec<cad_core::weld_beads::JointPreview> {
@@ -166,6 +174,7 @@ pub struct MonstertruckAdapter {
     histories: std::cell::RefCell<BTreeMap<NodeRef, TopologyHistory>>,
     tables: std::cell::RefCell<BTreeMap<String, (monstertruck::step::load::Table, f64)>>,
     weld_joints: std::cell::RefCell<BTreeMap<NodeRef, cad_core::weld_beads::JointPreview>>,
+    spatial_inputs: std::cell::RefCell<BTreeMap<NodeRef, cad_core::sketch3d::Evaluated>>,
 }
 #[derive(Clone, Default)]
 pub(crate) struct TopologyHistory {
@@ -862,6 +871,18 @@ fn resolve_faces(
     Ok(resolved)
 }
 impl KernelAdapter for MonstertruckAdapter {
+    fn spatial_sketch(&self, shape: &Shape) -> Option<cad_core::sketch3d::Evaluated> {
+        match shape {
+            Shape::ReferenceCurves { spatial, .. } => spatial.as_deref().cloned(),
+            _ => None,
+        }
+    }
+    fn spatial_sketch_input(&self, owner: &NodeRef) -> Option<cad_core::sketch3d::Evaluated> {
+        self.spatial_inputs.borrow().get(owner).cloned()
+    }
+    fn clear_spatial_sketch_inputs(&self) {
+        self.spatial_inputs.borrow_mut().clear();
+    }
     fn prepare_sketch(
         &self,
         source: &cad_core::Sketch,
@@ -917,7 +938,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/41;solver/tcad-native-lm/16"
+        "monstertruck/0.4.1+fc2306852a46;adapter/42;solver/tcad-native-lm/17"
     }
     fn clear_weld_joint_previews(&self) {
         self.weld_joints.borrow_mut().clear();
@@ -1053,11 +1074,31 @@ impl KernelAdapter for MonstertruckAdapter {
         root: &Path,
         tolerance: f64,
     ) -> Result<Shape> {
+        self.spatial_inputs.borrow_mut().remove(owner);
         let value = |e: &Expr| expression::value(doc, &owner.definition, e, Dimension::Length);
         let angle = |e: &Expr| expression::value(doc, &owner.definition, e, Dimension::Angle);
         let mut mapped_input = None;
         let mut generated_history = TopologyHistory::default();
         let result = match op {
+            Operation::Sketch3d { definition } => {
+                let (paths, evaluated, spatial) = crate::sketch3d::build(
+                    doc,
+                    owner,
+                    definition,
+                    tolerance,
+                    &mut generated_history,
+                    |solved| {
+                        self.spatial_inputs
+                            .borrow_mut()
+                            .insert(owner.clone(), solved);
+                    },
+                )?;
+                Shape::ReferenceCurves {
+                    paths,
+                    evaluated,
+                    spatial: Some(Box::new(spatial)),
+                }
+            }
             Operation::ReferencePlane { definition } => {
                 Shape::Reference(cad_core::reference_geometry::Geometry::Plane {
                     plane: definition.evaluate(
@@ -1119,7 +1160,11 @@ impl KernelAdapter for MonstertruckAdapter {
                     inputs,
                     &mut generated_history,
                 )?;
-                Shape::ReferenceCurves { paths, evaluated }
+                Shape::ReferenceCurves {
+                    paths,
+                    evaluated,
+                    spatial: None,
+                }
             }
             Operation::Rib { definition } => crate::rib::operation(
                 self,
@@ -2179,7 +2224,12 @@ impl KernelAdapter for MonstertruckAdapter {
         if !tolerance.is_finite() || tolerance <= 0. {
             return Err(err("Display tolerance must be finite and positive"));
         }
-        if let Shape::ReferenceCurves { paths, evaluated } = shape {
+        if let Shape::ReferenceCurves {
+            paths,
+            evaluated,
+            spatial,
+        } = shape
+        {
             let mut mesh = MeshData {
                 positions: vec![],
                 normals: vec![],
@@ -2199,6 +2249,15 @@ impl KernelAdapter for MonstertruckAdapter {
                 .get(producer)
                 .ok_or_else(|| err("Reference curve construction history is missing"))?;
             let mut point_count = 0usize;
+            if let Some(spatial) = spatial {
+                for point in spatial.solved.points.values() {
+                    for (axis, value) in point.iter().enumerate() {
+                        mesh.bounds[0][axis] = mesh.bounds[0][axis].min(*value);
+                        mesh.bounds[1][axis] = mesh.bounds[1][axis].max(*value);
+                    }
+                    mesh.positions.push(*point);
+                }
+            }
             for edge in paths.iter().flat_map(|wire| wire.iter()) {
                 // Source descriptors follow construction parameter orientation,
                 // independently of an incident face or a display path traversal.
@@ -2242,6 +2301,9 @@ impl KernelAdapter for MonstertruckAdapter {
                     native: None,
                     center: edge_center(&curve),
                 });
+            }
+            if mesh.positions.is_empty() {
+                mesh.bounds = [[0.; 3]; 2];
             }
             return Ok(mesh);
         }
@@ -3809,6 +3871,29 @@ impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
         profile: &NodeRef,
         member: &str,
     ) -> Result<cad_core::reference_geometry::Axis> {
+        if let Some(spatial) = crate::sketch3d::spatial(self.inputs, profile) {
+            if !matches!(
+                spatial
+                    .solved
+                    .members
+                    .get(member)
+                    .map(|member| &member.curve),
+                Some(
+                    cad_core::sketch3d::Curve::Circle { .. }
+                        | cad_core::sketch3d::Curve::Arc { .. }
+                )
+            ) {
+                return Err(err(
+                    "A spatial circular axis needs a circle or circular arc member",
+                ));
+            }
+            let curves =
+                crate::sketch3d::member_curves(self.adapter, self.inputs, profile, member)?;
+            let (curve, _) = curves
+                .first()
+                .ok_or_else(|| err("The spatial circular member is empty"))?;
+            return crate::axis_geometry::circle_axis(curve);
+        }
         let part = self
             .doc
             .parts
@@ -3891,6 +3976,29 @@ impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
         profile: &NodeRef,
         member: &str,
     ) -> Result<cad_core::reference_geometry::Axis> {
+        if let Some(spatial) = crate::sketch3d::spatial(self.inputs, profile) {
+            let Some(cad_core::sketch3d::Member {
+                curve: cad_core::sketch3d::Curve::Line { start, end },
+                ..
+            }) = spatial.solved.members.get(member)
+            else {
+                return Err(err("A spatial sketch axis needs a straight member"));
+            };
+            let a = *spatial
+                .solved
+                .points
+                .get(start)
+                .ok_or_else(|| err("The spatial line start is missing"))?;
+            let b = *spatial
+                .solved
+                .points
+                .get(end)
+                .ok_or_else(|| err("The spatial line finish is missing"))?;
+            return Ok(cad_core::reference_geometry::Axis {
+                origin: a,
+                direction: std::array::from_fn(|axis| b[axis] - a[axis]),
+            });
+        }
         let part = self
             .doc
             .parts
@@ -3930,6 +4038,14 @@ impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
         })
     }
     fn sketch_point(&self, profile: &NodeRef, point_id: &str) -> Result<[f64; 3]> {
+        if let Some(spatial) = crate::sketch3d::spatial(self.inputs, profile) {
+            return spatial
+                .solved
+                .points
+                .get(point_id)
+                .copied()
+                .ok_or_else(|| err("The referenced spatial sketch point was removed"));
+        }
         let part = self
             .doc
             .parts

@@ -74,6 +74,25 @@ fn project_profile_offset(source: &mut Value, offset: Value) -> Result<()> {
 
 pub fn fields(feature: &Feature) -> Result<Vec<DimensionField>> {
     let mut tagged = feature.operation.serialize(ExpressionSerializer)?;
+    if let Operation::Sketch3d { definition } = &feature.operation {
+        let driven = definition
+            .constraints
+            .iter()
+            .filter(|constraint| constraint.driven)
+            .map(|constraint| constraint.id.as_str())
+            .collect::<BTreeSet<_>>();
+        if let Some(constraints) = tagged
+            .pointer_mut("/definition/constraints")
+            .and_then(Value::as_array_mut)
+        {
+            constraints.retain(|constraint| {
+                constraint
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_none_or(|id| !driven.contains(id))
+            });
+        }
+    }
     if let Some(offset) = member_profile_offset(&feature.operation) {
         project_profile_offset(&mut tagged, offset.serialize(ExpressionSerializer)?)?;
     }

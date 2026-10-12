@@ -127,6 +127,11 @@ pub(crate) fn namespace_snapshot(
                     mapping.insert(key.clone(), mapped(link_id, key));
                 }
             }
+            if let crate::Operation::Sketch3d { definition } = &f.operation {
+                for key in definition.source_ids() {
+                    mapping.insert(key.clone(), mapped(link_id, key));
+                }
+            }
             if let crate::Operation::Surface {
                 operation: crate::surface::SurfaceOperation::Ruled { sources, .. },
             } = &f.operation
@@ -571,6 +576,27 @@ fn remap_source_inner(
             | "region_member" => true,
             "first" | "second" => {
                 object.contains_key("first_origin") && object.contains_key("second_origin")
+                    || field == "relation"
+                        && matches!(
+                            object.get("kind").and_then(|value| value.as_str()),
+                            Some(
+                                "coincident"
+                                    | "distance"
+                                    | "axis_distance"
+                                    | "angle"
+                                    | "parallel"
+                                    | "perpendicular"
+                                    | "equal_length"
+                                    | "tangent"
+                            )
+                        )
+            }
+            "line" => {
+                field == "relation"
+                    && matches!(
+                        object.get("kind").and_then(|value| value.as_str()),
+                        Some("on_line" | "point_line_distance")
+                    )
             }
             "center" => {
                 matches!(

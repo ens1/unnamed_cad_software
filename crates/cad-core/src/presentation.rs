@@ -675,7 +675,9 @@ pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> 
                 Some("A current valid preview is required")
             }
             "draft.cancel" if session.draft.is_none() => Some("No pending draft"),
-            "feature.new" | "sketch.new" if active.is_none() => Some("Select an editing part"),
+            "feature.new" | "sketch.new" | "sketch.new-3d" if active.is_none() => {
+                Some("Select an editing part")
+            }
             command if command.starts_with("feature.") && active.is_none() => {
                 Some("Select an editing part")
             }
@@ -1088,6 +1090,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("assembly.insert-existing", "Insert Existing Component"),
     ("assembly.mate-new", "Mate"),
     ("sketch.new", "Planar sketch"),
+    ("sketch.new-3d", "3D Sketch"),
     ("feature.new", "Add feature"),
     ("feature.extrude", "Extruded Boss/Base"),
     ("feature.cut", "Extruded Cut"),

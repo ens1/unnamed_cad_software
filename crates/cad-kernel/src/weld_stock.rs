@@ -73,6 +73,7 @@ struct Segment {
     start_axis: Vector3,
     end_axis: Vector3,
     carrier: Carrier,
+    spatial_sources: Option<Vec<cad_core::TopologyRef>>,
 }
 impl Segment {
     fn closed(&self) -> bool {
@@ -128,12 +129,39 @@ struct Placement<'a> {
     path_n: Vector3,
     roll: f64,
     profile_offset: [f64; 2],
+    spatial: bool,
+    clock_u: Vector3,
+    rotationally_symmetric: bool,
+    rectangle_symmetry: Option<bool>,
 }
 impl Placement<'_> {
-    fn at(&self, position: Point3, axis: Vector3) -> Face {
+    fn axes(&self, axis: Vector3) -> (Vector3, Vector3) {
         let rotation = Matrix3::from_axis_angle(axis, Rad(self.roll));
-        let u = rotation * self.path_n.cross(axis).normalize();
+        let transverse = if self.spatial && self.path_n.cross(axis).magnitude() <= 1e-10 {
+            self.clock_u
+        } else {
+            self.path_n
+        };
+        let u = rotation * transverse.cross(axis).normalize();
         let v = axis.cross(u);
+        (u, v)
+    }
+    fn miter_clocking(&self, first: &Segment, second: &Segment, normal: Vector3) -> bool {
+        if self.rotationally_symmetric {
+            return true;
+        }
+        let Some(swappable) = self.rectangle_symmetry else {
+            return false;
+        };
+        let (u, v) = self.axes(first.start_axis);
+        let (other_u, other_v) = self.axes(second.start_axis);
+        let reflect = |vector: Vector3| vector - 2. * normal * normal.dot(vector);
+        let parallel = |a: Vector3, b: Vector3| a.cross(b).magnitude() <= 1e-10;
+        (parallel(reflect(u), other_u) && parallel(reflect(v), other_v))
+            || (swappable && parallel(reflect(u), other_v) && parallel(reflect(v), other_u))
+    }
+    fn at(&self, position: Point3, axis: Vector3) -> Face {
+        let (u, v) = self.axes(axis);
         let map = |vector: Vector3| {
             u * vector.dot(self.u) + v * vector.dot(self.v) + axis * vector.dot(self.n)
         };
@@ -153,6 +181,60 @@ impl Placement<'_> {
             ),
         )
     }
+}
+/// Full authored rectangles centered exactly on the layout path are invariant
+/// under section-axis sign changes. Equal sides additionally admit X/Y swaps.
+/// This is source/carrier admission, not a sampled silhouette comparison.
+fn rectangle_symmetry(
+    source: &cad_core::Sketch,
+    face: &Face,
+    members: &std::collections::HashMap<EdgeId, (String, usize)>,
+    center: [f64; 2],
+) -> Option<bool> {
+    if center != [0.; 2] {
+        return None;
+    }
+    let mut swappable = true;
+    for wire in face.boundaries() {
+        if wire.len() != 4 {
+            return None;
+        }
+        let mut points = vec![];
+        for edge in &wire {
+            let (member, _) = members.get(&edge.id())?;
+            let SketchCurve::Line { start, end } =
+                cad_core::sketch_edit::effective_curve(source, member).ok()?
+            else {
+                return None;
+            };
+            let a = *source.points.get(&start)?;
+            let b = *source.points.get(&end)?;
+            if (a[0] == b[0]) == (a[1] == b[1]) {
+                return None;
+            }
+            for point in [a, b] {
+                if !points.contains(&point) {
+                    points.push(point);
+                }
+            }
+        }
+        if points.len() != 4 {
+            return None;
+        }
+        let radii = [
+            points.iter().map(|p| p[0].abs()).fold(0., f64::max),
+            points.iter().map(|p| p[1].abs()).fold(0., f64::max),
+        ];
+        if radii.iter().any(|r| !r.is_finite() || *r <= EPS)
+            || points.iter().any(|p| {
+                (p[0] != radii[0] && p[0] != -radii[0]) || (p[1] != radii[1] && p[1] != -radii[1])
+            })
+        {
+            return None;
+        }
+        swappable &= radii[0] == radii[1];
+    }
+    Some(swappable)
 }
 /// Butt priority is saved member selection order (stable source ID order for All).
 /// The outer polygon must be convex and the locating point inside it: these
@@ -252,6 +334,21 @@ fn joint(
                 ));
             }
             let direction = others[0].direction_away(position).ok_or_else(||unsupported("A member ending on another member's interior is a branch junction; choose Trim to Primary Member or an explicit trim plane"))?;
+            let n = away - direction;
+            if n.magnitude() <= EPS {
+                return Err(invalid(
+                    "Coincident outgoing axes cannot define a positive miter junction",
+                ));
+            }
+            if placement.spatial
+                && !placement.miter_clocking(segment, others[0], n.normalize())
+                && (away.dot(placement.path_n).abs() > 1e-10
+                    || direction.dot(placement.path_n).abs() > 1e-10)
+            {
+                return Err(unsupported(
+                    "A spatial miter on this section needs compatible joint clocking; use Independent Butt or explicit trim planes, or align the sketch workplane with the two incident axes. Centered circular and proven reflected rectangular stock admit compatible frames",
+                ));
+            }
             if (!matches!(segment.carrier, Carrier::Line)
                 || !matches!(others[0].carrier, Carrier::Line))
                 && away.dot(direction) > -1. + 1e-8
@@ -260,7 +357,6 @@ fn joint(
                     "Circular stock can join with matching tangents; angled circular miters need an exact non-normal end trim",
                 ));
             }
-            let n = away - direction;
             target = plane(position, n)?;
             let n = normal(&target)
                 * if normal(&target).dot(away) < 0. {
@@ -346,15 +442,22 @@ fn member_history(
     kind: MemberPathKind,
     sweep: Option<f64>,
 ) -> Result<()> {
-    let path = crate::section_history::member(
-        &definition.path,
-        &crate::extrusion::ThinMember {
-            sources: vec![segment.id.clone()],
-            side: 0,
-            piece: 0,
-            cap: false,
-        },
-    )?;
+    let path = if let Some(sources) = &segment.spatial_sources {
+        crate::section_history::Member {
+            sources: sources.clone(),
+            purpose: serde_json::json!({"spatial_member":segment.id}),
+        }
+    } else {
+        crate::section_history::member(
+            &definition.path,
+            &crate::extrusion::ThinMember {
+                sources: vec![segment.id.clone()],
+                side: 0,
+                piece: 0,
+                cap: false,
+            },
+        )?
+    };
     let sources = origins
         .iter()
         .flat_map(|origin| origin.sources.clone())
@@ -440,7 +543,21 @@ fn group(
 ) -> Result<Vec<BuiltMember>> {
     let (source, section_plane) =
         crate::extrusion::source(adapter, doc, &definition.section, inputs)?;
-    let (path, path_plane) = crate::extrusion::source(adapter, doc, &definition.path, inputs)?;
+    let spatial = crate::sketch3d::spatial(inputs, &definition.path);
+    let planar = if spatial.is_none() {
+        Some(crate::extrusion::source(
+            adapter,
+            doc,
+            &definition.path,
+            inputs,
+        )?)
+    } else {
+        None
+    };
+    let path_plane = spatial
+        .map(|spatial| &spatial.solved.workplane)
+        .or_else(|| planar.as_ref().map(|(_, plane)| plane))
+        .ok_or_else(|| invalid("The structural path source is unavailable"))?;
     let traced = crate::sketches::build_traced(
         doc,
         &definition.section.definition,
@@ -497,6 +614,21 @@ fn group(
     let path_n = Vector3::from(path_plane.u)
         .cross(Vector3::from(path_plane.v))
         .normalize();
+    let centered = [
+        locating[0] - definition.profile_offset_mm[0],
+        locating[1] - definition.profile_offset_mm[1],
+    ];
+    let circle_centered = |center: &str| source.points.get(center) == Some(&centered);
+    let material = source
+        .members
+        .values()
+        .filter(|member| !member.construction)
+        .collect::<Vec<_>>();
+    let rotationally_symmetric = source.profile_order.is_empty() && source.segments.is_empty()
+        && (!material.is_empty() || !source.circles.is_empty())
+        && material.iter().all(|member| matches!(&member.curve, SketchCurve::Circle { center, .. } if circle_centered(center)))
+        && source.circles.values().all(|circle| circle_centered(&circle.center));
+    let rectangle_symmetry = rectangle_symmetry(&source, &face, &traced.members, centered);
     let placement = Placement {
         section: &face,
         origin: Point3::from(section_plane.origin)
@@ -508,6 +640,10 @@ fn group(
         path_n,
         roll: definition.roll_rad,
         profile_offset: definition.profile_offset_mm,
+        spatial: spatial.is_some(),
+        clock_u: Vector3::from(path_plane.u),
+        rotationally_symmetric,
+        rectangle_symmetry,
     };
     let library_profile = definition
         .library_profile
@@ -520,14 +656,38 @@ fn group(
             + Vector3::from(path_plane.v) * point[1]
     };
     let point = |id: &str| {
-        path.points
+        if let Some(spatial) = spatial {
+            return spatial
+                .solved
+                .points
+                .get(id)
+                .copied()
+                .map(Point3::from)
+                .ok_or_else(|| invalid("Spatial path endpoint was removed"));
+        }
+        planar
+            .as_ref()
+            .ok_or_else(|| invalid("The planar path source is unavailable"))?
+            .0
+            .points
             .get(id)
             .copied()
             .map(world)
             .ok_or_else(|| invalid("Path endpoint was removed"))
     };
     let ids = if definition.members.is_empty() {
-        path.members.keys().cloned().collect::<Vec<_>>()
+        if let Some(spatial) = spatial {
+            spatial.solved.members.keys().cloned().collect::<Vec<_>>()
+        } else {
+            planar
+                .as_ref()
+                .ok_or_else(|| invalid("The planar path source is unavailable"))?
+                .0
+                .members
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        }
     } else {
         definition.members.clone()
     };
@@ -538,10 +698,47 @@ fn group(
     }
     let mut segments = vec![];
     for id in ids {
+        if let Some(spatial) = spatial {
+            let member = spatial
+                .solved
+                .members
+                .get(&id)
+                .ok_or_else(|| invalid("Selected spatial path member was removed"))?;
+            let cad_core::sketch3d::Curve::Line { start, end } = &member.curve else {
+                return Err(unsupported(
+                    "Spatial structural stock currently accepts straight line members; spatial arcs/splines need an explicitly compatible moving section frame",
+                ));
+            };
+            let a = point(start)?;
+            let b = point(end)?;
+            if a.distance(b) <= EPS {
+                return Err(invalid("Spatial path member has zero length"));
+            }
+            let axis = (b - a).normalize();
+            let spatial_sources =
+                crate::sketch3d::member_curves(adapter, inputs, &definition.path, &id)?
+                    .into_iter()
+                    .map(|(_, source)| source)
+                    .collect();
+            segments.push(Segment {
+                id,
+                a,
+                b,
+                start_axis: axis,
+                end_axis: axis,
+                carrier: Carrier::Line,
+                spatial_sources: Some(spatial_sources),
+            });
+            continue;
+        }
+        let path = &planar
+            .as_ref()
+            .ok_or_else(|| invalid("The planar path source is unavailable"))?
+            .0;
         if !path.members.contains_key(&id) {
             return Err(invalid("Selected path member was removed"));
         }
-        let segment = match cad_core::sketch_edit::effective_curve(&path, &id)? {
+        let segment = match cad_core::sketch_edit::effective_curve(path, &id)? {
             SketchCurve::Line { start, end } => {
                 let a = point(&start)?;
                 let b = point(&end)?;
@@ -556,6 +753,7 @@ fn group(
                     start_axis: axis,
                     end_axis: axis,
                     carrier: Carrier::Line,
+                    spatial_sources: None,
                 }
             }
             SketchCurve::Arc {
@@ -584,6 +782,7 @@ fn group(
                         angle,
                         closed: false,
                     },
+                    spatial_sources: None,
                 }
             }
             SketchCurve::Circle { center, radius } => {
@@ -612,6 +811,7 @@ fn group(
                         angle: std::f64::consts::TAU,
                         closed: true,
                     },
+                    spatial_sources: None,
                 }
             }
             _ => {

@@ -316,6 +316,58 @@ pub fn project(
         return vec![];
     };
     let suppressed = crate::configuration::feature_suppressed(document, &part.id, feature);
+    if matches!(feature.operation, Operation::Sketch3d { .. }) {
+        let busy = if editing {
+            Some("Finish or cancel the current operation first")
+        } else if editable_part.is_some_and(|id| id != part.id) {
+            Some("Use Edit in Place to edit this component")
+        } else {
+            None
+        };
+        let reason = busy.or(suppressed.then_some("Unsuppress this 3D sketch first"));
+        let mut out = [
+            ("feature.edit", "Edit 3D Sketch", "Sketch"),
+            ("feature.sweep", "Sweep Along Sketch", "Model"),
+            ("feature.curve-pattern", "Curve Driven Pattern", "Model"),
+            ("weldment.members", "Structural Member", "Model"),
+            ("reference.composite-curve", "Composite Curve", "Reference"),
+            ("reference.axis", "Reference Axis", "Reference"),
+            ("reference.point", "Reference Point", "Reference"),
+        ]
+        .into_iter()
+        .map(|(command, label, group)| descriptor(target, command, label, group, reason))
+        .chain([
+            descriptor(target, "selection.fit", "Zoom to Sketch", "View", None),
+            descriptor(target, "selection.measure", "Measure", "View", None),
+            descriptor(
+                target,
+                "feature.suppress",
+                if suppressed { "Unsuppress" } else { "Suppress" },
+                "Feature",
+                busy,
+            ),
+            descriptor(target, "feature.delete", "Delete Feature", "Feature", busy),
+        ])
+        .collect::<Vec<_>>();
+        if matches!(target, SelectionTarget::Feature { .. }) {
+            for (command, label, earlier) in [
+                ("feature.move-up", "Move Up", true),
+                ("feature.move-down", "Move Down", false),
+            ] {
+                let order_error = crate::feature_order::destination(part, &feature.id, earlier)
+                    .err()
+                    .map(|error| error.to_string());
+                out.push(descriptor(
+                    target,
+                    command,
+                    label,
+                    "Feature",
+                    busy.or(order_error.as_deref()),
+                ));
+            }
+        }
+        return out;
+    }
     let mut out = vec![];
     let busy = if editing {
         Some("Confirm or cancel the current operation first")

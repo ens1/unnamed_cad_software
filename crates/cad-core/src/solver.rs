@@ -18,6 +18,37 @@ pub struct SketchDragTarget {
 }
 pub trait ConstraintSolver {
     fn fingerprint(&self) -> &str;
+    fn solve_sketch3d(
+        &self,
+        _doc: &Document,
+        _owner: &str,
+        _definition: &mut crate::sketch3d::Definition,
+    ) -> Result<SolveReport> {
+        Err(CadError::Unsupported(
+            "This solver does not support spatial sketches".into(),
+        ))
+    }
+    fn drag_sketch3d(
+        &self,
+        _doc: &Document,
+        _owner: &str,
+        _definition: &mut crate::sketch3d::Definition,
+        _targets: &[crate::sketch3d::DragTarget],
+    ) -> Result<SolveReport> {
+        Err(CadError::Unsupported(
+            "This solver does not support spatial sketch dragging".into(),
+        ))
+    }
+    fn analyze_sketch3d(
+        &self,
+        _doc: &Document,
+        _owner: &str,
+        _definition: &crate::sketch3d::Definition,
+    ) -> Result<BTreeMap<Id, Vec<[f64; 3]>>> {
+        Err(CadError::Unsupported(
+            "This solver does not expose spatial sketch motion".into(),
+        ))
+    }
     fn solve_sketch(&self, doc: &Document, part: &str, sketch: &mut Sketch) -> Result<SolveReport>;
     fn drag_sketch(
         &self,
@@ -223,7 +254,7 @@ pub(crate) fn scaled_jacobian(j: &DMatrix<f64>) -> (DMatrix<f64>, DVector<f64>) 
 
 // Damped SVD avoids squaring the Jacobian's condition number. Trial steps reuse
 // one decomposition; invalid geometry rejects a step and increases damping.
-fn minimize(
+pub(crate) fn minimize(
     x: DVector<f64>,
     f: impl Fn(&DVector<f64>) -> Result<DVector<f64>>,
     limit: usize,
@@ -380,7 +411,32 @@ fn axis_residual(a: Vector3<f64>, b: Vector3<f64>) -> Vector3<f64> {
 }
 impl ConstraintSolver for NativeSolver {
     fn fingerprint(&self) -> &str {
-        "tcad-native-lm/16"
+        "tcad-native-lm/17"
+    }
+    fn solve_sketch3d(
+        &self,
+        doc: &Document,
+        owner: &str,
+        definition: &mut crate::sketch3d::Definition,
+    ) -> Result<SolveReport> {
+        crate::sketch3d::solve(doc, owner, definition)
+    }
+    fn drag_sketch3d(
+        &self,
+        doc: &Document,
+        owner: &str,
+        definition: &mut crate::sketch3d::Definition,
+        targets: &[crate::sketch3d::DragTarget],
+    ) -> Result<SolveReport> {
+        crate::sketch3d::drag(doc, owner, definition, targets)
+    }
+    fn analyze_sketch3d(
+        &self,
+        doc: &Document,
+        owner: &str,
+        definition: &crate::sketch3d::Definition,
+    ) -> Result<BTreeMap<Id, Vec<[f64; 3]>>> {
+        crate::sketch3d::point_motion(doc, owner, definition)
     }
     fn solve_sketch(&self, doc: &Document, part: &str, sketch: &mut Sketch) -> Result<SolveReport> {
         if sketch.points.keys().chain(sketch.members.keys()).any(|id| {

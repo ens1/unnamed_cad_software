@@ -131,7 +131,10 @@ pub(crate) fn seam(
             inputs,
         )?,
         SeamSource::ReferenceCurve { feature, piece, .. } => {
-            let Some(Shape::ReferenceCurves { paths, evaluated }) = inputs.get(feature) else {
+            let Some(Shape::ReferenceCurves {
+                paths, evaluated, ..
+            }) = inputs.get(feature)
+            else {
                 return Err(invalid("The reusable seam curve is missing"));
             };
             if paths.len() != 1 {

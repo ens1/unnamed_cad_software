@@ -1,6 +1,11 @@
 /* Nocturne: a portable composition and skin, independent of CAD definitions.
    Midnight surfaces, a right inspector, bottom command dock and circular tools.
    Edit these variables or selectors; no Rust changes are needed. */
+[role=sketch3d-member] { color: var(--reference); stroke-width: 1.5px; }
+[role=sketch3d-member].construction { color: #CDA7FF; }
+[role=sketch3d-member][state=selected], [role=sketch3d-handle][state=selected],
+[role=sketch3d-point-handle][state=selected] { color: var(--active); stroke-width: 3px; }
+[role=sketch3d-tool][state=selected] { background: var(--active); color: #191426; }
 :root {
   --panel: #191426;
   --panel-raised: #261D39;

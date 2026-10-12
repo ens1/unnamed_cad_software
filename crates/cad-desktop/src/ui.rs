@@ -273,6 +273,10 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
             if w.dialog.is_none() {
                 crate::history::latest(w);
             }
+        } else if crate::sketch3d_ui::escape(w) {
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+            });
         } else if crate::sketch::escape(w) {
             if !canceling_drag {
                 w.status = "Sketch tool stopped. Select another tool or Exit Sketch.".into();
@@ -310,7 +314,7 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
     if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::O)) {
         action(w, "file.open");
     }
-    if !ctx.egui_wants_keyboard_input() && w.sketch.is_some() {
+    if !ctx.egui_wants_keyboard_input() && (w.sketch.is_some() || crate::sketch3d_ui::active(w)) {
         if ctx.input(|i| i.key_pressed(egui::Key::D) && !i.modifiers.command) {
             action(w, "sketch.smart-dimension");
         }
@@ -634,6 +638,9 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     registry.register("structural-member-editor", |ui, w, _| {
         crate::structural_member_ui::show(ui, w);
     });
+    registry.register("sketch3d-editor", |ui, w, _| {
+        crate::sketch3d_ui::show(ui, w);
+    });
     registry.register("structural-member-locator", |ui, w, _| {
         if let Some(element) = crate::structural_member_ui::semantics(w)
             .into_iter()
@@ -828,6 +835,10 @@ pub(crate) fn semantic_element(
     if widget == "auto" && crate::selection_ui::render_edge_row(ui, w, element) {
         return;
     }
+    if widget == "auto" && element.role.starts_with("sketch3d-") {
+        crate::sketch3d_ui::render_control(ui, w, element);
+        return;
+    }
     if widget == "auto"
         && matches!(
             element.role.as_str(),
@@ -997,6 +1008,7 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
     }
     if crate::sketch_issues_ui::action(w, command, &element.data)
         || crate::structural_member_ui::action(w, command, &element.data)
+        || crate::sketch3d_ui::action(w, command, Some(&element.data))
         || crate::fabrication_sources_ui::action(w, command, &element.data)
         || crate::weld_beads_ui::action(w, command, Some(&element.data))
         || crate::sketch_block_library_ui::action(w, command, Some(&element.data))
@@ -1163,6 +1175,8 @@ pub(crate) fn history_command(w: &mut Workspace, redo: bool) {
         crate::drawing_interaction_ui::escape(w);
     } else if w.sketch.is_some() {
         crate::sketch::undo_point(w);
+    } else if crate::sketch3d_ui::active(w) {
+        crate::sketch3d_ui::history_command(w, redo);
     } else if w.tool_checkpoint.is_some() {
         w.cancel_tool();
     } else if redo {
@@ -1199,6 +1213,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     setter,
                     "operation-editor"
                         | "structural-member"
+                        | "sketch3d"
                         | "component-placement"
                         | "component-insert"
                         | "material-ui"
@@ -1521,6 +1536,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     || crate::assembly_welds_ui::field_is_invalid(w, element)
                     || crate::operation_editor_ui::field_is_invalid(w, element)
                     || crate::structural_member_ui::field_is_invalid(w, element)
+                    || crate::sketch3d_ui::field_is_invalid(w, element)
                     || crate::drawing_editor_ui::field_is_invalid(w, element)
                     || crate::drawing_interaction_ui::field_is_invalid(w, element)
                     || crate::configuration_ui::field_is_invalid(w, element)
@@ -1663,6 +1679,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         crate::assembly_welds_ui::field_error(w, element, error.clone());
         crate::operation_editor_ui::field_error(w, element, error.clone());
         crate::structural_member_ui::field_error(w, element, error.clone());
+        crate::sketch3d_ui::field_error(w, element, error.clone());
         crate::drawing_editor_ui::field_error(w, element, error.clone());
         crate::drawing_interaction_ui::field_error(w, element, error.clone());
         crate::production_ui::record_field_error(w, element, error.clone());
@@ -1687,6 +1704,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::appearances_ui::field_error(w, element, None);
                 crate::operation_editor_ui::field_error(w, element, None);
                 crate::structural_member_ui::field_error(w, element, None);
+                crate::sketch3d_ui::field_error(w, element, None);
                 crate::drawing_editor_ui::field_error(w, element, None);
                 crate::drawing_interaction_ui::field_error(w, element, None);
                 crate::production_ui::record_field_error(w, element, None);
@@ -1709,6 +1727,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::appearances_ui::field_error(w, element, Some(error.to_string()));
                 crate::operation_editor_ui::field_error(w, element, Some(error.to_string()));
                 crate::structural_member_ui::field_error(w, element, Some(error.to_string()));
+                crate::sketch3d_ui::field_error(w, element, Some(error.to_string()));
                 crate::drawing_editor_ui::field_error(w, element, Some(error.to_string()));
                 crate::drawing_interaction_ui::field_error(w, element, Some(error.to_string()));
                 crate::production_ui::record_field_error(w, element, Some(error.to_string()));
@@ -1804,7 +1823,10 @@ fn model_view(
     let cube = viewport::view_cube(w, ui, r);
     crate::operation_preview::viewport_status(ui, w, r);
     let motion_owned = crate::assembly_motion_ui::viewport(w, ui, r, &response, &[toolbar, cube]);
-    if !motion_owned && viewport::navigate(w, ui.ctx(), &response) {
+    if !motion_owned
+        && !crate::sketch3d_ui::captured(w)
+        && viewport::navigate(w, ui.ctx(), &response)
+    {
         w.selection_popup = None;
     }
     let empty = w.sketch.is_none()
@@ -1841,7 +1863,9 @@ fn model_view(
     {
         w.selection_popup = None;
         if let Some(pointer) = response.interact_pointer_pos() {
-            if let Some(feature) = crate::sketch::pick(w, r, pointer) {
+            if let Some(feature) = crate::sketch::pick(w, r, pointer)
+                .or_else(|| crate::sketch3d_ui::pick_inactive(w, r, pointer))
+            {
                 crate::sketch::select_feature(w, feature, &response);
             } else if let Some(selected) = viewport::pick(w, r, pointer).into_iter().next() {
                 viewport::select(w, selected);
@@ -1854,7 +1878,7 @@ fn model_view(
             }
         }
     }
-    if !motion_owned && w.sketch.is_none() {
+    if !motion_owned && w.sketch.is_none() && !crate::sketch3d_ui::active(w) {
         response.context_menu(|ui| {
             if w.tool_checkpoint.is_some() {
                 if ui
@@ -1883,6 +1907,7 @@ fn model_view(
         });
     }
     viewport::overlay(w, ui, r);
+    crate::sketch3d_ui::overlay_inactive(w, ui, r);
     let blocked = !response.hovered()
         || motion_owned
         || ui.input(|input| {
@@ -1902,7 +1927,9 @@ fn model_view(
     if !motion_owned {
         crate::sketch::overlay(w, ui, r, &response, toolbar);
     }
+    crate::sketch3d_ui::overlay(w, ui, r, &response, blocked || motion_owned);
     if w.sketch.is_none()
+        && !crate::sketch3d_ui::active(w)
         && !motion_owned
         && response.clicked()
         && response
@@ -1914,7 +1941,7 @@ fn model_view(
         let structural_pick =
             crate::structural_member_ui::capture_click(w, r, p, ui.input(|input| input.modifiers));
         let sketch_feature = if !structural_pick && w.tool_checkpoint.is_none() {
-            crate::sketch::pick(w, r, p)
+            crate::sketch::pick(w, r, p).or_else(|| crate::sketch3d_ui::pick_inactive(w, r, p))
         } else {
             None
         };
@@ -1953,6 +1980,7 @@ fn model_view(
     if w.sketch.is_none()
         && !motion_owned
         && !crate::structural_member_ui::active(w)
+        && !crate::sketch3d_ui::active(w)
         && response.hovered()
         && ui.input(|i| i.key_pressed(egui::Key::Tab))
         && !w.candidates.is_empty()
@@ -2075,6 +2103,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         return;
     }
     if crate::workspace_controls::action(w, cmd)
+        || crate::sketch3d_ui::action(w, cmd, None)
         || crate::document_identity_ui::action(w, cmd)
         || crate::sketch_overlay::action(w, cmd)
         || crate::properties_ui::action(w, cmd, None)
@@ -2386,6 +2415,12 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
                 .cloned()
                 .unwrap_or_else(|| w.session.visible().root.clone());
             crate::mate_ui::new(w, &owner);
+        }
+        "sketch.new-3d" => {
+            if w.view.active_part.is_none() {
+                new_part(w);
+            }
+            crate::sketch3d_ui::begin(w, None);
         }
         "sketch.new" => {
             if w.view.active_part.is_none() {
@@ -2700,6 +2735,10 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
         crate::sketch::begin(w, Some(f));
         return;
     }
+    if matches!(f.operation, Operation::Sketch3d { .. }) {
+        crate::sketch3d_ui::begin(w, Some(f));
+        return;
+    }
     let edge_path = crate::selection_ui::edge_selection(&f)
         .and_then(|(body, _)| crate::selection_ui::known_edge_occurrence(w, &body.definition));
     w.start_tool();
@@ -2753,6 +2792,14 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
     }
     if matches!(name, "Structural Member Group" | "Structural Member") {
         crate::structural_member_ui::begin(w);
+        return;
+    }
+    if crate::sketch3d_ui::active(w) && !crate::curve_pattern_ui::is_preset(name) {
+        w.after_confirm = Some(name.into());
+        w.confirm_tool();
+        if crate::sketch3d_ui::active(w) && !w.confirm_requested {
+            w.after_confirm = None;
+        }
         return;
     }
     if crate::rib_ui::is_preset(name) {
@@ -3143,17 +3190,39 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
                 mode: "new".into(),
             }
         }
-        "Sweep" => Operation::Sweep {
-            options: Default::default(),
-            profile,
-            path: vec![
-                plane.origin,
-                std::array::from_fn(|axis| plane.origin[axis] + normal[axis] * 50.),
-            ],
-            path_sketch: None,
-            body: solid_body.clone(),
-            mode: "new".into(),
-        },
+        "Sweep" => {
+            let path_sketch = part
+                .features
+                .iter()
+                .filter(|feature| !feature.suppressed && feature.id != profile.node)
+                .find(|feature| {
+                    w.view.active_node.as_ref() == Some(&feature.id)
+                        && matches!(
+                            feature.operation,
+                            Operation::Sketch3d { .. }
+                                | Operation::ReferenceCurve { .. }
+                                | Operation::Profile { .. }
+                        )
+                })
+                .or_else(|| {
+                    part.features.iter().rev().find(|feature| {
+                        !feature.suppressed
+                            && matches!(feature.operation, Operation::Sketch3d { .. })
+                    })
+                })
+                .map(|feature| part.reference(&feature.id));
+            Operation::Sweep {
+                options: Default::default(),
+                profile,
+                path: vec![
+                    plane.origin,
+                    std::array::from_fn(|axis| plane.origin[axis] + normal[axis] * 50.),
+                ],
+                path_sketch,
+                body: solid_body.clone(),
+                mode: "new".into(),
+            }
+        }
         "Shell" => Operation::Shell {
             body,
             thickness: "2 mm".into(),

@@ -101,6 +101,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         let mut history = BTreeMap::new();
         let mut meshes = BTreeMap::new();
         let mut sketches = BTreeMap::new();
+        let mut spatial_sketches = BTreeMap::new();
         let mut references = BTreeMap::new();
         let mut reference_curves = BTreeMap::new();
         let mut reference_curve_meshes = BTreeMap::new();
@@ -156,6 +157,11 @@ impl<K: KernelAdapter> Evaluator<K> {
                         .map(|(id, value)| (format!("{key}::{id}"), value)),
                 );
             }
+            spatial_sketches.extend(
+                self.spatial_sketch_output(&document, &part.id)
+                    .into_iter()
+                    .map(|(id, value)| (format!("{key}::{id}"), value)),
+            );
             references.extend(
                 self.reference_output(&document, &part.id)
                     .into_iter()
@@ -195,6 +201,7 @@ impl<K: KernelAdapter> Evaluator<K> {
             geometry_valid: false,
             elapsed_ms,
             sketches,
+            spatial_sketches,
             references,
             reference_curves,
             reference_curve_meshes,
@@ -640,6 +647,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         self.last_source.clear();
         self.adapter.clear_weld_joint_previews();
         self.adapter.clear_operation_previews();
+        self.adapter.clear_spatial_sketch_inputs();
         let report =
             crate::assemblies::build_shapes_report(&self.adapter, &solved, root, tolerance, true)?;
         if !report.failures.is_empty() {
@@ -1033,6 +1041,31 @@ impl<K: KernelAdapter> Evaluator<K> {
             })
             .collect()
     }
+    fn spatial_sketch_output(
+        &self,
+        doc: &Document,
+        definition: &str,
+    ) -> BTreeMap<String, cad_core::sketch3d::Evaluated> {
+        let Some(part) = doc.parts.get(definition) else {
+            return BTreeMap::new();
+        };
+        part.features
+            .iter()
+            .filter(|feature| {
+                !feature.suppressed
+                    && matches!(feature.operation, cad_core::Operation::Sketch3d { .. })
+            })
+            .filter_map(|feature| {
+                let producer = part.reference(&feature.id);
+                let evaluated = self
+                    .shapes
+                    .get(&producer)
+                    .and_then(|shape| self.adapter.spatial_sketch(shape))
+                    .or_else(|| self.adapter.spatial_sketch_input(&producer))?;
+                Some((feature.id.clone(), evaluated))
+            })
+            .collect()
+    }
     fn sketch_output(
         &self,
         doc: &Document,
@@ -1198,6 +1231,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         let mut body_sets = BTreeMap::new();
         let mut surface_sets = BTreeMap::new();
         let mut sketches = BTreeMap::new();
+        let mut spatial_sketches = BTreeMap::new();
         let mut references = BTreeMap::new();
         let mut reference_curves = BTreeMap::new();
         let mut reference_curve_meshes = BTreeMap::new();
@@ -1234,6 +1268,9 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 let key = format!("{}::{feature}", part.id);
                 reference_curves.insert(key.clone(), geometry);
                 reference_curve_meshes.insert(key, mesh);
+            }
+            for (feature, geometry) in self.spatial_sketch_output(&solved, &part.id) {
+                spatial_sketches.insert(format!("{}::{feature}", part.id), geometry);
             }
             for (feature, geometry) in self.sketch_output(&solved, &part.id)? {
                 sketches.insert(format!("{}::{feature}", part.id), geometry);
@@ -1282,6 +1319,11 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                     let key = format!("{key}::{feature}");
                     reference_curves.insert(key.clone(), geometry);
                     reference_curve_meshes.insert(key, mesh);
+                }
+                for (feature, geometry) in
+                    self.spatial_sketch_output(&configured_solved, &i.definition)
+                {
+                    spatial_sketches.insert(format!("{key}::{feature}"), geometry);
                 }
                 for (feature, report) in self.mold_output(&configured_solved, &i.definition) {
                     mold_analyses.insert(format!("{key}::{feature}"), report);
@@ -1469,6 +1511,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             diagnostics,
             elapsed_ms: start.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
             sketches,
+            spatial_sketches,
             references,
             reference_curves,
             reference_curve_meshes,

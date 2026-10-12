@@ -2266,10 +2266,10 @@ fn visible_sketch(w: &Workspace, instance: &PlacedPart, feature: &Feature) -> bo
     }
 }
 pub struct SketchHit {
-    definition: Id,
-    feature: Id,
-    path: Vec<Id>,
-    instance: Option<Id>,
+    pub(crate) definition: Id,
+    pub(crate) feature: Id,
+    pub(crate) path: Vec<Id>,
+    pub(crate) instance: Option<Id>,
 }
 pub fn select_feature(w: &mut Workspace, hit: SketchHit, response: &egui::Response) -> bool {
     let Some(feature) = w

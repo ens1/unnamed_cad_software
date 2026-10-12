@@ -21,6 +21,48 @@ fn source<'a>(doc: &'a Document, profile: &NodeRef) -> Option<&'a Sketch> {
     };
     part.sketches.get(sketch)
 }
+type PathEntities = (Vec<(cad_core::Id, String)>, Vec<cad_core::Id>);
+fn path_entities(doc: &Document, path: &NodeRef) -> Option<PathEntities> {
+    let part = doc.parts.get(&path.definition)?;
+    let feature = part
+        .features
+        .iter()
+        .find(|feature| feature.id == path.node)?;
+    if let Operation::Sketch3d { definition } = &feature.operation {
+        let members = definition
+            .members
+            .iter()
+            .enumerate()
+            .map(|(index, (id, member))| {
+                let kind = match member.curve {
+                    cad_core::sketch3d::Curve::Line { .. } => "Line",
+                    cad_core::sketch3d::Curve::Arc { .. } => "Arc",
+                    cad_core::sketch3d::Curve::Circle { .. } => "Circle",
+                    _ => "Spline",
+                };
+                (id.clone(), format!("3D {kind} {}", index + 1))
+            })
+            .collect();
+        return Some((members, definition.points.keys().cloned().collect()));
+    }
+    let sketch = source(doc, path)?;
+    let members = sketch
+        .members
+        .iter()
+        .enumerate()
+        .map(|(index, (id, member))| {
+            let kind = match member.curve {
+                cad_core::SketchCurve::Line { .. } => "Line",
+                cad_core::SketchCurve::Arc { .. } => "Arc",
+                cad_core::SketchCurve::Circle { .. } => "Circle",
+                cad_core::SketchCurve::Ellipse { .. } => "Ellipse",
+                _ => "Spline",
+            };
+            (id.clone(), format!("{kind} {}", index + 1))
+        })
+        .collect();
+    Some((members, sketch.points.keys().cloned().collect()))
+}
 fn thin(ui: &mut egui::Ui, thin: &mut Option<ThinExtrude>) -> bool {
     let mut changed = false;
     let mut enabled = thin.is_some();
@@ -283,12 +325,11 @@ pub(crate) fn sweep(
                 )
                 .changed();
         });
-    if let Some(sketch) = path.and_then(|path| source(doc, path)) {
-        let members = sketch.members.iter().collect::<Vec<_>>();
+    if let Some((members, points)) = path.and_then(|path| path_entities(doc, path)) {
         let label = options
             .path_member
             .as_ref()
-            .and_then(|id| members.iter().position(|(key, _)| *key == id))
+            .and_then(|id| members.iter().position(|(key, _)| key == id))
             .map(|index| format!("Member {}", index + 1))
             .unwrap_or(
                 if options.path_member.is_some() {
@@ -304,28 +345,16 @@ pub(crate) fn sweep(
                 changed |= ui
                     .selectable_value(&mut options.path_member, None, "Whole Path")
                     .changed();
-                for (index, (id, member)) in members.iter().enumerate() {
-                    let kind = match &member.curve {
-                        cad_core::SketchCurve::Line { .. } => "Line",
-                        cad_core::SketchCurve::Arc { .. } => "Arc",
-                        cad_core::SketchCurve::Circle { .. } => "Circle",
-                        cad_core::SketchCurve::Ellipse { .. } => "Ellipse",
-                        _ => "Spline",
-                    };
+                for (id, label) in &members {
                     changed |= ui
-                        .selectable_value(
-                            &mut options.path_member,
-                            Some((*id).clone()),
-                            format!("{kind} {}", index + 1),
-                        )
+                        .selectable_value(&mut options.path_member, Some(id.clone()), label)
                         .changed();
                 }
             });
-        let points = sketch.points.keys().collect::<Vec<_>>();
         let label = options
             .path_start_vertex
             .as_ref()
-            .and_then(|id| points.iter().position(|point| *point == id))
+            .and_then(|id| points.iter().position(|point| point == id))
             .map(|index| format!("Vertex {}", index + 1))
             .unwrap_or(
                 if options.path_start_vertex.is_some() {
@@ -345,7 +374,7 @@ pub(crate) fn sweep(
                     changed |= ui
                         .selectable_value(
                             &mut options.path_start_vertex,
-                            Some((*point).clone()),
+                            Some(point.clone()),
                             format!("Vertex {}", index + 1),
                         )
                         .changed();

@@ -39,7 +39,12 @@ pub(crate) fn source_label(doc: &Document, source: &CurveSource) -> String {
                         .keys()
                         .position(|id| id == member)
                 } else {
-                    None
+                    match &f.operation {
+                        Operation::Sketch3d { definition } => {
+                            definition.members.keys().position(|id| id == member)
+                        }
+                        _ => None,
+                    }
                 }
             });
             format!(
@@ -72,6 +77,27 @@ pub(crate) fn sources(
         .filter(|f| !f.suppressed)
     {
         match &feature.operation {
+            Operation::Sketch3d { definition } => {
+                for (index, (member, record)) in definition.members.iter().enumerate() {
+                    let kind = match &record.curve {
+                        cad_core::sketch3d::Curve::Line { .. } => "3D line",
+                        cad_core::sketch3d::Curve::Arc { .. } => "3D arc",
+                        cad_core::sketch3d::Curve::Circle { .. } => "3D circle",
+                        cad_core::sketch3d::Curve::Bezier { .. } => "3D Bézier",
+                        cad_core::sketch3d::Curve::Nurbs { .. } => "3D NURBS",
+                        cad_core::sketch3d::Curve::InterpolatingSpline { .. } => {
+                            "3D interpolating spline"
+                        }
+                    };
+                    out.push((
+                        format!("{} · {} {}", feature.name, kind, index + 1),
+                        CurveSource::SketchMember {
+                            profile: part.reference(&feature.id),
+                            member: member.clone(),
+                        },
+                    ));
+                }
+            }
             Operation::ReferenceCurve { .. } => out.push((
                 feature.name.clone(),
                 CurveSource::Curve {
@@ -140,21 +166,73 @@ fn source_closed(w: &Workspace, source: &CurveSource) -> bool {
                     .iter()
                     .find(|feature| feature.id == profile.node)
                     .and_then(|feature| match &feature.operation {
+                        Operation::Sketch3d { definition } => {
+                            let key = doc
+                                .active_configurations
+                                .get(&profile.definition)
+                                .map_or_else(
+                                    || format!("{}::{}", profile.definition, profile.node),
+                                    |configuration| {
+                                        format!(
+                                            "{}@{}::{}",
+                                            profile.definition, configuration, profile.node
+                                        )
+                                    },
+                                );
+                            if let Some(closed) = crate::history::current(w)
+                                .filter(|evaluation| evaluation.identity == w.session.identity())
+                                .and_then(|evaluation| evaluation.spatial_sketches.get(&key))
+                                .and_then(|evaluated| {
+                                    evaluated
+                                        .polylines
+                                        .iter()
+                                        .find(|line| &line.member == member)
+                                })
+                                .map(|line| line.closed)
+                            {
+                                return Some(closed);
+                            }
+                            definition
+                                .members
+                                .get(member)
+                                .map(|source| match &source.curve {
+                                    cad_core::sketch3d::Curve::Circle { .. } => true,
+                                    cad_core::sketch3d::Curve::Bezier { points }
+                                    | cad_core::sketch3d::Curve::Nurbs { points, .. }
+                                    | cad_core::sketch3d::Curve::InterpolatingSpline {
+                                        points,
+                                        ..
+                                    } => cad_core::sketch3d::point_aliases(definition).is_ok_and(
+                                        |aliases| {
+                                            points.first().zip(points.last()).is_some_and(
+                                                |(first, last)| {
+                                                    aliases.get(first) == aliases.get(last)
+                                                },
+                                            )
+                                        },
+                                    ),
+                                    _ => false,
+                                })
+                        }
                         Operation::Profile {
                             profile: Profile::Sketch { sketch },
                             ..
-                        } => part.sketches.get(sketch),
+                        } => part
+                            .sketches
+                            .get(sketch)
+                            .and_then(|sketch| sketch.members.get(member))
+                            .map(|member| match &member.curve {
+                                SketchCurve::Circle { .. } | SketchCurve::Ellipse { .. } => true,
+                                SketchCurve::Bezier { points }
+                                | SketchCurve::Nurbs { points, .. } => {
+                                    points.first() == points.last()
+                                }
+                                _ => false,
+                            }),
                         _ => None,
                     })
             })
-            .and_then(|sketch| sketch.members.get(member))
-            .is_some_and(|member| match &member.curve {
-                SketchCurve::Circle { .. } | SketchCurve::Ellipse { .. } => true,
-                SketchCurve::Bezier { points } | SketchCurve::Nurbs { points, .. } => {
-                    points.first() == points.last()
-                }
-                _ => false,
-            }),
+            .unwrap_or(false),
         CurveSource::Curve { feature } => doc
             .parts
             .get(&feature.definition)

@@ -236,10 +236,13 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "settings",
         ],
         "Insert" => {
-            return feature_groups()
-                .into_iter()
-                .map(|group| format!("menu/{}", group.to_lowercase().replace(' ', "-")))
-                .collect();
+            let mut items = vec!["sketch.new".into(), "sketch.new-3d".into()];
+            items.extend(
+                feature_groups()
+                    .into_iter()
+                    .map(|group| format!("menu/{}", group.to_lowercase().replace(' ', "-"))),
+            );
+            return items;
         }
         "View" => vec![
             "viewport.orientation.front",
@@ -626,6 +629,7 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
     };
     for (command, label) in cad_core::presentation::command_catalog() {
         let enabled = match command {
+            "sketch.new-3d" => !blocked && !sketching,
             "draft.apply" => confirmation_available(w),
             "draft.cancel" => w.tool_checkpoint.is_some() || w.session.draft.is_some() || sketching,
             "viewport.fit-sketch"
@@ -950,6 +954,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::sketch3d_ui::current_source_is_valid(w) {
+        return Some("Finish the current 3D sketch gesture and correct its fields before applying");
+    }
     if !crate::quantity_display::source_fields_valid(w) {
         return Some("Correct the current field text before applying");
     }
@@ -1147,6 +1154,16 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         });
         menu_button(ui, "Insert", |ui| {
+            for (command, label) in [
+                ("sketch.new", "Planar Sketch…"),
+                ("sketch.new-3d", "3D Sketch…"),
+            ] {
+                if menu_action(ui, command, label, w.tool_checkpoint.is_none()).clicked() {
+                    ui::action(w, command);
+                    ui.close();
+                }
+            }
+            ui.separator();
             for group in feature_groups() {
                 menu_button(ui, group, |ui| {
                     for tool in cad_core::modeling_tools::TOOLS
@@ -1291,12 +1308,29 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
     let sketching = w.sketch.is_some();
     let blocked = w.tool_checkpoint.is_some() && !sketching;
     let tab = w.command_tab.clone();
+    if tab == "Sketch" && crate::sketch3d_ui::active(w) {
+        crate::sketch3d_ui::toolbar(ui, w);
+        return;
+    }
     egui::ScrollArea::horizontal()
         .id_salt("cad-tool-groups")
         .auto_shrink([false, true])
         .show(ui, |ui| {
             ui.horizontal(|ui| match tab.as_str() {
                 "Sketch" => {
+                    if !sketching
+                        && tool_button(
+                            ui,
+                            "command-toolbar/sketch.new-3d",
+                            "3D Sketch",
+                            Icon::Sketch,
+                            !blocked,
+                            false,
+                            "Draw spatial sketch geometry in the model",
+                        )
+                    {
+                        ui::action(w, "sketch.new-3d");
+                    }
                     if tool_button(
                         ui,
                         "command-toolbar/sketch.new",
@@ -1921,21 +1955,29 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                 }
                 ui.separator();
                 for feature in &part.features {
-                    let consumed = matches!(feature.operation, Operation::Profile { .. })
-                        && part.features.iter().any(|f| {
-                            part.feature_dependencies(f)
-                                .iter()
-                                .any(|n| n.definition == part.id && n.node == feature.id)
-                        });
+                    let consumed = matches!(
+                        feature.operation,
+                        Operation::Profile { .. } | Operation::Sketch3d { .. }
+                    ) && part.features.iter().any(|f| {
+                        part.feature_dependencies(f)
+                            .iter()
+                            .any(|n| n.definition == part.id && n.node == feature.id)
+                    });
                     if consumed {
                         continue;
                     }
                     feature_row(ui, w, part, feature);
-                    if !matches!(feature.operation, Operation::Profile { .. }) {
+                    if !matches!(
+                        feature.operation,
+                        Operation::Profile { .. } | Operation::Sketch3d { .. }
+                    ) {
                         for input in part.feature_dependencies(feature) {
                             if let Some(sketch) = part.features.iter().find(|f| {
                                 f.id == input.node
-                                    && matches!(f.operation, Operation::Profile { .. })
+                                    && matches!(
+                                        f.operation,
+                                        Operation::Profile { .. } | Operation::Sketch3d { .. }
+                                    )
                             }) {
                                 ui.indent((&feature.id, &sketch.id), |ui| {
                                     feature_row(ui, w, part, sketch);
@@ -2142,7 +2184,10 @@ fn feature_row(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, feature: &Feat
             "{}  {}",
             if cad_core::configuration::feature_suppressed(w.session.visible(), &part.id, feature) {
                 "○"
-            } else if matches!(feature.operation, Operation::Profile { .. }) {
+            } else if matches!(
+                feature.operation,
+                Operation::Profile { .. } | Operation::Sketch3d { .. }
+            ) {
                 "▱"
             } else {
                 "◇"
@@ -2181,11 +2226,16 @@ pub fn properties(ui: &mut egui::Ui, w: &mut Workspace) {
         if ui
             .add_enabled(
                 !w.fields.contains_key("appearance-tool"),
-                egui::Button::new(if matches!(feature.operation, Operation::Profile { .. }) {
-                    "Edit Sketch"
-                } else {
-                    "Edit Feature"
-                }),
+                egui::Button::new(
+                    if matches!(
+                        feature.operation,
+                        Operation::Profile { .. } | Operation::Sketch3d { .. }
+                    ) {
+                        "Edit Sketch"
+                    } else {
+                        "Edit Feature"
+                    },
+                ),
             )
             .on_disabled_hover_text("Apply or cancel appearance changes before editing a feature")
             .clicked()
@@ -2206,6 +2256,9 @@ pub fn properties(ui: &mut egui::Ui, w: &mut Workspace) {
 pub fn confirmation_label(w: &Workspace) -> String {
     if crate::document_identity_ui::active(w) {
         return crate::document_identity_ui::confirmation_label(w).into();
+    }
+    if crate::sketch3d_ui::active(w) {
+        return "Finish 3D Sketch".into();
     }
     if w.sketch.is_some() {
         return crate::holes_ui::sketch_semantics(w)
@@ -2380,7 +2433,7 @@ pub(crate) fn profile_selector(
         });
     changed
 }
-fn sweep_path_selector(
+pub(crate) fn sweep_path_selector(
     ui: &mut egui::Ui,
     doc: &cad_core::Document,
     current: &str,
@@ -2409,7 +2462,9 @@ fn sweep_path_selector(
                         !feature.suppressed
                             && matches!(
                                 feature.operation,
-                                Operation::Profile { .. } | Operation::ReferenceCurve { .. }
+                                Operation::Profile { .. }
+                                    | Operation::ReferenceCurve { .. }
+                                    | Operation::Sketch3d { .. }
                             )
                     })
                 {

@@ -190,6 +190,41 @@ pub(crate) fn axis(
                     }
                 }
                 for f in candidates(doc, definition, current) {
+                    if let Operation::Sketch3d { definition: sketch } = &f.operation {
+                        for (index, (member, entity)) in sketch.members.iter().enumerate() {
+                            let axis = match &entity.curve {
+                                cad_core::sketch3d::Curve::Line { .. } => {
+                                    Some(AxisSource::SketchLine {
+                                        profile: NodeRef {
+                                            definition: definition.into(),
+                                            node: f.id.clone(),
+                                        },
+                                        member: member.clone(),
+                                    })
+                                }
+                                cad_core::sketch3d::Curve::Arc { .. }
+                                | cad_core::sketch3d::Curve::Circle { .. } => {
+                                    Some(AxisSource::SketchCircle {
+                                        profile: NodeRef {
+                                            definition: definition.into(),
+                                            node: f.id.clone(),
+                                        },
+                                        member: member.clone(),
+                                    })
+                                }
+                                _ => None,
+                            };
+                            if let Some(axis) = axis {
+                                changed |= ui
+                                    .selectable_value(
+                                        source,
+                                        axis,
+                                        format!("{} · 3D member {}", f.name, index + 1),
+                                    )
+                                    .changed();
+                            }
+                        }
+                    }
                     if let Operation::Profile {
                         profile: cad_core::Profile::Sketch { sketch },
                         ..
@@ -419,6 +454,10 @@ pub(crate) fn point_for_definition(
                                 format!("{} · origin", f.name),
                             )
                             .changed();
+                    } else if let Operation::Sketch3d { definition: sketch } = &f.operation {
+                        for (index, key) in sketch.points.keys().enumerate() {
+                            changed |= ui.selectable_value(source, PointSource::SketchPoint {profile:NodeRef {definition:definition.into(),node:f.id.clone()},point:key.clone()}, format!("{} · 3D point {}", f.name,index+1)).changed();
+                        }
                     } else if let Operation::Profile {
                         profile: cad_core::Profile::Sketch { sketch },
                         ..

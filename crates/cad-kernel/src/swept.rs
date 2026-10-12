@@ -67,7 +67,56 @@ fn source_path(
             circle: None,
         });
     };
-    if let Some(Shape::ReferenceCurves { paths, evaluated }) = inputs.get(reference) {
+    if crate::sketch3d::spatial(inputs, reference).is_some() {
+        let (wire, sources) = crate::sketch3d::selected_path(
+            adapter,
+            inputs,
+            reference,
+            options.path_member.as_deref(),
+            options.path_start_vertex.as_deref(),
+        )?;
+        let curves = wire.iter().map(Edge::oriented_curve).collect::<Vec<_>>();
+        let circular = curves
+            .iter()
+            .map(crate::axis_geometry::circle_geometry)
+            .collect::<Result<Vec<_>>>();
+        let circle = circular.ok().and_then(|frames| {
+            let first = frames.first()?;
+            if !frames.iter().all(|(center, normal, radius)| {
+                center.distance(first.0) <= EPS
+                    && normal.cross(first.1).magnitude() <= 1e-10
+                    && (radius - first.2).abs() <= EPS
+            }) {
+                return None;
+            }
+            let curve = &curves[0];
+            let parameter = curve.range_tuple().0;
+            let orientation = first
+                .1
+                .dot((curve.subs(parameter) - first.0).cross(curve.der(parameter)));
+            (orientation.is_finite() && orientation.abs() > 1e-12).then_some(CirclePath {
+                center: first.0,
+                normal: first.1,
+                sign: orientation.signum(),
+                full: wire.is_closed(),
+            })
+        });
+        return Ok(Path {
+            curves,
+            origins: sources
+                .into_iter()
+                .map(|source| Member {
+                    sources: vec![source],
+                    purpose: serde_json::json!({"spatial_path":"native_piece"}),
+                })
+                .collect(),
+            circle,
+        });
+    }
+    if let Some(Shape::ReferenceCurves {
+        paths, evaluated, ..
+    }) = inputs.get(reference)
+    {
         if options.path_member.is_some() || options.path_start_vertex.is_some() {
             return Err(invalid(
                 "A reference curve uses its saved source order and direction; clear sketch-only Path Member and Path Start Vertex selections",

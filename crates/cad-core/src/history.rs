@@ -82,7 +82,10 @@ pub fn stages(part: &Part, body_features: &BTreeSet<Id>) -> BTreeMap<Id, History
             }
         }
         if !feature.suppressed
-            && matches!(feature.operation, Operation::Profile { .. })
+            && matches!(
+                feature.operation,
+                Operation::Profile { .. } | Operation::Sketch3d { .. }
+            )
             && !consumed_sketches.contains(&feature.id)
         {
             live_sketches.insert(index, feature.id.clone());

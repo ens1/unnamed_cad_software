@@ -16,6 +16,7 @@ mod weld_stock;
 
 mod units;
 
+mod sketch3d;
 mod sketches;
 
 mod validation;

@@ -412,6 +412,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::document_identity_ui::semantics(w));
     elements.extend(crate::operation_editor_ui::semantics(w));
     elements.extend(crate::structural_member_ui::semantics(w));
+    elements.extend(crate::sketch3d_ui::semantics(w));
     elements.extend(crate::fabrication_sources_ui::semantics(w));
     elements.extend(crate::assembly_tools_ui::semantics(w));
     elements.extend(crate::assembly_welds_ui::semantics(w));
@@ -850,6 +851,11 @@ fn value_adapters() -> ValueAdapters {
         "structural-member",
         crate::structural_member_ui::set_value,
         crate::structural_member_ui::current_value,
+    );
+    adapters.register(
+        "sketch3d",
+        crate::sketch3d_ui::set_value,
+        crate::sketch3d_ui::current_value,
     );
     adapters.register(
         "sketch-feedback",

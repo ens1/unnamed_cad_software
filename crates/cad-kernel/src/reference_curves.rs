@@ -171,6 +171,9 @@ pub(crate) fn source(
                 .collect()
         }
         CurveSource::SketchMember { profile, member } => {
+            if crate::sketch3d::spatial(inputs, profile).is_some() {
+                return crate::sketch3d::member_curves(adapter, inputs, profile, member);
+            }
             let (mut sketch, plane) = crate::extrusion::source(adapter, doc, profile, inputs)?;
             if cad_core::sketch_transform::suppressed_members(&sketch).contains(member) {
                 return Err(invalid("The source sketch member is suppressed"));

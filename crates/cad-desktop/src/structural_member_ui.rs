@@ -192,7 +192,11 @@ fn selected_path(w: &Workspace, owner: &str) -> Option<NodeRef> {
                 .iter()
                 .rev()
                 .filter(|feature| {
-                    !feature.suppressed && matches!(feature.operation, Operation::Profile { .. })
+                    !feature.suppressed
+                        && matches!(
+                            feature.operation,
+                            Operation::Profile { .. } | Operation::Sketch3d { .. }
+                        )
                 })
                 .map(|feature| NodeRef {
                     definition: owner.into(),
@@ -225,11 +229,27 @@ fn generated_sections(w: &Workspace) -> BTreeSet<NodeRef> {
 }
 fn pending(w: &Workspace) -> Option<Pending> {
     let owner = w
-        .sketch
+        .sketch3d
         .as_ref()
-        .map(|sketch| sketch.definition.clone())
+        .map(|sketch| sketch.owner.clone())
+        .or_else(|| w.sketch.as_ref().map(|sketch| sketch.definition.clone()))
         .or_else(|| w.view.active_part.clone())?;
-    let (path, members) = if let Some(sketch) = &w.sketch {
+    let (path, members) = if let Some(sketch) = &w.sketch3d {
+        (
+            Some(NodeRef {
+                definition: sketch.owner.clone(),
+                node: sketch.feature.clone(),
+            }),
+            sketch
+                .selection
+                .iter()
+                .filter_map(|entity| match entity {
+                    crate::sketch3d_ui::Entity::Member { member } => Some(member.clone()),
+                    _ => None,
+                })
+                .collect(),
+        )
+    } else if let Some(sketch) = &w.sketch {
         (
             Some(NodeRef {
                 definition: sketch.definition.clone(),
@@ -266,7 +286,7 @@ pub fn begin(w: &mut Workspace) {
         w.status = "Create a layout sketch in a part first".into();
         return;
     };
-    if w.sketch.is_some() || w.confirm_requested {
+    if w.sketch.is_some() || w.sketch3d.is_some() || w.confirm_requested {
         match serde_json::to_string(&pending) {
             Ok(source) => w.after_confirm = Some(format!("{DEFERRED}{source}")),
             Err(error) => {
@@ -276,7 +296,7 @@ pub fn begin(w: &mut Workspace) {
         }
         if !w.confirm_requested {
             w.confirm_tool();
-            if w.sketch.is_some() && !w.confirm_requested {
+            if (w.sketch.is_some() || w.sketch3d.is_some()) && !w.confirm_requested {
                 w.after_confirm = None;
             }
         }
@@ -361,6 +381,9 @@ fn begin_pending(w: &mut Workspace, pending: Pending) {
         .filter(|member| available.iter().any(|(id, _)| id == member))
         .collect::<Vec<_>>();
     members.dedup();
+    let spatial_path = part.features.iter().any(|feature| {
+        feature.id == path.node && matches!(feature.operation, Operation::Sketch3d { .. })
+    });
     let feature = Feature {
         id:cad_core::id(), name:format!("Structural Member{}", part.features.iter().filter(|feature|
             matches!(&feature.operation, Operation::Weldment { operation } if matches!(operation.as_ref(), WeldmentOperation::Members { .. }))).count()+1),
@@ -368,7 +391,7 @@ fn begin_pending(w: &mut Workspace, pending: Pending) {
         operation:Operation::Weldment { operation:Box::new(WeldmentOperation::Members {
             body, section:source, path, members, member_mode:MemberMode::Explicit,
             roll:"0 deg".into(), anchor:None, profile_offset:["0 mm".into(), "0 mm".into()],
-            start_offset:"0 mm".into(), end_offset:"0 mm".into(), corner:Corner::Miter,
+            start_offset:"0 mm".into(), end_offset:"0 mm".into(), corner:if spatial_path {Corner::Butt} else {Corner::Miter},
             joint_gap:"0 mm".into(), library_profile:Some(Box::new(section.origin)),
         }) },
     };
@@ -597,7 +620,11 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 .take_while(|feature| feature.id != owner.node)
         })
         .filter(|feature| {
-            !feature.suppressed && matches!(feature.operation, Operation::Profile { .. })
+            !feature.suppressed
+                && matches!(
+                    feature.operation,
+                    Operation::Profile { .. } | Operation::Sketch3d { .. }
+                )
         })
         .filter_map(|feature| {
             let source = NodeRef {
@@ -1916,6 +1943,9 @@ fn unchanged_layout(w: &Workspace, path: &NodeRef, checkpoint: &cad_core::Sessio
     if a.features[..=index] != b.features[..=previous_index] {
         return false;
     }
+    if matches!(a.features[index].operation, Operation::Sketch3d { .. }) {
+        return true;
+    }
     let Operation::Profile {
         profile: Profile::Sketch { sketch },
         plane_reference: None,
@@ -1993,13 +2023,6 @@ fn path_lines(w: &Workspace) -> Vec<(Id, Vec<[f64; 3]>)> {
         cad_core::configuration::key(&path.definition, configuration),
         path.node
     );
-    let Some(sketch) = evaluation
-        .sketches
-        .get(&key)
-        .filter(|sketch| sketch.solved.is_some())
-    else {
-        return vec![];
-    };
     let placement_evaluation = if evaluation
         .instances
         .iter()
@@ -2032,6 +2055,42 @@ fn path_lines(w: &Workspace) -> Vec<(Id, Vec<[f64; 3]>)> {
     } else if w.session.visible().root == owner.definition {
         std::array::from_fn(|i| std::array::from_fn(|j| if i == j { 1. } else { 0. }))
     } else {
+        return vec![];
+    };
+    if let Some(sketch) = evaluation.spatial_sketches.get(&key) {
+        let available = crate::fabrication_ui::structural_path_members(w, path)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect::<BTreeSet<_>>();
+        let mut work = MAX_PICK_SEGMENTS;
+        return sketch
+            .polylines
+            .iter()
+            .filter(|line| available.contains(&line.member))
+            .filter_map(|line| {
+                work = work.checked_sub(line.points.len())?;
+                Some((
+                    line.member.clone(),
+                    line.points
+                        .iter()
+                        .map(|point| {
+                            std::array::from_fn(|axis| {
+                                matrix[axis][0] * point[0]
+                                    + matrix[axis][1] * point[1]
+                                    + matrix[axis][2] * point[2]
+                                    + matrix[axis][3]
+                            })
+                        })
+                        .collect(),
+                ))
+            })
+            .collect();
+    }
+    let Some(sketch) = evaluation
+        .sketches
+        .get(&key)
+        .filter(|sketch| sketch.solved.is_some())
+    else {
         return vec![];
     };
     let available = crate::fabrication_ui::structural_path_members(w, path)

@@ -859,6 +859,62 @@ fn closed_profile(w: &Workspace, profile: &NodeRef) -> bool {
 /// Structural stock uses exact line/circular paths; sheet-edge selection stays linear.
 pub(crate) fn structural_path_members(w: &Workspace, profile: &NodeRef) -> Vec<(String, String)> {
     let settings = &w.session.visible().settings;
+    if let Some(Operation::Sketch3d { definition }) = w
+        .session
+        .visible()
+        .parts
+        .get(&profile.definition)
+        .and_then(|part| {
+            part.features
+                .iter()
+                .find(|feature| feature.id == profile.node && !feature.suppressed)
+        })
+        .map(|feature| &feature.operation)
+    {
+        let identity = w.session.identity();
+        let key = format!(
+            "{}::{}",
+            cad_core::configuration::key(
+                &profile.definition,
+                w.session
+                    .visible()
+                    .active_configurations
+                    .get(&profile.definition)
+                    .map(String::as_str)
+            ),
+            profile.node
+        );
+        let solved = w
+            .session
+            .draft
+            .as_ref()
+            .and_then(|draft| draft.evaluation.as_ref())
+            .or(w.session.evaluation.as_ref())
+            .filter(|evaluation| evaluation.identity == identity)
+            .and_then(|evaluation| evaluation.spatial_sketches.get(&key))
+            .map(|evaluated| &evaluated.solved)
+            .unwrap_or(definition);
+        return solved
+            .members
+            .iter()
+            .enumerate()
+            .filter_map(|(index, (id, member))| {
+                let cad_core::sketch3d::Curve::Line { start, end } = &member.curve else {
+                    return None;
+                };
+                let a = solved.points.get(start)?;
+                let b = solved.points.get(end)?;
+                let length = (0..3)
+                    .map(|axis| (b[axis] - a[axis]).powi(2))
+                    .sum::<f64>()
+                    .sqrt();
+                Some((
+                    id.clone(),
+                    format!("3D path {} · {}", index + 1, settings.format_length(length)),
+                ))
+            })
+            .collect();
+    }
     let evaluated = viewport::display_evaluation(w).and_then(|evaluation| {
         evaluation
             .sketches

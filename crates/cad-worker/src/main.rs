@@ -21,6 +21,7 @@ fn run() -> Result<()> {
         let identity = match &request {
             WorkerRequest::DisplayMesh { request } => Some(request.identity.clone()),
             WorkerRequest::AnalyzeSketch { identity, .. }
+            | WorkerRequest::SolveSketch3d { identity, .. }
             | WorkerRequest::ManipulateAssembly { identity, .. }
             | WorkerRequest::Evaluate { identity, .. }
             | WorkerRequest::Export { identity, .. }
@@ -61,6 +62,80 @@ fn run() -> Result<()> {
                         sketch: sketch.id,
                         analysis: Box::new(analysis),
                     })
+            }
+            WorkerRequest::SolveSketch3d {
+                identity,
+                document,
+                feature,
+                editor,
+                sequence,
+                targets,
+            } => {
+                use cad_core::solver::ConstraintSolver;
+                let solved = (|| -> Result<_> {
+                    if identity.protocol != PROTOCOL_VERSION
+                        || identity.backend != evaluator.fingerprint()
+                        || identity.source != document.fingerprint()
+                    {
+                        return Err(cad_core::CadError::Invalid(
+                            "3D sketch goal source identity mismatch".into(),
+                        ));
+                    }
+                    document.validate()?;
+                    let configured = cad_core::configuration::effective(&document)?;
+                    let source = configured
+                        .parts
+                        .get(&feature.definition)
+                        .and_then(|part| {
+                            part.features
+                                .iter()
+                                .find(|source| source.id == feature.node)
+                        })
+                        .filter(|source| !source.suppressed)
+                        .ok_or_else(|| {
+                            cad_core::CadError::Invalid(
+                                "3D sketch goal feature is missing or suppressed".into(),
+                            )
+                        })?;
+                    let cad_core::Operation::Sketch3d { definition } = &source.operation else {
+                        return Err(cad_core::CadError::Invalid(
+                            "Cursor goals require a 3D sketch".into(),
+                        ));
+                    };
+                    let mut solved = (**definition).clone();
+                    let report = if targets.is_empty() {
+                        cad_core::solver::NativeSolver.solve_sketch3d(
+                            &configured,
+                            &feature.definition,
+                            &mut solved,
+                        )?
+                    } else {
+                        cad_core::solver::NativeSolver.drag_sketch3d(
+                            &configured,
+                            &feature.definition,
+                            &mut solved,
+                            &targets,
+                        )?
+                    };
+                    Ok((solved, report))
+                })();
+                Ok(match solved {
+                    Ok((solved, report)) => WorkerResponse::Sketch3dSolved {
+                        identity,
+                        feature,
+                        editor,
+                        sequence,
+                        solved: Box::new(solved),
+                        report,
+                    },
+                    Err(error) => WorkerResponse::Sketch3dSolveFailed {
+                        identity,
+                        feature,
+                        editor,
+                        sequence,
+                        message: error.to_string(),
+                    },
+                })
             }
             WorkerRequest::ManipulateAssembly {
                 identity,

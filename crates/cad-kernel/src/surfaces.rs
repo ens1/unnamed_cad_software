@@ -536,11 +536,14 @@ pub(crate) fn operation(
                 .map(point)
                 .collect::<Result<Vec<_>>>()?;
             if let Some(reference) = path_sketch {
-                let Some(Shape::Sketch { paths, .. }) = inputs.get(reference) else {
-                    return Err(invalid("Select an open path sketch"));
+                let paths = match inputs.get(reference) {
+                    Some(Shape::Sketch { paths, .. })
+                    | Some(Shape::ReferenceCurves { paths, .. }) => paths,
+                    _ => return Err(invalid("Select an open planar or 3D path sketch")),
                 };
                 if paths.len() != 1
                     || paths[0].is_empty()
+                    || paths[0].is_closed()
                     || paths[0]
                         .iter()
                         .any(|e| !matches!(e.curve(), Curve::Line(_)))

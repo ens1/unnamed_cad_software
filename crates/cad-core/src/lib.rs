@@ -50,6 +50,7 @@ pub mod reference_geometry;
 pub mod reference_repair;
 pub mod revolution;
 pub mod rib;
+pub mod sketch3d;
 pub mod sketch_diagnostics;
 pub mod sketch_dimensions;
 pub mod sketch_equation;

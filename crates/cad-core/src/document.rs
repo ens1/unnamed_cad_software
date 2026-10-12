@@ -182,6 +182,9 @@ impl Default for ExtrudeOptions {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Operation {
+    Sketch3d {
+        definition: Box<crate::sketch3d::Definition>,
+    },
     ReferencePlane {
         definition: crate::reference_geometry::PlaneDefinition,
     },
@@ -400,7 +403,7 @@ impl Operation {
     pub fn produces_solid(&self) -> bool {
         !self.is_reference()
             && !self.is_analysis()
-            && !matches!(self, Self::Profile { .. })
+            && !matches!(self, Self::Profile { .. } | Self::Sketch3d { .. })
             && !self.is_surface()
     }
     pub fn is_surface(&self) -> bool {
@@ -477,6 +480,7 @@ impl Operation {
                 | Self::ReferencePoint { .. }
                 | Self::ReferenceCoordinateSystem { .. }
                 | Self::ReferenceCurve { .. }
+                | Self::Sketch3d { .. }
         )
     }
     pub fn name(&self) -> &'static str {
@@ -498,6 +502,7 @@ impl Operation {
             Self::Surface { operation } => operation.name(),
             Self::Mold { operation } => operation.name(),
             Self::Profile { .. } => "Sketch",
+            Self::Sketch3d { .. } => "3D Sketch",
             Self::Box { .. } => "Box",
             Self::Cylinder { .. } => "Cylinder",
             Self::Sphere { .. } => "Sphere",
@@ -525,6 +530,7 @@ impl Operation {
     }
     pub fn expressions(&self) -> Vec<&Expr> {
         match self {
+            Self::Sketch3d { definition } => definition.expressions(),
             Self::Sheet { operation } => operation.expressions(),
             Self::Weldment { operation } => operation.expressions(),
             Self::WeldBead { definition } => definition.expressions(),
@@ -1340,6 +1346,9 @@ impl Document {
                 }
                 if let Operation::Weldment { operation } = &node.operation {
                     operation.validate_source()?;
+                }
+                if let Operation::Sketch3d { definition } = &node.operation {
+                    definition.validate()?;
                 }
                 if !ids.insert(&node.id) {
                     return Err(CadError::Invalid(format!(

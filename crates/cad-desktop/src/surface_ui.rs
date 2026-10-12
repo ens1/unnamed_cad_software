@@ -235,7 +235,14 @@ pub fn preset(w: &mut Workspace, name: &str) {
                 plane.origin,
                 std::array::from_fn(|i| plane.origin[i] + normal[i] * 50.),
             ],
-            path_sketch: None,
+            path_sketch: part
+                .features
+                .iter()
+                .rev()
+                .find(|feature| {
+                    !feature.suppressed && matches!(feature.operation, Operation::Sketch3d { .. })
+                })
+                .map(|feature| part.reference(&feature.id)),
         },
         "Filled Surface" => {
             let sections: Vec<_> = part
@@ -707,8 +714,7 @@ pub fn fields(
                 changed = true;
             }
             if let Some(reference) = path_sketch {
-                changed |=
-                    cad_ui::profile_selector(ui, doc, current, "Open path sketch", reference);
+                changed |= cad_ui::sweep_path_selector(ui, doc, current, reference);
             } else {
                 let mut remove = None;
                 for (i, p) in path.iter_mut().enumerate() {
@@ -730,7 +736,7 @@ pub fn fields(
                     changed = true;
                 }
             }
-            ui.small("Fixed section orientation along a polyline path.");
+            ui.small("Fixed section orientation along a connected planar or 3D polyline path.");
         }
         SurfaceOperation::Fill {
             boundaries,

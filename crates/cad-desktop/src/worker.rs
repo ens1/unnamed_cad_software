@@ -97,6 +97,7 @@ fn request_id(r: &WorkerRequest) -> Option<RequestIdentity> {
     match r {
         WorkerRequest::DisplayMesh { request } => Some(request.identity.clone()),
         WorkerRequest::AnalyzeSketch { identity, .. }
+        | WorkerRequest::SolveSketch3d { identity, .. }
         | WorkerRequest::ManipulateAssembly { identity, .. }
         | WorkerRequest::Evaluate { identity, .. }
         | WorkerRequest::Export { identity, .. }
@@ -129,6 +130,7 @@ fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerRes
                             if matches!(
                                 r,
                                 WorkerRequest::Evaluate { .. }
+                                    | WorkerRequest::SolveSketch3d { .. }
                                     | WorkerRequest::ManipulateAssembly { .. }
                                     | WorkerRequest::AnalyzeSketch { .. }
                             ) {
@@ -136,6 +138,7 @@ fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerRes
                                     !matches!(
                                         q,
                                         WorkerRequest::Evaluate { .. }
+                                            | WorkerRequest::SolveSketch3d { .. }
                                             | WorkerRequest::ManipulateAssembly { .. }
                                             | WorkerRequest::AnalyzeSketch { .. }
                                     )

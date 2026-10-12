@@ -480,6 +480,12 @@ fn node_choices(w: &Workspace, owner: &str, current: &str, kind: &str) -> Vec<Va
                 })
                 .filter(move |f| match kind {
                     "profile" => matches!(f.operation, Operation::Profile { .. }),
+                    "curve-path" => matches!(
+                        f.operation,
+                        Operation::Profile { .. }
+                            | Operation::Sketch3d { .. }
+                            | Operation::ReferenceCurve { .. }
+                    ),
                     "surface" => f.operation.is_surface(),
                     "solid" | "solid-local" => f.operation.produces_solid(),
                     "sheet" => matches!(f.operation, Operation::Sheet { .. }),
@@ -588,6 +594,28 @@ fn axis_choices(w: &Workspace, owner: &str, current: &str) -> Vec<Value> {
                     ));
                 }
             }
+            Operation::Sketch3d { definition } => {
+                for (index, (id, member)) in definition.members.iter().enumerate() {
+                    let source = match member.curve {
+                        cad_core::sketch3d::Curve::Line { .. } => Some(AxisSource::SketchLine {
+                            profile: feature.clone(),
+                            member: id.clone(),
+                        }),
+                        cad_core::sketch3d::Curve::Circle { .. }
+                        | cad_core::sketch3d::Curve::Arc { .. } => Some(AxisSource::SketchCircle {
+                            profile: feature.clone(),
+                            member: id.clone(),
+                        }),
+                        _ => None,
+                    };
+                    if let Some(source) = source {
+                        choices.push(choice(
+                            format!("{} · 3D member {}", f.name, index + 1),
+                            source,
+                        ));
+                    }
+                }
+            }
             Operation::Profile {
                 profile: cad_core::Profile::Sketch { sketch },
                 ..
@@ -672,6 +700,17 @@ fn point_choices(w: &Workspace, owner: &str, current: &str) -> Vec<Value> {
                     axis: AxisSource::Datum { feature },
                 },
             )),
+            Operation::Sketch3d { definition } => {
+                for (index, id) in definition.points.keys().enumerate() {
+                    choices.push(choice(
+                        format!("{} · 3D point {}", f.name, index + 1),
+                        PointSource::SketchPoint {
+                            profile: feature.clone(),
+                            point: id.clone(),
+                        },
+                    ));
+                }
+            }
             Operation::Profile {
                 profile: cad_core::Profile::Sketch { sketch },
                 ..
@@ -816,7 +855,8 @@ fn surface_fields(fields: &mut Fields<'_>, operation: &cad_core::surface::Surfac
             path, path_sketch, ..
         } => {
             fields.reference(&format!("{P}/profile"), "Section sketch", "profile", false);
-            let mut choices = node_choices(fields.w, fields.owner, &fields.feature.id, "profile");
+            let mut choices =
+                node_choices(fields.w, fields.owner, &fields.feature.id, "curve-path");
             choices.insert(0, choice("Explicit path points", Value::Null));
             fields.choice(&format!("{P}/path_sketch"), "Path sketch", choices);
             if path_sketch.is_none() {
@@ -1534,6 +1574,9 @@ fn mold_fields(fields: &mut Fields<'_>, operation: &cad_core::mold::MoldOperatio
 }
 
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
+    if crate::sketch3d_ui::active(w) {
+        return vec![];
+    }
     if crate::structural_member_ui::active(w) {
         return vec![];
     }
@@ -2013,6 +2056,9 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
 /// The native property manager renders the descriptors as an ordinary compact
 /// composition. Users can replace it with repeated fields/actions in any layout.
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
+    if crate::sketch3d_ui::show(ui, w) {
+        return true;
+    }
     if crate::structural_member_ui::show(ui, w) {
         return true;
     }

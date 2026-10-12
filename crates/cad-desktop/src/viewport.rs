@@ -738,6 +738,11 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
             }
             // Edges are projected with a forgiving hit target and remain cycleable through occlusion.
             for edge in &mesh.edges {
+                if spatial_edge_style(w, e, instance, edge, false)
+                    .is_some_and(|properties| overlay_hidden(&properties))
+                {
+                    continue;
+                }
                 let mut best = f32::INFINITY;
                 for line in edge.points.windows(2) {
                     if let (Some(a), Some(b)) = (
@@ -1126,7 +1131,7 @@ fn in_fit_scope(w: &Workspace, instance: &PlacedPart, scope: FitScope) -> bool {
     }
 }
 fn fit_region(w: &mut Workspace, scope: FitScope) {
-    if crate::assembly_motion_ui::dragging(w) {
+    if crate::assembly_motion_ui::dragging(w) || crate::sketch3d_ui::captured(w) {
         return;
     }
     if w.sketch
@@ -1162,6 +1167,36 @@ fn fit_region(w: &mut Workspace, scope: FitScope) {
         } else {
             &i.mesh_key
         };
+        for (_, spatial) in e.spatial_sketches.iter().filter(|(id, _)| {
+            id.strip_prefix(&format!("{key}::")).is_some_and(|feature| {
+                w.view
+                    .history_cursor
+                    .as_ref()
+                    .filter(|cursor| cursor.definition == i.definition)
+                    .is_none_or(|cursor| {
+                        cad_core::history::stage(e, key, &cursor.node)
+                            .zip(cad_core::history::stage(e, key, feature))
+                            .is_some_and(|(limit, station)| station.index <= limit.index)
+                    })
+            })
+        }) {
+            let active = w.sketch3d.as_ref().is_some_and(|state| {
+                state.owner == i.definition && state.feature == spatial.producer.node
+            });
+            for (id, point) in &spatial.solved.points {
+                if active
+                    || !spatial
+                        .solved
+                        .members
+                        .values()
+                        .any(|member| member.curve.points().contains(&id))
+                {
+                    let point = render_point(placed(*point, i));
+                    min = min.min(point);
+                    max = max.max(point);
+                }
+            }
+        }
         for (_, sketch) in e.sketches.iter().filter(|(id, _)| {
             id.strip_prefix(&format!("{key}::")).is_some_and(|feature| {
                 w.view
@@ -1886,6 +1921,7 @@ fn weld_guides(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
     }
 }
 pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
+    let mut spatial_depth_work = crate::sketch_overlay::DEPTH_WORK;
     weld_guides(w, ui, rect);
     crate::fabrication_sources_ui::overlay(w, ui, rect);
     crate::structural_member_ui::overlay(w, ui, rect);
@@ -2085,26 +2121,56 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                                 crate::selection_ui::same_edge(reference, &edge.reference)
                             })
                     })
-                }) || w.geometry_selection.iter().any(|pick| {
-                    selected_instance(pick, i)
-                        && (selected_topology(pick, &edge.reference, &edge.body)
-                            || pick.reference.topology == "face"
-                                && pick.body == edge.body
-                                && edge.faces.iter().any(|face| {
-                                    face.producer == pick.reference.producer
-                                        && face.role == pick.reference.role
-                                }))
-                });
+                }) || spatial_feature_selected(w, i, &edge.reference.producer)
+                    || w.geometry_selection.iter().any(|pick| {
+                        selected_instance(pick, i)
+                            && (selected_topology(pick, &edge.reference, &edge.body)
+                                || pick.reference.topology == "face"
+                                    && pick.body == edge.body
+                                    && edge.faces.iter().any(|face| {
+                                        face.producer == pick.reference.producer
+                                            && face.role == pick.reference.role
+                                    }))
+                    });
                 if active || m.indices.is_empty() {
+                    let spatial_style = spatial_edge_style(w, e, i, edge, active);
+                    if spatial_style.as_ref().is_some_and(overlay_hidden) {
+                        continue;
+                    }
                     let curve_color = props
                         .get("reference-curve-color")
                         .and_then(|value| crate::ui::color(value))
                         .unwrap_or(egui::Color32::from_rgb(65, 130, 185));
                     let stroke = egui::Stroke::new(
-                        if active { 3.5 } else { 1.5 },
-                        if active { accent } else { curve_color },
+                        spatial_style.as_ref().map_or(
+                            if active { 3.5 } else { 1.5 },
+                            |properties| {
+                                crate::presentation_controls::number(
+                                    properties,
+                                    "stroke-width",
+                                    if active { 3.5 } else { 1.5 },
+                                )
+                            },
+                        ),
+                        spatial_style
+                            .as_ref()
+                            .and_then(|properties| properties.get("color"))
+                            .and_then(|value| crate::ui::color(value))
+                            .unwrap_or(if active { accent } else { curve_color }),
                     );
                     for pair in edge.points.windows(2) {
+                        if let Some(properties) = &spatial_style {
+                            crate::sketch_overlay::line(
+                                w,
+                                ui,
+                                rect,
+                                [placed(pair[0], i), placed(pair[1], i)],
+                                stroke,
+                                crate::sketch_overlay::xray(w, true, properties),
+                                &mut spatial_depth_work,
+                            );
+                            continue;
+                        }
                         if let (Some(a), Some(b)) = (
                             project(w, rect, placed(pair[0], i)),
                             project(w, rect, placed(pair[1], i)),
@@ -2278,6 +2344,143 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
 }
 pub fn navigate(w: &mut Workspace, ctx: &egui::Context, response: &egui::Response) -> bool {
     crate::navigation::navigate(w, ctx, response)
+}
+fn overlay_hidden(properties: &BTreeMap<String, String>) -> bool {
+    properties
+        .get("display")
+        .is_some_and(|value| value == "none")
+        || properties
+            .get("visibility")
+            .is_some_and(|value| value == "hidden")
+}
+fn spatial_edge_style(
+    w: &Workspace,
+    evaluation: &Evaluation,
+    instance: &PlacedPart,
+    edge: &cad_core::protocol::EdgeData,
+    active: bool,
+) -> Option<BTreeMap<String, String>> {
+    let producer = &edge.reference.producer;
+    if !w
+        .session
+        .visible()
+        .parts
+        .get(&producer.definition)
+        .is_some_and(|part| {
+            part.features.iter().any(|feature| {
+                feature.id == producer.node
+                    && matches!(feature.operation, cad_core::Operation::Sketch3d { .. })
+            })
+        })
+    {
+        return None;
+    }
+    let key = format!(
+        "{}::{}",
+        cad_core::history::mesh_key(instance),
+        producer.node
+    );
+    let member = evaluation
+        .reference_curves
+        .get(&key)
+        .and_then(|curve| {
+            curve.pieces.iter().find(|piece| {
+                piece.reference.producer == *producer && piece.reference.role == edge.reference.role
+            })
+        })
+        .and_then(|piece| piece.id.rsplit_once("::").map(|(member, _)| member));
+    let construction = member
+        .and_then(|member| {
+            evaluation
+                .spatial_sketches
+                .get(&key)?
+                .solved
+                .members
+                .get(member)
+        })
+        .is_some_and(|member| member.construction);
+    let selected = active
+        || spatial_feature_selected(w, instance, producer)
+        || w.selected.as_ref().is_some_and(|selection| {
+            selected_instance(selection, instance) && selection.reference.producer == *producer
+        });
+    let mut properties = w.theme.properties_for(
+        &style_target(w).child(
+            &format!(
+                "sketch3d:{}/member/{}",
+                producer.node,
+                member.unwrap_or(&edge.reference.role)
+            ),
+            "sketch3d-member",
+            &[
+                "spatial-curve".into(),
+                "viewport-overlay".into(),
+                if construction {
+                    "construction"
+                } else {
+                    "regular"
+                }
+                .into(),
+            ],
+            if selected { "selected" } else { "ready" },
+        ),
+    );
+    let editing = w
+        .sketch3d
+        .as_ref()
+        .is_some_and(|state| state.owner == instance.definition && state.feature == producer.node);
+    let hidden = match crate::sketch_overlay::mode(w, true) {
+        cad_core::presentation::OverlayVisibility::Hidden => true,
+        cad_core::presentation::OverlayVisibility::Auto => !selected,
+        cad_core::presentation::OverlayVisibility::All => false,
+    };
+    if editing || hidden {
+        properties.insert("display".into(), "none".into());
+    }
+    if construction {
+        properties
+            .entry("color".into())
+            .or_insert_with(|| "#9178a5".into());
+    }
+    Some(properties)
+}
+pub(crate) fn spatial_feature_selected(
+    w: &Workspace,
+    instance: &PlacedPart,
+    producer: &cad_core::NodeRef,
+) -> bool {
+    if w.selected.is_some()
+        || producer.definition != instance.definition
+        || w.selected_feature_path
+            .as_ref()
+            .is_some_and(|path| path != &instance.path)
+        || w.view.active_instance.as_ref().is_some_and(|id| {
+            !instance.path.contains(id) && !(instance.path.is_empty() && id == &instance.definition)
+        })
+        || !w
+            .session
+            .visible()
+            .parts
+            .get(&producer.definition)
+            .is_some_and(|part| {
+                part.features.iter().any(|feature| {
+                    feature.id == producer.node
+                        && matches!(feature.operation, cad_core::Operation::Sketch3d { .. })
+                })
+            })
+    {
+        return false;
+    }
+    if let Some(cad_core::selection_actions::SelectionTarget::Feature {
+        definition,
+        feature,
+    }) = &w.context_selection
+    {
+        return definition == &producer.definition && feature == &producer.node;
+    }
+    w.context_selection.is_none()
+        && w.view.active_part.as_ref() == Some(&producer.definition)
+        && w.view.active_node.as_ref() == Some(&producer.node)
 }
 
 /// A viewport overlay, independent of authoritative camera/model definitions.

@@ -66,6 +66,7 @@ mod settings;
 mod settings_preferences;
 mod settings_ui;
 mod sketch;
+mod sketch3d_ui;
 mod sketch_analysis_ui;
 mod sketch_block_library_ui;
 mod sketch_blocks_ui;
@@ -107,7 +108,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/41;solver/tcad-native-lm/16";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/42;solver/tcad-native-lm/17";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -169,6 +170,7 @@ pub struct Workspace {
     pub branch_name: String,
     pub before_isolation: Option<PresentationState>,
     pub sketch: Option<sketch::EditingSketch>,
+    pub sketch3d: Option<sketch3d_ui::State>,
     pub active_plane: Option<String>,
     pub manager_tree: bool,
     pub command_tab: String,
@@ -316,6 +318,7 @@ impl Workspace {
             branch_name: String::new(),
             before_isolation: None,
             sketch: None,
+            sketch3d: None,
             active_plane: None,
             manager_tree: true,
             command_tab: "Features".into(),
@@ -433,6 +436,9 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !sketch3d_ui::ready_to_confirm(self) {
+            return;
+        }
         if !quantity_display::source_fields_valid(self) {
             self.status = "Correct the current field text before applying".into();
             self.confirm_requested = false;
@@ -523,6 +529,13 @@ impl Workspace {
             self.confirm_requested = false;
             return;
         }
+        if !sketch3d_ui::current_source_is_valid(self) {
+            self.status =
+                "Correct the current 3D sketch fields and finish its gesture before applying"
+                    .into();
+            self.confirm_requested = false;
+            return;
+        }
         if !structural_member_ui::current_source_is_valid(self) {
             self.status = "Select sketch members and correct the current structural member fields before applying".into();
             self.confirm_requested = false;
@@ -597,6 +610,7 @@ impl Workspace {
         let editing_edges = selection_ui::edge_feature(self).is_some();
         match self.session.apply() {
             Ok(()) => {
+                sketch3d_ui::cancel(self);
                 let save_as = document_identity_ui::take_after_confirm(self);
                 let destination = ui::take_save_as_destination(self);
                 assembly_tools_ui::cancel(self);
@@ -636,6 +650,7 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        sketch3d_ui::cancel(self);
         quantity_display::clear_errors(self);
         document_identity_ui::cancel(self);
         properties_ui::cancel(self);
@@ -776,6 +791,7 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        sketch3d_ui::cancel(self);
         quantity_display::clear_errors(self);
         document_identity_ui::cancel(self);
         properties_ui::cancel(self);
@@ -857,6 +873,9 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn confirm_tool(&mut self) {
+        if !sketch3d_ui::ready_to_confirm(self) {
+            return;
+        }
         if !quantity_display::source_fields_valid(self) {
             self.status = "Correct the current field text before applying".into();
             self.confirm_requested = false;
@@ -944,6 +963,13 @@ impl Workspace {
         }
         if !operation_editor_ui::current_source_is_valid(self) {
             self.status = "Correct the current operation fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !sketch3d_ui::current_source_is_valid(self) {
+            self.status =
+                "Correct the current 3D sketch fields and finish its gesture before applying"
+                    .into();
             self.confirm_requested = false;
             return;
         }
@@ -1189,6 +1215,7 @@ fn setup(
     render_appearance::setup(&mut commands, &mut images, &mut appearance);
 }
 fn poll_workers(mut w: ResMut<Workspace>) {
+    sketch3d_ui::poll(&mut w);
     sketch_analysis_ui::poll(&mut w);
     assembly_motion_ui::poll(&mut w);
     for (ok, message) in w.jobs.drain() {
