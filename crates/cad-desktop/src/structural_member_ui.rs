@@ -2063,7 +2063,7 @@ pub fn capture_click(
     point: egui::Pos2,
     _modifiers: egui::Modifiers,
 ) -> bool {
-    if !active(w) || !w.fields.get(PICK).is_none_or(|value| value == "true") {
+    if !active(w) || !w.fields.get(PICK).is_some_and(|value| value == "true") {
         return false;
     }
     let mut nearest: Option<(Id, f32)> = None;
