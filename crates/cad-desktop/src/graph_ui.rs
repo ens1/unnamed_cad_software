@@ -285,8 +285,13 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, part: Option<&Part>) {
                     .find_map(|a| a.instances.get(&node.id))
             {
                 if w.tool_checkpoint.is_none() {
-                    w.view.active_instance = Some(instance.id.clone());
-                    w.view.active_part = Some(instance.definition.clone());
+                    let path = doc
+                        .placed_parts()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|placed| placed.path.last() == Some(&instance.id))
+                        .map(|placed| placed.path);
+                    w.activate_context(Some(instance.definition.clone()), path);
                 }
                 crate::selection_ui::object_selected(
                     w,

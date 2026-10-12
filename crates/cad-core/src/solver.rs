@@ -224,9 +224,33 @@ pub(crate) fn scaled_jacobian(j: &DMatrix<f64>) -> (DMatrix<f64>, DVector<f64>) 
 // Damped SVD avoids squaring the Jacobian's condition number. Trial steps reuse
 // one decomposition; invalid geometry rejects a step and increases damping.
 fn minimize(
+    x: DVector<f64>,
+    f: impl Fn(&DVector<f64>) -> Result<DVector<f64>>,
+    limit: usize,
+) -> Result<(DVector<f64>, SolveReport)> {
+    minimize_in_metric(x, f, limit, None)
+}
+
+fn jacobian_in_metric(
+    j: &DMatrix<f64>,
+    metric: Option<&DVector<f64>>,
+) -> (DMatrix<f64>, DVector<f64>) {
+    if let Some(metric) = metric {
+        let mut scaled = j.clone();
+        for col in 0..j.ncols() {
+            scaled.column_mut(col).scale_mut(1. / metric[col]);
+        }
+        (scaled, metric.clone())
+    } else {
+        scaled_jacobian(j)
+    }
+}
+
+fn minimize_in_metric(
     mut x: DVector<f64>,
     f: impl Fn(&DVector<f64>) -> Result<DVector<f64>>,
     limit: usize,
+    metric: Option<&DVector<f64>>,
 ) -> Result<(DVector<f64>, SolveReport)> {
     if x.iter().any(|v| !v.is_finite()) {
         return Err(CadError::Invalid(
@@ -242,22 +266,30 @@ fn minimize(
             break;
         }
         let j = jacobian(&x, &r, &f)?;
-        let (scaled, scale) = scaled_jacobian(&j);
+        let (scaled, scale) = jacobian_in_metric(&j, metric);
         let svd = scaled.svd(true, true);
         let u = svd.u.as_ref().unwrap();
         let vt = svd.v_t.as_ref().unwrap();
         let projected = u.transpose() * &r;
         let cost = r.norm_squared();
+        let cutoff = if metric.is_some() {
+            svd.singular_values.amax() * 1e-8
+        } else {
+            0.
+        };
         let mut accepted = None;
         let mut growth = 2.;
         for _ in 0..16 {
             iterations += 1;
             let coefficients = DVector::from_iterator(
                 svd.singular_values.len(),
-                svd.singular_values
-                    .iter()
-                    .enumerate()
-                    .map(|(i, s)| -projected[i] * s / (s * s + lambda)),
+                svd.singular_values.iter().enumerate().map(|(i, s)| {
+                    if *s <= cutoff {
+                        0.
+                    } else {
+                        -projected[i] * s / (s * s + lambda)
+                    }
+                }),
             );
             let delta = (vt.transpose() * coefficients).component_div(&scale);
             if delta.iter().any(|v| !v.is_finite()) {
@@ -293,7 +325,7 @@ fn minimize(
     let rank = if j.nrows() == 0 || j.ncols() == 0 {
         0
     } else {
-        let (scaled, _) = scaled_jacobian(&j);
+        let (scaled, _) = jacobian_in_metric(&j, metric);
         let svd = scaled.svd(false, false);
         svd.rank(svd.singular_values.amax() * 1e-8)
     };
@@ -348,7 +380,7 @@ fn axis_residual(a: Vector3<f64>, b: Vector3<f64>) -> Vector3<f64> {
 }
 impl ConstraintSolver for NativeSolver {
     fn fingerprint(&self) -> &str {
-        "tcad-native-lm/15"
+        "tcad-native-lm/16"
     }
     fn solve_sketch(&self, doc: &Document, part: &str, sketch: &mut Sketch) -> Result<SolveReport> {
         if sketch.points.keys().chain(sketch.members.keys()).any(|id| {
@@ -597,11 +629,16 @@ fn solve_assembly_frames(
 ) -> Result<SolveReport> {
     Ok(solve_assembly_geometry(doc, assembly, frames, &BTreeMap::new(), &[])?.report)
 }
-fn matrix_rank(j: &DMatrix<f64>) -> usize {
+fn matrix_rank(j: &DMatrix<f64>, metric: Option<&DVector<f64>>) -> usize {
     if j.nrows() == 0 || j.ncols() == 0 || j.amax() < 1e-9 {
         0
     } else {
-        let (scaled, _) = scaled_jacobian(j);
+        // Nullspace blocks have already been physically scaled and normalized.
+        // Renormalizing their near-zero columns would manufacture apparent DOF
+        // for a component whose motion is actually locked.
+        let scaled = metric
+            .map(|metric| jacobian_in_metric(j, Some(metric)).0)
+            .unwrap_or_else(|| j.clone());
         let svd = scaled.svd(false, false);
         svd.rank(svd.singular_values.amax() * 1e-8)
     }
@@ -642,8 +679,8 @@ fn solve_assembly_geometry(
                 None
             }
         });
-        if let Some(first) = support.or_else(|| assembly.instances.keys().next()) {
-            grounded.push(first.clone());
+        if let Some(support) = support {
+            grounded.push(support.clone());
         }
     }
     let movable = assembly
@@ -765,6 +802,17 @@ fn solve_assembly_geometry(
         ))
     };
     let start = DVector::from_vec(start);
+    // Use a physical pose metric, rather than normalizing every derivative
+    // column. A free coordinate's nearly-zero numerical derivative must not be
+    // amplified into an enormous translation. Minimum-norm increments retain
+    // unconstrained pose directions; the rank cutoff matches motion diagnostics.
+    let metric = DVector::from_fn(start.len(), |coordinate, _| {
+        if coordinate < movable.len() * 6 && coordinate % 6 < 3 {
+            1.
+        } else {
+            100.
+        }
+    });
     let mut seed = start.clone();
     let mut drive_iterations = 0;
     if !goals.is_empty() {
@@ -817,11 +865,11 @@ fn solve_assembly_geometry(
         } else {
             start.clone()
         };
-        let (driven, report) = minimize(initial, driven, 100)?;
+        let (driven, report) = minimize_in_metric(initial, driven, 100, Some(&metric))?;
         seed = driven;
         drive_iterations = report.iterations;
     }
-    let (x, mut report) = minimize(seed, equations, 160)?;
+    let (x, mut report) = minimize_in_metric(seed, equations, 160, Some(&metric))?;
     report.iterations += drive_iterations;
     let groups = grouped(&x)?;
     if !report.converged {
@@ -868,7 +916,7 @@ fn solve_assembly_geometry(
         }
         inequalities += bounds.len();
         let block = j.rows(row, r.len()).into_owned();
-        let rank = matrix_rank(&block);
+        let rank = matrix_rank(&block, Some(&metric));
         if base.mates.iter().any(|mate| mate.id == id) {
             diagnostics.insert(
                 id.clone(),
@@ -884,7 +932,7 @@ fn solve_assembly_geometry(
         }
         row += r.len();
     }
-    let equality_rank = matrix_rank(&j);
+    let equality_rank = matrix_rank(&j, Some(&metric));
     report.degrees_of_freedom = x.len().saturating_sub(equality_rank);
     report.redundant_equations = residual
         .len()
@@ -894,7 +942,7 @@ fn solve_assembly_geometry(
     // this includes correlated component motion and path parameters.
     let mut projector = DMatrix::identity(x.len(), x.len());
     if !j.is_empty() {
-        let (scaled, scale) = scaled_jacobian(&j);
+        let (scaled, scale) = jacobian_in_metric(&j, Some(&metric));
         let svd = scaled.svd(false, true);
         let vt = svd.v_t.as_ref().expect("requested right singular vectors");
         let cutoff = svd.singular_values.amax() * 1e-8;
@@ -942,7 +990,7 @@ fn solve_assembly_geometry(
                 grounded: false,
                 translation_directions: motion_directions(&translations),
                 rotation_directions: motion_directions(&rotations),
-                degrees_of_freedom: matrix_rank(&rows),
+                degrees_of_freedom: matrix_rank(&rows, None),
             }
         } else {
             ComponentMotion {

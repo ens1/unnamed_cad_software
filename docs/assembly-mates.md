@@ -2,7 +2,7 @@
 
 Assembly geometry contract version 4 stores mate intent independently of the kernel, solver, renderer and widgets. Primary references identify direct component occurrences by stable ID and then an optional sequence of nested occurrence IDs. Auxiliary references retain the same complete identity. A source can be an origin plane/axis, exact planar face, proven rotational face axis, straight/circular edge axis, datum, coordinate-system element or complete Z/X frame, solved sketch point/axis, expression-defined local point, exact planar sketch/model curve, or closed planar profile/face centroid. Provenance and current geometry ownership remain separate. A complete coordinate frame supplies its local Z axis and local X transverse direction, retaining twist orientation for rotation locking and mechanical phase relationships.
 
-A mate's optional boxed `relationship` contains typed advanced/mechanical intent. Existing source schema 1 files keep their numeric frames and standard mate fields. All added optional fields omit `None`; absent relationships retain the existing behavior and pinned-source hashes. Associative references never fall back to numeric frames when missing, suppressed, ambiguous or unresolved. Evaluated frames, auxiliary frames, motion diagnostics and curve carriers are application-owned f64 data. The current integrated solver fingerprint is `tcad-native-lm/14`; adapter composition records its own fingerprint.
+A mate's optional boxed `relationship` contains typed advanced/mechanical intent. Existing source schema 1 files keep their numeric frames and standard mate fields. All added optional fields omit `None`; absent relationships retain the existing behavior and pinned-source hashes. Associative references never fall back to numeric frames when missing, suppressed, ambiguous or unresolved. Evaluated frames, auxiliary frames, motion diagnostics and curve carriers are application-owned f64 data. The current integrated solver fingerprint is `tcad-native-lm/16`; adapter composition records its own fingerprint.
 
 The docked editor groups the types into Standard, Advanced and Mechanical. Geometry selection, expressions, placement and parameter changes enter the common document draft and persistent worker. OK requires the current draft's validated evaluation and commits one undoable operation; Cancel restores its checkpoint. Invalid or unsynchronized Advanced Source blocks Apply. Captured mechanical motion zeros and rigid lock poses use the current validated placements. Geometry-dependent commands and state are also available through the semantic presentation contract.
 
@@ -38,7 +38,35 @@ The docked editor groups the types into Standard, Advanced and Mechanical. Geome
 
 **Universal Joint** relates intersecting shaft rotations with the captured shaft-axis angle through the angular transmission relation. Relative center coincidence is enforced. Perpendicular captured shafts are singular and rejected. Phase and transmission direction are editable. This is a kinematic shaft relationship, not generated yoke hardware or dynamic simulation.
 
-These couplers measure motion in the selected support frame and keep their captured axis directions in that frame. Captured f64 zero frames are source intent, not stale worker geometry. Angular coordinates use the selected principal ±180° branch; persistent revolution counters, continuous multi-turn motion driving and alternate winding selection remain implementation work. A support occurrence must differ from the two moving participants. When no instance is explicitly fixed, a selected mechanical support is grounded before falling back to the first occurrence.
+These couplers measure motion in the selected support frame and keep their captured axis directions in that frame. Captured f64 zero frames are source intent, not stale worker geometry. Angular coordinates use the selected principal ±180° branch; persistent revolution counters, continuous multi-turn motion driving and alternate winding selection remain implementation work. A support occurrence must differ from the two moving participants. When no instance is explicitly fixed, an explicitly selected mechanical support is grounded. Ordinary mates do not implicitly ground an arbitrary UUID-ordered occurrence.
+
+## Placement stability and preview identity
+
+New assembly creation and library insertion ground the first component explicitly;
+later components and shared duplicates are free unless the user fixes them.
+Releasing every ordinary fixed component retains the assembly's global freedom.
+Existing assemblies with no fixed component also retain that freedom, rather
+than changing their implicit reference whenever an unrelated component is added.
+
+Assembly solving uses a fixed physical pose metric: translations use millimeters,
+rotation increments use 100 mm/radian, and free carrier parameters use a scale of
+100. Its minimum-norm damped SVD steps reject singular directions below the
+diagnostic rank cutoff. It does not normalize near-zero Jacobian columns into
+active directions; doing that can amplify finite-difference noise into enormous
+unconstrained displacements. Free pose directions remain available rather than
+receiving synthetic constraints. Strict mate residual validation still gates Apply.
+This is a local numerical solution, not a guarantee of global reachability or
+selection of every possible assembly branch.
+
+Component controls label saved position/rotation seeds with X/Y/Z axes and show
+the current validated solved mechanical pose and component freedom separately.
+Move/Rotate starts from that solved pose. Named configuration identity and
+display-only exploded state are published with semantic placement data; exploded
+offsets do not change mechanical positions. The mate editor publishes both
+evaluated world reference frames and the measured reference separation. Planar
+offsets are signed from the first reference to the second along the selected plane
+normal; a positive value does not mean an unsigned separation. Pending or stale
+evaluations cannot supply these current-pose readouts.
 
 **Slot** uses a line or circular center path and a point/pin-axis origin, with the same free/fixed parameter and optional orientation controls as Path. Exact model carriers are eligible when the line/circle identity proof succeeds. Their rational parameterization is retained; a retracing rational carrier is never silently replaced by an endpoint segment or simplified arc. This mode describes the pin center's path; it does not infer a center path from arbitrary slot-wall faces.
 

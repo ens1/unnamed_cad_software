@@ -775,6 +775,9 @@ pub(crate) fn semantic_element(
         });
         return;
     }
+    if widget == "auto" && crate::selection_ui::render_edge_row(ui, w, element) {
+        return;
+    }
     if matches!(
         element.role.as_str(),
         "production-field" | "production-action"
@@ -1123,32 +1126,99 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     let mut draw = |ui: &mut egui::Ui| {
         ui.scope(|ui| {
             crate::presentation_controls::apply_properties(ui, &props);
-            let mut content = |ui: &mut egui::Ui| {
-                ui.horizontal(|ui| {
-                    crate::presentation_controls::label(
+            let available = if ui.available_width().is_finite() {
+                ui.available_width().max(0.)
+            } else {
+                ui.clip_rect().width().max(0.)
+            };
+            let label_id = format!("{}:label", element.id);
+            let unit_id = format!("{}:unit", element.id);
+            let unit = descriptor
+                .unit
+                .as_deref()
+                .filter(|unit| !unit.is_empty() && !value.is_boolean());
+            let label_props = crate::presentation_controls::properties(
+                &label_id,
+                "field-label",
+                &field_classes,
+                &field_state,
+            );
+            let unit_props = crate::presentation_controls::properties(
+                &unit_id,
+                "field-unit",
+                &field_classes,
+                "ready",
+            );
+            let label_width = crate::presentation_controls::caption_width(
+                ui,
+                &label_props,
+                &element.label,
+                available,
+            );
+            let unit_width = unit
+                .map(|unit| {
+                    crate::presentation_controls::caption_width(ui, &unit_props, unit, available)
+                })
+                .unwrap_or(0.);
+            let caption_gap = if label_width > 0. && unit_width > 0. {
+                ui.spacing().item_spacing.x
+            } else {
+                0.
+            };
+            let caption_width = (label_width + caption_gap + unit_width).min(available);
+            let minimum_control = crate::presentation_controls::length(
+                &props,
+                "min-width",
+                available,
+                crate::presentation_controls::number(
+                    &props,
+                    "width",
+                    crate::presentation_controls::number(
+                        &props,
+                        "font-size",
+                        egui::TextStyle::Body.resolve(ui.style()).size,
+                    ) * 7.,
+                ),
+            )
+            .max(crate::presentation_controls::number(
+                &props,
+                "min-target-size",
+                0.,
+            ));
+            let row = props
+                .get("flex-direction")
+                .is_some_and(|value| value == "row")
+                && element.data.get("multiline").and_then(Value::as_bool) != Some(true)
+                && caption_width + ui.spacing().item_spacing.x + minimum_control <= available;
+            let caption = |ui: &mut egui::Ui| {
+                let width = ui.available_width().max(0.);
+                let unit_width = unit_width.min(width);
+                let label_width = label_width.min((width - unit_width - caption_gap).max(0.));
+                if label_width > 0. {
+                    crate::presentation_controls::bounded_label(
                         ui,
-                        &format!("{}:label", element.id),
+                        &label_id,
                         "field-label",
                         &field_classes,
                         &element.label,
                         &field_state,
+                        label_width,
                     )
                     .on_hover_text(&descriptor.accessibility_label);
-                    if let Some(unit) = descriptor
-                        .unit
-                        .as_deref()
-                        .filter(|unit| !unit.is_empty() && !value.is_boolean())
-                    {
-                        crate::presentation_controls::label(
-                            ui,
-                            &format!("{}:unit", element.id),
-                            "field-unit",
-                            &field_classes,
-                            unit,
-                            "ready",
-                        );
-                    }
-                });
+                }
+                if let Some(unit) = unit.filter(|_| unit_width > 0.) {
+                    crate::presentation_controls::bounded_label(
+                        ui,
+                        &unit_id,
+                        "field-unit",
+                        &field_classes,
+                        unit,
+                        "ready",
+                        unit_width,
+                    );
+                }
+            };
+            let mut control = |ui: &mut egui::Ui| {
                 let control_size = crate::presentation_controls::field_size(ui, &props);
                 ui.spacing_mut().interact_size.y = control_size.y;
                 if !descriptor.choices.is_empty() {
@@ -1169,6 +1239,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     egui::ComboBox::from_id_salt((&element.id, editor_generation))
                         .selected_text(selected_label)
                         .width(control_size.x)
+                        .wrap_mode(egui::TextWrapMode::Truncate)
                         .show_ui(ui, |ui| {
                             ui.add_enabled_ui(editable, |ui| {
                                 let filter_key = format!(
@@ -1333,12 +1404,31 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     None
                 }
             };
-            if props.get("flex-direction").is_some_and(|v| v == "row")
-                && element.data.get("multiline").and_then(Value::as_bool) != Some(true)
-            {
-                ui.horizontal(&mut content).inner
+            if row {
+                ui.horizontal(|ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(caption_width, ui.spacing().interact_size.y),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.set_min_width(caption_width);
+                            caption(ui);
+                        },
+                    );
+                    control(ui)
+                })
+                .inner
             } else {
-                content(ui)
+                ui.vertical(|ui| {
+                    if caption_width > 0. {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(available, ui.spacing().interact_size.y),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            caption,
+                        );
+                    }
+                    control(ui)
+                })
+                .inner
             }
         })
         .inner
@@ -2176,10 +2266,7 @@ fn new_part(w: &mut Workspace) {
         assembly: Some(root),
         placement: Default::default(),
     });
-    w.view.active_part = Some(def);
-    w.view.active_instance = None;
-    w.selected = None;
-    w.active_plane = None;
+    w.activate_context(Some(def), None);
     crate::sketch::begin(w, None);
 }
 pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
@@ -3303,7 +3390,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                     placement: Default::default(),
                     configuration: None,
                     finish: None,
-                    fixed: false,
+                    fixed: a.instances.is_empty(),
                     translation_expressions: None,
                 },
             });
@@ -3343,7 +3430,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                         placement: Default::default(),
                         configuration: None,
                         finish: None,
-                        fixed: false,
+                        fixed: a.instances.is_empty(),
                         translation_expressions: None,
                     },
                 );
@@ -3419,6 +3506,11 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
         });
     }
     let generated = cad_core::component_pattern::generated(a);
+    if a.instances.values().all(|instance| !instance.fixed) && !a.instances.is_empty() {
+        ui.small(
+            "No component is fixed. Ground a reference component to locate the assembly in space.",
+        );
+    }
     let present = cad_core::configuration::effective(&doc)
         .ok()
         .and_then(|d| d.assemblies.get(&assembly_id).cloned())
@@ -3462,22 +3554,26 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                         "Definition: {}",
                         cad_core::presentation::definition_name(&doc, &instance.definition)
                     ));
+                    crate::assembly_tools_ui::show_placement(ui, w, &assembly_id, &i.id);
                     ui.horizontal(|ui| {
-                        ui.label("Position");
-                        for value in &mut instance.placement.translation {
+                        ui.label(if doc.active_configurations.contains_key(&assembly_id) { "Base position seed" } else { "Position seed" });
+                        for (axis, value) in ["X", "Y", "Z"].into_iter().zip(&mut instance.placement.translation) {
+                            ui.label(axis);
                             changed |= ui
                                 .add(egui::DragValue::new(value).speed(0.2).suffix(" mm"))
                                 .changed();
                         }
                     });
                     ui.horizontal(|ui| {
-                        ui.label("Rotation");
-                        for value in &mut instance.placement.rotation_deg {
+                        ui.label(if doc.active_configurations.contains_key(&assembly_id) { "Base rotation seed" } else { "Rotation seed" });
+                        for (axis, value) in ["X", "Y", "Z"].into_iter().zip(&mut instance.placement.rotation_deg) {
+                            ui.label(axis);
                             changed |= ui
                                 .add(egui::DragValue::new(value).speed(0.2).suffix("°"))
                                 .changed();
                         }
                     });
+                    ui.small("Mates solve from these starting coordinates. Move / Rotate uses the current solved pose.");
                     let mut expr = instance.translation_expressions.is_some();
                     if ui
                         .checkbox(&mut expr, "Drive position with assembly expressions")
@@ -3496,7 +3592,8 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                         changed = true;
                     }
                     if let Some(expressions) = &mut instance.translation_expressions {
-                        for e in expressions {
+                        for (axis, e) in ["X", "Y", "Z"].into_iter().zip(expressions) {
+                            ui.label(format!("{axis} position / expression"));
                             changed |= ui.text_edit_singleline(&mut e.0).changed();
                         }
                     }
@@ -3517,8 +3614,9 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                     }
                     ui.horizontal(|ui| {
                         if ui.button("Edit in place").clicked() {
-                            w.view.active_instance = Some(i.id.clone());
-                            w.view.active_part = Some(i.definition.clone());
+                            let path = doc.placed_parts().unwrap_or_default().into_iter()
+                                .find(|placed| placed.path.last() == Some(&i.id)).map(|placed| placed.path);
+                            w.activate_context(Some(i.definition.clone()), path);
                             if !w.view.isolation {
                                 w.isolate();
                             }
@@ -3533,6 +3631,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                             let mut clone = i.clone();
                             clone.id = id();
                             clone.name.push_str(" copy");
+                            clone.fixed = false;
                             clone.placement.translation[0] += 30.;
                             w.dispatch(Command::PutInstance {
                                 assembly: assembly_id.clone(),

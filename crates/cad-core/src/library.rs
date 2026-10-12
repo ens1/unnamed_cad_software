@@ -315,23 +315,24 @@ pub fn link(
     );
     if old.is_none() {
         let instance = id();
-        doc.assemblies
+        let assembly = doc
+            .assemblies
             .get_mut(&doc.root)
-            .ok_or_else(|| CadError::Invalid("Linking needs an assembly root".into()))?
-            .instances
-            .insert(
-                instance.clone(),
-                Instance {
-                    id: instance,
-                    name,
-                    definition,
-                    placement: Default::default(),
-                    finish: None,
-                    configuration: None,
-                    fixed: false,
-                    translation_expressions: None,
-                },
-            );
+            .ok_or_else(|| CadError::Invalid("Linking needs an assembly root".into()))?;
+        let fixed = assembly.instances.is_empty();
+        assembly.instances.insert(
+            instance.clone(),
+            Instance {
+                id: instance,
+                name,
+                definition,
+                placement: Default::default(),
+                finish: None,
+                configuration: None,
+                fixed,
+                translation_expressions: None,
+            },
+        );
     }
     doc.validate()?;
     Ok(link_id)

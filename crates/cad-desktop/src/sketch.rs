@@ -235,6 +235,50 @@ pub(crate) fn hit_plane(
 }
 pub fn normal_to(w: &mut Workspace) {
     if let Some(sketch) = &w.sketch {
+        let face_bounds = sketch
+            .reference
+            .as_ref()
+            .filter(|reference| reference.topology == "face")
+            .and_then(|reference| {
+                let evaluation = viewport::display_evaluation(w)?;
+                let instance = viewport::display_instances(w, evaluation)
+                    .into_iter()
+                    .find(|instance| {
+                        instance.definition == sketch.definition
+                            && w.edge_selection_path
+                                .as_ref()
+                                .is_none_or(|path| path == &instance.path)
+                            && w.view
+                                .active_instance
+                                .as_ref()
+                                .is_none_or(|id| instance.path.last() == Some(id))
+                    })?;
+                let mut min = DVec3::splat(f64::INFINITY);
+                let mut max = DVec3::splat(f64::NEG_INFINITY);
+                for mesh in viewport::display_meshes(w, evaluation, instance) {
+                    for face in mesh.faces.iter().filter(|face| {
+                        face.reference.producer == reference.producer
+                            && face.reference.role == reference.role
+                            && sketch
+                                .reference_body
+                                .as_ref()
+                                .is_none_or(|body| face.body.as_ref() == Some(body))
+                    }) {
+                        for index in mesh
+                            .indices
+                            .get(face.start..face.start.checked_add(face.count)?)?
+                        {
+                            let point = DVec3::from_array(viewport::placed(
+                                *mesh.positions.get(*index as usize)?,
+                                instance,
+                            ));
+                            min = min.min(point);
+                            max = max.max(point);
+                        }
+                    }
+                }
+                (min.is_finite() && max.is_finite()).then_some((min, max))
+            });
         let normal = DVec3::from_array(transform(&sketch.matrix, sketch.plane.u, true))
             .cross(DVec3::from_array(transform(
                 &sketch.matrix,
@@ -244,13 +288,22 @@ pub fn normal_to(w: &mut Workspace) {
             .normalize();
         let render = Vec3::new(normal.x as f32, normal.z as f32, -normal.y as f32);
         w.view.orbit = [render.x.atan2(render.z), render.y.clamp(-1., 1.).asin()];
-        w.view.target = viewport::render_point(world(
+        let origin = DVec3::from_array(world(
             &sketch.plane,
             &sketch.matrix,
             sketch.anchor.unwrap_or([0.; 2]),
-        ))
-        .to_array();
+        ));
+        let center = if let Some((min, max)) = face_bounds {
+            let center = (min + max) * 0.5;
+            // Mesh bounds are disposable framing hints; sketch coordinates and references stay unchanged.
+            w.view.distance = ((max - min).length() as f32 * 0.014).max(0.08);
+            center - normal * (center - origin).dot(normal)
+        } else {
+            origin
+        };
+        w.view.target = viewport::render_point(center.to_array()).to_array();
         w.view.roll = 0.;
+        w.pending_context_focus = false;
         crate::navigation::stop(w);
     }
 }

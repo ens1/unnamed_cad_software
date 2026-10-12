@@ -412,6 +412,134 @@ fn current_evaluation(w: &Workspace) -> Result<&cad_core::protocol::Evaluation> 
             )
         })
 }
+pub fn preview_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+    let Some(assembly) = w.fields.get("assembly-id") else {
+        return vec![];
+    };
+    let Ok(mate) = parsed(w) else {
+        return vec![];
+    };
+    let doc = w.session.visible();
+    let Some(source) = doc.assemblies.get(assembly) else {
+        return vec![];
+    };
+    let evaluation = if synchronized(w, assembly, &mate) {
+        current_evaluation(w).ok()
+    } else {
+        None
+    };
+    let solved = evaluation.and_then(|e| {
+        e.assemblies.get(&cad_core::configuration::key(
+            assembly,
+            doc.active_configurations.get(assembly).map(String::as_str),
+        ))
+    });
+    let world = solved.and_then(|a| {
+        let frames = a.frames.get(&mate.id)?;
+        Some([
+            frames[0]
+                .transformed(&a.placements.get(&mate.first)?.matrix())
+                .ok()?,
+            frames[1]
+                .transformed(&a.placements.get(&mate.second)?.matrix())
+                .ok()?,
+        ])
+    });
+    let mut out = vec![];
+    for (index, participant, reference) in [
+        (0, &mate.first, &mate.first_reference),
+        (1, &mate.second, &mate.second_reference),
+    ] {
+        let name = source
+            .instances
+            .get(participant)
+            .map(|i| i.name.as_str())
+            .unwrap_or("Missing component");
+        out.push(cad_core::presentation::SemanticElement {
+            id: format!("mate:{}:reference:{index}:preview", mate.id),
+            role: "mate-reference-preview".into(),
+            label: format!(
+                "{} reference · {name}",
+                if index == 0 { "First" } else { "Second" }
+            ),
+            value: Some(
+                reference
+                    .as_ref()
+                    .map(|r| source_name(doc, &r.source))
+                    .unwrap_or_else(|| "Legacy numeric frame".into()),
+            ),
+            state: if world.is_some() {
+                "evaluated"
+            } else {
+                "pending"
+            }
+            .into(),
+            commands: vec![],
+            relationships: vec![assembly.clone(), participant.clone(), mate.id.clone()],
+            data: serde_json::json!({
+                "assembly": assembly, "mate": mate.id, "instance": participant,
+                "reference": reference,
+                "world_frame": world.as_ref().map(|frames| &frames[index]),
+                "evaluation_identity": evaluation.map(|e| &e.identity),
+                "editable": false,
+            }),
+        });
+    }
+    if matches!(mate.kind.as_str(), "coincident" | "planar" | "distance") {
+        let measured = world.as_ref().map(|frames| {
+            let [first, second] = frames;
+            let delta = DVec3::from_array(second.origin) - DVec3::from_array(first.origin);
+            if first.kind == FrameKind::Plane || second.kind == FrameKind::Plane {
+                let (normal, reference) = if first.kind == FrameKind::Plane {
+                    (first.axis, "first")
+                } else {
+                    (second.axis, "second")
+                };
+                format!(
+                    "Solved signed gap {:.4} mm · second − first along {reference} normal",
+                    delta.dot(DVec3::from_array(normal))
+                )
+            } else if first.kind == FrameKind::Axis || second.kind == FrameKind::Axis {
+                let normal = if first.kind == FrameKind::Axis {
+                    first.axis
+                } else {
+                    second.axis
+                };
+                format!(
+                    "Solved radial distance {:.4} mm",
+                    delta.cross(DVec3::from_array(normal)).length()
+                )
+            } else {
+                format!("Solved point distance {:.4} mm", delta.length())
+            }
+        });
+        out.push(cad_core::presentation::SemanticElement {
+            id: format!("mate:{}:gap:preview", mate.id),
+            role: "mate-gap-preview".into(),
+            label: "Current reference separation".into(),
+            value: Some(measured.unwrap_or_else(|| "Updating reference separation…".into())),
+            state: if world.is_some() {
+                "evaluated"
+            } else {
+                "pending"
+            }
+            .into(),
+            commands: vec![],
+            relationships: vec![
+                assembly.clone(),
+                mate.id.clone(),
+                mate.first.clone(),
+                mate.second.clone(),
+            ],
+            data: serde_json::json!({
+                "assembly": assembly, "mate": mate.id, "requested_offset": mate.offset,
+                "world_frames": world, "evaluation_identity": evaluation.map(|e| &e.identity),
+                "editable": false,
+            }),
+        });
+    }
+    out
+}
 fn lock_placement(w: &Workspace, assembly: &str, mate: &Mate) -> Result<cad_core::Placement> {
     let evaluation = current_evaluation(w)?;
     let a = evaluation
@@ -1402,6 +1530,22 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
                 "Gap / distance / expression"
             });
             changed |= ui.text_edit_singleline(&mut mate.offset.0).changed();
+            if mate.kind != "angle" {
+                for element in preview_semantics(w)
+                    .into_iter()
+                    .filter(|e| e.role == "mate-gap-preview")
+                {
+                    crate::presentation_controls::label(
+                        ui,
+                        &element.id,
+                        &element.role,
+                        &[],
+                        element.value.as_deref().unwrap_or_default(),
+                        &element.state,
+                    );
+                }
+                ui.small("For planar references, the gap is signed from first to second. Reverse the sign or swap references to place the other side.");
+            }
         }
         if !matches!(
             mate.kind.as_str(),
@@ -1533,7 +1677,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
                 ui.small(format!("Solved carrier parameter {:.6}", t));
             }
         }
-        egui::CollapsingHeader::new("Component motion").show(ui,|ui|{for(id,motion)in &evaluated.component_motion{let name=a.instances.get(id).map(|i|i.name.as_str()).unwrap_or("Component");ui.label(format!("{name}: {} DOF{}",motion.degrees_of_freedom,if motion.grounded{" · grounded"}else{""}));ui.small(format!("{} translational / {} rotational motion directions",motion.translation_directions.len(),motion.rotation_directions.len()));}ui.small("Directions describe local infinitesimal motion; coupled components may share a degree of freedom.");});
+        egui::CollapsingHeader::new("Solved placements / component motion").show(ui,|ui|{for(id,motion)in &evaluated.component_motion{crate::assembly_tools_ui::show_placement(ui,w,assembly,id);ui.small(format!("{} translational / {} rotational motion directions",motion.translation_directions.len(),motion.rotation_directions.len()));}ui.small("Directions describe local infinitesimal motion; coupled components may share a degree of freedom. Input coordinates are solver seeds; solved placements are the current model positions.");});
     }
     ui.horizontal(|ui| {
         if ui

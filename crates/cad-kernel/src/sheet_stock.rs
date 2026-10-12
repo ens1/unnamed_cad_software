@@ -8,15 +8,6 @@ use std::collections::BTreeMap;
 fn invalid(message: impl ToString) -> CadError {
     CadError::Invalid(format!("Sheet metal: {}", message.to_string()))
 }
-fn profiles(inputs: &BTreeMap<NodeRef, Shape>, reference: &NodeRef) -> Result<Vec<Face>> {
-    match inputs.get(reference) {
-        Some(Shape::Profile(face)) => Ok(vec![face.clone()]),
-        Some(Shape::Sketch { faces, .. }) if !faces.is_empty() => Ok(faces.clone()),
-        _ => Err(invalid(
-            "Select a closed source sketch; open chains cannot define sheet blanks",
-        )),
-    }
-}
 struct EdgeFlange {
     a: Point3,
     b: Point3,
@@ -315,80 +306,32 @@ fn source_reference(source: &NodeRef, member: Option<&str>, topology: &str) -> T
 }
 /// Record stock construction before native partition Booleans consume it.
 /// Sources are definition/member identities, not tessellation or face indices.
-#[allow(clippy::too_many_arguments)]
 fn record_prism(
-    adapter: &MonstertruckAdapter,
     owner: &NodeRef,
     source: &NodeRef,
-    face: &Face,
-    shift: Vector3,
+    section: &crate::extrusion::ThinSection,
     direction: Vector3,
     solid: &Solid,
+    purpose: &serde_json::Value,
     history: &mut TopologyHistory,
 ) -> Result<()> {
-    let axis = direction.normalize();
-    let face_source = adapter
-        .face_source(source, face.id())
-        .unwrap_or_else(|| source_reference(source, None, "face"));
-    for output in solid.face_iter() {
-        let sources = if output
-            .oriented_surface()
-            .normal(0., 0.)
-            .normalize()
-            .dot(axis)
-            .abs()
-            > 1. - 1e-8
-        {
-            vec![face_source.clone()]
-        } else {
-            let mut sources = vec![];
-            for edge in face.edge_iter() {
-                let lower = builder::translated(&edge, shift);
-                let upper = builder::translated(&edge, shift + direction);
-                if output.edge_iter().any(|candidate| {
-                    [
-                        lower.clone(),
-                        lower.inverse(),
-                        upper.clone(),
-                        upper.inverse(),
-                    ]
-                    .iter()
-                    .any(|edge| {
-                        crate::surfaces::same_curve(
-                            &candidate.oriented_curve(),
-                            &edge.oriented_curve(),
-                            1e-7,
-                        )
-                    })
-                }) {
-                    sources.push(
-                        adapter
-                            .edge_source(source, edge.id())
-                            .unwrap_or_else(|| face_source.clone()),
-                    );
-                }
-            }
-            if sources.is_empty() {
-                return Err(invalid("A stock wall lost its source contour ancestry"));
-            }
-            sources
-        };
-        let normal = output.oriented_surface().normal(0., 0.).normalize();
-        let surface = if normal.dot(axis) > 1. - 1e-8 {
-            "end_cap"
-        } else if normal.dot(axis) < -1. + 1e-8 {
-            "start_cap"
-        } else {
-            "wall"
-        };
-        history.constructed_face(
-            owner,
-            output.id(),
-            &sources,
-            &serde_json::json!({"operation":"sheet_stock_extrusion","surface":surface}),
-        )?;
-    }
-    Ok(())
+    // Native Sketch inputs do not publish a solid carrier history. Rebuilding
+    // a traced section obtains each authored member and constructor piece
+    // directly; a whole-profile fallback would name every sidewall alike.
+    // The shared extrusion recorder also names cap/wall intersections before
+    // a tab or normal cut asks a Boolean to propagate their ancestry.
+    crate::section_history::extrusion(
+        owner,
+        source,
+        section,
+        solid,
+        crate::section_history::ToolContext {
+            axis: direction.normalize(),
+            drafted: false,
+        },
+        purpose,
+        history,
+    )
 }
 fn record_strip(
     owner: &NodeRef,
@@ -528,21 +471,21 @@ fn build(
     } else {
         Vector3::zero()
     };
-    let base_faces = profiles(inputs, &stock.profile)?;
+    let base_sections =
+        crate::extrusion::profiles_traced(adapter, doc, &stock.profile, inputs, &[])?;
     let mut plates = vec![];
-    for face in &base_faces {
+    for section in &base_sections {
         let plate = crate::adapter::oriented_extrude(
-            &builder::translated(face, shift),
+            &builder::translated(&section.face, shift),
             normal * stock.thickness_mm,
         );
         record_prism(
-            adapter,
-            owner,
+            &stock.source,
             &stock.profile,
-            face,
-            shift,
+            section,
             normal * stock.thickness_mm,
             &plate,
+            &serde_json::json!({"operation":"sheet_stock_extrusion","source":stock.source}),
             history,
         )?;
         plates.push(plate);
@@ -575,19 +518,18 @@ fn build(
             } else {
                 Vector3::zero()
             };
-        for face in profiles(inputs, profile)? {
+        for section in crate::extrusion::profiles_traced(adapter, doc, profile, inputs, &[])? {
             let tool = crate::adapter::oriented_extrude(
-                &builder::translated(&face, edit_shift),
+                &builder::translated(&section.face, edit_shift),
                 normal * stock.thickness_mm,
             );
             record_prism(
-                adapter,
-                owner,
+                source,
                 profile,
-                &face,
-                edit_shift,
+                &section,
                 normal * stock.thickness_mm,
                 &tool,
+                &serde_json::json!({"operation":"sheet_blank_edit","source":source}),
                 history,
             )?;
             let scope = std::collections::BTreeSet::from([
@@ -649,13 +591,19 @@ fn build(
             bends: vec![],
         });
     }
-    if base_faces.len() != 1 || plates.len() != 1 || plates[0].boundaries().len() != 1 {
+    if base_sections.len() != 1 || plates.len() != 1 || plates[0].boundaries().len() != 1 {
         return Err(CadError::Unsupported("Flanges require one connected blank; separate sheet regions need separate stock features".into()));
     }
-    let face = if base_faces[0].oriented_surface().normal(0., 0.).dot(normal) > 0. {
-        base_faces[0].clone()
+    let face = if base_sections[0]
+        .face
+        .oriented_surface()
+        .normal(0., 0.)
+        .dot(normal)
+        > 0.
+    {
+        base_sections[0].face.clone()
     } else {
-        base_faces[0].inverse()
+        base_sections[0].face.inverse()
     };
     let outer = face
         .boundaries()

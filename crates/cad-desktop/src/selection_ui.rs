@@ -402,6 +402,89 @@ fn focus_edge(
     Ok(())
 }
 
+/// Presentation metadata is resolved on the same current input and occurrence
+/// as picking. It never substitutes a signature or sampled polyline for intent.
+fn native_edge<'a>(
+    w: &'a Workspace,
+    body: &cad_core::NodeRef,
+    reference: &cad_core::TopologyRef,
+) -> Option<&'a cad_core::protocol::EdgeData> {
+    let evaluation = viewport::selection_evaluation(w)?;
+    let session = w.tool_checkpoint.as_ref().unwrap_or(&w.session);
+    if !evaluation.valid || evaluation.identity != session.identity() {
+        return None;
+    }
+    let path = known_edge_occurrence(w, &body.definition)?;
+    let instances = viewport::display_instances(w, evaluation)
+        .into_iter()
+        .filter(|instance| instance.definition == body.definition && instance.path == path)
+        .collect::<Vec<_>>();
+    if instances.len() != 1 {
+        return None;
+    }
+    let edges = viewport::selection_meshes(w, evaluation, instances[0])
+        .into_iter()
+        .flat_map(|mesh| &mesh.edges)
+        .filter(|edge| edge.body.as_ref() == Some(body) && same_edge(&edge.reference, reference))
+        .collect::<Vec<_>>();
+    (edges.len() == 1).then(|| edges[0])
+}
+
+fn edge_summary(
+    w: &Workspace,
+    body: &cad_core::NodeRef,
+    reference: &cad_core::TopologyRef,
+) -> (String, serde_json::Value) {
+    use cad_core::protocol::{EDGE_CENTER_VERSION, EdgeCenter};
+    let Some(edge) = native_edge(w, body, reference) else {
+        return (
+            "Geometry unavailable".into(),
+            serde_json::json!({"resolved":false,"summary":"Geometry unavailable"}),
+        );
+    };
+    let settings = &w.session.visible().settings;
+    let (kind, summary, length, radius) = match edge.center.as_ref() {
+        Some(EdgeCenter::Line {
+            version,
+            start,
+            end,
+        }) if *version == EDGE_CENTER_VERSION => {
+            let length = start
+                .iter()
+                .zip(end)
+                .map(|(start, end)| (end - start).powi(2))
+                .sum::<f64>()
+                .sqrt();
+            if length.is_finite() && length > 0. {
+                (
+                    "straight",
+                    format!("Straight · {}", settings.format_length(length)),
+                    Some(length),
+                    None,
+                )
+            } else {
+                ("edge", "Edge".into(), None, None)
+            }
+        }
+        Some(EdgeCenter::Circle {
+            version, radius_mm, ..
+        }) if *version == EDGE_CENTER_VERSION && radius_mm.is_finite() && *radius_mm > 0. => (
+            "circular",
+            format!("Circular · R {}", settings.format_length(*radius_mm)),
+            None,
+            Some(*radius_mm),
+        ),
+        _ => ("edge", "Edge".into(), None, None),
+    };
+    let metadata = serde_json::json!({
+        "resolved":true,"summary":summary,"kind":kind,"length_mm":length,"radius_mm":radius,
+        "carrier":edge.center,"incidence":edge.native,"reference":edge.reference,
+        "measurement_source":(length.is_some() || radius.is_some()).then_some("exact_native_carrier"),"display_only":true,
+        "evaluation_identity":viewport::selection_evaluation(w).map(|evaluation| &evaluation.identity),
+    });
+    (summary, metadata)
+}
+
 pub(crate) fn edge_controls(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
     let Some(feature) = edge_feature(w) else {
         return vec![];
@@ -446,25 +529,139 @@ pub(crate) fn edge_controls(w: &Workspace) -> Vec<cad_core::presentation::Semant
         let key = edge_key(&feature.id, edge);
         let command = format!("selection.edge-remove/{key}");
         let focus = format!("selection.edge-focus/{key}");
+        let row = format!("edge-selection/{key}");
+        let label = format!("Edge {}", index + 1);
+        let (summary, metadata) = edge_summary(w, body, edge);
+        let resolved = metadata["resolved"].as_bool().unwrap_or(false);
         out.push(cad_core::presentation::SemanticElement {
-            id: format!("edge-selection/{key}"), role:"edge-selection-item".into(), label:format!("Edge {}", index + 1),
-            value:Some(edge.role.clone()), state:"selected".into(), commands:vec![focus.clone(),command.clone()],
+            id: row.clone(), role:"edge-selection-item".into(), label:label.clone(),
+            value:Some(summary.clone()), state:if resolved {"selected"} else {"unresolved"}.into(), commands:vec![focus.clone(),command.clone()],
             relationships:vec![feature.id.clone()],
-            data:serde_json::json!({"feature":feature.id,"edge":edge,"input_body":body,"classes":["property-control"]}),
+            data:serde_json::json!({"feature":feature.id,"edge":edge,"input_body":body,"nativeEdge":metadata,"classes":["property-control","edge-selection-row"],
+                "actions":[{"command":focus,"label":"Focus","enabled":resolved,"disabled_reason":(!resolved).then_some("Wait for current input geometry or repair this edge reference")},
+                    {"command":command,"label":"Remove","enabled":true}]}),
         });
         out.push(cad_core::presentation::SemanticElement {
             id:focus.clone(),role:"edge-selection-action".into(),label:format!("Focus edge {}",index+1),
-            value:Some(edge.role.clone()),state:"ready".into(),commands:vec![focus],relationships:vec![feature.id.clone()],
-            data:serde_json::json!({"presentation_control":true,"feature":feature.id,"edge":edge,"input_body":body,"classes":["property-control","edge-focus"]}),
+            value:Some(if resolved {format!("Focus and highlight {label} · {summary}")} else {"Wait for current input geometry or repair this edge reference".into()}),state:if resolved {"ready"} else {"disabled"}.into(),commands:vec![focus],relationships:vec![feature.id.clone()],
+            data:serde_json::json!({"presentation_control":true,"feature":feature.id,"edge":edge,"input_body":body,"inline_parent":row,"classes":["property-control","edge-focus"]}),
         });
         out.push(cad_core::presentation::SemanticElement {
             id: command.clone(), role:"edge-selection-action".into(), label:format!("Remove edge {}", index + 1),
-            value:Some(edge.role.clone()), state:"ready".into(), commands:vec![command],
+            value:Some(format!("Remove {label} from this feature")), state:"ready".into(), commands:vec![command],
             relationships:vec![feature.id.clone()],
-            data:serde_json::json!({"presentation_control":true,"feature":feature.id,"edge":edge,"input_body":body,"classes":["property-control","edge-remove"]}),
+            data:serde_json::json!({"presentation_control":true,"feature":feature.id,"edge":edge,"input_body":body,"inline_parent":row,"classes":["property-control","edge-remove"]}),
         });
     }
     out
+}
+
+/// Compact bundled composition over the ordinary row and action descriptors.
+/// Custom layouts can instead bind Focus and Remove independently.
+pub(crate) fn render_edge_row(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    element: &cad_core::presentation::SemanticElement,
+) -> bool {
+    if element.role != "edge-selection-item" {
+        return false;
+    }
+    let classes = element
+        .data
+        .get("classes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    let props = controls::properties(&element.id, &element.role, &classes, &element.state);
+    if props.get("display").is_some_and(|value| value == "none") {
+        return true;
+    }
+    if props
+        .get("visibility")
+        .is_some_and(|value| value == "hidden")
+    {
+        ui.allocate_response(controls::field_size(ui, &props), egui::Sense::hover());
+        return true;
+    }
+    let row_target = controls::current_target().map(|parent| {
+        if parent.node.id == element.id {
+            parent
+        } else {
+            parent.child(
+                &element.id,
+                &element.role,
+                &classes
+                    .iter()
+                    .map(|class| (*class).into())
+                    .collect::<Vec<_>>(),
+                &element.state,
+            )
+        }
+    });
+    let mut clicked = None;
+    let mut render = |ui: &mut egui::Ui| {
+        ui.scope(|ui| {
+            controls::apply_properties(ui, &props);
+            let size = controls::field_size(ui, &props);
+            if props.contains_key("width") || props.contains_key("max-width") {
+                ui.set_max_width(size.x);
+            }
+            if props.contains_key("height") || props.contains_key("min-height") {
+                ui.set_min_height(size.y);
+            }
+            controls::frame_from_properties(ui, &props).show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let text = element
+                        .value
+                        .as_ref()
+                        .map(|summary| format!("{} · {summary}", element.label))
+                        .unwrap_or_else(|| element.label.clone());
+                    controls::label(
+                        ui,
+                        &format!("{}:label", element.id),
+                        "edge-selection-label",
+                        &classes,
+                        &text,
+                        &element.state,
+                    );
+                    for action in element.action_descriptors() {
+                        let focus = action.command.starts_with("selection.edge-focus/");
+                        let action_classes = [
+                            "property-control",
+                            if focus { "edge-focus" } else { "edge-remove" },
+                        ];
+                        let response = controls::button(
+                            ui,
+                            &action.command,
+                            "edge-selection-action",
+                            &action_classes,
+                            &action.label,
+                            action.enabled,
+                            false,
+                        )
+                        .on_hover_text(format!("{} {}", action.label, element.label))
+                        .on_disabled_hover_text(
+                            action.disabled_reason.as_deref().unwrap_or(&action.label),
+                        );
+                        if response.clicked() {
+                            clicked = Some(action.command);
+                        }
+                    }
+                });
+            });
+        });
+    };
+    if let Some(target) = row_target {
+        controls::with_target(target, ui, render);
+    } else {
+        render(ui);
+    }
+    if let Some(command) = clicked {
+        edge_action(w, &command);
+    }
+    true
 }
 
 pub(crate) fn edge_action(w: &mut Workspace, command: &str) -> bool {
@@ -479,8 +676,15 @@ pub(crate) fn edge_action(w: &mut Workspace, command: &str) -> bool {
         w.status = "The edge selection changed; use its current controls".into();
         return true;
     };
-    if control.state == "disabled" {
-        w.status = control.value.clone().unwrap_or_default();
+    if let Some(action) = control
+        .action_descriptors()
+        .into_iter()
+        .find(|action| action.command == command && !action.enabled)
+    {
+        w.status = action
+            .disabled_reason
+            .or_else(|| control.value.clone())
+            .unwrap_or_else(|| "This edge action is unavailable".into());
         return true;
     }
     let Some(mut feature) = edge_feature(w) else {
@@ -638,8 +842,18 @@ pub(crate) fn edge_picker(
     let mut remove = None;
     for (index, edge) in edges.iter().enumerate() {
         let key = edge_key(feature, edge);
+        let (summary, metadata) = edge_summary(w, body, edge);
+        let resolved = metadata["resolved"].as_bool().unwrap_or(false);
         ui.push_id(&key, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                controls::label(
+                    ui,
+                    &format!("edge-selection/{key}:label"),
+                    "edge-selection-label",
+                    &["property-control", "edge-selection-row"],
+                    &format!("Edge {} · {summary}", index + 1),
+                    if resolved { "selected" } else { "unresolved" },
+                );
                 let active = w
                     .selected
                     .as_ref()
@@ -649,11 +863,17 @@ pub(crate) fn edge_picker(
                     &format!("selection.edge-focus/{key}"),
                     "edge-selection-action",
                     &["property-control", "edge-focus"],
-                    &format!("Edge {}", index + 1),
-                    true,
+                    "Focus",
+                    resolved,
                     active,
                 )
-                .on_hover_text(format!("Focus and highlight {}", edge.role))
+                .on_hover_text(format!(
+                    "Focus and highlight Edge {} · {summary}",
+                    index + 1
+                ))
+                .on_disabled_hover_text(
+                    "Wait for current input geometry or repair this edge reference",
+                )
                 .clicked()
                     && let Err(error) = focus_edge(w, body, edge)
                 {
@@ -664,7 +884,7 @@ pub(crate) fn edge_picker(
                     &format!("selection.edge-remove/{key}"),
                     "edge-selection-action",
                     &["property-control", "edge-remove"],
-                    "×",
+                    "Remove",
                     true,
                     false,
                 )
@@ -1318,8 +1538,18 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
                     w.rendered_key.clear();
                 }
                 "selection.isolate" | "selection.edit-in-place" => {
-                    w.view.active_instance = Some(object.clone());
-                    if command == "selection.isolate" || !w.view.isolation {
+                    if command == "selection.edit-in-place" {
+                        let path = w
+                            .session
+                            .visible()
+                            .placed_parts()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .find(|placed| placed.path.last() == Some(object))
+                            .map(|placed| placed.path);
+                        w.activate_context(Some(definition.clone()), path);
+                    } else {
+                        w.view.active_instance = Some(object.clone());
                         w.isolate();
                     }
                     w.rendered_key.clear();

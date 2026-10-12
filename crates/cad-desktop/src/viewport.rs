@@ -399,7 +399,7 @@ pub(crate) fn visible(w: &Workspace, i: &PlacedPart) -> bool {
     !w.view.isolation
         || w.peek
         || crate::assembly_motion_ui::component_selected(w, &i.path)
-        || w.view.active_part.as_deref() == Some(&i.definition)
+        || active_context(w, i)
         || w.view.pinned.iter().any(|p| i.path.contains(p))
         || w.view.ghost_others
 }
@@ -407,8 +407,18 @@ pub(crate) fn ghost_neighbor(w: &Workspace, instance: &PlacedPart) -> bool {
     w.view.isolation
         && !w.peek
         && !crate::assembly_motion_ui::component_selected(w, &instance.path)
-        && w.view.active_part.as_ref() != Some(&instance.definition)
+        && !active_context(w, instance)
         && !w.view.pinned.iter().any(|id| instance.path.contains(id))
+}
+fn active_context(w: &Workspace, instance: &PlacedPart) -> bool {
+    w.view.active_part.as_ref() == Some(&instance.definition)
+        && w.edge_selection_path
+            .as_ref()
+            .is_none_or(|path| path == &instance.path)
+        && w.view
+            .active_instance
+            .as_ref()
+            .is_none_or(|id| instance.path.last() == Some(id))
 }
 #[derive(Clone, Copy, Debug)]
 enum PreviewKind {
@@ -600,6 +610,15 @@ fn preview_styles(
 /// Picking and its feedback share the same evaluated input during a feature edit.
 /// A newly previewed shell/fillet may have replaced the topology being selected.
 pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
+    if let Some(evaluation) = crate::reference_repair_ui::display_evaluation(w) {
+        return Some(evaluation);
+    }
+    if !w.view.original
+        && w.view.history_cursor.is_none()
+        && let Some(evaluation) = crate::assembly_motion_ui::display_evaluation(w)
+    {
+        return Some(evaluation);
+    }
     let selecting_input = w.dialog.as_deref() == Some("feature")
         && serde_json::from_str::<cad_core::Feature>(&w.json).is_ok_and(|f| {
             matches!(
@@ -613,16 +632,16 @@ pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
                     | cad_core::Operation::Split { .. }
             )
         });
-    let input = selecting_input
-        .then_some(w.tool_checkpoint.as_ref())
-        .flatten()
-        .and_then(|s| {
-            s.draft
-                .as_ref()
-                .and_then(|d| d.preview_evaluation())
-                .or(s.evaluation.as_ref())
-        });
-    input.or_else(|| display_evaluation(w))
+    if selecting_input && let Some(checkpoint) = w.tool_checkpoint.as_ref() {
+        return checkpoint
+            .draft
+            .as_ref()
+            .and_then(|d| d.preview_evaluation())
+            .or(checkpoint.evaluation.as_ref())
+            .filter(|e| e.valid && e.identity == checkpoint.identity());
+    }
+    // Last-valid draft geometry supports navigation, but cannot establish new source references.
+    display_evaluation(w).filter(|e| e.valid && e.identity == w.session.identity())
 }
 /// Editing an existing edge feature selects its authored input from the history
 /// cache. The checkpoint's final mesh may already contain the old fillet/chamfer.
@@ -815,7 +834,11 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
             return false;
         }
     }
-    let reference = w.view.isolation && w.view.active_part.as_ref() != Some(&s.definition);
+    let reference = w.view.isolation
+        && (w.view.active_part.as_ref() != Some(&s.definition)
+            || w.edge_selection_path
+                .as_ref()
+                .is_some_and(|path| path != &s.path));
     if !reference && !feature_editing {
         w.view.active_part = Some(s.definition.clone());
         w.view.active_instance = s.path.last().cloned();
@@ -823,8 +846,9 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
     }
     w.context_selection = None;
     w.selected_feature_path = None;
-    if !feature_editing
-        || crate::selection_ui::edge_feature(w).is_some() && w.edge_selection_path.is_none()
+    if !reference
+        && (!feature_editing
+            || crate::selection_ui::edge_feature(w).is_some() && w.edge_selection_path.is_none())
     {
         w.edge_selection_path = Some(s.path.clone());
     }
@@ -921,7 +945,46 @@ pub(crate) fn preselected_edges(w: &Workspace, body: &cad_core::NodeRef) -> Vec<
     }
     edges
 }
+#[derive(Clone, Copy)]
+enum FitScope {
+    All,
+    Selection,
+    Context,
+}
 pub fn fit(w: &mut Workspace, selection: bool) {
+    fit_region(
+        w,
+        if selection {
+            FitScope::Selection
+        } else {
+            FitScope::All
+        },
+    );
+}
+fn fit_context(w: &mut Workspace) {
+    fit_region(w, FitScope::Context);
+}
+fn in_fit_scope(w: &Workspace, instance: &PlacedPart, scope: FitScope) -> bool {
+    match scope {
+        FitScope::All => true,
+        FitScope::Context => w.view.active_part.as_ref().is_none_or(|definition| {
+            definition == &instance.definition
+                && w.edge_selection_path
+                    .as_ref()
+                    .is_none_or(|path| path == &instance.path)
+        }),
+        FitScope::Selection => {
+            w.geometry_selection
+                .iter()
+                .any(|pick| selected_instance(pick, instance))
+                || w.selected.as_ref().map_or_else(
+                    || w.view.active_part.as_ref() == Some(&instance.definition),
+                    |selected| selected.path == instance.path,
+                )
+        }
+    }
+}
+fn fit_region(w: &mut Workspace, scope: FitScope) {
     if crate::assembly_motion_ui::dragging(w) {
         return;
     }
@@ -939,16 +1002,7 @@ pub fn fit(w: &mut Workspace, selection: bool) {
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     let props = style(w);
     for i in display_instances(w, e).iter().filter(|i| visible(w, i)) {
-        if selection
-            && !w
-                .geometry_selection
-                .iter()
-                .any(|pick| selected_instance(pick, i))
-            && w.selected.as_ref().map_or_else(
-                || w.view.active_part.as_ref() != Some(&i.definition),
-                |selected| selected.path != i.path,
-            )
-        {
+        if !in_fit_scope(w, i, scope) {
             continue;
         }
         for m in display_meshes(w, e, i)
@@ -1014,12 +1068,7 @@ pub fn fit(w: &mut Workspace, selection: bool) {
         if preview_style(w, &preview, &props).is_none() {
             continue;
         }
-        if selection
-            && w.selected.as_ref().map_or_else(
-                || w.view.active_part.as_ref() != Some(&preview.instance.definition),
-                |selected| selected.path != preview.instance.path,
-            )
-        {
+        if !in_fit_scope(w, preview.instance, scope) {
             continue;
         }
         for corner in 0..8 {
@@ -1077,6 +1126,42 @@ pub fn sync_scene(
     mut finishes: ResMut<Assets<render_appearance::FinishMaterial>>,
     mut appearance: ResMut<render_appearance::Runtime>,
 ) {
+    let selection_source = selection_evaluation(&w)
+        .map(|evaluation| {
+            serde_json::to_string(&(
+                &evaluation.identity,
+                display_instances(&w, evaluation)
+                    .iter()
+                    .map(|instance| (&instance.path, &instance.matrix))
+                    .collect::<Vec<_>>(),
+                &w.view.history_cursor,
+            ))
+            .unwrap_or_default()
+        })
+        .unwrap_or_default();
+    if selection_source != w.selection_source {
+        w.selection_source = selection_source;
+        w.candidates.clear();
+        w.selection_popup = None;
+        w.selected = None;
+        w.geometry_selection.clear();
+        w.hover_guide = None;
+        w.hover_cache = crate::viewport_guides::Cache::default();
+        if matches!(
+            w.context_selection,
+            Some(cad_core::selection_actions::SelectionTarget::Geometry { .. })
+        ) {
+            w.context_selection = None;
+        }
+    }
+    if w.pending_context_focus {
+        if w.sketch.is_some() {
+            w.pending_context_focus = false;
+        } else if display_evaluation(&w).is_some_and(|e| e.identity == w.session.identity()) {
+            fit_context(&mut w);
+            w.pending_context_focus = false;
+        }
+    }
     let props = style(&w);
     let preview_styles = preview_styles(&w, &preview_meshes(&w), &props);
     let key = format!(

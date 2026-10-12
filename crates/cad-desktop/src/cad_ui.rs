@@ -1515,30 +1515,23 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
     let doc = w.session.visible().clone();
     if doc.parts.len() > 1 || w.view.active_part.is_none() {
         let mut active = w.view.active_part.clone();
-        egui::ComboBox::from_id_salt("editing-component")
-            .selected_text(
-                active
-                    .as_ref()
-                    .map(|id| cad_core::presentation::definition_name(&doc, id))
-                    .unwrap_or_else(|| doc.name.clone()),
-            )
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut active, None, "Assembly");
-                for p in doc.parts.values() {
-                    ui.selectable_value(&mut active, Some(p.id.clone()), &p.name);
-                }
-            });
-        if active != w.view.active_part && w.sketch.is_none() {
-            w.view.active_part = active;
-            w.view.active_instance = None;
-            w.edge_selection_path = None;
-            w.view.active_node = None;
-            w.active_plane = None;
-            w.selected = None;
-            w.selected_feature_path = None;
-            w.candidates.clear();
-            w.context_selection = None;
-            w.selection_popup = None;
+        ui.add_enabled_ui(w.tool_checkpoint.is_none(), |ui| {
+            egui::ComboBox::from_id_salt("editing-component")
+                .selected_text(
+                    active
+                        .as_ref()
+                        .map(|id| cad_core::presentation::definition_name(&doc, id))
+                        .unwrap_or_else(|| doc.name.clone()),
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut active, None, "Assembly");
+                    for p in doc.parts.values() {
+                        ui.selectable_value(&mut active, Some(p.id.clone()), &p.name);
+                    }
+                });
+        });
+        if active != w.view.active_part && w.tool_checkpoint.is_none() && w.sketch.is_none() {
+            w.activate_context(active, None);
         }
     }
     if w.view.active_layout == "graph-workspace"
@@ -1578,8 +1571,10 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                 );
                 if response.clicked() {
                     if w.tool_checkpoint.is_none() {
-                        w.view.active_part = Some(placed.definition.clone());
-                        w.view.active_instance = placed.path.last().cloned();
+                        w.activate_context(
+                            Some(placed.definition.clone()),
+                            Some(placed.path.clone()),
+                        );
                     }
                     crate::selection_ui::object_selected(
                         w,
@@ -1614,19 +1609,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
         )
         .clicked()
     {
-        w.view.active_part = None;
-        w.view.active_instance = None;
-        w.view.active_node = None;
-        w.selected = None;
-        w.geometry_selection.clear();
-        w.selection_popup = None;
-        w.rendered_key.clear();
-        w.context_selection = None;
-        w.selected_feature_path = None;
-        w.edge_selection_path = None;
-        w.active_plane = None;
-        w.candidates.clear();
-        crate::navigation::stop(w);
+        w.activate_context(None, None);
         return;
     }
     if w.view.mode == "Flow" {

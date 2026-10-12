@@ -2029,6 +2029,10 @@ pub(crate) fn render_elements(
                         let mut index = 0;
                         while index < children.len() {
                             let element = &children[index];
+                            if element.data.get("inline_parent").is_some() {
+                                index += 1;
+                                continue;
+                            }
                             if element.role.ends_with("-action") {
                                 let end = children[index..]
                                     .iter()
@@ -2036,10 +2040,16 @@ pub(crate) fn render_elements(
                                     .map_or(children.len(), |n| index + n);
                                 ui.horizontal_wrapped(|ui| {
                                     for element in &children[index..end] {
-                                        render_action(ui, w, element);
+                                        if element.data.get("inline_parent").is_none() {
+                                            render_action(ui, w, element);
+                                        }
                                     }
                                 });
                                 index = end;
+                                continue;
+                            }
+                            if crate::selection_ui::render_edge_row(ui, w, element) {
+                                index += 1;
                                 continue;
                             }
                             if element.data.get("setter").is_some() {

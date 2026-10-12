@@ -112,10 +112,6 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
     }
     match &operation {
         Operation::Fillet { .. } | Operation::Chamfer { .. } => {
-            fields.group("selection", "Selected edges");
-            fields
-                .out
-                .extend(crate::selection_ui::edge_controls(fields.w));
             fields.group("extent", "Edge treatment");
             if let Operation::Fillet { .. } = operation {
                 fields.quantity("/operation/radius", "Radius", "mm");
@@ -148,6 +144,10 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                     fields.choice("/operation/options/first_face", "Distance 1 face", choices);
                 }
             }
+            fields.group("selection", "Selected edges");
+            fields
+                .out
+                .extend(crate::selection_ui::edge_controls(fields.w));
         }
         Operation::Shell {
             body,

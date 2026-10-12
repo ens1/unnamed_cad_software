@@ -81,7 +81,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/34;solver/tcad-native-lm/15";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/35;solver/tcad-native-lm/16";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -122,6 +122,9 @@ pub struct Workspace {
     pub geometry_selection: Vec<viewport::Selection>,
     /// Full occurrence anchor for edge selection; a leaf can repeat in subassemblies.
     pub edge_selection_path: Option<Vec<cad_core::Id>>,
+    /// Explicit context navigation frames the chosen occurrence once evaluation is current.
+    pub pending_context_focus: bool,
+    pub selection_source: String,
     pub selected_feature_path: Option<Vec<String>>,
     pub selection_popup: Option<selection_ui::ActionPopup>,
     pub context_selection: Option<cad_core::selection_actions::SelectionTarget>,
@@ -261,6 +264,8 @@ impl Workspace {
             hover_viewport_seen: false,
             geometry_selection: vec![],
             edge_selection_path: None,
+            pending_context_focus: false,
+            selection_source: String::new(),
             selected_feature_path: None,
             selection_popup: None,
             context_selection: None,
@@ -312,6 +317,58 @@ impl Workspace {
     }
     pub fn tolerance(&self) -> f64 {
         self.session.visible().settings.evaluation_tolerance_mm
+    }
+    pub fn activate_context(
+        &mut self,
+        definition: Option<cad_core::Id>,
+        path: Option<Vec<cad_core::Id>>,
+    ) {
+        if definition.is_some() && !self.view.isolation {
+            self.before_isolation = Some(self.view.clone());
+        }
+        let occurrences = self.session.visible().placed_parts().unwrap_or_default();
+        let occurrence = definition.as_ref().and_then(|definition| {
+            occurrences.iter().find(|instance| {
+                &instance.definition == definition
+                    && path.as_ref().is_none_or(|path| path == &instance.path)
+            })
+        });
+        history::latest(self);
+        self.view.active_instance = occurrence.and_then(|i| i.path.last().cloned());
+        self.edge_selection_path = occurrence.map(|i| i.path.clone());
+        self.view.active_part = definition;
+        if let Some(part) = self
+            .view
+            .active_part
+            .as_ref()
+            .and_then(|id| self.session.visible().parts.get(id))
+            && part.features.is_empty()
+        {
+            let origin = occurrence
+                .map(|instance| viewport::placed([0.; 3], instance))
+                .unwrap_or([0.; 3]);
+            self.view.target = viewport::render_point(origin).to_array();
+            self.view.distance = 3.5;
+        }
+        self.view.active_node = None;
+        self.active_plane = None;
+        self.selected = None;
+        self.geometry_selection.clear();
+        self.selected_feature_path = None;
+        self.context_selection = None;
+        self.selection_popup = None;
+        self.candidates.clear();
+        self.hover_guide = None;
+        self.hover_cache = viewport_guides::Cache::default();
+        if self.view.active_part.is_none() {
+            self.view.isolation = false;
+            self.before_isolation = None;
+        } else {
+            self.view.isolation = true;
+        }
+        self.pending_context_focus = true;
+        self.rendered_key.clear();
+        navigation::stop(self);
     }
     pub fn dispatch(&mut self, c: cad_core::commands::Command) {
         if drawing_interaction_ui::active(self) {
@@ -509,6 +566,7 @@ impl Workspace {
             ..Default::default()
         };
         self.view.active_part = self.session.committed.parts.keys().next().cloned();
+        self.activate_context(self.view.active_part.clone(), None);
         self.requested = None;
         self.changed = Instant::now();
         self.selected = None;

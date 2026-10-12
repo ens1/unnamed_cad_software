@@ -101,7 +101,12 @@ pub fn number(properties: &BTreeMap<String, String>, key: &str, fallback: f32) -
         .unwrap_or(fallback)
 }
 
-fn length(properties: &BTreeMap<String, String>, key: &str, extent: f32, fallback: f32) -> f32 {
+pub(crate) fn length(
+    properties: &BTreeMap<String, String>,
+    key: &str,
+    extent: f32,
+    fallback: f32,
+) -> f32 {
     properties
         .get(key)
         .and_then(|value| value.trim().strip_suffix('%'))
@@ -113,10 +118,21 @@ fn length(properties: &BTreeMap<String, String>, key: &str, extent: f32, fallbac
 
 /// Value-widget dimensions resolve against the actual styled parent region.
 pub(crate) fn field_size(ui: &egui::Ui, props: &BTreeMap<String, String>) -> egui::Vec2 {
-    let available = ui.available_width().max(0.);
+    let available = if ui.available_width().is_finite() {
+        ui.available_width().max(0.)
+    } else {
+        ui.clip_rect().width().max(0.)
+    };
     let target = number(props, "min-target-size", 0.).max(0.);
-    let min_width = length(props, "min-width", available, target).max(target);
-    let max_width = length(props, "max-width", available, available).max(min_width);
+    // CSS minimum sizes request usable space; they cannot manufacture space
+    // outside a docked panel. Responsive field layout provides a full-width row
+    // when the preferred horizontal composition cannot fit.
+    let min_width = length(props, "min-width", available, target)
+        .max(target)
+        .min(available);
+    let max_width = length(props, "max-width", available, available)
+        .max(min_width)
+        .min(available);
     let width = length(props, "width", available, available).clamp(min_width, max_width);
     let extent = if ui.available_height().is_finite() {
         ui.available_height()
@@ -128,6 +144,29 @@ pub(crate) fn field_size(ui: &egui::Ui, props: &BTreeMap<String, String>) -> egu
     let height =
         length(props, "height", extent, ui.spacing().interact_size.y).clamp(min_height, max_height);
     egui::vec2(width, height)
+}
+
+pub(crate) fn caption_width(
+    ui: &egui::Ui,
+    props: &BTreeMap<String, String>,
+    text: &str,
+    available: f32,
+) -> f32 {
+    if props.get("display").is_some_and(|value| value == "none") {
+        return 0.;
+    }
+    let measured = ui
+        .painter()
+        .layout_no_wrap(text.into(), font(ui, props), Color32::WHITE)
+        .size()
+        .x;
+    let minimum = length(props, "min-width", available, 0.)
+        .max(0.)
+        .min(available);
+    let maximum = length(props, "max-width", available, available)
+        .max(minimum)
+        .min(available);
+    length(props, "width", available, measured).clamp(minimum, maximum)
 }
 
 fn padding(properties: &BTreeMap<String, String>, fallback: egui::Vec2) -> [f32; 4] {
@@ -455,6 +494,33 @@ pub fn label(
     text: &str,
     state: &str,
 ) -> Response {
+    label_with_width_limit(ui, id, role, classes, text, state, None)
+}
+
+pub(crate) fn bounded_label(
+    ui: &mut egui::Ui,
+    id: &str,
+    role: &str,
+    classes: &[&str],
+    text: &str,
+    state: &str,
+    width: f32,
+) -> Response {
+    // The caller has resolved this width against the complete field region.
+    // Re-resolving percentages against the narrower caption would shrink them
+    // a second time and move the unit/control away from their reserved column.
+    label_with_width_limit(ui, id, role, classes, text, state, Some(width.max(0.)))
+}
+
+fn label_with_width_limit(
+    ui: &mut egui::Ui,
+    id: &str,
+    role: &str,
+    classes: &[&str],
+    text: &str,
+    state: &str,
+    width_limit: Option<f32>,
+) -> Response {
     let props = properties(id, role, classes, state);
     if props.get("display").is_some_and(|value| value == "none") {
         return ui.interact(egui::Rect::NOTHING, ui.id().with(id), egui::Sense::hover());
@@ -481,14 +547,18 @@ pub fn label(
                 .is_some_and(|value| value == "hidden")
             {
                 let size = egui::vec2(
-                    length(&props, "width", ui.available_width(), 0.),
+                    width_limit
+                        .unwrap_or_else(|| length(&props, "width", ui.available_width(), 0.)),
                     number(&props, "height", font(ui, &props).size),
                 );
                 return ui.allocate_response(size, egui::Sense::hover());
             }
-            if props.contains_key("width") || props.contains_key("height") {
+            if width_limit.is_some() || props.contains_key("width") || props.contains_key("height")
+            {
                 let size = egui::vec2(
-                    length(&props, "width", ui.available_width(), ui.available_width()),
+                    width_limit.unwrap_or_else(|| {
+                        length(&props, "width", ui.available_width(), ui.available_width())
+                    }),
                     number(&props, "height", font(ui, &props).size),
                 );
                 let response = ui.add_sized(size, widget);

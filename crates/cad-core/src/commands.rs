@@ -410,24 +410,21 @@ impl Command {
             } => {
                 if let Some(a) = assembly {
                     let key = id();
-                    document
-                        .assemblies
-                        .get_mut(&a)
-                        .ok_or_else(missing)?
-                        .instances
-                        .insert(
-                            key.clone(),
-                            Instance {
-                                id: key,
-                                name: part.name.clone(),
-                                definition: part.id.clone(),
-                                placement,
-                                finish: None,
-                                configuration: None,
-                                fixed: false,
-                                translation_expressions: None,
-                            },
-                        );
+                    let assembly = document.assemblies.get_mut(&a).ok_or_else(missing)?;
+                    let fixed = assembly.instances.is_empty();
+                    assembly.instances.insert(
+                        key.clone(),
+                        Instance {
+                            id: key,
+                            name: part.name.clone(),
+                            definition: part.id.clone(),
+                            placement,
+                            finish: None,
+                            configuration: None,
+                            fixed,
+                            translation_expressions: None,
+                        },
+                    );
                 }
                 document.parts.insert(part.id.clone(), part);
             }
