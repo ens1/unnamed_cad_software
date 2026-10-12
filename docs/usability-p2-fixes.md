@@ -57,3 +57,12 @@ topology repair are unchanged by this usability work. Fidelity/repair status
 stays explicit in Drawing Information even though implementation descriptions no
 longer appear on production paper by default. Export requires current validated,
 applied drawing source.
+
+## Validation checkpoint
+
+Completed `cargo fmt --all --check`, `cargo check --workspace --locked`,
+`cargo clippy --workspace --locked --lib --bins --no-deps -- -D warnings`,
+and `scripts/package-macos.sh`. Packaging compiled the locked workspace,
+validated Info.plist, verified both nested executables and the completed macOS
+bundle signatures, and replaced `dist/TCAD.app`. The origin repository remains
+private. No tests, assertion probes, app launches or UI smoke runs were performed.

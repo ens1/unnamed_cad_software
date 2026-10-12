@@ -10,6 +10,14 @@ solver 16, drawing contract 7 and paper interaction contract 2. See
 [P1 implementation details and validation](usability-p1-fixes.md). Interactive
 acceptance of these changes remains unperformed.
 
+The 2026-10-12 P2 follow-up adds compact semantic context menus, nearby Smart
+Dimension entry, one-checkpoint hole positioning, explicit component actions and
+placement fields, native failed weld contact guides, persistent paper editing,
+and clean drawing output. The current backend is adapter 36 / native solver 16;
+selection action contract is 4 and disposable weld-joint preview contract is 1.
+See [P2 implementation details](usability-p2-fixes.md). UI acceptance remains
+unperformed.
+
 ## Integrated source
 
 - Sketch Trim/Extend/Split with preserved analytic/rational geometry; arbitrary-axis symmetry; bounded point-on-curve, tangency and curvature contact on analytic line/arc/circle/ellipse/Bezier/positive clamped NURBS carriers. Saved normalized fixed/free contact parameters use exact derivatives and require regular tangents/C2 curvature locations. Driven/reference dimensions preserve their authored expression, measure the current geometry and add no solve equation. Arc length/included-angle and ellipse dimensions join the existing coordinate/length/angle modes. Rank/DOF and residual diagnostics are published; ambiguous or nonconvergent definitions block Apply.

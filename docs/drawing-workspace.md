@@ -28,8 +28,9 @@ custom scales use the existing f64 view layouts and validated draft. Existing
 per-view placement and parent alignment remain editable. Choosing a preset that
 removes an annotated view is rejected by drawing validation.
 
-The default dock pins Apply, Cancel Edit, PDF/DXF and Model actions below the
-scrolling properties. Export requires an applied, current validated drawing.
+The default dock pins Apply, Cancel Edit, PDF/DXF and Model actions above the
+scrolling properties. The sheet/view/annotation tree uses the dependency region
+once, with compact properties below it. Export requires an applied, current validated drawing.
 Each action and tree item is also an independent semantic binding. Existing
 `drawing-editor` confirmation action identities remain available to custom
 layouts; their default visual position has moved to the pinned footer.
@@ -65,6 +66,10 @@ address workspace/navigation intent. Tree roles are `drawing-tree-group` and
 projection and scale remain independently bound `drawing-editor-field` values.
 Users may move, hide, duplicate or restyle these elements in their layout and
 CSS-like theme without changing engineering source or Apply/Cancel semantics.
+
+The native registry exposes `drawing-tree` and `drawing-completion` independently
+from `drawings-editor`, so alternative layouts can move the tree and action bar
+without duplicating their state.
 
 Implementation verification is compilation, formatting and linting only; no code
 tests or interactive acceptance were run.

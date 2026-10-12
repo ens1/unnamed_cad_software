@@ -157,3 +157,14 @@ Settings use two independently versioned, renderer-free preference contracts. `c
 Drawing contract 7, format/template contract 2 and interaction contract 2 retain parent-aligned views, exact circular-center point references, saved leader elbows and disposable f64 paper hit/reference geometry. Dimensions can retain two exact curve references for parallel-edge separation, and automatic orthographic groups share a standard scale. Geometry and drawing validity are separate evaluation flags: complete current native geometry permits explicit drawing repair; only complete current `valid` evaluations authorize Apply or export. Native failure results remain unqualified. Adapter 35 and native solver 16 invalidate old derived geometry/placement caches. Sheet stock preserves member/piece extrusion ancestry; assembly iteration uses a physical pose metric with a singular cutoff. See [P1 implementation details](usability-p1-fixes.md).
 
 BOM/stock/production contracts 1 and drawing-table contract 3 supply configurable structures/columns, authored equivalent-stock identities, occurrence-bound balloons and bounded real page continuations. Stable source manifests survive library namespacing and Make Unique without merging remaining shared occurrences into the successor row. Pages, table CSV, PDF and drawing DXF consume the same source-derived content. The desktop registers named drawing-interaction and production value adapters over shared drafts; presentation placement and CSS style remain separate. See [paper interaction](drawing-paper-interaction.md) and [production workflows](drawing-production.md).
+
+The P2 usability follow-up uses adapter 36 / native solver 16. Evaluation adds
+disposable weld-joint preview contract 1, retaining native contact failure
+guides independently from last-valid model display and strict Apply validation.
+Selection action contract 4 supplies default menu composition hints without
+changing command identity. Hole positioning retains its modeling checkpoint
+through the feature handoff. Component insertion reconstructs one preview from
+its checkpoint and targets the intended owning assembly. Drawing navigation,
+selection and workspace visibility are presentation preferences; rendering
+fidelity/source metadata are excluded from paper primitives. See
+[P2 implementation details](usability-p2-fixes.md).

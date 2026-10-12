@@ -167,3 +167,13 @@ Configuration contract 4 reads versions 1–3 and adds omitted-empty per-instanc
 Drawing contract 6 adds defaulted parent view alignment/inherited scale, exact `curve_center` point references and annotation `leader_points_mm` offsets. Local sheet templates are version 2 and accept version 1 defaults. Table contract 3 adds defaulted BOM/cut-list options, source-manifest row keys, member/accessory balloons and stable row-range segments with page/position/repeated-header intent. Derived continuation page IDs never replace saved source sheets. Saved model settings include defaulted production report preferences (contract 1). Existing source remains readable; invalid/ambiguous associations fail rather than adopting tessellated display geometry. Evaluation adds default-false `geometry_valid`, distinct from full `valid`, for explicit current drawing repair.
 
 Drawing contract 7 adds `perpendicular` dimension intent and an omitted-None second exact curve reference for associative parallel-edge separation. Paper interaction contract 2 carries both curve references in dimension creation. Existing point dimensions and templates remain readable and retain their authored measurement type. Adapter 35 / native solver 16 invalidate old disposable geometry/placement caches; corrected sheet stock ancestry may require explicit reattachment of ambiguous legacy sidewall references. See [P1 implementation details](usability-p1-fixes.md).
+
+The P2 follow-up uses adapter 36 / native solver 16, with defaulted disposable
+`Evaluation.weld_joints` records (joint-preview contract 1). These f64 curves,
+support identities, poses and native contact states never become saved source
+geometry. Selection action contract 4 adds presentation-only menu hints.
+Defaulted Drawing workspace/page/navigation/selection fields belong to saved
+`PresentationState`, separately from engineering source. Derived drawing sheets
+retain fidelity/source information outside paper vectors. Existing native CAD
+definitions retain their schema and readable identities; see
+[P2 implementation details](usability-p2-fixes.md).

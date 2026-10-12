@@ -18,7 +18,7 @@ From a terminal:
 ./target/debug/tcad-desktop --reset-ui
 ```
 
-The worker executable must sit beside the desktop executable. `TCAD_WORKER` can select another compatible worker. The toolchain is pinned in `rust-toolchain.toml`; the dependency graph is pinned in `Cargo.lock`. Windows and Linux use the same source and native windowing dependencies. The adapter 35 / solver 16 [P1 usability fixes](docs/usability-p1-fixes.md) were formatted, compiled, strictly linted and packaged with verified macOS signatures on 2026-10-11. Other platforms and interactive acceptance of these fixes remain unverified.
+The worker executable must sit beside the desktop executable. `TCAD_WORKER` can select another compatible worker. The toolchain is pinned in `rust-toolchain.toml`; the dependency graph is pinned in `Cargo.lock`. Windows and Linux use the same source and native windowing dependencies. The current adapter 36 / solver 16 [P2 usability fixes](docs/usability-p2-fixes.md) were formatted, compiled, strictly linted and packaged with verified macOS signatures on 2026-10-12. The earlier [P1 fixes](docs/usability-p1-fixes.md) remain included. Other platforms and interactive acceptance of these fixes remain unverified.
 
 The macOS bundle contains `TCAD` (desktop), `tcad-worker` (geometry), and `tcad-cli` (command line). These names must remain distinct even on case-insensitive filesystems.
 `./scripts/package-macos.sh` builds a fresh bundle, ad-hoc signs its nested executables and completed resources, verifies the signatures, then replaces `dist/TCAD.app`. A failed build or signature check preserves the existing package. Fresh executable files prevent invalid cached code-signature pages when rebuilding on macOS.
