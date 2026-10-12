@@ -1,0 +1,754 @@
+{
+  "id": "a8058020-c578-4785-9057-f8dbddfac791",
+  "name": "Part1",
+  "parameters": {},
+  "features": [
+    {
+      "id": "512b278f-364c-4a79-8020-e4020e32a977",
+      "name": "Sketch1",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "b73d28af-2090-4092-bb8c-999a029762fd"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "6dd2560c-811e-433f-aaf7-61a521fb93be",
+      "name": "Boss-Extrude1",
+      "operation": {
+        "kind": "extrude",
+        "profile": {
+          "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+          "node": "512b278f-364c-4a79-8020-e4020e32a977"
+        },
+        "distance": "12 mm",
+        "direction": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "body": null,
+        "mode": "new",
+        "options": {
+          "profile_normal": true,
+          "reverse_direction": false,
+          "end": "blind",
+          "start_offset": "0 mm",
+          "reverse_distance": null,
+          "target": null,
+          "target_body": null,
+          "end_offset": "0 mm"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "8bff2d12-ab78-445f-8921-02a09780053e",
+      "name": "Sketch2",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "32859532-0ae8-4d84-b526-2d1915444303"
+        },
+        "plane": {
+          "origin": [
+            59.99999999999601,
+            39.99999999742897,
+            12.0
+          ],
+          "u": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            -1.0,
+            0.0
+          ]
+        },
+        "plane_reference": {
+          "producer": {
+            "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+            "node": "6dd2560c-811e-433f-aaf7-61a521fb93be"
+          },
+          "role": "construction:{\"purpose\":{\"constructor\":{\"end\":\"end\",\"scope\":null},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"3e0624b7-4ebd-4681-861b-2f1b533d5d79\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"6c1526a6-fa2c-4e45-9860-dd3d4a6dce5b\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"d9381b7d-9cf8-4d1b-9b16-a4cd79ddf932\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"ee91a66d-a902-4536-bd3a-a98ef21bda92\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}",
+          "topology": "face",
+          "signature": {
+            "center": [
+              -3.9968028886505635e-12,
+              -2.570493151665687e-9,
+              12.0
+            ],
+            "measure": 9599.999999999807,
+            "tolerance": 0.00001
+          }
+        },
+        "reference_body": {
+          "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+          "node": "6dd2560c-811e-433f-aaf7-61a521fb93be"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "e5046352-b951-4553-adef-06d2bede9ad3",
+      "name": "Boss-Extrude2",
+      "operation": {
+        "kind": "extrude",
+        "profile": {
+          "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+          "node": "8bff2d12-ab78-445f-8921-02a09780053e"
+        },
+        "distance": "25 mm",
+        "direction": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "body": {
+          "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+          "node": "6dd2560c-811e-433f-aaf7-61a521fb93be"
+        },
+        "mode": "join",
+        "options": {
+          "profile_normal": true,
+          "reverse_direction": false,
+          "end": "blind",
+          "start_offset": "0 mm",
+          "reverse_distance": null,
+          "target": null,
+          "target_body": null,
+          "end_offset": "0 mm"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "3b74afbb-b4a8-481e-b75c-af868d92466a",
+      "name": "Sketch3",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "d0b84ff8-09d8-47de-9d75-7cdb5bff1750"
+        },
+        "plane": {
+          "origin": [
+            19.999999999996007,
+            19.999999997428972,
+            37.0
+          ],
+          "u": [
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            -0.0,
+            -1.0,
+            -1.7763568394002506e-16
+          ]
+        },
+        "plane_reference": {
+          "producer": {
+            "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+            "node": "e5046352-b951-4553-adef-06d2bede9ad3"
+          },
+          "role": "construction:{\"purpose\":{\"constructor\":{\"end\":\"end\",\"scope\":null},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}",
+          "topology": "face",
+          "signature": {
+            "center": [
+              -3.992331689872402e-12,
+              -2.5710287232527662e-9,
+              37.0
+            ],
+            "measure": 1248.5288333202423,
+            "tolerance": 0.00001
+          }
+        },
+        "reference_body": {
+          "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+          "node": "e5046352-b951-4553-adef-06d2bede9ad3"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "db587dd7-a2d7-473e-9517-95ccfa48226d",
+      "name": "Drilled Holes1",
+      "operation": {
+        "kind": "drilled_holes",
+        "definition": {
+          "body": {
+            "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+            "node": "e5046352-b951-4553-adef-06d2bede9ad3"
+          },
+          "positions": {
+            "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+            "node": "3b74afbb-b4a8-481e-b75c-af868d92466a"
+          },
+          "points": [
+            "82f6cc3e-b03d-4319-9068-85f0a432e2e5"
+          ],
+          "diameter": "20 mm",
+          "depth": "10 mm",
+          "end": "through_all",
+          "head": {
+            "kind": "simple"
+          },
+          "reverse": false,
+          "start_offset": "0 mm"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "508a1fe1-d581-4b59-b85f-30eda679de1e",
+      "name": "Sketch4",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "55567d81-6da2-4093-b592-59bb9ee91d62"
+        },
+        "plane": {
+          "origin": [
+            59.99999999999601,
+            39.99999999742844,
+            12.0
+          ],
+          "u": [
+            0.0,
+            1.0,
+            0.0
+          ],
+          "v": [
+            -1.0,
+            0.0,
+            0.0
+          ]
+        },
+        "plane_reference": {
+          "producer": {
+            "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+            "node": "db587dd7-a2d7-473e-9517-95ccfa48226d"
+          },
+          "role": "construction:{\"purpose\":{\"constructor\":\"upper_transition\",\"intervals\":[[0,0,0],[1,0,0],[2,0,0],[3,0,0],[5,0,0],[6,0,0],[7,0,0],[8,0,0]],\"operation\":\"prismatic_boolean\",\"planes\":[[4]],\"source_table\":\"canonical_construction_sources\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"6dd2560c-811e-433f-aaf7-61a521fb93be\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":0,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"3e0624b7-4ebd-4681-861b-2f1b533d5d79\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"6dd2560c-811e-433f-aaf7-61a521fb93be\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":0,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"6c1526a6-fa2c-4e45-9860-dd3d4a6dce5b\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"6dd2560c-811e-433f-aaf7-61a521fb93be\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":0,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"d9381b7d-9cf8-4d1b-9b16-a4cd79ddf932\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"6dd2560c-811e-433f-aaf7-61a521fb93be\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":0,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"ee91a66d-a902-4536-bd3a-a98ef21bda92\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"base\":{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"6dd2560c-811e-433f-aaf7-61a521fb93be\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"end\":\"end\",\"scope\":null},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"3e0624b7-4ebd-4681-861b-2f1b533d5d79\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"6c1526a6-fa2c-4e45-9860-dd3d4a6dce5b\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"d9381b7d-9cf8-4d1b-9b16-a4cd79ddf932\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"ee91a66d-a902-4536-bd3a-a98ef21bda92\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},\"component\":0,\"constructor\":\"contact_trim\",\"operation\":\"extrusion_join\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"6dd2560c-811e-433f-aaf7-61a521fb93be\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"end\":\"end\",\"scope\":null},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"3e0624b7-4ebd-4681-861b-2f1b533d5d79\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"6c1526a6-fa2c-4e45-9860-dd3d4a6dce5b\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"d9381b7d-9cf8-4d1b-9b16-a4cd79ddf932\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"ee91a66d-a902-4536-bd3a-a98ef21bda92\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":0,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":1,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":2,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":3,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":0,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":1,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":2,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":3,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"}],\"topology\":\"face\"}",
+          "topology": "face",
+          "signature": {
+            "center": [
+              -3.994582442601313e-12,
+              -2.5707607995317167e-9,
+              12.0
+            ],
+            "measure": 8351.471166679565,
+            "tolerance": 0.00001
+          }
+        },
+        "reference_body": {
+          "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+          "node": "db587dd7-a2d7-473e-9517-95ccfa48226d"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "9bbf596d-abd0-4802-bac6-2a1db1013855",
+      "name": "Chamfer1",
+      "operation": {
+        "kind": "chamfer",
+        "body": {
+          "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+          "node": "db587dd7-a2d7-473e-9517-95ccfa48226d"
+        },
+        "edges": [
+          {
+            "producer": {
+              "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+              "node": "db587dd7-a2d7-473e-9517-95ccfa48226d"
+            },
+            "role": "construction:{\"purpose\":{\"constructor\":\"section_interval\",\"intervals\":[[0,0,0]],\"operation\":\"prismatic_boolean\",\"planes\":[[1]],\"source_table\":\"canonical_construction_sources\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"6dd2560c-811e-433f-aaf7-61a521fb93be\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":0,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"6c1526a6-fa2c-4e45-9860-dd3d4a6dce5b\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"base\":{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"6dd2560c-811e-433f-aaf7-61a521fb93be\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"end\":\"end\",\"scope\":null},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"3e0624b7-4ebd-4681-861b-2f1b533d5d79\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"6c1526a6-fa2c-4e45-9860-dd3d4a6dce5b\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"d9381b7d-9cf8-4d1b-9b16-a4cd79ddf932\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"ee91a66d-a902-4536-bd3a-a98ef21bda92\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},\"component\":0,\"constructor\":\"contact_trim\",\"operation\":\"extrusion_join\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"6dd2560c-811e-433f-aaf7-61a521fb93be\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"end\":\"end\",\"scope\":null},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"3e0624b7-4ebd-4681-861b-2f1b533d5d79\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"6c1526a6-fa2c-4e45-9860-dd3d4a6dce5b\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"d9381b7d-9cf8-4d1b-9b16-a4cd79ddf932\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"512b278f-364c-4a79-8020-e4020e32a977\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"ee91a66d-a902-4536-bd3a-a98ef21bda92\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":0,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":1,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":2,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":3,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"}],\"topology\":\"face\"}},\"topology\":\"face\"}],\"topology\":\"edge\"}",
+            "topology": "edge",
+            "signature": {
+              "center": [
+                -3.9999376360142114e-12,
+                -40.00000000256969,
+                12.0
+              ],
+              "measure": 120.0,
+              "tolerance": 0.00001
+            }
+          }
+        ],
+        "distance": "2 mm",
+        "options": {
+          "method": "equal_distance",
+          "second_distance": "2 mm",
+          "angle": "45 deg",
+          "flip": false,
+          "first_face": null
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "0356b678-1c75-4ddb-99b0-842dbd62a973",
+      "name": "Fillet1",
+      "operation": {
+        "kind": "fillet",
+        "body": {
+          "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+          "node": "9bbf596d-abd0-4802-bac6-2a1db1013855"
+        },
+        "edges": [
+          {
+            "producer": {
+              "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+              "node": "db587dd7-a2d7-473e-9517-95ccfa48226d"
+            },
+            "role": "construction:{\"purpose\":{\"constructor\":\"section_interval\",\"intervals\":[[1,0,0]],\"operation\":\"prismatic_boolean\",\"planes\":[[0]],\"source_table\":\"canonical_construction_sources\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"end\":\"end\",\"scope\":null},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":3,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"}],\"topology\":\"edge\"}",
+            "topology": "edge",
+            "signature": {
+              "center": [
+                -12.50712930664655,
+                12.50712930407154,
+                37.0
+              ],
+              "measure": 31.4032299443969,
+              "tolerance": 0.00001
+            }
+          },
+          {
+            "producer": {
+              "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+              "node": "db587dd7-a2d7-473e-9517-95ccfa48226d"
+            },
+            "role": "construction:{\"purpose\":{\"constructor\":\"section_interval\",\"intervals\":[[1,0,0]],\"operation\":\"prismatic_boolean\",\"planes\":[[0]],\"source_table\":\"canonical_construction_sources\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"end\":\"end\",\"scope\":null},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":0,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"}],\"topology\":\"edge\"}",
+            "topology": "edge",
+            "signature": {
+              "center": [
+                -12.507129306646558,
+                -12.50712930921359,
+                37.0
+              ],
+              "measure": 31.403229944396898,
+              "tolerance": 0.00001
+            }
+          },
+          {
+            "producer": {
+              "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+              "node": "db587dd7-a2d7-473e-9517-95ccfa48226d"
+            },
+            "role": "construction:{\"purpose\":{\"constructor\":\"section_interval\",\"intervals\":[[1,0,0]],\"operation\":\"prismatic_boolean\",\"planes\":[[0]],\"source_table\":\"canonical_construction_sources\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"end\":\"end\",\"scope\":null},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":1,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"}],\"topology\":\"edge\"}",
+            "topology": "edge",
+            "signature": {
+              "center": [
+                12.507129306638566,
+                -12.507129309213592,
+                37.0
+              ],
+              "measure": 31.403229944396895,
+              "tolerance": 0.00001
+            }
+          },
+          {
+            "producer": {
+              "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+              "node": "db587dd7-a2d7-473e-9517-95ccfa48226d"
+            },
+            "role": "construction:{\"purpose\":{\"constructor\":\"section_interval\",\"intervals\":[[1,0,0]],\"operation\":\"prismatic_boolean\",\"planes\":[[0]],\"source_table\":\"canonical_construction_sources\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"end\":\"end\",\"scope\":null},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"},{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"e5046352-b951-4553-adef-06d2bede9ad3\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"constructor\":{\"scope\":null,\"wall\":{\"cap\":false,\"piece\":2,\"side\":0}},\"operation\":\"extrusion\"},\"sources\":[{\"producer\":{\"definition\":\"a8058020-c578-4785-9057-f8dbddfac791\",\"node\":\"8bff2d12-ab78-445f-8921-02a09780053e\"},\"role\":{\"contract\":\"construction\",\"intent\":{\"purpose\":{\"member\":\"5d9b48f4-e935-40cb-b6a5-8021f9ed657c\",\"operation\":\"sketch_member\"},\"sources\":[],\"topology\":\"curve\"}},\"topology\":\"curve\"}],\"topology\":\"face\"}},\"topology\":\"face\"}],\"topology\":\"edge\"}",
+            "topology": "edge",
+            "signature": {
+              "center": [
+                12.507129306638573,
+                12.507129304071531,
+                37.0
+              ],
+              "measure": 31.403229944396898,
+              "tolerance": 0.00001
+            }
+          }
+        ],
+        "radius": "3 mm"
+      },
+      "suppressed": false
+    }
+  ],
+  "outputs": [
+    "0356b678-1c75-4ddb-99b0-842dbd62a973"
+  ],
+  "material": "aluminum",
+  "properties": {},
+  "sketches": {
+    "32859532-0ae8-4d84-b526-2d1915444303": {
+      "id": "32859532-0ae8-4d84-b526-2d1915444303",
+      "name": "Sketch2",
+      "points": {
+        "ab93f0d5-b5cd-4f79-bdf0-9adf6de221c3": [
+          60.0,
+          40.0
+        ]
+      },
+      "segments": [],
+      "constraints": [
+        {
+          "id": "86563193-1f5d-4d52-982e-98833c490a99",
+          "kind": "diameter",
+          "entities": [
+            "5d9b48f4-e935-40cb-b6a5-8021f9ed657c"
+          ],
+          "value": "40 mm"
+        }
+      ],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "5d9b48f4-e935-40cb-b6a5-8021f9ed657c": {
+          "construction": false,
+          "curve": {
+            "kind": "circle",
+            "center": "ab93f0d5-b5cd-4f79-bdf0-9adf6de221c3",
+            "radius": "20 mm"
+          }
+        }
+      }
+    },
+    "55567d81-6da2-4093-b592-59bb9ee91d62": {
+      "id": "55567d81-6da2-4093-b592-59bb9ee91d62",
+      "name": "Sketch4",
+      "points": {
+        "3b8932c3-7041-4484-afc3-0258bac9e183": [
+          -25.0,
+          110.0
+        ],
+        "3f218198-2673-46d6-ac84-b63d4c3946f7": [
+          -55.0,
+          30.0
+        ],
+        "7cf4df63-769c-4c19-9764-d07e2d2e2836": [
+          -55.0,
+          10.0
+        ],
+        "d46b9996-65cd-46d1-8021-ae6d5bffdd44": [
+          -25.0,
+          10.0
+        ],
+        "daa7d92a-0a57-4392-8a22-6b5887fa99dc": [
+          -55.0,
+          110.0
+        ],
+        "dbad2b3b-0201-4624-8371-657c51607b77": [
+          -55.0,
+          90.0
+        ],
+        "ddeca0c7-1679-4113-ad41-8f168e7ce56b": [
+          -25.0,
+          90.0
+        ],
+        "de7b3a83-ed44-41e5-b055-a6a944b763d9": [
+          -25.0,
+          30.0
+        ]
+      },
+      "segments": [],
+      "constraints": [
+        {
+          "id": "af72d608-04c5-46c9-8c63-49cfefaa562a",
+          "kind": "horizontal",
+          "entities": [
+            "dbad2b3b-0201-4624-8371-657c51607b77",
+            "ddeca0c7-1679-4113-ad41-8f168e7ce56b"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "a0ca09dc-ce5f-42ed-830c-dc81268b5c6d",
+          "kind": "vertical",
+          "entities": [
+            "ddeca0c7-1679-4113-ad41-8f168e7ce56b",
+            "3b8932c3-7041-4484-afc3-0258bac9e183"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "3202d2ba-f5e4-46dd-9a76-dfa3ca643bab",
+          "kind": "horizontal",
+          "entities": [
+            "3b8932c3-7041-4484-afc3-0258bac9e183",
+            "daa7d92a-0a57-4392-8a22-6b5887fa99dc"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "f8dea113-17e8-4da4-9c85-4bd910d09431",
+          "kind": "vertical",
+          "entities": [
+            "daa7d92a-0a57-4392-8a22-6b5887fa99dc",
+            "dbad2b3b-0201-4624-8371-657c51607b77"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "a941e205-7800-45a2-8317-0eccd9f347bb",
+          "kind": "horizontal",
+          "entities": [
+            "7cf4df63-769c-4c19-9764-d07e2d2e2836",
+            "d46b9996-65cd-46d1-8021-ae6d5bffdd44"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "8c4ee2b3-6f4a-4699-b19b-453110917b4f",
+          "kind": "vertical",
+          "entities": [
+            "d46b9996-65cd-46d1-8021-ae6d5bffdd44",
+            "de7b3a83-ed44-41e5-b055-a6a944b763d9"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "f803b9ca-be02-46f0-93fe-c3c43e7ee755",
+          "kind": "horizontal",
+          "entities": [
+            "de7b3a83-ed44-41e5-b055-a6a944b763d9",
+            "3f218198-2673-46d6-ac84-b63d4c3946f7"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "c0afce32-f24d-4779-8e2f-0127308ce985",
+          "kind": "vertical",
+          "entities": [
+            "3f218198-2673-46d6-ac84-b63d4c3946f7",
+            "7cf4df63-769c-4c19-9764-d07e2d2e2836"
+          ],
+          "value": "0 mm"
+        }
+      ],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "04f8b2a6-ada7-4f97-9067-fceb8eb97587": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "de7b3a83-ed44-41e5-b055-a6a944b763d9",
+            "end": "3f218198-2673-46d6-ac84-b63d4c3946f7"
+          }
+        },
+        "0fc3edd2-d6bd-4651-afa9-b19e1d164dfe": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "7cf4df63-769c-4c19-9764-d07e2d2e2836",
+            "end": "d46b9996-65cd-46d1-8021-ae6d5bffdd44"
+          }
+        },
+        "1133e4fb-5530-4011-8c4d-3f2760661c75": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "dbad2b3b-0201-4624-8371-657c51607b77",
+            "end": "ddeca0c7-1679-4113-ad41-8f168e7ce56b"
+          }
+        },
+        "132258cb-9bce-45bd-bca8-dbfb464abae6": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "d46b9996-65cd-46d1-8021-ae6d5bffdd44",
+            "end": "de7b3a83-ed44-41e5-b055-a6a944b763d9"
+          }
+        },
+        "1bff3e28-f72f-4141-b2e3-e29827de9ec0": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "3b8932c3-7041-4484-afc3-0258bac9e183",
+            "end": "daa7d92a-0a57-4392-8a22-6b5887fa99dc"
+          }
+        },
+        "5bfcf551-c24c-4007-ac64-e126f8a75b9a": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "3f218198-2673-46d6-ac84-b63d4c3946f7",
+            "end": "7cf4df63-769c-4c19-9764-d07e2d2e2836"
+          }
+        },
+        "a7b9bc8f-b215-493f-afb6-c8a2b34ac86a": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "daa7d92a-0a57-4392-8a22-6b5887fa99dc",
+            "end": "dbad2b3b-0201-4624-8371-657c51607b77"
+          }
+        },
+        "d0ff17da-4da2-4e3a-863d-67a63838432e": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "ddeca0c7-1679-4113-ad41-8f168e7ce56b",
+            "end": "3b8932c3-7041-4484-afc3-0258bac9e183"
+          }
+        }
+      }
+    },
+    "b73d28af-2090-4092-bb8c-999a029762fd": {
+      "id": "b73d28af-2090-4092-bb8c-999a029762fd",
+      "name": "Sketch1",
+      "points": {
+        "04dc74b4-b1aa-401c-9a19-19958eb69fee": [
+          59.99999999999601,
+          -40.00000000256942
+        ],
+        "0ea96b0f-cacd-44ad-bdc2-e7165ef18e07": [
+          -60.000000000004,
+          39.99999999742897
+        ],
+        "6f1f2eb9-587b-401d-a5a6-29b7d5aadeba": [
+          59.99999999999601,
+          39.99999999742844
+        ],
+        "96cd893b-ba4e-4da2-95ae-b007141d8cff": [
+          -60.000000000004,
+          -40.000000002569955
+        ]
+      },
+      "segments": [],
+      "constraints": [
+        {
+          "id": "84916293-b752-46e9-b3d7-3d987568243f",
+          "kind": "horizontal",
+          "entities": [
+            "96cd893b-ba4e-4da2-95ae-b007141d8cff",
+            "04dc74b4-b1aa-401c-9a19-19958eb69fee"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "99406130-94d4-4955-b002-8005c96dd9d7",
+          "kind": "vertical",
+          "entities": [
+            "04dc74b4-b1aa-401c-9a19-19958eb69fee",
+            "6f1f2eb9-587b-401d-a5a6-29b7d5aadeba"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "d24610e7-b990-4000-a5f7-ede097470810",
+          "kind": "horizontal",
+          "entities": [
+            "6f1f2eb9-587b-401d-a5a6-29b7d5aadeba",
+            "0ea96b0f-cacd-44ad-bdc2-e7165ef18e07"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "bf8370fe-cc47-4b9f-a212-64008027c95b",
+          "kind": "vertical",
+          "entities": [
+            "0ea96b0f-cacd-44ad-bdc2-e7165ef18e07",
+            "96cd893b-ba4e-4da2-95ae-b007141d8cff"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "a96488c8-59c7-4019-a2ab-f1f071c9538d",
+          "kind": "distance_x",
+          "entities": [
+            "96cd893b-ba4e-4da2-95ae-b007141d8cff",
+            "04dc74b4-b1aa-401c-9a19-19958eb69fee"
+          ],
+          "value": "120 mm"
+        },
+        {
+          "id": "c1ef1257-d3e1-420f-98aa-169dd8c5b456",
+          "kind": "distance_y",
+          "entities": [
+            "96cd893b-ba4e-4da2-95ae-b007141d8cff",
+            "0ea96b0f-cacd-44ad-bdc2-e7165ef18e07"
+          ],
+          "value": "80 mm"
+        }
+      ],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "3e0624b7-4ebd-4681-861b-2f1b533d5d79": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "6f1f2eb9-587b-401d-a5a6-29b7d5aadeba",
+            "end": "0ea96b0f-cacd-44ad-bdc2-e7165ef18e07"
+          }
+        },
+        "6c1526a6-fa2c-4e45-9860-dd3d4a6dce5b": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "96cd893b-ba4e-4da2-95ae-b007141d8cff",
+            "end": "04dc74b4-b1aa-401c-9a19-19958eb69fee"
+          }
+        },
+        "d9381b7d-9cf8-4d1b-9b16-a4cd79ddf932": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "0ea96b0f-cacd-44ad-bdc2-e7165ef18e07",
+            "end": "96cd893b-ba4e-4da2-95ae-b007141d8cff"
+          }
+        },
+        "ee91a66d-a902-4536-bd3a-a98ef21bda92": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "04dc74b4-b1aa-401c-9a19-19958eb69fee",
+            "end": "6f1f2eb9-587b-401d-a5a6-29b7d5aadeba"
+          }
+        }
+      }
+    },
+    "d0b84ff8-09d8-47de-9d75-7cdb5bff1750": {
+      "id": "d0b84ff8-09d8-47de-9d75-7cdb5bff1750",
+      "name": "Sketch3",
+      "points": {
+        "82f6cc3e-b03d-4319-9068-85f0a432e2e5": [
+          20.0,
+          20.0
+        ]
+      },
+      "segments": [],
+      "constraints": [],
+      "profile_order": [],
+      "circles": {},
+      "members": {}
+    }
+  },
+  "configurations": {}
+}

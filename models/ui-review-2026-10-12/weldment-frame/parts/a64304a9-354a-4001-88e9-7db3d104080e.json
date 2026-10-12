@@ -1,0 +1,779 @@
+{
+  "id": "a64304a9-354a-4001-88e9-7db3d104080e",
+  "name": "Part1",
+  "parameters": {},
+  "features": [
+    {
+      "id": "9f36c967-9d61-4610-98b1-f2d4ee12313f",
+      "name": "Sketch1",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "59e94a4c-a8d5-4f01-9b09-efa7b3d6eee9"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "d3fd9b50-89f9-4adc-8195-69e1a5b79f1c",
+      "name": "Sketch2",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "27aaad43-65fd-47c7-9f48-2699dfe4b3a5"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "a6b5d4b3-69f5-43cf-8279-4524f4dbdf24",
+      "name": "Structural Member Group1",
+      "operation": {
+        "kind": "weldment",
+        "operation": {
+          "kind": "members",
+          "body": null,
+          "section": {
+            "definition": "a64304a9-354a-4001-88e9-7db3d104080e",
+            "node": "9f36c967-9d61-4610-98b1-f2d4ee12313f"
+          },
+          "path": {
+            "definition": "a64304a9-354a-4001-88e9-7db3d104080e",
+            "node": "d3fd9b50-89f9-4adc-8195-69e1a5b79f1c"
+          },
+          "members": [],
+          "roll": "0 deg",
+          "anchor": null,
+          "start_offset": "0 mm",
+          "end_offset": "0 mm",
+          "corner": "miter",
+          "joint_gap": "0 mm"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "faf74e3a-015f-4b50-8c34-2a7a041bdcb3",
+      "name": "Sketch3",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "aafedfe8-bc07-46ad-9b38-c040d1e9637a"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "ab88cea3-9bc0-47a7-9e26-fba71eef580a",
+      "name": "Sketch4",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "46f178d8-8881-4414-8ede-f825c655ed5f"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "26fec047-be2e-46a6-8446-6086657bd91c",
+      "name": "Structural Member Group2",
+      "operation": {
+        "kind": "weldment",
+        "operation": {
+          "kind": "members",
+          "body": {
+            "definition": "a64304a9-354a-4001-88e9-7db3d104080e",
+            "node": "a6b5d4b3-69f5-43cf-8279-4524f4dbdf24"
+          },
+          "section": {
+            "definition": "a64304a9-354a-4001-88e9-7db3d104080e",
+            "node": "faf74e3a-015f-4b50-8c34-2a7a041bdcb3"
+          },
+          "path": {
+            "definition": "a64304a9-354a-4001-88e9-7db3d104080e",
+            "node": "ab88cea3-9bc0-47a7-9e26-fba71eef580a"
+          },
+          "members": [],
+          "roll": "0 deg",
+          "anchor": null,
+          "start_offset": "11 mm",
+          "end_offset": "17 mm",
+          "corner": "miter",
+          "joint_gap": "0 mm"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "cbe18b1b-6d70-44b3-b962-9341fa2d2abe",
+      "name": "Sketch5",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "1d956366-c28e-47d3-aac0-421073adc0e2"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "6bcef0e1-5331-4371-87b9-3c2ed0ec036e",
+      "name": "Sketch6",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "407e420f-028f-467c-90f1-805595c35a27"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "df243993-969e-4c9d-bf40-cfeeb59dfbf7",
+      "name": "Structural Member Group3",
+      "operation": {
+        "kind": "weldment",
+        "operation": {
+          "kind": "members",
+          "body": {
+            "definition": "a64304a9-354a-4001-88e9-7db3d104080e",
+            "node": "26fec047-be2e-46a6-8446-6086657bd91c"
+          },
+          "section": {
+            "definition": "a64304a9-354a-4001-88e9-7db3d104080e",
+            "node": "cbe18b1b-6d70-44b3-b962-9341fa2d2abe"
+          },
+          "path": {
+            "definition": "a64304a9-354a-4001-88e9-7db3d104080e",
+            "node": "6bcef0e1-5331-4371-87b9-3c2ed0ec036e"
+          },
+          "members": [],
+          "roll": "0 deg",
+          "anchor": null,
+          "start_offset": "0 mm",
+          "end_offset": "0 mm",
+          "corner": "miter",
+          "joint_gap": "0 mm"
+        }
+      },
+      "suppressed": false
+    }
+  ],
+  "outputs": [
+    "df243993-969e-4c9d-bf40-cfeeb59dfbf7"
+  ],
+  "material": "aluminum",
+  "properties": {},
+  "sketches": {
+    "1d956366-c28e-47d3-aac0-421073adc0e2": {
+      "id": "1d956366-c28e-47d3-aac0-421073adc0e2",
+      "name": "Sketch5",
+      "points": {
+        "237a97c8-6805-4903-8d4f-277d5a1afaf8": [
+          15.0,
+          2.0
+        ],
+        "41174b0f-7a10-4fe0-9f24-7439f4563d4f": [
+          15.0,
+          -2.0
+        ],
+        "98c30b8b-4856-4c03-b62d-4a7be1327e7a": [
+          -15.0,
+          2.0
+        ],
+        "b35f055e-3bf5-4e55-9c2f-7a93a0c33ec1": [
+          -15.0,
+          -2.0
+        ]
+      },
+      "segments": [],
+      "constraints": [
+        {
+          "id": "9c25e8db-1827-4892-809f-d2795936f641",
+          "kind": "horizontal",
+          "entities": [
+            "b35f055e-3bf5-4e55-9c2f-7a93a0c33ec1",
+            "41174b0f-7a10-4fe0-9f24-7439f4563d4f"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "5938d0e9-5523-43d8-91bc-6987228c0f15",
+          "kind": "vertical",
+          "entities": [
+            "41174b0f-7a10-4fe0-9f24-7439f4563d4f",
+            "237a97c8-6805-4903-8d4f-277d5a1afaf8"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "b17594af-b27f-47ec-8a3c-91b0b79c195a",
+          "kind": "horizontal",
+          "entities": [
+            "237a97c8-6805-4903-8d4f-277d5a1afaf8",
+            "98c30b8b-4856-4c03-b62d-4a7be1327e7a"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "e94c970e-7429-4cde-af51-1f5fdd4308ae",
+          "kind": "vertical",
+          "entities": [
+            "98c30b8b-4856-4c03-b62d-4a7be1327e7a",
+            "b35f055e-3bf5-4e55-9c2f-7a93a0c33ec1"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "6413b64f-a2b7-4f8f-aac0-2d677dacd796",
+          "kind": "distance_x",
+          "entities": [
+            "b35f055e-3bf5-4e55-9c2f-7a93a0c33ec1",
+            "41174b0f-7a10-4fe0-9f24-7439f4563d4f"
+          ],
+          "value": "30 mm"
+        }
+      ],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "af8887b0-6e5d-4f9a-ad50-3c3cb50437ad": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "98c30b8b-4856-4c03-b62d-4a7be1327e7a",
+            "end": "b35f055e-3bf5-4e55-9c2f-7a93a0c33ec1"
+          }
+        },
+        "df023d2a-5e9e-47ca-a4f2-b014edf162be": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "237a97c8-6805-4903-8d4f-277d5a1afaf8",
+            "end": "98c30b8b-4856-4c03-b62d-4a7be1327e7a"
+          }
+        },
+        "e6b1d59b-a007-4ee1-a7a0-30b56722239f": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "b35f055e-3bf5-4e55-9c2f-7a93a0c33ec1",
+            "end": "41174b0f-7a10-4fe0-9f24-7439f4563d4f"
+          }
+        },
+        "eb06ad55-10ad-4e82-b176-b67313c35f88": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "41174b0f-7a10-4fe0-9f24-7439f4563d4f",
+            "end": "237a97c8-6805-4903-8d4f-277d5a1afaf8"
+          }
+        }
+      }
+    },
+    "27aaad43-65fd-47c7-9f48-2699dfe4b3a5": {
+      "id": "27aaad43-65fd-47c7-9f48-2699dfe4b3a5",
+      "name": "Sketch2",
+      "points": {
+        "13a987fe-aef3-453e-bd9b-4138e039537c": [
+          -0.4864285170185249,
+          -0.49181799140991467
+        ],
+        "55d53da7-5552-4e5f-bcf7-f665863beb82": [
+          -0.4864285170185249,
+          -120.49181799140644
+        ],
+        "5d935f24-7ee0-4c5c-b95a-6a233e65e97e": [
+          -200.48642851701854,
+          -120.4918179914073
+        ],
+        "bf0ed446-a879-427c-b362-c0b9f3013b90": [
+          -200.48642851701854,
+          -0.4918179914090501
+        ]
+      },
+      "segments": [],
+      "constraints": [
+        {
+          "id": "9ae2f0ee-343f-46e2-85fc-54ec58b87318",
+          "kind": "horizontal",
+          "entities": [
+            "5d935f24-7ee0-4c5c-b95a-6a233e65e97e",
+            "55d53da7-5552-4e5f-bcf7-f665863beb82"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "33d824e1-5a50-499c-88c8-7598357ca460",
+          "kind": "vertical",
+          "entities": [
+            "55d53da7-5552-4e5f-bcf7-f665863beb82",
+            "13a987fe-aef3-453e-bd9b-4138e039537c"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "b2c1587a-1564-45aa-8a91-13fd0eeffc3d",
+          "kind": "horizontal",
+          "entities": [
+            "13a987fe-aef3-453e-bd9b-4138e039537c",
+            "bf0ed446-a879-427c-b362-c0b9f3013b90"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "ba6ec8ea-8d60-4d68-b758-ea3095672cfb",
+          "kind": "vertical",
+          "entities": [
+            "bf0ed446-a879-427c-b362-c0b9f3013b90",
+            "5d935f24-7ee0-4c5c-b95a-6a233e65e97e"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "eeea2d03-1f5c-43d0-980f-7f622f8d0e39",
+          "kind": "distance_x",
+          "entities": [
+            "bf0ed446-a879-427c-b362-c0b9f3013b90",
+            "13a987fe-aef3-453e-bd9b-4138e039537c"
+          ],
+          "value": "200 mm"
+        },
+        {
+          "id": "e5a5bd7b-e957-4a1b-b173-505cc360601d",
+          "kind": "distance_y",
+          "entities": [
+            "5d935f24-7ee0-4c5c-b95a-6a233e65e97e",
+            "bf0ed446-a879-427c-b362-c0b9f3013b90"
+          ],
+          "value": "120 mm"
+        }
+      ],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "0ea8572c-24c8-466c-bc78-db0755ca3785": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "55d53da7-5552-4e5f-bcf7-f665863beb82",
+            "end": "13a987fe-aef3-453e-bd9b-4138e039537c"
+          }
+        },
+        "25307ce8-a2ed-4a2f-ad1c-f361584264cf": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "13a987fe-aef3-453e-bd9b-4138e039537c",
+            "end": "bf0ed446-a879-427c-b362-c0b9f3013b90"
+          }
+        },
+        "39d8b022-9f03-4445-b7d4-9bc3b614d370": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "5d935f24-7ee0-4c5c-b95a-6a233e65e97e",
+            "end": "55d53da7-5552-4e5f-bcf7-f665863beb82"
+          }
+        },
+        "9f37c656-6f1c-4760-8197-31c5ee271a14": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "bf0ed446-a879-427c-b362-c0b9f3013b90",
+            "end": "5d935f24-7ee0-4c5c-b95a-6a233e65e97e"
+          }
+        }
+      }
+    },
+    "407e420f-028f-467c-90f1-805595c35a27": {
+      "id": "407e420f-028f-467c-90f1-805595c35a27",
+      "name": "Sketch6",
+      "points": {
+        "7c403d24-ca91-4af1-8ad4-b36128d4c8cc": [
+          -13.0,
+          -33.0
+        ],
+        "f85c1341-c4e0-42d3-828e-3257dbae728c": [
+          -188.0,
+          -33.0
+        ]
+      },
+      "segments": [],
+      "constraints": [],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "4b4035e1-098c-4c13-a0cc-feb327bf0f5a": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "7c403d24-ca91-4af1-8ad4-b36128d4c8cc",
+            "end": "f85c1341-c4e0-42d3-828e-3257dbae728c"
+          }
+        }
+      }
+    },
+    "46f178d8-8881-4414-8ede-f825c655ed5f": {
+      "id": "46f178d8-8881-4414-8ede-f825c655ed5f",
+      "name": "Sketch4",
+      "points": {
+        "1f2f3e7f-4f6b-47e8-af62-728b2521215e": [
+          1.0,
+          -62.0
+        ],
+        "621c0f44-00b2-4f06-9e68-d393c4e30518": [
+          -206.0,
+          -62.0
+        ]
+      },
+      "segments": [],
+      "constraints": [],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "2b99558b-bc57-4d76-be0f-e5638beca915": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "1f2f3e7f-4f6b-47e8-af62-728b2521215e",
+            "end": "621c0f44-00b2-4f06-9e68-d393c4e30518"
+          }
+        }
+      }
+    },
+    "59e94a4c-a8d5-4f01-9b09-efa7b3d6eee9": {
+      "id": "59e94a4c-a8d5-4f01-9b09-efa7b3d6eee9",
+      "name": "Sketch1",
+      "points": {
+        "26559ca3-6b37-4c1d-b4b0-ad09248e80a8": [
+          8.0,
+          -8.0
+        ],
+        "2987bda2-3bb7-4bbd-b728-c2182daa3993": [
+          -8.0,
+          8.0
+        ],
+        "45b22d8c-8e94-486c-9eaf-0765c469aa97": [
+          -10.0,
+          10.0
+        ],
+        "4f6f132e-88d7-40e9-b36b-e90280d0885a": [
+          -8.0,
+          -8.0
+        ],
+        "53e4b5e6-f3e3-4db5-a079-31ab0dae6776": [
+          10.0,
+          -10.0
+        ],
+        "5c1c9d24-00e9-4b52-b8a8-162ada37be15": [
+          -10.0,
+          -10.0
+        ],
+        "a9e99c07-091a-4f54-ab78-36fe50c4d40a": [
+          8.0,
+          8.0
+        ],
+        "ab6b032a-0020-4533-beff-a9246adde1e9": [
+          10.0,
+          10.0
+        ]
+      },
+      "segments": [],
+      "constraints": [
+        {
+          "id": "026fcf14-639b-4eda-b15e-a4b2d6eeda53",
+          "kind": "horizontal",
+          "entities": [
+            "5c1c9d24-00e9-4b52-b8a8-162ada37be15",
+            "53e4b5e6-f3e3-4db5-a079-31ab0dae6776"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "913e95c6-cd8b-43f7-9b6a-d75504a90e9d",
+          "kind": "vertical",
+          "entities": [
+            "53e4b5e6-f3e3-4db5-a079-31ab0dae6776",
+            "ab6b032a-0020-4533-beff-a9246adde1e9"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "a53213eb-03c7-4308-b34a-e813af831bfe",
+          "kind": "horizontal",
+          "entities": [
+            "ab6b032a-0020-4533-beff-a9246adde1e9",
+            "45b22d8c-8e94-486c-9eaf-0765c469aa97"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "8773bce2-568b-4640-a662-220524d11beb",
+          "kind": "vertical",
+          "entities": [
+            "45b22d8c-8e94-486c-9eaf-0765c469aa97",
+            "5c1c9d24-00e9-4b52-b8a8-162ada37be15"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "bef9b87d-b819-405a-aeaf-d104f89d3944",
+          "kind": "horizontal",
+          "entities": [
+            "4f6f132e-88d7-40e9-b36b-e90280d0885a",
+            "26559ca3-6b37-4c1d-b4b0-ad09248e80a8"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "c04300a2-8f3f-49ab-bd97-9f65293dacfc",
+          "kind": "vertical",
+          "entities": [
+            "26559ca3-6b37-4c1d-b4b0-ad09248e80a8",
+            "a9e99c07-091a-4f54-ab78-36fe50c4d40a"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "ccca050e-ede0-4d48-8210-4c9de8bb9bbc",
+          "kind": "horizontal",
+          "entities": [
+            "a9e99c07-091a-4f54-ab78-36fe50c4d40a",
+            "2987bda2-3bb7-4bbd-b728-c2182daa3993"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "960d6433-8a9f-481a-b101-c2df62be0e44",
+          "kind": "vertical",
+          "entities": [
+            "2987bda2-3bb7-4bbd-b728-c2182daa3993",
+            "4f6f132e-88d7-40e9-b36b-e90280d0885a"
+          ],
+          "value": "0 mm"
+        }
+      ],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "209f0e42-b5c7-416f-9144-9100df17cb55": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "26559ca3-6b37-4c1d-b4b0-ad09248e80a8",
+            "end": "a9e99c07-091a-4f54-ab78-36fe50c4d40a"
+          }
+        },
+        "211012a0-c654-407e-8260-1e4c704a8a99": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "45b22d8c-8e94-486c-9eaf-0765c469aa97",
+            "end": "5c1c9d24-00e9-4b52-b8a8-162ada37be15"
+          }
+        },
+        "6d92298b-7adf-4ce9-9b72-ff23440ffdac": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "ab6b032a-0020-4533-beff-a9246adde1e9",
+            "end": "45b22d8c-8e94-486c-9eaf-0765c469aa97"
+          }
+        },
+        "9fcf3ba0-1924-48aa-9fc2-fb391a0bcb3c": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "5c1c9d24-00e9-4b52-b8a8-162ada37be15",
+            "end": "53e4b5e6-f3e3-4db5-a079-31ab0dae6776"
+          }
+        },
+        "d0b3f0db-629c-4580-a858-22b4875746da": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "a9e99c07-091a-4f54-ab78-36fe50c4d40a",
+            "end": "2987bda2-3bb7-4bbd-b728-c2182daa3993"
+          }
+        },
+        "d5e4824e-5b83-4a2f-8b8b-52a19c98edae": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "53e4b5e6-f3e3-4db5-a079-31ab0dae6776",
+            "end": "ab6b032a-0020-4533-beff-a9246adde1e9"
+          }
+        },
+        "e8b4ace2-f840-44e7-978d-32fe2a5c64d0": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "2987bda2-3bb7-4bbd-b728-c2182daa3993",
+            "end": "4f6f132e-88d7-40e9-b36b-e90280d0885a"
+          }
+        },
+        "fe0cd7e7-6e9d-4cdd-bae1-e4eefc368ce4": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "4f6f132e-88d7-40e9-b36b-e90280d0885a",
+            "end": "26559ca3-6b37-4c1d-b4b0-ad09248e80a8"
+          }
+        }
+      }
+    },
+    "aafedfe8-bc07-46ad-9b38-c040d1e9637a": {
+      "id": "aafedfe8-bc07-46ad-9b38-c040d1e9637a",
+      "name": "Sketch3",
+      "points": {
+        "2d38fe69-3551-42ad-b6ce-fd510b1d0afa": [
+          0.0,
+          0.0
+        ]
+      },
+      "segments": [],
+      "constraints": [
+        {
+          "id": "e346bb97-f8a2-46da-85fa-2e3d18de19fd",
+          "kind": "diameter",
+          "entities": [
+            "a1fa93fb-5cf0-4155-918c-ebf97a57106b"
+          ],
+          "value": "12 mm"
+        }
+      ],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "a1fa93fb-5cf0-4155-918c-ebf97a57106b": {
+          "construction": false,
+          "curve": {
+            "kind": "circle",
+            "center": "2d38fe69-3551-42ad-b6ce-fd510b1d0afa",
+            "radius": "8 mm"
+          }
+        }
+      }
+    }
+  },
+  "configurations": {}
+}

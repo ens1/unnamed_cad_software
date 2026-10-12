@@ -1,0 +1,7 @@
+"Item","Member","Section","Length","Start angle","Finish angle","Qty","Material"
+"1","Structural Member Group2 · Member 5","a64304a9-354a-4001-88e9-7db3d104080e::faf74e3a-015f-4b50-8c34-2a7a041bdcb3","179.000","0.000","0.000","1","Aluminum"
+"2","Structural Member Group1 · Member 1","a64304a9-354a-4001-88e9-7db3d104080e::9f36c967-9d61-4610-98b1-f2d4ee12313f","120.000","45.000","45.000","1","Aluminum"
+"3","Structural Member Group1 · Member 2","a64304a9-354a-4001-88e9-7db3d104080e::9f36c967-9d61-4610-98b1-f2d4ee12313f","200.000","45.000","45.000","1","Aluminum"
+"4","Structural Member Group1 · Member 3","a64304a9-354a-4001-88e9-7db3d104080e::9f36c967-9d61-4610-98b1-f2d4ee12313f","200.000","45.000","45.000","1","Aluminum"
+"5","Structural Member Group1 · Member 4","a64304a9-354a-4001-88e9-7db3d104080e::9f36c967-9d61-4610-98b1-f2d4ee12313f","120.000","45.000","45.000","1","Aluminum"
+"6","Structural Member Group3 · Member 6","a64304a9-354a-4001-88e9-7db3d104080e::cbe18b1b-6d70-44b3-b962-9341fa2d2abe","175.000","0.000","0.000","1","Aluminum"

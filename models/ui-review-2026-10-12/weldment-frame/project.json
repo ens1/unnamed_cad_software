@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "document": {
+    "schema_version": 1,
+    "id": "940a5eea-9c95-4e4c-a1b3-4fa7fffa6e80",
+    "name": "Part1",
+    "revision": 10,
+    "root": "64aef920-1e92-4a2d-921f-5dd99d0037d6",
+    "parts": {},
+    "assemblies": {},
+    "materials": {
+      "aluminum": {
+        "id": "aluminum",
+        "name": "Aluminum",
+        "density_kg_m3": 2700.0,
+        "color": [
+          0.68,
+          0.72,
+          0.77
+        ],
+        "metallic": 1.0,
+        "roughness": 0.28
+      },
+      "plastic": {
+        "id": "plastic",
+        "name": "Polymer",
+        "density_kg_m3": 1200.0,
+        "color": [
+          0.17,
+          0.2,
+          0.25
+        ],
+        "metallic": 0.0,
+        "roughness": 0.4
+      },
+      "rubber": {
+        "id": "rubber",
+        "name": "Rubber",
+        "density_kg_m3": 1100.0,
+        "color": [
+          0.025,
+          0.028,
+          0.03
+        ],
+        "metallic": 0.0,
+        "roughness": 0.85
+      },
+      "steel": {
+        "id": "steel",
+        "name": "Steel",
+        "density_kg_m3": 7850.0,
+        "color": [
+          0.42,
+          0.46,
+          0.52
+        ],
+        "metallic": 1.0,
+        "roughness": 0.22
+      }
+    },
+    "resources": {},
+    "drawings": [],
+    "comments": [],
+    "properties": {
+      "document_kind": "part"
+    },
+    "libraries": {},
+    "camera_views": {
+      "a40f4ce3-7407-41a3-9edd-ab97b153f116": {
+        "version": 1,
+        "id": "a40f4ce3-7407-41a3-9edd-ab97b153f116",
+        "name": "Weldment Work",
+        "pose": {
+          "target_mm": [
+            0.0,
+            -0.0,
+            0.0
+          ],
+          "orbit_rad": [
+            3.141592502593994,
+            1.570796251296997
+          ],
+          "roll_rad": 0.0,
+          "distance_mm": 600.0,
+          "projection": {
+            "kind": "perspective",
+            "vertical_fov_deg": 45.0
+          }
+        }
+      }
+    }
+  },
+  "parts": {
+    "a64304a9-354a-4001-88e9-7db3d104080e": "parts/a64304a9-354a-4001-88e9-7db3d104080e.json"
+  },
+  "assemblies": {
+    "64aef920-1e92-4a2d-921f-5dd99d0037d6": "assemblies/64aef920-1e92-4a2d-921f-5dd99d0037d6.json"
+  }
+}

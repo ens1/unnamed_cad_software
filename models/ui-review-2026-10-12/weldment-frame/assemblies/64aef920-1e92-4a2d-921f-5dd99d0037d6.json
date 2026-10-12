@@ -1,0 +1,29 @@
+{
+  "id": "64aef920-1e92-4a2d-921f-5dd99d0037d6",
+  "name": "Part1",
+  "instances": {
+    "da9db577-1621-454a-8643-7235066cc2e5": {
+      "id": "da9db577-1621-454a-8643-7235066cc2e5",
+      "name": "Part1",
+      "definition": "a64304a9-354a-4001-88e9-7db3d104080e",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_deg": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": true,
+      "translation_expressions": null
+    }
+  },
+  "mates": [],
+  "promoted_parameters": {},
+  "parameters": {}
+}

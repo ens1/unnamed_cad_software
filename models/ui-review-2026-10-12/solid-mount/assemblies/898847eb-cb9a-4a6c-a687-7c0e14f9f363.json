@@ -1,0 +1,29 @@
+{
+  "id": "898847eb-cb9a-4a6c-a687-7c0e14f9f363",
+  "name": "Part1",
+  "instances": {
+    "259dbe35-11f6-492b-b91e-40c866c61f5f": {
+      "id": "259dbe35-11f6-492b-b91e-40c866c61f5f",
+      "name": "Part1",
+      "definition": "a8058020-c578-4785-9057-f8dbddfac791",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_deg": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": true,
+      "translation_expressions": null
+    }
+  },
+  "mates": [],
+  "promoted_parameters": {},
+  "parameters": {}
+}

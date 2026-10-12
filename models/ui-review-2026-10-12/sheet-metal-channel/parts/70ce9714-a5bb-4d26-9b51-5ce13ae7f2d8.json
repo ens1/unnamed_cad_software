@@ -1,0 +1,342 @@
+{
+  "id": "70ce9714-a5bb-4d26-9b51-5ce13ae7f2d8",
+  "name": "Part1",
+  "parameters": {},
+  "features": [
+    {
+      "id": "bd3736df-fcc1-4ff9-bb4a-44d6a6023eb6",
+      "name": "Sketch1",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "b5bd1fca-9a7e-4fce-b705-119c6260cd06"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "277e94c6-5ac9-4816-94d5-95073eecd119",
+      "name": "Base Flange / Tab1",
+      "operation": {
+        "kind": "sheet",
+        "operation": {
+          "kind": "base",
+          "profile": {
+            "definition": "70ce9714-a5bb-4d26-9b51-5ce13ae7f2d8",
+            "node": "bd3736df-fcc1-4ff9-bb4a-44d6a6023eb6"
+          },
+          "thickness": "2 mm",
+          "inside_radius": "2 mm",
+          "k_factor": "0.4",
+          "side": "positive"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "6391dcfc-0104-440d-8171-975ecdb8031d",
+      "name": "Edge Flange1",
+      "operation": {
+        "kind": "sheet",
+        "operation": {
+          "kind": "edge_flange",
+          "body": {
+            "definition": "70ce9714-a5bb-4d26-9b51-5ce13ae7f2d8",
+            "node": "277e94c6-5ac9-4816-94d5-95073eecd119"
+          },
+          "member": "45de3d21-53ea-46a1-8750-26477a7f2d45",
+          "length": "30 mm",
+          "angle": "90 deg",
+          "inside_radius": null,
+          "k_factor": null
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "7ee85bbf-3ed1-4ca1-835b-6ef31afd276a",
+      "name": "Edge Flange2",
+      "operation": {
+        "kind": "sheet",
+        "operation": {
+          "kind": "edge_flange",
+          "body": {
+            "definition": "70ce9714-a5bb-4d26-9b51-5ce13ae7f2d8",
+            "node": "6391dcfc-0104-440d-8171-975ecdb8031d"
+          },
+          "member": "d21eaf2c-6407-4af5-8934-c26d54bc2013",
+          "length": "20 mm",
+          "angle": "90 deg",
+          "inside_radius": null,
+          "k_factor": null
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "af8c17c6-6964-4c21-ba85-465ce3f6e833",
+      "name": "Open Hem1",
+      "operation": {
+        "kind": "sheet",
+        "operation": {
+          "kind": "hem",
+          "body": {
+            "definition": "70ce9714-a5bb-4d26-9b51-5ce13ae7f2d8",
+            "node": "7ee85bbf-3ed1-4ca1-835b-6ef31afd276a"
+          },
+          "member": "d21eaf2c-6407-4af5-8934-c26d54bc2013",
+          "length": "10 mm",
+          "gap": "2 mm",
+          "reverse": false,
+          "attachment": {
+            "definition": "70ce9714-a5bb-4d26-9b51-5ce13ae7f2d8",
+            "node": "7ee85bbf-3ed1-4ca1-835b-6ef31afd276a"
+          }
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "5fe2d13d-d49b-4d4b-a135-6c7352fd768f",
+      "name": "Sketch2",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "da7b351e-971c-45df-bd50-8e82dd0c48e6"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "1937e9d2-9431-4f95-953e-6ec400260c2d",
+      "name": "Flat Pattern1",
+      "operation": {
+        "kind": "sheet",
+        "operation": {
+          "kind": "flatten",
+          "body": {
+            "definition": "70ce9714-a5bb-4d26-9b51-5ce13ae7f2d8",
+            "node": "af8c17c6-6964-4c21-ba85-465ce3f6e833"
+          },
+          "state": "flat"
+        }
+      },
+      "suppressed": false
+    },
+    {
+      "id": "10aec09c-c39f-49c3-8f98-24b76aac5187",
+      "name": "Formed Sheet1",
+      "operation": {
+        "kind": "sheet",
+        "operation": {
+          "kind": "flatten",
+          "body": {
+            "definition": "70ce9714-a5bb-4d26-9b51-5ce13ae7f2d8",
+            "node": "1937e9d2-9431-4f95-953e-6ec400260c2d"
+          },
+          "state": "formed"
+        }
+      },
+      "suppressed": false
+    }
+  ],
+  "outputs": [
+    "10aec09c-c39f-49c3-8f98-24b76aac5187"
+  ],
+  "material": "aluminum",
+  "properties": {},
+  "sketches": {
+    "b5bd1fca-9a7e-4fce-b705-119c6260cd06": {
+      "id": "b5bd1fca-9a7e-4fce-b705-119c6260cd06",
+      "name": "Sketch1",
+      "points": {
+        "09c3fe80-e5d6-4005-afda-72eab7228205": [
+          -150.0,
+          -80.0
+        ],
+        "333726fc-de0b-4ea3-9ef6-5f449b8cd1a3": [
+          0.0,
+          0.0
+        ],
+        "782f5b66-a81a-40b7-97fd-b6f295ad9122": [
+          -150.0,
+          0.0
+        ],
+        "f0aca815-1cba-4740-9f37-51ffb734e3e7": [
+          0.0,
+          -80.0
+        ]
+      },
+      "segments": [],
+      "constraints": [
+        {
+          "id": "3ea8bfbf-521f-4f96-8677-c57dc6aeca8e",
+          "kind": "horizontal",
+          "entities": [
+            "09c3fe80-e5d6-4005-afda-72eab7228205",
+            "f0aca815-1cba-4740-9f37-51ffb734e3e7"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "45b38865-9cd5-46f1-9bdf-b183ea700c95",
+          "kind": "vertical",
+          "entities": [
+            "f0aca815-1cba-4740-9f37-51ffb734e3e7",
+            "333726fc-de0b-4ea3-9ef6-5f449b8cd1a3"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "3875ca7a-0c98-4288-bcd3-9d8ff88aa249",
+          "kind": "horizontal",
+          "entities": [
+            "333726fc-de0b-4ea3-9ef6-5f449b8cd1a3",
+            "782f5b66-a81a-40b7-97fd-b6f295ad9122"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "67ab53b0-deef-4745-b426-40113eeff33a",
+          "kind": "vertical",
+          "entities": [
+            "782f5b66-a81a-40b7-97fd-b6f295ad9122",
+            "09c3fe80-e5d6-4005-afda-72eab7228205"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "648904f6-1019-4f02-8cdb-f9a936000ccf",
+          "kind": "distance_x",
+          "entities": [
+            "782f5b66-a81a-40b7-97fd-b6f295ad9122",
+            "333726fc-de0b-4ea3-9ef6-5f449b8cd1a3"
+          ],
+          "value": "150 mm"
+        },
+        {
+          "id": "038311b6-7ce2-4ac2-8c2b-682cc5ccb547",
+          "kind": "distance_y",
+          "entities": [
+            "09c3fe80-e5d6-4005-afda-72eab7228205",
+            "782f5b66-a81a-40b7-97fd-b6f295ad9122"
+          ],
+          "value": "80 mm"
+        }
+      ],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "45de3d21-53ea-46a1-8750-26477a7f2d45": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "333726fc-de0b-4ea3-9ef6-5f449b8cd1a3",
+            "end": "782f5b66-a81a-40b7-97fd-b6f295ad9122"
+          }
+        },
+        "7e3a3b57-e88d-4583-80ed-7fc7184c26f6": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "782f5b66-a81a-40b7-97fd-b6f295ad9122",
+            "end": "09c3fe80-e5d6-4005-afda-72eab7228205"
+          }
+        },
+        "96746539-7d8f-451e-9cda-0d19c4d74bea": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "f0aca815-1cba-4740-9f37-51ffb734e3e7",
+            "end": "333726fc-de0b-4ea3-9ef6-5f449b8cd1a3"
+          }
+        },
+        "d21eaf2c-6407-4af5-8934-c26d54bc2013": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "09c3fe80-e5d6-4005-afda-72eab7228205",
+            "end": "f0aca815-1cba-4740-9f37-51ffb734e3e7"
+          }
+        }
+      }
+    },
+    "da7b351e-971c-45df-bd50-8e82dd0c48e6": {
+      "id": "da7b351e-971c-45df-bd50-8e82dd0c48e6",
+      "name": "Sketch2",
+      "points": {
+        "2a5349d4-5778-4a31-bdf1-a0b63df31cdf": [
+          -20.0,
+          -40.0
+        ],
+        "30c5f56e-834e-4583-bcd5-09e4228a78e6": [
+          -131.0,
+          -40.0
+        ]
+      },
+      "segments": [],
+      "constraints": [],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "caeca198-d173-4a26-8e4e-9428b6c65b74": {
+          "construction": false,
+          "curve": {
+            "kind": "circle",
+            "center": "2a5349d4-5778-4a31-bdf1-a0b63df31cdf",
+            "radius": "3 mm"
+          }
+        },
+        "f94116c1-dfe6-4bbb-846b-a4d1f6725036": {
+          "construction": false,
+          "curve": {
+            "kind": "circle",
+            "center": "30c5f56e-834e-4583-bcd5-09e4228a78e6",
+            "radius": "3 mm"
+          }
+        }
+      }
+    }
+  },
+  "configurations": {}
+}
