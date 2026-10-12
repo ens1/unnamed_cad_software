@@ -7,7 +7,7 @@ use std::{
 };
 pub mod dimensions;
 pub use dimensions::{DimensionField, FIELD_CONTRACT_VERSION};
-pub const CONTRACT_VERSION: u32 = 4;
+pub const CONTRACT_VERSION: u32 = 5;
 fn supported_version(value: u32) -> bool {
     (1..=CONTRACT_VERSION).contains(&value)
 }
@@ -48,6 +48,9 @@ pub struct Overrides {
     pub component_patterns: BTreeMap<Id, bool>,
     #[serde(default)]
     pub mates: BTreeMap<Id, bool>,
+    /// Owning-assembly deposited weld IDs. True suppresses, false restores.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub assembly_welds: BTreeMap<Id, bool>,
     #[serde(default)]
     pub component_configurations: BTreeMap<Id, Option<Id>>,
     /// Stable owning-assembly occurrence IDs. Each omitted coordinate inherits.
@@ -230,6 +233,7 @@ fn merge(target: &mut Overrides, next: &Overrides) {
         .component_patterns
         .extend(next.component_patterns.clone());
     target.mates.extend(next.mates.clone());
+    target.assembly_welds.extend(next.assembly_welds.clone());
     target
         .component_configurations
         .extend(next.component_configurations.clone());
@@ -422,6 +426,7 @@ pub fn validate(doc: &Document) -> Result<()> {
                     "sketch",
                 )?;
                 if !o.components.is_empty()
+                    || !o.assembly_welds.is_empty()
                     || !o.mates.is_empty()
                     || !o.component_configurations.is_empty()
                     || !o.component_patterns.is_empty()
@@ -442,6 +447,11 @@ pub fn validate(doc: &Document) -> Result<()> {
                 }
             } else if let Some(a) = doc.assemblies.get(definition) {
                 validate_assembly_placements(a, o)?;
+                require_keys(
+                    o.assembly_welds.keys(),
+                    |id| a.weld_beads.contains_key(id),
+                    "assembly weld",
+                )?;
                 require_keys(
                     o.parameters.keys(),
                     |id| a.parameters.contains_key(id),
@@ -777,6 +787,13 @@ fn apply_assembly(assembly: &mut Assembly, o: &Overrides) -> Result<()> {
         );
     }
     apply_curve_seeds(assembly, &o.mate_curve_seeds)?;
+    for (id, suppressed) in &o.assembly_welds {
+        assembly
+            .weld_beads
+            .get_mut(id)
+            .ok_or_else(|| invalid("Configured assembly weld is missing"))?
+            .suppressed = *suppressed;
+    }
     assembly
         .instances
         .retain(|id, _| !o.components.get(id).copied().unwrap_or(false));
@@ -944,6 +961,9 @@ pub fn csv(table: &Table) -> Result<String> {
         for key in c.overrides.mates.keys() {
             keys.insert(format!("mate:{key}"));
         }
+        for key in c.overrides.assembly_welds.keys() {
+            keys.insert(format!("weld:{key}"));
+        }
         for key in c.overrides.component_configurations.keys() {
             keys.insert(format!("configuration:{key}"));
         }
@@ -1058,6 +1078,11 @@ fn cell(c: &Definition, h: &str) -> Result<String> {
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
                 "mate" => o.mates.get(key).map(|s| s.to_string()).unwrap_or_default(),
+                "weld" => o
+                    .assembly_welds
+                    .get(key)
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
                 "configuration" => o
                     .component_configurations
                     .get(key)
@@ -1285,6 +1310,9 @@ fn set_cell(c: &mut Definition, h: &str, value: &str) -> Result<()> {
                 "mate" => {
                     o.mates.insert(key.into(), boolean(value)?);
                 }
+                "weld" => {
+                    o.assembly_welds.insert(key.into(), boolean(value)?);
+                }
                 "configuration" => {
                     o.component_configurations.insert(
                         key.into(),
@@ -1470,6 +1498,14 @@ fn import_into(doc: &mut Document, mut table: Table, replace: bool) -> Result<()
                 .map(|i| (i.id.clone(), i.name.clone()))
                 .collect::<Vec<_>>();
             normalize_map(&mut o.components, &instances, "component")?;
+            normalize_map(
+                &mut o.assembly_welds,
+                &a.weld_beads
+                    .values()
+                    .map(|bead| (bead.id.clone(), bead.name.clone()))
+                    .collect::<Vec<_>>(),
+                "assembly weld",
+            )?;
             normalize_map(&mut o.component_configurations, &instances, "component")?;
             normalize_map(
                 &mut o.component_placements,

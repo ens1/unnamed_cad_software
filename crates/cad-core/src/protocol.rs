@@ -197,6 +197,11 @@ pub struct Evaluation {
     pub sheets: BTreeMap<String, crate::sheet_metal::EvaluatedSheet>,
     #[serde(default)]
     pub weldments: BTreeMap<String, crate::weldment::EvaluatedWeldment>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub weld_beads: BTreeMap<String, crate::weld_beads::Evaluated>,
+    /// Assembly-owned deposited metal, separate from shared part definitions.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub assembly_welds: BTreeMap<String, crate::assembly_welds::Evaluated>,
     /// Exact source-linked analysis reports, separate from display meshes.
     #[serde(default)]
     pub mold_analyses: BTreeMap<String, crate::mold::DraftReport>,

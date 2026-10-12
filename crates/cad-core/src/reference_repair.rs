@@ -44,6 +44,7 @@ impl Class {
 pub enum Storage {
     Operation,
     Sketch { sketch: Id },
+    AssemblyWeld,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Binding {
@@ -158,7 +159,7 @@ fn node_class(document: &Document, node: &NodeRef, field: &str, context: &str) -
                 .map(|f| class_for_operation(&f.operation))
                 .unwrap_or(Class::Feature),
             "coordinate_system" | "coordinate_system_origin" => Class::CoordinateSystem,
-            "curve" => Class::Curve,
+            "curve" | "reference_curve" => Class::Curve,
             _ => Class::Feature,
         };
     }
@@ -342,6 +343,21 @@ impl Inventory<'_> {
     }
 }
 pub fn inputs(document: &Document, owner: &NodeRef) -> Result<Vec<Input>> {
+    if let Some(weld) = document
+        .assemblies
+        .get(&owner.definition)
+        .and_then(|assembly| assembly.weld_beads.get(&owner.node))
+    {
+        let mut inventory = Inventory {
+            document,
+            owner,
+            storage: Storage::AssemblyWeld,
+            output: vec![],
+            visits: 0,
+        };
+        inventory.walk(&serde_json::to_value(weld)?, "", "Weld joint", "", None, 0)?;
+        return Ok(inventory.output);
+    }
     let part = document
         .parts
         .get(&owner.definition)
@@ -409,6 +425,31 @@ pub fn failures(document: &Document, evaluation: Option<&Evaluation>) -> Vec<Fai
             }
         }
     }
+    for assembly in document.assemblies.values() {
+        for weld in assembly.weld_beads.values() {
+            let messages = evaluation
+                .into_iter()
+                .flat_map(|evaluation| &evaluation.diagnostics)
+                .filter(|diagnostic| {
+                    diagnostic.severity == "error" && diagnostic.target.as_ref() == Some(&weld.id)
+                })
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect::<Vec<_>>();
+            if !messages.is_empty() {
+                let owner = NodeRef {
+                    definition: assembly.id.clone(),
+                    node: weld.id.clone(),
+                };
+                failures.push(Failure {
+                    inputs: inputs(document, &owner).unwrap_or_default(),
+                    owner,
+                    label: format!("{} / {}", assembly.name, weld.name),
+                    messages,
+                    configuration: document.active_configurations.get(&assembly.id).cloned(),
+                });
+            }
+        }
+    }
     failures
 }
 pub fn node_compatible(document: &Document, input: &Input, node: &NodeRef) -> Result<()> {
@@ -434,6 +475,41 @@ pub fn node_compatible(document: &Document, input: &Input, node: &NodeRef) -> Re
     };
     if !compatible {
         return Err(invalid("Replacement has an incompatible source type"));
+    }
+    if input.storage == Storage::AssemblyWeld {
+        let weld = document
+            .assemblies
+            .get(&input.owner.definition)
+            .and_then(|assembly| assembly.weld_beads.get(&input.owner.node))
+            .ok_or_else(|| invalid("The owning assembly weld is missing"))?;
+        let source = serde_json::to_value(weld)?;
+        let mut parent = input.path.as_str();
+        let path = loop {
+            parent = parent
+                .rsplit_once('/')
+                .map(|(parent, _)| parent)
+                .ok_or_else(|| invalid("The weld reference has no owning component path"))?;
+            if let Some(path) = source.pointer(parent).and_then(|value| value.get("path")) {
+                break serde_json::from_value::<Vec<Id>>(path.clone())?;
+            }
+            if parent.is_empty() {
+                return Err(invalid("The weld reference has no owning component path"));
+            }
+        };
+        let mut owner = input.owner.definition.as_str();
+        for id in &path {
+            owner = &document
+                .assemblies
+                .get(owner)
+                .and_then(|assembly| assembly.instances.get(id))
+                .ok_or_else(|| invalid("The selected weld component path is missing"))?
+                .definition;
+        }
+        if owner != node.definition {
+            return Err(invalid(
+                "A weld repair must preserve its component path; select another component explicitly in the Weld Bead editor",
+            ));
+        }
     }
     if node.definition == input.owner.definition {
         let part = &document.parts[&node.definition];
@@ -616,13 +692,12 @@ pub fn repair(document: &mut Document, repairs: &[Repair]) -> Result<()> {
                 (Value::Null, None)
             }
         };
-        let part = candidate
-            .parts
-            .get_mut(&input.owner.definition)
-            .ok_or_else(|| invalid("Part is missing"))?;
         let mut source = match &input.storage {
             Storage::Operation => serde_json::to_value(
-                &part
+                &candidate
+                    .parts
+                    .get(&input.owner.definition)
+                    .ok_or_else(|| invalid("Part is missing"))?
                     .features
                     .iter()
                     .find(|f| f.id == input.owner.node)
@@ -630,9 +705,20 @@ pub fn repair(document: &mut Document, repairs: &[Repair]) -> Result<()> {
                     .operation,
             )?,
             Storage::Sketch { sketch } => serde_json::to_value(
-                part.sketches
+                candidate
+                    .parts
+                    .get(&input.owner.definition)
+                    .ok_or_else(|| invalid("Part is missing"))?
+                    .sketches
                     .get(sketch)
                     .ok_or_else(|| invalid("Sketch is missing"))?,
+            )?,
+            Storage::AssemblyWeld => serde_json::to_value(
+                candidate
+                    .assemblies
+                    .get(&input.owner.definition)
+                    .and_then(|assembly| assembly.weld_beads.get(&input.owner.node))
+                    .ok_or_else(|| invalid("Assembly weld is missing"))?,
             )?,
         };
         *source
@@ -670,6 +756,10 @@ pub fn repair(document: &mut Document, repairs: &[Repair]) -> Result<()> {
         }
         match &input.storage {
             Storage::Operation => {
+                let part = candidate
+                    .parts
+                    .get(&input.owner.definition)
+                    .ok_or_else(|| invalid("Part is missing"))?;
                 let mut feature = part
                     .features
                     .iter()
@@ -686,8 +776,16 @@ pub fn repair(document: &mut Document, repairs: &[Repair]) -> Result<()> {
                 .execute(&mut candidate)?;
             }
             Storage::Sketch { sketch } => {
-                part.sketches
+                candidate
+                    .parts
+                    .get_mut(&input.owner.definition)
+                    .ok_or_else(|| invalid("Part is missing"))?
+                    .sketches
                     .insert(sketch.clone(), serde_json::from_value(source)?);
+            }
+            Storage::AssemblyWeld => {
+                let weld = serde_json::from_value(source)?;
+                crate::assembly_welds::put(&mut candidate, &input.owner.definition, weld)?;
             }
         }
     }

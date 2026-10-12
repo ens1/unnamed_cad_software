@@ -15,9 +15,18 @@ fn selected_path(w: &Workspace) -> Vec<String> {
         return vec![];
     };
     if evaluation(w).is_some_and(|evaluation| {
-        evaluation.instances.iter().any(|instance| {
-            instance.path == selected.path && instance.definition == selected.definition
-        })
+        evaluation
+            .instances
+            .iter()
+            .chain(
+                evaluation
+                    .assembly_welds
+                    .values()
+                    .map(|weld| &weld.placement),
+            )
+            .any(|instance| {
+                instance.path == selected.path && instance.definition == selected.definition
+            })
     }) {
         return selected.path.clone();
     }
@@ -25,6 +34,7 @@ fn selected_path(w: &Workspace) -> Vec<String> {
         .map(|e| {
             e.instances
                 .iter()
+                .chain(e.assembly_welds.values().map(|weld| &weld.placement))
                 .filter(|i| {
                     i.definition == selected.definition
                         && i.path.last().is_some_and(|id| id == &selected.instance)
@@ -108,6 +118,49 @@ pub(crate) fn reference_choices(w: &Workspace) -> Vec<(PointReference, String)> 
                     ),
                 ));
             }
+        }
+    }
+    for weld in e.assembly_welds.values() {
+        let Some(mesh) = e.meshes.get(&weld.placement.mesh_key) else {
+            continue;
+        };
+        for (index, edge) in mesh
+            .edges
+            .iter()
+            .enumerate()
+            .filter(|(_, edge)| edge.curve.is_some())
+        {
+            for parameter in [0., 1.] {
+                out.push((
+                    PointReference::EdgePoint {
+                        edge: edge.reference.clone(),
+                        body: edge.body.clone(),
+                        parameter,
+                        instance_path: weld.placement.path.clone(),
+                    },
+                    format!(
+                        "{} / Bead Edge {} · {}",
+                        weld.placement.name,
+                        index + 1,
+                        if parameter == 0. { "Start" } else { "Finish" }
+                    ),
+                ));
+            }
+        }
+        for (index, face) in mesh
+            .faces
+            .iter()
+            .enumerate()
+            .filter(|(_, face)| face.plane.is_some())
+        {
+            out.push((
+                PointReference::FaceOrigin {
+                    face: face.reference.clone(),
+                    body: face.body.clone(),
+                    instance_path: weld.placement.path.clone(),
+                },
+                format!("{} / Bead Plane {}", weld.placement.name, index + 1),
+            ));
         }
     }
     out

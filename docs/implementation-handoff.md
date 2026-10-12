@@ -880,3 +880,27 @@ Signed packaging completed for implementation commit `1995454`:
 plist, signed all three distinct executables and signature-verified
 `dist/TCAD.app`. The implementation was pushed to the private canonical origin.
 No app was launched or tested interactively.
+
+## 2026-10-11 manufacturing and visible weld checkpoint
+
+Sheet contract v2 adds exact chained signed flanges through 180°, open hems,
+jogs with developed bend schedules, and closed base-normal cuts on parallel
+sketch/model-face planes. Weldment contract v2 adds circular stock and developed
+lengths, joint gaps and trim-to-primary butt corners, inner/outer/recessed caps,
+and native cap/gusset stock rows. Weld bead contract v1 deposits real crowned
+fillet/butt B-reps along supported associative line/circle seams in parts and
+assemblies. Continuous/intermittent segments retain exact analytic volume and
+length metadata. Separate assembly ownership, configured suppression (config
+contract v5), optical/material assignments, reference repair, library namespace
+and Make Unique retargeting, native edges, STL/STEP, assembled drawings and
+boundary-based mass inspection are integrated. Exploded views and saved native
+assembly collision/clearance selections currently omit assembly-owned beads;
+assembled part/component stock remains the inspection target. Geometry bounds
+and outstanding manufacturing gaps are recorded in manufacturing-geometry.md
+and mechanical-cad-coverage.md. Backend adapter revision is 32.
+
+Completed: `cargo check --workspace --locked`, `cargo fmt --all --check`,
+`cargo clippy --workspace --locked -- -D warnings`, and `git diff --check`.
+No tests, probes, app launches or UI smoke checks. Packaging will follow the
+requested assembly continuation. The existing dependency future-incompatibility
+notice for proc-macro-error2 remains.

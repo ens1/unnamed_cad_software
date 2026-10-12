@@ -214,6 +214,19 @@ pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> 
                     },
                 ));
             }
+            if let crate::Operation::WeldBead { definition } = &node.operation {
+                out.extend(crate::weld_beads::semantic_fields(
+                    doc,
+                    &p.id,
+                    &node.id,
+                    definition,
+                    if session.draft.is_some() {
+                        "draft"
+                    } else {
+                        "committed"
+                    },
+                ));
+            }
             out.extend(crate::body_editing::pattern_semantic_fields(
                 doc,
                 &p.id,

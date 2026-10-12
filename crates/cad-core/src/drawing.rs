@@ -986,9 +986,54 @@ fn sheet_instances(
         return Ok(stage.instances.clone());
     }
     if sheet.definition == doc.root {
-        Ok(e.instances.clone())
+        Ok(e.instances
+            .iter()
+            .cloned()
+            .chain(e.assembly_welds.values().map(|weld| weld.placement.clone()))
+            .collect())
     } else {
-        crate::configuration::placed_parts(&scoped_document(doc, e, sheet), Some(&e.assemblies))
+        let scoped = scoped_document(doc, e, sheet);
+        let mut instances = crate::configuration::placed_parts(&scoped, Some(&e.assemblies))?;
+        if scoped.assemblies.contains_key(&sheet.definition) {
+            let occurrences = crate::assembly_welds::occurrences(doc, &e.assemblies)?;
+            let configuration = doc.active_configurations.get(&sheet.definition);
+            if let Some(occurrence) = occurrences.iter().find(|occurrence| {
+                occurrence.definition == sheet.definition
+                    && occurrence.configuration.as_ref() == configuration
+            }) {
+                let inverse = occurrence
+                    .matrix
+                    .try_inverse()
+                    .ok_or_else(|| invalid("Drawing assembly occurrence pose is singular"))?;
+                for weld in e
+                    .assembly_welds
+                    .values()
+                    .filter(|weld| weld.placement.path.starts_with(&occurrence.path))
+                {
+                    let mut placement = weld.placement.clone();
+                    let matrix = nalgebra::Matrix4::from_fn(|r, c| placement.matrix[r][c]);
+                    let matrix = inverse * matrix;
+                    placement.matrix =
+                        std::array::from_fn(|r| std::array::from_fn(|c| matrix[(r, c)]));
+                    placement.path = placement.path[occurrence.path.len()..].to_vec();
+                    instances.push(placement);
+                }
+            } else if crate::assembly_welds::occurrences(&scoped, &e.assemblies)?
+                .iter()
+                .any(|occurrence| {
+                    occurrence
+                        .context
+                        .assemblies
+                        .get(&occurrence.definition)
+                        .is_some_and(|assembly| {
+                            assembly.weld_beads.values().any(|weld| !weld.suppressed)
+                        })
+                })
+            {
+                return Err(crate::CadError::Unsupported("A welded subassembly drawing needs a current evaluated occurrence of the same assembly configuration; activate or place that configuration before drawing its deposited metal".into()));
+            }
+        }
+        Ok(instances)
     }
 }
 fn placements(
@@ -1008,12 +1053,12 @@ fn placements(
         .into_iter()
         .filter(|i| i.definition == definition && (path.is_empty() || i.path == path))
         .map(|i| Placement {
-            key: if let Some(config) = i.configuration {
-                format!("{}@{config}", i.definition)
-            } else if i.mesh_key.is_empty() {
-                i.definition
-            } else {
+            key: if !i.mesh_key.is_empty() {
                 i.mesh_key
+            } else if let Some(config) = i.configuration {
+                format!("{}@{config}", i.definition)
+            } else {
+                i.definition
             },
             matrix: i.matrix,
         })
@@ -1060,6 +1105,14 @@ fn body_matches(doc: &Document, actual: &Option<NodeRef>, required: &Option<Node
     let Some(actual) = actual else {
         return false;
     };
+    if let Some(assembly) = doc.assemblies.get(&required.definition)
+        && !assembly
+            .weld_beads
+            .get(&required.node)
+            .is_some_and(|weld| !weld.suppressed)
+    {
+        return false;
+    }
     let mut pending = vec![actual.clone()];
     let mut visited = std::collections::BTreeSet::new();
     while let Some(reference) = pending.pop() {
@@ -2722,12 +2775,12 @@ pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sh
     let mut curves = Vec::new();
     let mut triangles = Vec::new();
     for instance in &instances {
-        let key = if let Some(config) = &instance.configuration {
-            format!("{}@{config}", instance.definition)
-        } else if instance.mesh_key.is_empty() {
-            instance.definition.clone()
-        } else {
+        let key = if !instance.mesh_key.is_empty() {
             instance.mesh_key.clone()
+        } else if let Some(config) = &instance.configuration {
+            format!("{}@{config}", instance.definition)
+        } else {
+            instance.definition.clone()
         };
         let Some(mesh) = e.meshes.get(&key) else {
             continue;

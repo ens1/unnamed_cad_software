@@ -7,8 +7,10 @@ mod prismatic_boolean;
 pub mod exchange;
 mod step_import;
 
+mod assembly_welds;
 mod fabrication;
 mod sheet_stock;
+mod weld_beads;
 mod weld_stock;
 
 mod units;

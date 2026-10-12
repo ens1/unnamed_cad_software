@@ -554,6 +554,11 @@ fn fields(
                 });
             }
         });
+        egui::CollapsingHeader::new("Weld beads").show(ui, |ui| {
+            for bead in assembly.weld_beads.values() {
+                changed |= suppress(ui, &bead.name, &bead.id, &mut c.overrides.assembly_welds);
+            }
+        });
     }
     egui::CollapsingHeader::new("Custom properties").show(ui, |ui| {
         changed |= properties(ui, w, c);
@@ -862,6 +867,7 @@ fn table(ui: &mut egui::Ui, w: &mut Workspace, doc: &Document, owner: &str) {
                                         .chain(r.overrides.components.values())
                                         .chain(r.overrides.component_patterns.values())
                                         .chain(r.overrides.mates.values())
+                                        .chain(r.overrides.assembly_welds.values())
                                         .filter(|s| **s)
                                         .count()
                                         .to_string()
@@ -1092,6 +1098,23 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             c = local;
         }
         let resolved = configuration::resolve(doc, &owner, &c.id).ok();
+        if let Some(assembly) = doc.assemblies.get(&owner) {
+            for bead in assembly.weld_beads.values() {
+                let explicit = c.overrides.assembly_welds.get(&bead.id).copied();
+                let effective = explicit
+                    .or_else(|| {
+                        resolved
+                            .as_ref()
+                            .and_then(|resolved| resolved.overrides.assembly_welds.get(&bead.id))
+                            .copied()
+                    })
+                    .unwrap_or(bead.suppressed);
+                out.push(cad_core::presentation::SemanticElement {
+                    id:format!("configuration-weld:{owner}@{}:{}",c.id,bead.id),role:"configuration-weld-field".into(),label:format!("{} · {}",c.name,bead.name),value:Some(explicit.map(|value|value.to_string()).unwrap_or("Inherited".into())),state:if explicit.is_some(){"overridden"}else{"inherited"}.into(),commands:vec![],relationships:vec![owner.clone(),format!("{owner}@{}",c.id),bead.id.clone()],
+                    data:serde_json::json!({"contract":"tcad.configuration.weld-suppression","version":1,"setter":"configuration-dimension","owner":owner,"configuration":c.id,"weld":bead.id,"json":explicit,"value_type":"choice","editable":true,"effective_suppressed":effective,"choices":[{"value":null,"label":"Inherited"},{"value":false,"label":"Present"},{"value":true,"label":"Suppressed"}]}),
+                });
+            }
+        }
         for dimension in &fields {
             let explicit = c
                 .overrides
@@ -1153,6 +1176,20 @@ pub fn current_value(
     if element.role == "configuration-placement-field" {
         return poses::current_value(w, element);
     }
+    if element.role == "configuration-weld-field" {
+        let owner = element.data["owner"].as_str()?;
+        let id = element.data["configuration"].as_str()?;
+        let weld = element.data["weld"].as_str()?;
+        let configuration = source(w)
+            .ok()
+            .filter(|configuration| {
+                configuration.id == id && self::owner(w).as_deref() == Some(owner)
+            })
+            .or_else(|| configuration::definitions(w.session.visible(), owner).remove(id))?;
+        return Some(serde_json::json!(
+            configuration.overrides.assembly_welds.get(weld)
+        ));
+    }
     let (owner, id, feature, path, field) = dimension_identity(element)?;
     let c = source(w)
         .ok()
@@ -1191,6 +1228,66 @@ pub fn set_value(
 ) -> cad_core::Result<()> {
     if element.role == "configuration-placement-field" {
         return poses::set_value(w, element, value);
+    }
+    if element.role == "configuration-weld-field" {
+        let invalid = |message: &str| cad_core::CadError::Invalid(message.into());
+        let owner = element.data["owner"]
+            .as_str()
+            .ok_or_else(|| invalid("Missing weld configuration owner"))?;
+        let id = element.data["configuration"]
+            .as_str()
+            .ok_or_else(|| invalid("Missing weld configuration identity"))?;
+        let weld = element.data["weld"]
+            .as_str()
+            .ok_or_else(|| invalid("Missing weld identity"))?;
+        if w.dialog.as_deref() != Some("configurations")
+            || self::owner(w).as_deref() != Some(owner)
+            || w.tool_checkpoint.is_none()
+        {
+            return Err(invalid(
+                "Open the owning assembly's Configurations editor before changing weld suppression",
+            ));
+        }
+        if !w
+            .session
+            .visible()
+            .assemblies
+            .get(owner)
+            .is_some_and(|assembly| assembly.weld_beads.contains_key(weld))
+        {
+            return Err(invalid("The assembly weld is no longer present"));
+        }
+        let mut configuration =
+            if w.fields.get("configuration-editor").map(String::as_str) == Some(id) {
+                source(w)?
+            } else {
+                if !current_source_is_valid(w) {
+                    return Err(invalid(
+                        "Correct the current configuration source before editing another row",
+                    ));
+                }
+                configuration::definitions(w.session.visible(), owner)
+                    .remove(id)
+                    .ok_or_else(|| invalid("This configuration no longer exists"))?
+            };
+        if value.is_null() {
+            configuration.overrides.assembly_welds.remove(weld);
+        } else {
+            configuration.overrides.assembly_welds.insert(
+                weld.into(),
+                value.as_bool().ok_or_else(|| {
+                    invalid("Weld suppression requires an inherited, present or suppressed choice")
+                })?,
+            );
+        }
+        configuration.version = configuration::CONTRACT_VERSION;
+        w.fields.insert("configuration-editor".into(), id.into());
+        w.json = serde_json::to_string_pretty(&configuration)?;
+        submit(w, owner, configuration.clone());
+        if configuration::definitions(w.session.visible(), owner).get(id) != Some(&configuration) {
+            return Err(invalid(&w.status));
+        }
+        return Ok(());
     }
     let (owner, id, feature, path, field) = dimension_identity(element).ok_or_else(|| {
         cad_core::CadError::Invalid("Missing configuration dimension identity".into())

@@ -498,6 +498,7 @@ fn submit(w: &mut Workspace, assembly: &str, mate: Mate) {
 pub fn begin(w: &mut Workspace, assembly: &str, mate: Mate) {
     if w.fields.contains_key("exploded-view-editor")
         || w.fields.contains_key("assembly-inspection-editor")
+        || w.fields.contains_key("assembly-weld-editor")
     {
         w.status = "Confirm or cancel the current assembly operation before editing mates".into();
         return;

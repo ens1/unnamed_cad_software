@@ -65,6 +65,39 @@ pub fn project(
     editing: bool,
     editable_part: Option<&str>,
 ) -> Vec<SemanticElement> {
+    if let SelectionTarget::Geometry {
+        definition,
+        body: Some(body),
+        ..
+    } = target
+        && let Some(bead) = document
+            .assemblies
+            .get(definition)
+            .and_then(|assembly| assembly.weld_beads.get(&body.node))
+    {
+        let reason = editing.then_some("Confirm or cancel the current operation first");
+        let suppressed = document
+            .active_configurations
+            .get(definition)
+            .and_then(|id| crate::configuration::resolve(document, definition, id).ok())
+            .and_then(|resolved| resolved.overrides.assembly_welds.get(&bead.id).copied())
+            .unwrap_or(bead.suppressed);
+        return [
+            ("assembly.weld-edit", "Edit Weld Bead"),
+            (
+                "assembly.weld-suppress",
+                if suppressed {
+                    "Unsuppress Weld Bead"
+                } else {
+                    "Suppress Weld Bead"
+                },
+            ),
+            ("assembly.weld-delete", "Delete Weld Bead"),
+        ]
+        .into_iter()
+        .map(|(command, label)| descriptor(target, command, label, "Weld", reason))
+        .collect();
+    }
     match target {
         SelectionTarget::Sketch {
             definition,
@@ -326,6 +359,12 @@ pub fn project(
                     );
                 }
                 "edge" => {
+                    add(
+                        "weld.bead",
+                        "Weld Bead",
+                        "Weldments",
+                        editing.then_some("Confirm or cancel the current operation first"),
+                    );
                     add(
                         "mold.parting-surface",
                         "Parting Surface",

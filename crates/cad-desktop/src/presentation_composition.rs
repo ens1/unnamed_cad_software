@@ -394,6 +394,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::settings_ui::semantics(w));
     elements.extend(crate::operation_preview::semantics(w));
     elements.extend(crate::operation_editor_ui::semantics(w));
+    elements.extend(crate::assembly_welds_ui::semantics(w));
     for element in crate::drawing_editor_ui::semantics(w) {
         if let Some(existing) = elements
             .iter_mut()
@@ -668,6 +669,11 @@ fn value_adapters() -> ValueAdapters {
         "drawing-editor",
         crate::drawing_editor_ui::set_value,
         crate::drawing_editor_ui::current_value,
+    );
+    adapters.register(
+        "assembly-weld",
+        crate::assembly_welds_ui::set_value,
+        crate::assembly_welds_ui::current_value,
     );
     adapters.register(
         "operation-editor",

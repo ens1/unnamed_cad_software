@@ -118,7 +118,30 @@ pub trait KernelAdapter {
             "This geometry adapter does not provide weldment manufacturing metadata".into(),
         ))
     }
+    fn weld_bead_metadata(
+        &self,
+        _doc: &Document,
+        _owner: &NodeRef,
+        _inputs: &BTreeMap<NodeRef, Shape>,
+    ) -> Result<Option<cad_core::weld_beads::Evaluated>> {
+        Err(CadError::Unsupported(
+            "This geometry adapter does not provide native weld bead metadata".into(),
+        ))
+    }
     fn mesh(&self, shape: &Shape, producer: &NodeRef, tolerance: f64) -> Result<MeshData>;
+    fn assembly_weld(
+        &self,
+        _doc: &Document,
+        _owner: &NodeRef,
+        _definition: &cad_core::weld_beads::Definition,
+        _contexts: &BTreeMap<Vec<String>, (Document, [[f64; 4]; 4])>,
+        _root: &Path,
+        _tolerance: f64,
+    ) -> Result<(MeshData, Vec<Solid>, cad_core::weld_beads::Evaluated)> {
+        Err(CadError::Unsupported(
+            "This geometry adapter does not construct assembly weld beads".into(),
+        ))
+    }
     /// Disposable operation display geometry, independent from evaluated bodies.
     fn operation_delta(
         &self,
@@ -907,7 +930,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/31;solver/tcad-native-lm/14"
+        "monstertruck/0.4.1+fc2306852a46;adapter/32;solver/tcad-native-lm/14"
     }
     fn sketch_material_regions(
         &self,
@@ -934,6 +957,24 @@ impl KernelAdapter for MonstertruckAdapter {
         inputs: &BTreeMap<NodeRef, Shape>,
     ) -> Result<Option<cad_core::weldment::EvaluatedWeldment>> {
         crate::weld_stock::metadata(self, doc, owner, inputs)
+    }
+    fn weld_bead_metadata(
+        &self,
+        doc: &Document,
+        owner: &NodeRef,
+        inputs: &BTreeMap<NodeRef, Shape>,
+    ) -> Result<Option<cad_core::weld_beads::Evaluated>> {
+        let Some(feature) = doc.parts.get(&owner.definition).and_then(|part| {
+            part.features
+                .iter()
+                .find(|feature| feature.id == owner.node)
+        }) else {
+            return Ok(None);
+        };
+        let Operation::WeldBead { definition } = &feature.operation else {
+            return Ok(None);
+        };
+        crate::weld_beads::metadata(self, doc, owner, definition, inputs).map(Some)
     }
     fn alias_history(&self, owner: &NodeRef, input: &NodeRef) -> Result<()> {
         let history = self
@@ -1962,10 +2003,25 @@ impl KernelAdapter for MonstertruckAdapter {
                 sections,
                 bends,
             )?]),
-            Operation::Sheet { .. } => {
-                crate::sheet_stock::operation(self, doc, owner, inputs, tolerance)?
+            Operation::Sheet { .. } => crate::sheet_stock::operation(
+                self,
+                doc,
+                owner,
+                inputs,
+                tolerance,
+                &mut generated_history,
+            )?,
+            Operation::Weldment { .. } => {
+                crate::weld_stock::operation(self, doc, owner, inputs, &mut generated_history)?
             }
-            Operation::Weldment { .. } => crate::weld_stock::operation(self, doc, owner, inputs)?,
+            Operation::WeldBead { definition } => crate::weld_beads::operation(
+                self,
+                doc,
+                owner,
+                definition,
+                inputs,
+                &mut generated_history,
+            )?,
             Operation::Import {
                 resource,
                 solid_ids,
@@ -2102,6 +2158,17 @@ impl KernelAdapter for MonstertruckAdapter {
         tolerance: f64,
     ) -> Result<cad_core::protocol::OperationPreviewChange> {
         crate::operation_preview::delta(self, before, after, owner, tolerance)
+    }
+    fn assembly_weld(
+        &self,
+        doc: &Document,
+        owner: &NodeRef,
+        definition: &cad_core::weld_beads::Definition,
+        contexts: &BTreeMap<Vec<String>, (Document, [[f64; 4]; 4])>,
+        root: &Path,
+        tolerance: f64,
+    ) -> Result<(MeshData, Vec<Solid>, cad_core::weld_beads::Evaluated)> {
+        crate::assembly_welds::build(doc, owner, definition, contexts, root, tolerance)
     }
     fn mesh(&self, shape: &Shape, producer: &NodeRef, tolerance: f64) -> Result<MeshData> {
         if !tolerance.is_finite() || tolerance <= 0. {
@@ -2523,6 +2590,9 @@ impl MonstertruckAdapter {
             result.push(output);
         }
         Ok(Shape::Bodies(result))
+    }
+    pub(crate) fn register_weld_history(&self, owner: &NodeRef, history: TopologyHistory) {
+        self.histories.borrow_mut().insert(owner.clone(), history);
     }
     pub(crate) fn face_source(&self, body: &NodeRef, face: FaceId) -> Option<TopologyRef> {
         self.histories

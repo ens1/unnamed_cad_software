@@ -73,6 +73,29 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             };
             values.push(inspection::placed(value, instance.matrix)?);
         }
+        if w.view.history_cursor.is_none() {
+            for weld in evaluation.assembly_welds.values() {
+                if selected.is_some_and(|selected| selected.path != weld.placement.path) {
+                    continue;
+                }
+                if scope == "body" {
+                    let body = selected
+                        .and_then(|selected| selected.body.as_ref())
+                        .ok_or_else(|| {
+                            cad_core::CadError::Invalid(
+                                "Select a weld bead face or edge first".into(),
+                            )
+                        })?;
+                    if body != &weld.owner {
+                        return Err(cad_core::CadError::Invalid(
+                            "Selected weld body does not match its evaluated deposited metal"
+                                .into(),
+                        ));
+                    }
+                }
+                values.push(inspection::placed(&weld.properties, weld.placement.matrix)?);
+            }
+        }
         inspection::combine(&values)
     })();
     match result {

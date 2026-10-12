@@ -1014,6 +1014,19 @@ fn potential_members(
             return Err(invalid("Cut-list sources must be native weldment outputs"));
         };
         pending.extend(operation.consumed_outputs());
+        if matches!(
+            operation.as_ref(),
+            crate::weldment::WeldmentOperation::EndCap { .. }
+        ) {
+            let candidate = crate::weldment::MemberRef {
+                group: reference.clone(),
+                member: "cap".into(),
+            };
+            if !members.contains(&candidate) {
+                admit_rows(members.len(), 1, limit)?;
+                members.insert(candidate);
+            }
+        }
         if let crate::weldment::WeldmentOperation::Members {
             path,
             members: selected,
@@ -1203,12 +1216,26 @@ fn cut_list_content(
                         "Native cut-list cache contract/source does not match its configured output",
                     ));
                 }
-                admit_rows(potential.len(), stock.members.len(), MAX_RESERVATIONS)?;
+                admit_rows(
+                    potential.len(),
+                    stock.members.len() + stock.accessories.len(),
+                    MAX_RESERVATIONS,
+                )?;
                 potential.extend(stock.members.iter().map(|m| RowSource::CutList {
                     output: reference.clone(),
                     configuration: config.clone(),
                     member: m.reference.clone(),
                 }));
+                potential.extend(
+                    stock
+                        .accessories
+                        .iter()
+                        .map(|accessory| RowSource::CutList {
+                            output: reference.clone(),
+                            configuration: config.clone(),
+                            member: accessory.reference.clone(),
+                        }),
+                );
             }
         }
     }
@@ -1294,7 +1321,7 @@ fn cut_list_content(
             "Item".into(),
             "Member".into(),
             "Section".into(),
-            format!("Centerline ({unit})"),
+            format!("Developed / stock ({unit})"),
             "Start (deg)".into(),
             "Finish (deg)".into(),
             "Qty".into(),

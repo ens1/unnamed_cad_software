@@ -1,7 +1,7 @@
 //! Versioned sketch-based sheet stock, bend intent, and derived manufacturing data.
 use crate::{CadError, Dimension, Document, Expr, Id, NodeRef, Plane, Result};
 use serde::{Deserialize, Serialize};
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
@@ -41,6 +41,45 @@ pub enum SheetOperation {
         inside_radius: Option<Expr>,
         #[serde(default)]
         k_factor: Option<Expr>,
+        /// An earlier flange feature whose full terminal edge receives this bend.
+        /// `None` retains the original base-sketch member attachment.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachment: Option<NodeRef>,
+    },
+    Hem {
+        body: NodeRef,
+        member: Id,
+        length: Expr,
+        /// Clear distance between the returned and original sheet surfaces.
+        gap: Expr,
+        #[serde(default)]
+        reverse: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachment: Option<NodeRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        k_factor: Option<Expr>,
+    },
+    Jog {
+        body: NodeRef,
+        member: Id,
+        /// Signed displacement between the incoming and outgoing mid-surfaces.
+        offset: Expr,
+        /// Straight tangent length after the second bend.
+        length: Expr,
+        /// Positive bend magnitude through 90 degrees; offset controls the side.
+        angle: Expr,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        inside_radius: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        k_factor: Option<Expr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachment: Option<NodeRef>,
+    },
+    /// Through-thickness cut projected from a parallel sketch plane to the base
+    /// blank, propagated to both states. A stock top-face sketch is valid.
+    NormalCut {
+        body: NodeRef,
+        profile: NodeRef,
     },
     Flatten {
         body: NodeRef,
@@ -54,6 +93,9 @@ impl SheetOperation {
             Self::Base { .. } => "Base Flange / Tab",
             Self::Tab { .. } => "Sheet Tab",
             Self::EdgeFlange { .. } => "Edge Flange",
+            Self::Hem { .. } => "Open Hem",
+            Self::Jog { .. } => "Jog / Offset Flange",
+            Self::NormalCut { .. } => "Sheet Normal Cut / Relief",
             Self::Flatten {
                 state: State::Flat, ..
             } => "Flat Pattern",
@@ -63,14 +105,34 @@ impl SheetOperation {
     pub fn dependencies(&self) -> Vec<NodeRef> {
         match self {
             Self::Base { profile, .. } => vec![profile.clone()],
-            Self::Tab { body, profile } => vec![body.clone(), profile.clone()],
-            Self::EdgeFlange { body, .. } | Self::Flatten { body, .. } => vec![body.clone()],
+            Self::Tab { body, profile } | Self::NormalCut { body, profile } => {
+                vec![body.clone(), profile.clone()]
+            }
+            Self::EdgeFlange {
+                body, attachment, ..
+            }
+            | Self::Hem {
+                body, attachment, ..
+            }
+            | Self::Jog {
+                body, attachment, ..
+            } => {
+                let mut sources = vec![body.clone()];
+                sources.extend(attachment.iter().filter(|source| *source != body).cloned());
+                sources
+            }
+            Self::Flatten { body, .. } => vec![body.clone()],
         }
     }
     pub fn consumed_outputs(&self) -> Vec<NodeRef> {
         match self {
             Self::Base { .. } => vec![],
-            Self::Tab { body, .. } | Self::EdgeFlange { body, .. } | Self::Flatten { body, .. } => {
+            Self::Tab { body, .. }
+            | Self::EdgeFlange { body, .. }
+            | Self::Hem { body, .. }
+            | Self::Jog { body, .. }
+            | Self::NormalCut { body, .. }
+            | Self::Flatten { body, .. } => {
                 vec![body.clone()]
             }
         }
@@ -95,6 +157,29 @@ impl SheetOperation {
                 values.extend(k_factor.iter());
                 values
             }
+            Self::Hem {
+                length,
+                gap,
+                k_factor,
+                ..
+            } => {
+                let mut values = vec![length, gap];
+                values.extend(k_factor.iter());
+                values
+            }
+            Self::Jog {
+                offset,
+                length,
+                angle,
+                inside_radius,
+                k_factor,
+                ..
+            } => {
+                let mut values = vec![offset, length, angle];
+                values.extend(inside_radius.iter());
+                values.extend(k_factor.iter());
+                values
+            }
             _ => vec![],
         }
     }
@@ -107,17 +192,48 @@ pub struct Flange {
     pub angle_rad: f64,
     pub radius_mm: f64,
     pub k_factor: f64,
+    pub attachment: Option<NodeRef>,
+    pub continuation: Vec<FlangeBend>,
 }
-impl Flange {
+#[derive(Clone, Debug)]
+pub struct FlangeBend {
+    pub length_mm: f64,
+    pub angle_rad: f64,
+    pub radius_mm: f64,
+    pub k_factor: f64,
+}
+impl FlangeBend {
     pub fn allowance_mm(&self, thickness: f64) -> f64 {
         self.angle_rad.abs() * (self.radius_mm + self.k_factor * thickness)
     }
+}
+impl Flange {
+    pub fn allowance_mm(&self, thickness: f64) -> f64 {
+        self.segments()
+            .map(|bend| bend.allowance_mm(thickness))
+            .sum()
+    }
+    pub fn segments(&self) -> impl Iterator<Item = FlangeBend> + '_ {
+        std::iter::once(FlangeBend {
+            length_mm: self.length_mm,
+            angle_rad: self.angle_rad,
+            radius_mm: self.radius_mm,
+            k_factor: self.k_factor,
+        })
+        .chain(self.continuation.iter().cloned())
+    }
+}
+#[derive(Clone, Debug)]
+pub enum BlankEdit {
+    Tab { source: NodeRef, profile: NodeRef },
+    Cut { source: NodeRef, profile: NodeRef },
 }
 #[derive(Clone, Debug)]
 pub struct Stock {
     pub source: NodeRef,
     pub profile: NodeRef,
     pub tabs: Vec<NodeRef>,
+    pub blank_edits: Vec<BlankEdit>,
     pub thickness_mm: f64,
     pub radius_mm: f64,
     pub k_factor: f64,
@@ -127,6 +243,52 @@ pub struct Stock {
 }
 fn invalid(message: &str) -> CadError {
     CadError::Invalid(format!("Sheet metal: {message}"))
+}
+fn optional_k(
+    doc: &Document,
+    source: &NodeRef,
+    value: Option<&Expr>,
+    inherited: f64,
+) -> Result<f64> {
+    let k = value
+        .map(|expression| {
+            crate::expression::value(doc, &source.definition, expression, Dimension::Scalar)
+        })
+        .transpose()?
+        .unwrap_or(inherited);
+    if !k.is_finite() || !(0.0..=1.0).contains(&k) {
+        return Err(invalid("K factor must be a finite scalar in [0,1]"));
+    }
+    Ok(k)
+}
+fn check_attachment(stock: &Stock, member: &str, attachment: Option<&NodeRef>) -> Result<()> {
+    if let Some(source) = attachment {
+        let parent = stock.flanges.iter().find(|flange| &flange.source == source)
+            .ok_or_else(|| invalid("Terminal attachment must name an earlier flange, hem or jog in this sheet stock"))?;
+        if parent.member != member {
+            return Err(invalid(
+                "A terminal attachment must retain its parent base-sketch member",
+            ));
+        }
+        if stock
+            .flanges
+            .iter()
+            .any(|flange| flange.attachment.as_ref() == Some(source))
+        {
+            return Err(invalid(
+                "The selected terminal flange edge already has a bend attached",
+            ));
+        }
+    } else if stock
+        .flanges
+        .iter()
+        .any(|flange| flange.member == member && flange.attachment.is_none())
+    {
+        return Err(invalid(
+            "The selected base-sketch edge already has a bend; select its terminal attachment for a chained bend",
+        ));
+    }
+    Ok(())
 }
 pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
     fn resolve(
@@ -149,6 +311,9 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
             let body = match operation.as_ref() {
                 SheetOperation::Tab { body, .. }
                 | SheetOperation::EdgeFlange { body, .. }
+                | SheetOperation::Hem { body, .. }
+                | SheetOperation::Jog { body, .. }
+                | SheetOperation::NormalCut { body, .. }
                 | SheetOperation::Flatten { body, .. } => body,
                 SheetOperation::Base { .. } => {
                     return Err(invalid("A suppressed base cannot define sheet stock"));
@@ -190,6 +355,7 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
                     source: reference.clone(),
                     profile: profile.clone(),
                     tabs: vec![],
+                    blank_edits: vec![],
                     thickness_mm: thickness,
                     radius_mm: radius,
                     k_factor,
@@ -200,10 +366,19 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
             }
             SheetOperation::Tab { body, profile } => {
                 let mut stock = resolve(doc, body, stack)?;
-                if !stock.flanges.is_empty() {
-                    return Err(CadError::Unsupported("Add sheet tabs before edge flanges; trimming tabs through developed bends requires bend-aware Boolean propagation".into()));
-                }
                 stock.tabs.push(profile.clone());
+                stock.blank_edits.push(BlankEdit::Tab {
+                    source: reference.clone(),
+                    profile: profile.clone(),
+                });
+                stock
+            }
+            SheetOperation::NormalCut { body, profile } => {
+                let mut stock = resolve(doc, body, stack)?;
+                stock.blank_edits.push(BlankEdit::Cut {
+                    source: reference.clone(),
+                    profile: profile.clone(),
+                });
                 stock
             }
             SheetOperation::EdgeFlange {
@@ -213,6 +388,7 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
                 angle,
                 inside_radius,
                 k_factor,
+                attachment,
             } => {
                 let mut stock = resolve(doc, body, stack)?;
                 let extension = length(extension)?;
@@ -237,18 +413,16 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
                     .unwrap_or(stock.k_factor);
                 if extension <= 1e-7
                     || angle.abs() < 1e-6
-                    || angle.abs() > std::f64::consts::FRAC_PI_2 + 1e-8
+                    || angle.abs() > std::f64::consts::PI + 1e-8
                     || radius <= 0.
                     || !k.is_finite()
                     || !(0.0..=1.0).contains(&k)
                 {
                     return Err(invalid(
-                        "Edge flanges require positive tangent length/radius, signed angles through 90 degrees, and K factor in [0,1]",
+                        "Edge flanges require positive tangent length/radius, signed angles through 180 degrees, and K factor in [0,1]",
                     ));
                 }
-                if stock.flanges.iter().any(|f| f.member == *member) {
-                    return Err(invalid("A base sketch member already has an edge flange"));
-                }
+                check_attachment(&stock, member, attachment.as_ref())?;
                 stock.flanges.push(Flange {
                     source: reference.clone(),
                     member: member.clone(),
@@ -256,6 +430,100 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
                     angle_rad: angle,
                     radius_mm: radius,
                     k_factor: k,
+                    attachment: attachment.clone(),
+                    continuation: vec![],
+                });
+                stock
+            }
+            SheetOperation::Hem {
+                body,
+                member,
+                length: extension,
+                gap,
+                reverse,
+                attachment,
+                k_factor,
+            } => {
+                let mut stock = resolve(doc, body, stack)?;
+                let extension = length(extension)?;
+                let gap = length(gap)?;
+                let k = optional_k(doc, reference, k_factor.as_ref(), stock.k_factor)?;
+                if extension <= 1e-7 || gap <= 1e-7 {
+                    return Err(invalid(
+                        "Open hems require a positive return tangent length and positive clear gap; closed crushed hems need a forming model",
+                    ));
+                }
+                check_attachment(&stock, member, attachment.as_ref())?;
+                stock.flanges.push(Flange {
+                    source: reference.clone(),
+                    member: member.clone(),
+                    length_mm: extension,
+                    angle_rad: if *reverse {
+                        -std::f64::consts::PI
+                    } else {
+                        std::f64::consts::PI
+                    },
+                    radius_mm: gap * 0.5,
+                    k_factor: k,
+                    attachment: attachment.clone(),
+                    continuation: vec![],
+                });
+                stock
+            }
+            SheetOperation::Jog {
+                body,
+                member,
+                offset,
+                length: extension,
+                angle,
+                inside_radius,
+                k_factor,
+                attachment,
+            } => {
+                let mut stock = resolve(doc, body, stack)?;
+                let offset = length(offset)?;
+                let extension = length(extension)?;
+                let angle =
+                    crate::expression::value(doc, &reference.definition, angle, Dimension::Angle)?;
+                let radius = inside_radius
+                    .as_ref()
+                    .map(length)
+                    .transpose()?
+                    .unwrap_or(stock.radius_mm);
+                let k = optional_k(doc, reference, k_factor.as_ref(), stock.k_factor)?;
+                if extension <= 1e-7
+                    || offset.abs() <= 1e-7
+                    || radius <= 0.
+                    || angle <= 1e-6
+                    || angle > std::f64::consts::FRAC_PI_2 + 1e-8
+                {
+                    return Err(invalid(
+                        "Jogs require positive terminal length/radius, a nonzero signed offset, and a positive bend angle through 90 degrees",
+                    ));
+                }
+                let mid_radius = radius + stock.thickness_mm * 0.5;
+                let web = (offset.abs() - 2. * mid_radius * (1. - angle.cos())) / angle.sin();
+                if !web.is_finite() || web <= 1e-7 {
+                    return Err(invalid(
+                        "Jog offset is too small for two specified bends; increase offset or reduce radius/angle",
+                    ));
+                }
+                check_attachment(&stock, member, attachment.as_ref())?;
+                let signed_angle = angle * offset.signum();
+                stock.flanges.push(Flange {
+                    source: reference.clone(),
+                    member: member.clone(),
+                    length_mm: web,
+                    angle_rad: signed_angle,
+                    radius_mm: radius,
+                    k_factor: k,
+                    attachment: attachment.clone(),
+                    continuation: vec![FlangeBend {
+                        length_mm: extension,
+                        angle_rad: -signed_angle,
+                        radius_mm: radius,
+                        k_factor: k,
+                    }],
                 });
                 stock
             }
@@ -274,6 +542,9 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
 pub struct BendLine {
     pub feature: NodeRef,
     pub member: Id,
+    /// Zero-based bend within a feature; jogs publish two distinct lines.
+    #[serde(default)]
+    pub index: u32,
     pub start: [f64; 2],
     pub end: [f64; 2],
     pub angle_rad: f64,
@@ -345,14 +616,66 @@ pub fn semantic_fields(
             );
             fields
         }
+        SheetOperation::Hem {
+            length,
+            gap,
+            k_factor,
+            ..
+        } => {
+            let mut fields = vec![
+                ("length", "Return Tangent Length", length, Dimension::Length),
+                ("gap", "Clear Hem Gap", gap, Dimension::Length),
+            ];
+            fields.extend(
+                k_factor
+                    .iter()
+                    .map(|value| ("k_factor", "K Factor", value, Dimension::Scalar)),
+            );
+            fields
+        }
+        SheetOperation::Jog {
+            offset,
+            length,
+            angle,
+            inside_radius,
+            k_factor,
+            ..
+        } => {
+            let mut fields = vec![
+                (
+                    "offset",
+                    "Signed Mid-Surface Offset",
+                    offset,
+                    Dimension::Length,
+                ),
+                (
+                    "length",
+                    "Terminal Tangent Length",
+                    length,
+                    Dimension::Length,
+                ),
+                ("angle", "Bend Magnitude", angle, Dimension::Angle),
+            ];
+            fields.extend(
+                inside_radius
+                    .iter()
+                    .map(|value| ("inside_radius", "Inside Radius", value, Dimension::Length)),
+            );
+            fields.extend(
+                k_factor
+                    .iter()
+                    .map(|value| ("k_factor", "K Factor", value, Dimension::Scalar)),
+            );
+            fields
+        }
         _ => vec![],
     };
     let mut fields: Vec<_> = quantities.into_iter().map(|(field, label, expression, dimension)| crate::presentation::SemanticElement {
         id: format!("{node}::sheet::{field}"), role: "feature-field".into(), label: label.into(), value: Some(expression.0.clone()), state: state.into(), commands: vec!["feature.edit".into()], relationships: vec![node.into()],
         data: serde_json::json!({"contract":"tcad.sheet_metal","version":CONTRACT_VERSION,"field":field,"type":"quantity","dimension":dimension,"expression":expression,"evaluated":crate::expression::value(doc,owner,expression,dimension).ok(),"editable":true}),
     }).collect();
-    fields.push(crate::presentation::SemanticElement { id: format!("{node}::sheet::options"), role: "feature-options".into(), label: operation.name().into(), value: None, state: state.into(), commands: vec!["feature.edit".into(),"sheet.flange".into(),"sheet.flat".into(),"sheet.formed".into()], relationships: operation.dependencies().into_iter().map(|source| source.node).collect(),
-        data: serde_json::json!({"contract":"tcad.sheet_metal","version":CONTRACT_VERSION,"source":operation,"editable":true,"capabilities":{"base":"closed_sketch_regions_with_holes","thickness_direction":["positive","negative","mid_plane"],"tabs":"coplanar_before_bends","flanges":"complete_supporting_straight_base_edges","signed_angle_range_degrees":[-90,90],"allowance":"abs(angle)*(inside_radius+K*thickness)","flat_geometry":"exact_brep","relief":false,"imported_body_recognition":false}}),
+    fields.push(crate::presentation::SemanticElement { id: format!("{node}::sheet::options"), role: "feature-options".into(), label: operation.name().into(), value: None, state: state.into(), commands: vec!["feature.edit".into(),"sheet.flange".into(),"sheet.hem".into(),"sheet.jog".into(),"sheet.cut".into(),"sheet.flat".into(),"sheet.formed".into()], relationships: operation.dependencies().into_iter().map(|source| source.node).collect(),
+        data: serde_json::json!({"contract":"tcad.sheet_metal","version":CONTRACT_VERSION,"source":operation,"editable":true,"capabilities":{"base":"closed_sketch_regions_with_holes","thickness_direction":["positive","negative","mid_plane"],"tabs":"coplanar_base_blank_preserving_bend_interfaces","flanges":"complete_supporting_straight_base_edges_and_chained_terminal_edges","signed_angle_range_degrees":[-180,180],"hem":"open_return_explicit_clear_gap","jog":"two_opposed_bends_with_signed_mid_surface_offset","allowance":"abs(angle)*(inside_radius+K*thickness)","flat_geometry":"exact_brep","relief":"closed_sketch_base_blank_normal_cuts_preserving_bend_interfaces","imported_body_recognition":false,"limits":["flanges_have_full_base_member_width","cuts_do_not_cross_bend_interfaces","overlapping_flat_envelopes_and_self_intersecting_formed_sections_are_rejected","closed_crushed_hems_and_general_sketched_bends_require_forming_support"]}}),
     });
     fields
 }

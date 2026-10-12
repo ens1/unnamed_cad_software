@@ -1,6 +1,7 @@
 mod appearances_ui;
 mod assembly_inspection_ui;
 mod assembly_motion_ui;
+mod assembly_welds_ui;
 mod background;
 mod body_filter_ui;
 mod cad_ui;
@@ -55,6 +56,7 @@ mod theme_library;
 mod ui;
 mod viewport;
 mod viewport_guides;
+mod weld_beads_ui;
 mod worker;
 mod workspace_controls;
 use bevy::{
@@ -74,7 +76,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/31;solver/tcad-native-lm/14";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/32;solver/tcad-native-lm/14";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -323,6 +325,11 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !assembly_welds_ui::current_source_is_valid(self) {
+            self.status = "Correct the current assembly weld source before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !drawing_editor_ui::current_source_is_valid(self) {
             self.status = "Correct the current drawing fields before applying".into();
             self.confirm_requested = false;
@@ -425,6 +432,7 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
         assembly_motion_ui::cancel(self);
         reference_repair_ui::reset(self);
@@ -541,6 +549,7 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
         assembly_motion_ui::cancel(self);
         reference_repair_ui::reset(self);
@@ -602,6 +611,11 @@ impl Workspace {
         self.status = "Operation cancelled".into();
     }
     pub fn confirm_tool(&mut self) {
+        if !assembly_welds_ui::current_source_is_valid(self) {
+            self.status = "Correct the current assembly weld source before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !drawing_editor_ui::current_source_is_valid(self) {
             self.status = "Correct the current drawing fields before applying".into();
             self.confirm_requested = false;
@@ -688,6 +702,7 @@ impl Workspace {
         }
 
         if (self.assembly_motion.is_some()
+            || self.fields.contains_key("assembly-weld-editor")
             || self.fields.contains_key("exploded-view-editor")
             || self.fields.contains_key("assembly-inspection-editor")
             || self.fields.contains_key("appearance-tool"))

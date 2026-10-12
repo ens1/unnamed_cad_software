@@ -878,6 +878,9 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
     if !crate::drawing_editor_ui::current_source_is_valid(w) {
         return Some("Correct the current drawing fields before applying");
     }
+    if !crate::assembly_welds_ui::current_source_is_valid(w) {
+        return Some("Correct the current assembly weld source before applying");
+    }
     if !crate::operation_editor_ui::current_source_is_valid(w) {
         return Some("Correct the current operation fields before applying");
     }
@@ -905,6 +908,7 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
         "configuration-source-invalid",
         "exploded-view-source-invalid",
         "assembly-inspection-source-invalid",
+        "assembly-weld-source-invalid",
         "appearance-source-invalid",
     ]
     .iter()
@@ -929,7 +933,8 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
             return Some("A current validated preview is required");
         }
     } else if !(w.fields.contains_key("exploded-view-editor")
-        || w.fields.contains_key("assembly-inspection-editor"))
+        || w.fields.contains_key("assembly-inspection-editor")
+        || w.fields.contains_key("assembly-weld-editor"))
     {
         return Some("No current operation to apply");
     }
@@ -1572,6 +1577,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                     }
                 }
             }
+            crate::assembly_welds_ui::tree(ui, w);
             if ui.button("Insert Component").clicked() {
                 ui::action(w, "part.new");
             }
@@ -2583,6 +2589,9 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
         }
         Operation::Weldment { operation } => {
             changed |= crate::fabrication_ui::weldment_fields(ui, w, &feature.id, operation);
+        }
+        Operation::WeldBead { .. } => {
+            ui.label("Weld Bead parameters are exposed through the modeling property manager.");
         }
         Operation::Surface { operation } => {
             changed |= crate::surface_ui::fields(ui, w, &feature.id, operation);

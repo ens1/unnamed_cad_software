@@ -33,6 +33,14 @@ pub enum Command {
         assembly: Id,
         inspection: Box<crate::assembly_inspection::Definition>,
     },
+    PutAssemblyWeld {
+        assembly: Id,
+        weld: Box<crate::weld_beads::Definition>,
+    },
+    DeleteAssemblyWeld {
+        assembly: Id,
+        weld: Id,
+    },
     DeleteAssemblyInspection {
         assembly: Id,
         inspection: Id,
@@ -214,6 +222,12 @@ impl Command {
                 assembly,
                 inspection,
             } => crate::assembly_inspection::put(document, &assembly, *inspection)?,
+            Self::PutAssemblyWeld { assembly, weld } => {
+                crate::assembly_welds::put(document, &assembly, *weld)?
+            }
+            Self::DeleteAssemblyWeld { assembly, weld } => {
+                crate::assembly_welds::remove(document, &assembly, &weld)?
+            }
             Self::DeleteAssemblyInspection {
                 assembly,
                 inspection,
@@ -729,6 +743,9 @@ impl Command {
                     }
                 }
                 retarget_drawing_occurrence(
+                    document, &assembly, &instance, &def, &new_id, &mapping,
+                )?;
+                crate::assembly_welds::retarget_instance(
                     document, &assembly, &instance, &def, &new_id, &mapping,
                 )?;
                 document

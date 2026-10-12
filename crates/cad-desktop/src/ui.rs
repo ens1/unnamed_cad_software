@@ -886,6 +886,7 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         || crate::operation_editor_ui::action(w, command, Some(&element.data))
         || crate::drawing_editor_ui::action(w, command, Some(&element.data))
         || crate::assembly_motion_ui::action(w, command, Some(&element.data))
+        || crate::assembly_welds_ui::action(w, command, Some(&element.data))
     {
         return;
     }
@@ -1042,7 +1043,10 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
             setter.starts_with("appearance-")
                 || matches!(
                     setter,
-                    "operation-editor" | "drawing-editor" | "configuration-dimension"
+                    "operation-editor"
+                        | "drawing-editor"
+                        | "configuration-dimension"
+                        | "assembly-weld"
                 )
         }) {
         element.role.as_str()
@@ -1236,7 +1240,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     .map(str::to_string)
                     .unwrap_or_else(|| value.to_string());
                 let key = format!("presentation-field:{}:{editor_generation}", element.id);
-                let keep_invalid_text = crate::operation_editor_ui::field_is_invalid(w, element)
+                let keep_invalid_text = crate::assembly_welds_ui::field_is_invalid(w, element)
+                    || crate::operation_editor_ui::field_is_invalid(w, element)
                     || crate::drawing_editor_ui::field_is_invalid(w, element)
                     || crate::configuration_ui::field_is_invalid(w, element);
                 let text = w.fields.entry(key).or_insert(current.clone());
@@ -1309,6 +1314,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         draw(ui)
     };
     if let Some(error) = appearance_error {
+        crate::assembly_welds_ui::field_error(w, element, error.clone());
         crate::operation_editor_ui::field_error(w, element, error.clone());
         crate::drawing_editor_ui::field_error(w, element, error.clone());
         crate::configuration_ui::field_error(w, element, error.clone());
@@ -1317,12 +1323,14 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     if let Some(next) = next {
         match crate::presentation_composition::set_value(w, element, next) {
             Ok(()) => {
+                crate::assembly_welds_ui::field_error(w, element, None);
                 crate::appearances_ui::field_error(w, element, None);
                 crate::operation_editor_ui::field_error(w, element, None);
                 crate::drawing_editor_ui::field_error(w, element, None);
                 crate::configuration_ui::field_error(w, element, None);
             }
             Err(error) => {
+                crate::assembly_welds_ui::field_error(w, element, Some(error.to_string()));
                 w.status = error.to_string();
                 crate::appearances_ui::field_error(w, element, Some(error.to_string()));
                 crate::operation_editor_ui::field_error(w, element, Some(error.to_string()));
@@ -1661,6 +1669,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || crate::operation_editor_ui::action(w, cmd, None)
         || crate::drawing_editor_ui::action(w, cmd, None)
         || crate::assembly_motion_ui::action(w, cmd, None)
+        || crate::assembly_welds_ui::action(w, cmd, None)
     {
         return;
     }
@@ -1690,7 +1699,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
-        || w.fields.contains_key("assembly-inspection-editor"))
+        || w.fields.contains_key("assembly-inspection-editor")
+        || w.fields.contains_key("assembly-weld-editor"))
         && (cmd.starts_with("feature.")
             || cmd.starts_with("sketch.")
             || matches!(
@@ -2113,6 +2123,7 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
         || w.fields.contains_key("assembly-inspection-editor")
+        || w.fields.contains_key("assembly-weld-editor")
     {
         w.status = "Confirm or cancel the current operation before editing another feature".into();
         return;
@@ -2160,11 +2171,25 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
     w.open_editor("feature");
 }
 pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
+    if name == "Weld Bead" {
+        if w.session
+            .visible()
+            .assemblies
+            .contains_key(&w.session.visible().root)
+        {
+            let owner = w.session.visible().root.clone();
+            crate::assembly_welds_ui::new(w, &owner);
+        } else {
+            crate::weld_beads_ui::preset(w);
+        }
+        return;
+    }
     if w.fields.contains_key("appearance-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
         || w.fields.contains_key("assembly-inspection-editor")
+        || w.fields.contains_key("assembly-weld-editor")
     {
         w.status = "Confirm or cancel the current operation before editing another feature".into();
         return;
@@ -2753,6 +2778,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 | "assembly-motion"
         ) && !w.fields.contains_key("mate-editor")
             && !w.fields.contains_key("component-pattern-editor")
+            && !w.fields.contains_key("assembly-weld-editor")
             && ui.small_button("Close").clicked()
         {
             w.dialog = None;
@@ -3154,6 +3180,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
         || w.fields.contains_key("assembly-inspection-editor")
+        || w.fields.contains_key("assembly-weld-editor")
     {
         ui.label(cad_core::presentation::definition_name(&doc, &assembly_id));
     } else {
@@ -3175,6 +3202,10 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
     }
     if w.fields.contains_key("assembly-inspection-editor") {
         crate::assembly_inspection_ui::show(ui, w, &assembly_id);
+        return;
+    }
+    if w.fields.contains_key("assembly-weld-editor") {
+        crate::assembly_welds_ui::show(ui, w);
         return;
     }
     if w.fields.contains_key("component-pattern-editor") {
@@ -3219,6 +3250,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                     component_patterns: BTreeMap::new(),
                     exploded_views: BTreeMap::new(),
                     inspections: BTreeMap::new(),
+                    weld_beads: BTreeMap::new(),
                     parameters: BTreeMap::new(),
                 },
             );
@@ -3250,6 +3282,10 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
     if ui.button("Component Pattern…").clicked() {
         crate::component_pattern_ui::new(w, &assembly_id);
     }
+    if ui.button("Weld Bead…").clicked() {
+        crate::assembly_welds_ui::new(w, &assembly_id);
+    }
+    crate::assembly_welds_ui::tree(ui, w);
     if assembly_id == doc.root {
         if ui.button("Interference / Clearance…").clicked() {
             crate::assembly_inspection_ui::new(w);

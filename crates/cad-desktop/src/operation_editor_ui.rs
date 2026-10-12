@@ -22,6 +22,7 @@ pub fn supports(operation: &Operation) -> bool {
                 | Operation::DirectEdit { .. }
                 | Operation::Sheet { .. }
                 | Operation::Weldment { .. }
+                | Operation::WeldBead { .. }
                 | Operation::Mold { .. }
         )
 }
@@ -949,6 +950,31 @@ fn direct_fields(fields: &mut Fields<'_>, definition: &cad_core::direct_edit::De
         }
     }
 }
+fn sheet_attachment_fields(fields: &mut Fields<'_>, body: &NodeRef, attachment: &Option<NodeRef>) {
+    const P: &str = "/operation/operation";
+    fields.reference(&format!("{P}/body"), "Sheet stock", "sheet", false);
+    if let Ok(stock) = cad_core::sheet_metal::stock(fields.w.session.visible(), body) {
+        fields.group("attachment", "Bend attachment");
+        let choices = crate::fabrication_ui::sheet_attachment_choices(fields.w, &stock)
+            .into_iter()
+            .map(|(value, label)| choice(label, value))
+            .collect();
+        fields.choice(&format!("{P}/attachment"), "Attach bend to", choices);
+        if attachment.is_none() {
+            let choices = crate::fabrication_ui::sheet_base_members(fields.w, &stock)
+                .into_iter()
+                .map(|(value, label)| choice(label, value))
+                .collect();
+            fields.choice(&format!("{P}/member"), "Base sketch edge", choices);
+        } else {
+            fields.note(
+                "terminal-association",
+                "Full-width terminal edge; the source base member follows the selected attachment.",
+                "ready",
+            );
+        }
+    }
+}
 fn sheet_fields(fields: &mut Fields<'_>, operation: &cad_core::sheet_metal::SheetOperation) {
     use cad_core::sheet_metal::SheetOperation as S;
     const P: &str = "/operation/operation";
@@ -962,30 +988,27 @@ fn sheet_fields(fields: &mut Fields<'_>, operation: &cad_core::sheet_metal::Shee
             fields.quantity(&format!("{P}/k_factor"), "K factor (0–1)", "");
             thickness_side(fields, &format!("{P}/side"));
         }
-        S::Tab { .. } => {
+        S::Tab { .. } | S::NormalCut { .. } => {
             fields.reference(&format!("{P}/body"), "Sheet stock", "sheet", false);
             fields.reference(
                 &format!("{P}/profile"),
-                "Coplanar tab sketch",
+                if matches!(operation, S::NormalCut { .. }) {
+                    "Parallel cut sketch / stock face"
+                } else {
+                    "Base-plane closed sketch"
+                },
                 "profile",
                 false,
             );
+            fields.note("blank-edit","Tabs are coplanar with the base sketch; normal cuts accept parallel sketches including a stock face. Blank edits propagate to both states and preserve bend attachment sidewalls.","ready");
         }
-        S::EdgeFlange { body, .. } => {
-            fields.reference(&format!("{P}/body"), "Sheet stock", "sheet", false);
-            let choices = cad_core::sheet_metal::stock(fields.w.session.visible(), body)
-                .ok()
-                .map(|stock| {
-                    crate::fabrication_ui::members(fields.w, &stock)
-                        .into_iter()
-                        .map(|(value, label)| choice(label, value))
-                        .collect()
-                })
-                .unwrap_or_default();
-            fields.choice(&format!("{P}/member"), "Base sketch edge", choices);
+        S::EdgeFlange {
+            body, attachment, ..
+        } => {
+            sheet_attachment_fields(fields, body, attachment);
             fields.group("bend", "Bend");
             fields.quantity(&format!("{P}/length"), "Straight tangent length", "mm");
-            fields.quantity(&format!("{P}/angle"), "Bend angle", "deg");
+            fields.quantity(&format!("{P}/angle"), "Signed bend angle (±180°)", "deg");
             fields.optional_expression(
                 &format!("{P}/inside_radius"),
                 "inside radius",
@@ -993,6 +1016,35 @@ fn sheet_fields(fields: &mut Fields<'_>, operation: &cad_core::sheet_metal::Shee
                 "mm",
             );
             fields.optional_expression(&format!("{P}/k_factor"), "K factor", "0.4", "");
+            fields.note("flange-scope","Exact full-width circular bend; tangent length starts after the bend. Chained terminal attachments preserve source ancestry.","ready");
+        }
+        S::Hem {
+            body, attachment, ..
+        } => {
+            sheet_attachment_fields(fields, body, attachment);
+            fields.group("hem", "Open hem");
+            fields.quantity(&format!("{P}/length"), "Return tangent length", "mm");
+            fields.quantity(&format!("{P}/gap"), "Clear hem gap", "mm");
+            fields.toggle(&format!("{P}/reverse"), "Reverse bend side");
+            fields.optional_expression(&format!("{P}/k_factor"), "K factor", "0.4", "");
+            fields.note("hem-scope","Open 180° return: radius is half the clear gap. Closed crushed hems require forming support.","ready");
+        }
+        S::Jog {
+            body, attachment, ..
+        } => {
+            sheet_attachment_fields(fields, body, attachment);
+            fields.group("jog", "Two-bend jog");
+            fields.quantity(&format!("{P}/offset"), "Signed mid-surface offset", "mm");
+            fields.quantity(&format!("{P}/length"), "Terminal tangent length", "mm");
+            fields.quantity(&format!("{P}/angle"), "Bend magnitude (0–90°)", "deg");
+            fields.optional_expression(
+                &format!("{P}/inside_radius"),
+                "inside radius",
+                "1 mm",
+                "mm",
+            );
+            fields.optional_expression(&format!("{P}/k_factor"), "K factor", "0.4", "");
+            fields.note("jog-scope","Two equal opposite circular bends. Offset controls bend side and derives straight web length from radius and thickness; flat output carries two bend lines.","ready");
         }
         S::Flatten { .. } => {
             fields.reference(&format!("{P}/body"), "Sheet stock", "sheet", false);
@@ -1038,7 +1090,7 @@ fn weldment_fields(fields: &mut Fields<'_>, operation: &cad_core::weldment::Weld
             member_selection(
                 fields,
                 &format!("{P}/members"),
-                crate::fabrication_ui::path_members(fields.w, path)
+                crate::fabrication_ui::structural_path_members(fields.w, path)
                     .into_iter()
                     .map(|(value, label)| choice(label, value))
                     .collect(),
@@ -1069,8 +1121,40 @@ fn weldment_fields(fields: &mut Fields<'_>, operation: &cad_core::weldment::Weld
             fields.choice(
                 &format!("{P}/corner"),
                 "Corner treatment",
-                enum_choices(&[("miter", "Miter"), ("butt", "Butt")]),
+                enum_choices(&[
+                    ("miter", "Miter"),
+                    ("butt", "Independent butt"),
+                    ("butt_trim", "Trim to primary member"),
+                ]),
             );
+            fields.quantity(&format!("{P}/joint_gap"), "Joint gap", "mm");
+            if let W::Members {
+                corner: cad_core::weldment::Corner::ButtTrim,
+                ..
+            } = operation
+            {
+                fields.group("priority", "Member priority");
+                let all = crate::fabrication_ui::structural_path_members(fields.w, path);
+                let selected = if members.is_empty() {
+                    all.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>()
+                } else {
+                    members.clone()
+                };
+                for (id, label) in all.into_iter().filter(|(id, _)| selected.contains(id)) {
+                    let mut ordered = selected.clone();
+                    ordered.retain(|member| member != &id);
+                    ordered.insert(0, id.clone());
+                    fields.action(
+                        &format!("priority/{id}"),
+                        &format!("Make primary: {label}"),
+                        json!({"kind":"set","pointer":format!("{P}/members"),"value":ordered}),
+                        selected.first() != Some(&id),
+                        "This member already has first priority",
+                    );
+                }
+                fields.note("priority","At each branch the first incident member stays full length; later members trim to its convex outer wall. All uses saved source ID order.","ready");
+            }
+            fields.note("curved-stock","Circular arcs and closed circles use exact tangent transport and true developed lengths. Angled curved ends and spline stock coping remain unsupported.","ready");
         }
         W::Trim { body, members, .. } => {
             fields.reference(&format!("{P}/body"), "Weldment", "weldment", false);
@@ -1104,7 +1188,21 @@ fn weldment_fields(fields: &mut Fields<'_>, operation: &cad_core::weldment::Weld
             fields.choice(&format!("{P}/member"), "Member", choices);
             member_end(fields, &format!("{P}/end"));
             fields.quantity(&format!("{P}/thickness"), "Cap thickness", "mm");
-            fields.quantity(&format!("{P}/offset"), "Outward gap", "mm");
+            fields.choice(
+                &format!("{P}/contour"),
+                "Cap contour",
+                enum_choices(&[
+                    ("outer", "Outer contour"),
+                    ("inner", "Inner contour (inset)"),
+                ]),
+            );
+            fields.quantity(&format!("{P}/offset"), "Outward gap (+) / recess (−)", "mm");
+            fields.quantity(
+                &format!("{P}/edge_offset"),
+                "Contour oversize (+) / clearance (−)",
+                "mm",
+            );
+            fields.note("caps","Inner caps need one hollow contour and nonpositive clearance; recess needs straight stock. Line/arc contour sizing and separate accessory cut-list rows are supported.","ready");
         }
         W::Gusset { .. } => {
             fields.reference(&format!("{P}/body"), "Append to weldment", "weldment", true);
@@ -1120,6 +1218,130 @@ fn member_end(fields: &mut Fields<'_>, path: &str) {
         "Member end",
         enum_choices(&[("start", "Start"), ("finish", "Finish")]),
     );
+}
+fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::Definition) {
+    use cad_core::weld_beads::{Pattern, Profile};
+    const P: &str = "/operation/definition";
+    fields.group("sources", "Weld joint");
+    let mut seams = crate::weld_beads_ui::seam_choices(fields.w, fields.owner, &fields.feature.id)
+        .into_iter()
+        .map(|(source, label)| choice(label, source))
+        .collect::<Vec<_>>();
+    if let Some(source) = crate::weld_beads_ui::selected_seam(fields.w, true).filter(|source| {
+        source.dependency().definition == fields.owner
+            && source.dependency().node != fields.feature.id
+    }) {
+        seams.insert(0, choice("Selected joint edge / seam", source));
+    }
+    fields.choice(&format!("{P}/seam"), "Seam source", seams);
+    fields.note("seam-intent","A model edge follows its native construction ancestry; a sketch/reference curve is an explicitly authored seam.","ready");
+    let supports =
+        crate::weld_beads_ui::support_choices(fields.w, fields.owner, &fields.feature.id)
+            .into_iter()
+            .map(|(source, label)| choice(label, source))
+            .collect::<Vec<_>>();
+    for (index, _) in definition.supports.iter().enumerate() {
+        fields.choice(
+            &format!("{P}/supports/{index}"),
+            &format!("Support face {}", index + 1),
+            supports.clone(),
+        );
+        fields.array_actions(
+            &format!("{P}/supports"),
+            index,
+            &format!("support-{index}"),
+            false,
+        );
+    }
+    let selected = crate::weld_beads_ui::selected_supports(fields.w, true)
+        .into_iter()
+        .find(|face| {
+            face.body.definition == fields.owner
+                && face.body.node != fields.feature.id
+                && !definition.supports.contains(face)
+        });
+    let maximum = if definition.profile == Profile::Fillet {
+        2
+    } else {
+        1
+    };
+    fields.action(
+        "add-support",
+        "Add selected support face",
+        json!({"kind":"append","pointer":format!("{P}/supports"),"value":selected}),
+        selected.is_some() && definition.supports.len() < maximum,
+        "Select a face on a joint body; fillet welds use two faces and butt beads use one",
+    );
+    fields.action(
+        "infer-supports",
+        "Infer adjacent model faces",
+        json!({"kind":"set","pointer":format!("{P}/supports"),"value":[]}),
+        !definition.supports.is_empty(),
+        "Adjacent faces are already inferred",
+    );
+    fields.group("profile", "Deposited weld metal");
+    fields.choice(
+        &format!("{P}/profile"),
+        "Weld profile",
+        enum_choices(&[("fillet", "Fillet bead"), ("butt", "Butt bead")]),
+    );
+    fields.quantity(
+        &format!("{P}/size"),
+        if definition.profile == Profile::Fillet {
+            "Leg size"
+        } else {
+            "Bead width"
+        },
+        "mm",
+    );
+    fields.quantity(&format!("{P}/reinforcement"), "Crown rise", "mm");
+    fields.choice(
+        &format!("{P}/pattern"),
+        "Deposition",
+        vec![
+            choice("Continuous", Pattern::Continuous),
+            choice(
+                "Intermittent",
+                Pattern::Intermittent {
+                    length: "20 mm".into(),
+                    gap: "20 mm".into(),
+                },
+            ),
+        ],
+    );
+    if matches!(definition.pattern, Pattern::Intermittent { .. }) {
+        fields.quantity(&format!("{P}/pattern/length"), "Stitch length", "mm");
+        fields.quantity(&format!("{P}/pattern/gap"), "Clear gap", "mm");
+    }
+    fields.quantity(&format!("{P}/start_offset"), "Start offset", "mm");
+    fields.quantity(&format!("{P}/end_offset"), "End offset", "mm");
+    if !matches!(
+        definition.seam,
+        cad_core::weld_beads::SeamSource::ModelEdge { .. }
+    ) && definition.supports.is_empty()
+    {
+        fields.group("placement", "Authored seam orientation");
+        fields.coordinates(&format!("{P}/direction"), "Section direction", "");
+        fields.quantity(&format!("{P}/roll"), "Section roll", "deg");
+    }
+    fields.group("appearance", "Finish and engineering material");
+    let doc = fields.w.session.visible();
+    let mut finishes = vec![choice("Inherit part finish", Value::Null)];
+    finishes.extend(
+        doc.finishes
+            .values()
+            .map(|finish| choice(&finish.name, &finish.id)),
+    );
+    let mut materials = vec![choice("Inherit part material", Value::Null)];
+    materials.extend(
+        doc.materials
+            .values()
+            .map(|material| choice(&material.name, &material.id)),
+    );
+    fields.choice(&format!("{P}/finish"), "Optical finish", finishes);
+    fields.choice(&format!("{P}/material"), "Engineering material", materials);
+    fields.toggle(&format!("{P}/suppressed"), "Suppress deposited bead");
+    fields.note("native-solid","The bead is a separate native solid. Size, crown, stitches and offsets rebuild before Apply. Joint support trims are validated.","ready");
 }
 fn member_selection(fields: &mut Fields<'_>, path: &str, choices: Vec<Value>, all: bool) {
     let entries = fields
@@ -1284,6 +1506,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         Operation::DirectEdit { definition } => direct_fields(&mut fields, definition),
         Operation::Sheet { operation } => sheet_fields(&mut fields, operation),
         Operation::Weldment { operation } => weldment_fields(&mut fields, operation),
+        Operation::WeldBead { definition } => weld_bead_fields(&mut fields, definition),
         Operation::Mold { operation } => mold_fields(&mut fields, operation),
         _ => common::fields(&mut fields),
     }
@@ -1530,12 +1753,7 @@ fn clear_dependent_selections(
             && source.pointer("/operation/operation/member").is_some()
         {
             if kind == "sheet" {
-                if let Ok(stock) = cad_core::sheet_metal::stock(w.session.visible(), &body)
-                    && let Some((member, _)) =
-                        crate::fabrication_ui::members(w, &stock).into_iter().next()
-                {
-                    replace_value(source, "/operation/operation/member", json!(member))?;
-                }
+                repair_sheet_target(source, w, true)?;
             } else if kind == "weldment"
                 && let Ok(stock) = cad_core::weldment::stock(w.session.visible(), &body)
                 && let Some((member, _)) = crate::fabrication_ui::member_choices(w, &stock)
@@ -1545,6 +1763,9 @@ fn clear_dependent_selections(
                 replace_value(source, "/operation/operation/member", json!(member))?;
             }
         }
+    }
+    if kind == "sheet" && pointer == "/operation/operation/attachment" {
+        repair_sheet_target(source, w, false)?;
     }
     if pointer == "/operation/options/uniform" && next == &Value::Bool(false) {
         let factor = source.pointer("/operation/options/factors/0").cloned();
@@ -1570,6 +1791,58 @@ fn clear_dependent_selections(
         && source.pointer("/operation/operation/anchor").is_some()
     {
         replace_value(source, "/operation/operation/anchor", Value::Null)?;
+    }
+    Ok(())
+}
+fn repair_sheet_target(source: &mut Value, w: &Workspace, reset: bool) -> Result<()> {
+    const P: &str = "/operation/operation";
+    let body: NodeRef = serde_json::from_value(
+        source
+            .pointer(&format!("{P}/body"))
+            .cloned()
+            .ok_or_else(|| invalid("Sheet stock selection is missing"))?,
+    )?;
+    let stock = cad_core::sheet_metal::stock(w.session.visible(), &body)?;
+    if reset {
+        let (member, attachment) = crate::fabrication_ui::sheet_target(w, &stock)
+            .ok_or_else(|| invalid("Sheet stock has no available base or terminal flange edge"))?;
+        replace_value(source, &format!("{P}/member"), json!(member))?;
+        replace_value(source, &format!("{P}/attachment"), json!(attachment))?;
+        return Ok(());
+    }
+    let attachment: Option<NodeRef> = serde_json::from_value(
+        source
+            .pointer(&format!("{P}/attachment"))
+            .cloned()
+            .unwrap_or(Value::Null),
+    )?;
+    if let Some(attachment) = attachment {
+        let parent = stock
+            .flanges
+            .iter()
+            .find(|flange| {
+                flange.source == attachment
+                    && !stock
+                        .flanges
+                        .iter()
+                        .any(|child| child.attachment.as_ref() == Some(&attachment))
+            })
+            .ok_or_else(|| {
+                invalid("Choose an available terminal edge in the selected sheet stock")
+            })?;
+        replace_value(source, &format!("{P}/member"), json!(parent.member))?;
+    } else {
+        let choices = crate::fabrication_ui::sheet_base_members(w, &stock);
+        let current = source
+            .pointer(&format!("{P}/member"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !choices.iter().any(|(member, _)| member == current) {
+            let (member, _) = choices.into_iter().next().ok_or_else(|| {
+                invalid("No unused base edge remains; choose a terminal flange attachment")
+            })?;
+            replace_value(source, &format!("{P}/member"), json!(member))?;
+        }
     }
     Ok(())
 }
@@ -1847,6 +2120,20 @@ fn render_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement
 fn editable_source(feature: &Feature) -> Value {
     let mut source = json!(feature);
     common::normalize_source(&feature.operation, &mut source);
+    if let Operation::WeldBead { definition } = &feature.operation {
+        source["operation"]["definition"]["supports"] = json!(definition.supports);
+        source["operation"]["definition"]["finish"] = json!(definition.finish);
+        source["operation"]["definition"]["material"] = json!(definition.material);
+    }
+    if let Operation::Sheet { operation } = &feature.operation {
+        use cad_core::sheet_metal::SheetOperation as S;
+        if let S::EdgeFlange { attachment, .. }
+        | S::Hem { attachment, .. }
+        | S::Jog { attachment, .. } = operation.as_ref()
+        {
+            source["operation"]["operation"]["attachment"] = json!(attachment);
+        }
+    }
     source
 }
 

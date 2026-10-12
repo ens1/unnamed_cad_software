@@ -160,7 +160,7 @@ pub fn collapse_for_modeling(w: &mut Workspace) {
     let rebased = w.selected.as_ref().and_then(|s| {
         let e = crate::viewport::display_evaluation(w)?;
         let display = crate::viewport::display_instances(w, e)
-            .iter()
+            .into_iter()
             .find(|i| i.path == s.path)?;
         let original = e.instances.iter().find(|i| i.path == s.path)?;
         let shifted: [f64; 3] = std::array::from_fn(|r| s.point[r] - display.matrix[r][3]);

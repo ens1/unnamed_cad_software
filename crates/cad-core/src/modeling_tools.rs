@@ -253,6 +253,27 @@ pub const TOOLS: &[ModelingTool] = &[
         requires_body: true,
     },
     ModelingTool {
+        command: "sheet.hem",
+        label: "Open Hem",
+        group: "Sheet Metal",
+        preset: "Open Hem",
+        requires_body: true,
+    },
+    ModelingTool {
+        command: "sheet.jog",
+        label: "Jog / Offset Flange",
+        group: "Sheet Metal",
+        preset: "Jog / Offset Flange",
+        requires_body: true,
+    },
+    ModelingTool {
+        command: "sheet.cut",
+        label: "Normal Cut / Relief",
+        group: "Sheet Metal",
+        preset: "Sheet Normal Cut / Relief",
+        requires_body: true,
+    },
+    ModelingTool {
         command: "sheet.flat",
         label: "Flat Pattern",
         group: "Sheet Metal",
@@ -292,6 +313,13 @@ pub const TOOLS: &[ModelingTool] = &[
         label: "Gusset",
         group: "Weldments",
         preset: "Sketch Gusset",
+        requires_body: false,
+    },
+    ModelingTool {
+        command: "weld.bead",
+        label: "Weld Bead",
+        group: "Weldments",
+        preset: "Weld Bead",
         requires_body: false,
     },
     ModelingTool {

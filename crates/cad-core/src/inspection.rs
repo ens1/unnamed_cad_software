@@ -247,7 +247,20 @@ pub fn evaluate(
         }
         let bodies: BTreeMap<_, _> = bodies
             .into_iter()
-            .map(|(id, value)| Ok((id, value.metrics(origin, density)?)))
+            .map(|(id, value)| {
+                let body_density = part
+                    .features
+                    .iter()
+                    .find(|f| f.id == id)
+                    .and_then(|f| match &f.operation {
+                        crate::Operation::WeldBead { definition } => definition.material.as_ref(),
+                        _ => None,
+                    })
+                    .and_then(|id| doc.materials.get(id))
+                    .map(|m| m.density_kg_m3)
+                    .or(density);
+                Ok((id, value.metrics(origin, body_density)?))
+            })
             .collect::<Result<_>>()?;
         let total = combine(&bodies.values().cloned().collect::<Vec<_>>())?;
         result.insert(
@@ -256,7 +269,7 @@ pub fn evaluate(
                 version: CONTRACT_VERSION,
                 representation: "evaluated_boundary_tessellation".into(),
                 definition: definition.into(),
-                density_kg_m3: density,
+                density_kg_m3: if part.features.iter().any(|f| matches!(&f.operation, crate::Operation::WeldBead { definition } if definition.material.as_ref().is_some_and(|id| id != &part.material))) { None } else { density },
                 total,
                 bodies,
             },
@@ -370,4 +383,47 @@ pub fn combine(values: &[Metrics]) -> Result<Metrics> {
     };
     validate_metrics(&result)?;
     Ok(result)
+}
+
+/// Engineering properties of independently owned assembly geometry.
+/// Integration uses the evaluated boundary, with the same numeric limits as parts.
+pub fn boundary_metrics(mesh: &MeshData, density: Option<f64>) -> Result<Metrics> {
+    let origin = Vector3::from_fn(|r, _| (mesh.bounds[0][r] + mesh.bounds[1][r]) / 2.);
+    let mut integral = Integral::default();
+    for face in &mesh.faces {
+        let end = face
+            .start
+            .checked_add(face.count)
+            .ok_or_else(|| invalid("Invalid boundary index range"))?;
+        let indices = mesh
+            .indices
+            .get(face.start..end)
+            .ok_or_else(|| invalid("Invalid boundary index range"))?;
+        if indices.len() % 3 != 0 {
+            return Err(invalid(
+                "Engineering properties require triangular boundaries",
+            ));
+        }
+        for triangle in indices.as_chunks::<3>().0 {
+            let [a, b, c] = triangle.map(|i| {
+                mesh.positions
+                    .get(i as usize)
+                    .copied()
+                    .map(Vector3::from)
+                    .ok_or_else(|| invalid("Invalid boundary vertex index"))
+            });
+            let points = [a?, b?, c?];
+            if points.iter().flat_map(|p| p.iter()).any(|v| !v.is_finite()) {
+                return Err(invalid(
+                    "Engineering properties require finite boundary coordinates",
+                ));
+            }
+            integral.triangle(
+                points,
+                origin,
+                face.body_kind == crate::protocol::BodyKind::Solid,
+            );
+        }
+    }
+    integral.metrics(origin, density)
 }

@@ -202,6 +202,9 @@ pub fn link(
         for inspection in assembly.inspections.values() {
             mapping.insert(inspection.id.clone(), mapped(&link_id, &inspection.id));
         }
+        for weld in assembly.weld_beads.values() {
+            mapping.insert(weld.id.clone(), mapped(&link_id, &weld.id));
+        }
         for pattern in assembly.component_patterns.values() {
             mapping.insert(pattern.id.clone(), mapped(&link_id, &pattern.id));
             for mate in &pattern.mates {
@@ -430,6 +433,8 @@ fn remap_source_inner(
                 | "component_patterns"
                 | "exploded_views"
                 | "inspections"
+                | "weld_beads"
+                | "assembly_welds"
         )
     }
     fn reference_text(

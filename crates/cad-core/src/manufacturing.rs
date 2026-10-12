@@ -349,7 +349,12 @@ pub fn dxf_profiles(doc: &Document) -> Result<String> {
 pub fn stl(evaluation: &Evaluation, path: &Path) -> Result<()> {
     let mut file = std::fs::File::create(path)?;
     writeln!(file, "solid tcad")?;
-    for instance in &evaluation.instances {
+    for instance in evaluation.instances.iter().chain(
+        evaluation
+            .assembly_welds
+            .values()
+            .map(|weld| &weld.placement),
+    ) {
         if let Some(mesh) = evaluation.meshes.get(&instance.mesh_key) {
             let transform = |p: [f64; 3]| -> nalgebra::Vector3<f64> {
                 nalgebra::Vector3::from(std::array::from_fn(|i| {
@@ -519,6 +524,18 @@ pub struct CutListRow {
     pub start_cut_angle_rad: Option<f64>,
     #[serde(default)]
     pub end_cut_angle_rad: Option<f64>,
+    #[serde(default)]
+    pub bend_radius_mm: Option<f64>,
+    #[serde(default)]
+    pub sweep_angle_rad: Option<f64>,
+    #[serde(default)]
+    pub accessory: Option<crate::weldment::AccessoryKind>,
+    #[serde(default)]
+    pub blank_size_mm: Option<[f64; 2]>,
+    #[serde(default)]
+    pub thickness_mm: Option<f64>,
+    #[serde(default)]
+    pub blank_bounds_exact: Option<bool>,
 }
 pub fn cut_list(doc: &Document) -> Result<Vec<CutListRow>> {
     let mut grouped: BTreeMap<(Id, Option<Id>), usize> = BTreeMap::new();
@@ -557,6 +574,12 @@ pub fn cut_list(doc: &Document) -> Result<Vec<CutListRow>> {
                     section: None,
                     start_cut_angle_rad: None,
                     end_cut_angle_rad: None,
+                    bend_radius_mm: None,
+                    sweep_angle_rad: None,
+                    accessory: None,
+                    blank_size_mm: None,
+                    thickness_mm: None,
+                    blank_bounds_exact: None,
                 });
             }
         }
@@ -666,6 +689,13 @@ fn append_native_cut_list(
                         part.name, feature.name
                     ))
                 })?;
+            if evaluated.version != crate::weldment::CONTRACT_VERSION
+                || evaluated.source != part.reference(&feature.id)
+            {
+                return Err(CadError::Invalid(
+                    "Native cut list requires current fabrication metadata".into(),
+                ));
+            }
             for (index, member) in evaluated.members.iter().enumerate() {
                 if limit.is_some_and(|limit| rows.len() >= limit) {
                     return Err(CadError::Invalid(
@@ -690,7 +720,17 @@ fn append_native_cut_list(
                 rows.push(CutListRow {
                     definition: definition.clone(),
                     feature: feature.id.clone(),
-                    description: format!("{group} · Member {}{suffix}", index + 1),
+                    description: if let (Some(radius), Some(angle)) =
+                        (member.bend_radius_mm, member.sweep_angle_rad)
+                    {
+                        format!(
+                            "{group} · Member {} · Bend R{radius:.3} mm / {:.3} deg{suffix}",
+                            index + 1,
+                            angle.to_degrees()
+                        )
+                    } else {
+                        format!("{group} · Member {}{suffix}", index + 1)
+                    },
                     material: doc
                         .materials
                         .get(&part.material)
@@ -703,6 +743,69 @@ fn append_native_cut_list(
                     section: Some(member.section.clone()),
                     start_cut_angle_rad: Some(member.start_cut_angle_rad),
                     end_cut_angle_rad: Some(member.end_cut_angle_rad),
+                    bend_radius_mm: member.bend_radius_mm,
+                    sweep_angle_rad: member.sweep_angle_rad,
+                    accessory: None,
+                    blank_size_mm: None,
+                    thickness_mm: None,
+                    blank_bounds_exact: None,
+                });
+            }
+            for accessory in &evaluated.accessories {
+                if limit.is_some_and(|limit| rows.len() >= limit) {
+                    return Err(CadError::Invalid(
+                        "Native drawing cut list exceeds its bounded active row limit".into(),
+                    ));
+                }
+                if !accessory.thickness_mm.is_finite()
+                    || accessory.thickness_mm <= 0.
+                    || accessory
+                        .blank_size_mm
+                        .iter()
+                        .any(|v| !v.is_finite() || *v <= 0.)
+                {
+                    return Err(CadError::Invalid(
+                        "Native cut-list accessory has invalid stock dimensions".into(),
+                    ));
+                }
+                let name = part
+                    .features
+                    .iter()
+                    .find(|source| source.id == accessory.reference.group.node)
+                    .map(|source| source.name.as_str())
+                    .unwrap_or("Accessory");
+                let bounds = if accessory.blank_bounds_exact {
+                    "blank"
+                } else {
+                    "control-hull stock bounds"
+                };
+                rows.push(CutListRow {
+                    definition: definition.clone(),
+                    feature: feature.id.clone(),
+                    description: format!(
+                        "{name} · {bounds} {:.3} × {:.3} × {:.3} mm{suffix}",
+                        accessory.blank_size_mm[0],
+                        accessory.blank_size_mm[1],
+                        accessory.thickness_mm
+                    ),
+                    material: doc
+                        .materials
+                        .get(&part.material)
+                        .map(|material| material.name.clone())
+                        .unwrap_or_else(|| part.material.clone()),
+                    length_mm: accessory.blank_size_mm[0].max(accessory.blank_size_mm[1]),
+                    quantity,
+                    configuration: configuration.clone(),
+                    member_reference: Some(accessory.reference.clone()),
+                    section: Some(accessory.profile.clone()),
+                    start_cut_angle_rad: Some(0.),
+                    end_cut_angle_rad: Some(0.),
+                    bend_radius_mm: None,
+                    sweep_angle_rad: None,
+                    accessory: Some(accessory.kind),
+                    blank_size_mm: Some(accessory.blank_size_mm),
+                    thickness_mm: Some(accessory.thickness_mm),
+                    blank_bounds_exact: Some(accessory.blank_bounds_exact),
                 });
             }
         }
@@ -712,7 +815,7 @@ fn append_native_cut_list(
 
 pub fn cut_list_csv_evaluated(doc: &Document, evaluation: &Evaluation) -> Result<String> {
     let escaped = |text: &str| format!("\"{}\"", text.replace('"', "\"\""));
-    let mut out = "Definition,Member,Material,Section,Centerline length mm,Start cut angle deg,Finish cut angle deg,Quantity,Configuration,Member source\n".to_string();
+    let mut out = "Definition,Member,Material,Section,Centerline or stock length mm,Start cut angle deg,Finish cut angle deg,Quantity,Configuration,Member source,Bend radius mm,Bend sweep deg,Accessory,Stock width mm,Stock height mm,Thickness mm,Stock bounds exact\n".to_string();
     for row in cut_list_evaluated(doc, evaluation)? {
         let source = row
             .member_reference
@@ -735,7 +838,7 @@ pub fn cut_list_csv_evaluated(doc: &Document, evaluation: &Evaluation) -> Result
                 .unwrap_or_default()
         };
         out.push_str(&format!(
-            "{},{},{},{},{:.6},{},{},{},{},{}\n",
+            "{},{},{},{},{:.6},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             escaped(&row.definition),
             escaped(&row.description),
             escaped(&row.material),
@@ -745,7 +848,26 @@ pub fn cut_list_csv_evaluated(doc: &Document, evaluation: &Evaluation) -> Result
             angle(row.end_cut_angle_rad),
             row.quantity,
             escaped(row.configuration.as_deref().unwrap_or_default()),
-            escaped(&source)
+            escaped(&source),
+            row.bend_radius_mm
+                .map(|v| format!("{v:.6}"))
+                .unwrap_or_default(),
+            angle(row.sweep_angle_rad),
+            row.accessory
+                .map(|kind| format!("{kind:?}"))
+                .unwrap_or_default(),
+            row.blank_size_mm
+                .map(|size| format!("{:.6}", size[0]))
+                .unwrap_or_default(),
+            row.blank_size_mm
+                .map(|size| format!("{:.6}", size[1]))
+                .unwrap_or_default(),
+            row.thickness_mm
+                .map(|v| format!("{v:.6}"))
+                .unwrap_or_default(),
+            row.blank_bounds_exact
+                .map(|v| v.to_string())
+                .unwrap_or_default(),
         ));
     }
     Ok(out)

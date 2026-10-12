@@ -57,6 +57,7 @@ fn submit(w: &mut Workspace, assembly: &str, p: Definition) {
 pub fn begin(w: &mut Workspace, assembly: &str, p: Definition) {
     if w.fields.contains_key("exploded-view-editor")
         || w.fields.contains_key("assembly-inspection-editor")
+        || w.fields.contains_key("assembly-weld-editor")
         || w.sketch.is_some()
         || w.fields.contains_key("mate-editor")
         || w.fields.contains_key("configuration-editor")

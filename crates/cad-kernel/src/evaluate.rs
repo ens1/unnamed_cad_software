@@ -168,6 +168,8 @@ impl<K: KernelAdapter> Evaluator<K> {
             properties: BTreeMap::new(),
             sheets: BTreeMap::new(),
             weldments: BTreeMap::new(),
+            weld_beads: BTreeMap::new(),
+            assembly_welds: BTreeMap::new(),
             mold_analyses: BTreeMap::new(),
             configurations: cad_core::configuration::evaluated(&document).ok(),
             history: std::sync::Arc::new(history),
@@ -223,7 +225,12 @@ impl<K: KernelAdapter> Evaluator<K> {
                 )
             })) {
                 Ok(Ok(evaluated)) => {
-                    preview.baseline_instances = evaluated.instances;
+                    preview.baseline_instances = evaluated
+                        .instances
+                        .iter()
+                        .chain(evaluated.assembly_welds.values().map(|w| &w.placement))
+                        .cloned()
+                        .collect();
                     baseline = Some((self.body_sets.clone(), self.surface_sets.clone()));
                 }
                 failed => {
@@ -280,6 +287,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                     definition: evaluated
                         .instances
                         .iter()
+                        .chain(evaluated.assembly_welds.values().map(|w| &w.placement))
                         .chain(&preview.baseline_instances)
                         .find(|instance| instance.mesh_key == key)
                         .map(|instance| instance.definition.clone())
@@ -413,7 +421,12 @@ impl<K: KernelAdapter> Evaluator<K> {
         self.focused_previews.insert(key.into(), change);
     }
 
-    fn build(&mut self, doc: &Document, root: &Path, tolerance: f64) -> Result<Document> {
+    pub(crate) fn build(
+        &mut self,
+        doc: &Document,
+        root: &Path,
+        tolerance: f64,
+    ) -> Result<Document> {
         self.failed_build = None;
         doc.validate()?;
         if !tolerance.is_finite() || !(1e-6..=1.).contains(&tolerance) {
@@ -794,6 +807,27 @@ impl<K: KernelAdapter> Evaluator<K> {
         }
         Ok(output)
     }
+    fn weld_bead_output(
+        &self,
+        doc: &Document,
+        definition: &str,
+    ) -> Result<BTreeMap<String, cad_core::weld_beads::Evaluated>> {
+        let part = &doc.parts[definition];
+        let mut output = BTreeMap::new();
+        for feature in part.features.iter().filter(|feature| {
+            !feature.suppressed
+                && part.outputs.contains(&feature.id)
+                && matches!(feature.operation, cad_core::Operation::WeldBead { .. })
+        }) {
+            if let Some(bead) =
+                self.adapter
+                    .weld_bead_metadata(doc, &part.reference(&feature.id), &self.shapes)?
+            {
+                output.insert(feature.id.clone(), bead);
+            }
+        }
+        Ok(output)
+    }
     fn reference_output(
         &self,
         doc: &Document,
@@ -1031,11 +1065,15 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         let mut mold_analyses = BTreeMap::new();
         let mut sheets = BTreeMap::new();
         let mut weldments = BTreeMap::new();
+        let mut weld_beads = BTreeMap::new();
         let mut history = BTreeMap::new();
         for part in solved.parts.values() {
             self.focused_preview(part, &part.id, tolerance);
             for (feature, weldment) in self.weldment_output(&solved, &part.id)? {
                 weldments.insert(format!("{}::{feature}", part.id), weldment);
+            }
+            for (feature, bead) in self.weld_bead_output(&solved, &part.id)? {
+                weld_beads.insert(format!("{}::{feature}", part.id), bead);
             }
             for (feature, report) in self.mold_output(&solved, &part.id) {
                 mold_analyses.insert(format!("{}::{feature}", part.id), report);
@@ -1112,6 +1150,9 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 {
                     weldments.insert(format!("{key}::{feature}"), weldment);
                 }
+                for (feature, bead) in self.weld_bead_output(&configured_solved, &i.definition)? {
+                    weld_beads.insert(format!("{key}::{feature}"), bead);
+                }
                 for (feature, geometry) in self.sketch_output(&configured_solved, &i.definition)? {
                     sketches.insert(format!("{key}::{feature}"), geometry);
                 }
@@ -1129,11 +1170,111 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 }
             }
         }
-        self.body_sets = body_sets;
         self.surface_sets = surface_sets;
         self.history_cache
             .retain(|key, _| history.contains_key(key));
         let properties = cad_core::inspection::evaluate(document, &meshes)?;
+        let mut assembly_welds = BTreeMap::new();
+        let occurrences = cad_core::assembly_welds::occurrences(document, &assemblies)?;
+        for occurrence in &occurrences {
+            let Some(assembly) = occurrence.context.assemblies.get(&occurrence.definition) else {
+                continue;
+            };
+            for weld in assembly.weld_beads.values().filter(|w| !w.suppressed) {
+                let owner = NodeRef {
+                    definition: assembly.id.clone(),
+                    node: weld.id.clone(),
+                };
+                let inverse = occurrence.matrix.try_inverse().ok_or_else(|| {
+                    CadError::Invalid("Weld Bead: assembly pose is singular".into())
+                })?;
+                let mut contexts = BTreeMap::new();
+                for (path, dependency) in
+                    std::iter::once((weld.seam.path(), weld.seam.dependency()))
+                        .chain(weld.supports.iter().map(|f| (f.path.as_slice(), &f.body)))
+                {
+                    let full_path = occurrence
+                        .path
+                        .iter()
+                        .chain(path)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    let leaf = occurrences
+                        .iter()
+                        .find(|o| o.path == full_path && o.definition == dependency.definition)
+                        .ok_or_else(|| {
+                            CadError::Invalid(format!(
+                                "Weld Bead {}: seam or support component is inactive",
+                                weld.name
+                            ))
+                        })?;
+                    let relative = inverse * leaf.matrix;
+                    contexts.insert(
+                        path.to_vec(),
+                        (
+                            leaf.context.clone(),
+                            std::array::from_fn(|r| std::array::from_fn(|c| relative[(r, c)])),
+                        ),
+                    );
+                }
+                let (mesh, bodies, bead) = self
+                    .adapter
+                    .assembly_weld(
+                        &occurrence.context,
+                        &owner,
+                        weld,
+                        &contexts,
+                        root,
+                        tolerance,
+                    )
+                    .map_err(|e| {
+                        CadError::Invalid(format!("{} / {}: {e}", assembly.name, weld.name))
+                    })?;
+                let seam_context = &contexts[weld.seam.path()].0;
+                let seam_part = &seam_context.parts[&weld.seam.dependency().definition];
+                let material = weld
+                    .material
+                    .clone()
+                    .unwrap_or_else(|| seam_part.material.clone());
+                let metrics = cad_core::inspection::boundary_metrics(
+                    &mesh,
+                    document.materials.get(&material).map(|m| m.density_kg_m3),
+                )?;
+                let mut path = occurrence.path.clone();
+                path.push(weld.id.clone());
+                let key = format!("assembly-weld:{}", path.join("/"));
+                let placement = cad_core::PlacedPart {
+                    path,
+                    definition: assembly.id.clone(),
+                    name: weld.name.clone(),
+                    matrix: std::array::from_fn(|r| {
+                        std::array::from_fn(|c| occurrence.matrix[(r, c)])
+                    }),
+                    configuration: occurrence.configuration.clone(),
+                    mesh_key: key.clone(),
+                    bom_excluded: true,
+                    finish: Some(
+                        weld.finish
+                            .clone()
+                            .unwrap_or_else(|| seam_part.finish.clone()),
+                    ),
+                };
+                body_sets.insert(key.clone(), bodies);
+                meshes.insert(key.clone(), mesh);
+                assembly_welds.insert(
+                    key,
+                    cad_core::assembly_welds::Evaluated {
+                        version: 1,
+                        owner,
+                        placement,
+                        bead,
+                        properties: metrics,
+                        material,
+                    },
+                );
+            }
+        }
+        self.body_sets = body_sets;
         let configurations = Some(cad_core::configuration::evaluated(document)?);
         let exploded_views = cad_core::exploded_views::evaluate(document, &instances)?;
         let assembly_inspections = crate::assembly_inspection::evaluate(
@@ -1162,6 +1303,8 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             mold_analyses,
             sheets,
             weldments,
+            weld_beads,
+            assembly_welds,
             history: std::sync::Arc::new(history),
             operation_preview: None,
         };
@@ -1226,6 +1369,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 &evaluated.assemblies,
                 &self.body_sets,
                 &self.surface_sets,
+                &evaluated.assembly_welds,
                 path,
             ),
             _ => Err(CadError::Unsupported(format!("Export format {format}"))),

@@ -29,6 +29,7 @@ fn editing(w: &Workspace) -> bool {
             "configuration-editor",
             "exploded-view-editor",
             "assembly-inspection-editor",
+            "assembly-weld-editor",
         ]
         .into_iter()
         .any(|key| w.fields.contains_key(key))
@@ -187,7 +188,8 @@ pub fn highlight(w: &Workspace, evaluation: &cad_core::protocol::Evaluation) -> 
         || evaluation.identity != w.session.identity()
         || w.view.history_cursor.is_some()
         || w.view.exploded_view.is_some()
-        || w.fields.contains_key("assembly-inspection-editor") && !current_source_is_valid(w)
+        || w.fields.contains_key("assembly-inspection-editor")
+        || w.fields.contains_key("assembly-weld-editor") && !current_source_is_valid(w)
     {
         return None;
     }

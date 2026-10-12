@@ -3,13 +3,25 @@ use crate::{
     CadError, Dimension, Document, Expr, Id, NodeRef, Result, reference_geometry::PlaneSource,
 };
 use serde::{Deserialize, Serialize};
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
+fn zero_length() -> Expr {
+    "0 mm".into()
+}
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Corner {
     #[default]
     Miter,
     Butt,
+    /// Preserve the first incident member and trim later members to its outer wall.
+    ButtTrim,
+}
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CapContour {
+    #[default]
+    Outer,
+    Inner,
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -40,6 +52,8 @@ pub enum WeldmentOperation {
         end_offset: Expr,
         #[serde(default)]
         corner: Corner,
+        #[serde(default = "zero_length")]
+        joint_gap: Expr,
     },
     Trim {
         body: NodeRef,
@@ -57,6 +71,10 @@ pub enum WeldmentOperation {
         end: End,
         thickness: Expr,
         offset: Expr,
+        #[serde(default)]
+        contour: CapContour,
+        #[serde(default = "zero_length")]
+        edge_offset: Expr,
     },
     Gusset {
         #[serde(default)]
@@ -103,12 +121,16 @@ impl WeldmentOperation {
                 roll,
                 start_offset,
                 end_offset,
+                joint_gap,
                 ..
-            } => vec![roll, start_offset, end_offset],
+            } => vec![roll, start_offset, end_offset, joint_gap],
             Self::Trim { offset, .. } => vec![offset],
             Self::EndCap {
-                thickness, offset, ..
-            } => vec![thickness, offset],
+                thickness,
+                offset,
+                edge_offset,
+                ..
+            } => vec![thickness, offset, edge_offset],
             Self::Gusset { thickness, .. } => vec![thickness],
         }
     }
@@ -124,6 +146,7 @@ pub struct Group {
     pub start_offset_mm: f64,
     pub end_offset_mm: f64,
     pub corner: Corner,
+    pub joint_gap_mm: f64,
 }
 #[derive(Clone, Debug)]
 pub struct Trim {
@@ -141,6 +164,8 @@ pub struct Cap {
     pub end: End,
     pub thickness_mm: f64,
     pub offset_mm: f64,
+    pub contour: CapContour,
+    pub edge_offset_mm: f64,
 }
 #[derive(Clone, Debug)]
 pub struct Plate {
@@ -212,8 +237,13 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
                 start_offset,
                 end_offset,
                 corner,
+                joint_gap,
                 ..
             } => {
+                let joint_gap_mm = length(joint_gap)?;
+                if joint_gap_mm < 0. {
+                    return Err(invalid("Joint gap must be nonnegative"));
+                }
                 if members
                     .iter()
                     .collect::<std::collections::BTreeSet<_>>()
@@ -237,6 +267,7 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
                     start_offset_mm: length(start_offset)?,
                     end_offset_mm: length(end_offset)?,
                     corner: *corner,
+                    joint_gap_mm,
                 });
             }
             WeldmentOperation::Trim {
@@ -280,6 +311,8 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
                 end,
                 thickness,
                 offset,
+                contour,
+                edge_offset,
                 ..
             } => {
                 let thickness = length(thickness)?;
@@ -291,9 +324,9 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
                 {
                     return Err(invalid("End-cap member must belong to inherited stock"));
                 }
-                if thickness <= 1e-7 || offset < 0. {
+                if thickness <= 1e-7 || (*contour == CapContour::Outer && offset < 0.) {
                     return Err(invalid(
-                        "End caps need positive thickness and nonnegative outward gap",
+                        "End caps need positive thickness; recessed caps must use the inner contour",
                     ));
                 }
                 if stock.caps.iter().any(|cap| {
@@ -310,6 +343,8 @@ pub fn stock(doc: &Document, reference: &NodeRef) -> Result<Stock> {
                     end: *end,
                     thickness_mm: thickness,
                     offset_mm: offset,
+                    contour: *contour,
+                    edge_offset_mm: length(edge_offset)?,
                 });
             }
             WeldmentOperation::Gusset {
@@ -344,6 +379,38 @@ pub struct EvaluatedMember {
     pub centerline_length_mm: f64,
     pub start_cut_angle_rad: f64,
     pub end_cut_angle_rad: f64,
+    pub path_kind: MemberPathKind,
+    pub start_tangent: [f64; 3],
+    pub end_tangent: [f64; 3],
+    pub bend_radius_mm: Option<f64>,
+    pub sweep_angle_rad: Option<f64>,
+    pub closed: bool,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberPathKind {
+    Straight,
+    CircularArc,
+    Circular,
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessoryKind {
+    EndCap,
+    Gusset,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EvaluatedAccessory {
+    /// Uses the same stable row identity contract as structural members.
+    pub reference: MemberRef,
+    pub kind: AccessoryKind,
+    pub profile: NodeRef,
+    pub thickness_mm: f64,
+    /// Stock rectangle in the accessory's own plane, including contour sizing.
+    pub blank_size_mm: [f64; 2],
+    /// False for conservative positive-weight spline control-hull stock bounds.
+    pub blank_bounds_exact: bool,
+    pub center: [f64; 3],
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EvaluatedWeldment {
@@ -352,6 +419,7 @@ pub struct EvaluatedWeldment {
     pub members: Vec<EvaluatedMember>,
     pub cap_count: usize,
     pub gusset_count: usize,
+    pub accessories: Vec<EvaluatedAccessory>,
 }
 pub fn semantic_fields(
     doc: &Document,
@@ -365,6 +433,7 @@ pub fn semantic_fields(
             roll,
             start_offset,
             end_offset,
+            joint_gap,
             ..
         } => vec![
             ("roll", "Section Rotation", roll, Dimension::Angle),
@@ -380,15 +449,30 @@ pub fn semantic_fields(
                 end_offset,
                 Dimension::Length,
             ),
+            ("joint_gap", "Joint Gap", joint_gap, Dimension::Length),
         ],
         WeldmentOperation::Trim { offset, .. } => {
             vec![("offset", "Trim Plane Offset", offset, Dimension::Length)]
         }
         WeldmentOperation::EndCap {
-            thickness, offset, ..
+            thickness,
+            offset,
+            edge_offset,
+            ..
         } => vec![
             ("thickness", "Cap Thickness", thickness, Dimension::Length),
-            ("offset", "Outward Gap", offset, Dimension::Length),
+            (
+                "offset",
+                "Outward Gap (+) / Recess (−)",
+                offset,
+                Dimension::Length,
+            ),
+            (
+                "edge_offset",
+                "Contour Oversize (+) / Clearance (−)",
+                edge_offset,
+                Dimension::Length,
+            ),
         ],
         WeldmentOperation::Gusset { thickness, .. } => vec![(
             "thickness",
@@ -402,7 +486,7 @@ pub fn semantic_fields(
         data: serde_json::json!({"contract":"tcad.weldment","version":CONTRACT_VERSION,"field":field,"type":"quantity","dimension":dimension,"expression":expression,"evaluated":crate::expression::value(doc,owner,expression,dimension).ok(),"editable":true}),
     }).collect();
     fields.push(crate::presentation::SemanticElement { id: format!("{node}::weldment::options"), role: "feature-options".into(), label: operation.name().into(), value: None, state: state.into(), commands: vec!["feature.edit".into(),"weldment.members".into(),"weldment.trim".into(),"weldment.cap".into(),"weldment.gusset".into()], relationships: operation.dependencies().into_iter().map(|source| source.node).collect(),
-        data: serde_json::json!({"contract":"tcad.weldment","version":CONTRACT_VERSION,"source":operation,"editable":true,"capabilities":{"section":"one_closed_region_with_optional_holes","paths":"planar_straight_sketch_members_including_construction","placement":["sketch_origin","locating_point","roll"],"groups":"multiple_saved_section_path_groups","corners":["two_incident_member_miter","independent_butt"],"trim":"associative_planar_end_projection","caps":"terminal_or_explicitly_trimmed_end","gussets":"closed_sketch_plate","manufacturing_length":"evaluated_centerline_between_end_planes","members_remain_separate_solids":true}}),
+        data: serde_json::json!({"contract":"tcad.weldment","version":CONTRACT_VERSION,"source":operation,"editable":true,"capabilities":{"section":"one_closed_region_with_optional_holes","paths":["planar_straight","planar_circular_arc","closed_circular"],"construction_paths":true,"placement":["sketch_origin","locating_point","roll"],"groups":"multiple_saved_section_path_groups","corners":["two_incident_member_miter_with_gap","independent_butt","prioritized_convex_polygon_member_butt_trim"],"trim":["associative_planar_straight_end_projection","normal_to_tangent_circular_end_plane"],"caps":["outer_contour","single_inner_contour","signed_recess","line_arc_contour_clearance"],"gussets":"closed_sketch_plate","manufacturing_length":"evaluated_true_centerline_developed_length","cut_list_accessories":"end_caps_and_gusset_regions","members_remain_separate_solids":true}}),
     });
     fields
 }

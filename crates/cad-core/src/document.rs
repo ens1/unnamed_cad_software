@@ -377,6 +377,9 @@ pub enum Operation {
     Weldment {
         operation: Box<crate::weldment::WeldmentOperation>,
     },
+    WeldBead {
+        definition: Box<crate::weld_beads::Definition>,
+    },
     SheetMetal {
         width: Expr,
         thickness: Expr,
@@ -480,6 +483,7 @@ impl Operation {
         match self {
             Self::Sheet { operation } => operation.name(),
             Self::Weldment { operation } => operation.name(),
+            Self::WeldBead { .. } => "Weld Bead",
             Self::ReferencePlane { .. } => "Plane",
             Self::ReferenceAxis { .. } => "Axis",
             Self::ReferencePoint { .. } => "Point",
@@ -523,6 +527,7 @@ impl Operation {
         match self {
             Self::Sheet { operation } => operation.expressions(),
             Self::Weldment { operation } => operation.expressions(),
+            Self::WeldBead { definition } => definition.expressions(),
             Self::ReferencePlane { definition } => definition.expressions(),
             Self::ReferenceAxis { definition } => definition.expressions(),
             Self::ReferencePoint { definition } => definition.expressions(),
@@ -615,6 +620,7 @@ impl Operation {
         let mut dependencies = match self {
             Self::Sheet { operation } => operation.dependencies(),
             Self::Weldment { operation } => operation.dependencies(),
+            Self::WeldBead { definition } => definition.dependencies(),
             Self::ReferencePlane { definition } => definition.dependencies(),
             Self::ReferenceAxis { definition } => definition.dependencies(),
             Self::ReferencePoint { definition } => definition.dependencies(),
@@ -889,6 +895,8 @@ pub struct Assembly {
     pub exploded_views: BTreeMap<Id, crate::exploded_views::Definition>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inspections: BTreeMap<Id, crate::assembly_inspection::Definition>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub weld_beads: BTreeMap<Id, crate::weld_beads::Definition>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Sketch {
@@ -1201,8 +1209,10 @@ impl Document {
     pub fn validate(&self) -> Result<()> {
         self.settings.validate(self)?;
         crate::appearance::validate(self)?;
+        crate::weld_beads::validate_parts(self)?;
         crate::exploded_views::validate(self)?;
         crate::assembly_inspection::validate(self)?;
+        crate::assembly_welds::validate(self)?;
         crate::drawing::validate_document(self)?;
         fn valid_id(id: &str) -> bool {
             !id.is_empty()
@@ -1294,6 +1304,11 @@ impl Document {
         for (key, assembly) in &self.assemblies {
             if key != &assembly.id || !ids.insert(key) {
                 return Err(CadError::Invalid("Invalid assembly identity".into()));
+            }
+            for (key, weld) in &assembly.weld_beads {
+                if key != &weld.id || !valid_id(key) || !ids.insert(key) {
+                    return Err(CadError::Invalid("Invalid assembly weld identity".into()));
+                }
             }
             for (key, pattern) in &assembly.component_patterns {
                 if key != &pattern.id || !valid_id(key) || !ids.insert(key) {
@@ -1592,6 +1607,7 @@ impl Document {
             component_patterns: BTreeMap::new(),
             exploded_views: BTreeMap::new(),
             inspections: BTreeMap::new(),
+            weld_beads: BTreeMap::new(),
             parameters: BTreeMap::new(),
         };
         let root = a.id.clone();

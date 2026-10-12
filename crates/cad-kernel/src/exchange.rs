@@ -45,6 +45,7 @@ pub fn export_step(
     evaluated: &BTreeMap<Id, cad_core::assembly_geometry::EvaluatedAssembly>,
     bodies: &BTreeMap<String, Vec<Solid>>,
     surfaces: &BTreeMap<String, Vec<Shell>>,
+    assembly_welds: &BTreeMap<String, cad_core::assembly_welds::Evaluated>,
     path: &Path,
 ) -> Result<()> {
     struct Traversal<'a> {
@@ -52,6 +53,7 @@ pub fn export_step(
         evaluated: &'a BTreeMap<Id, cad_core::assembly_geometry::EvaluatedAssembly>,
         bodies: &'a BTreeMap<String, Vec<Solid>>,
         surfaces: &'a BTreeMap<String, Vec<Shell>>,
+        assembly_welds: &'a BTreeMap<String, cad_core::assembly_welds::Evaluated>,
         graph: KernelAssembly<Vec<StepBody>, PartAttributes, Matrix4, PartAttributes>,
         active: BTreeSet<Id>,
         nodes: BTreeMap<Id, monstertruck::assembly::dag::NodeIndex>,
@@ -156,6 +158,49 @@ pub fn export_step(
                         ));
                     }
                 }
+                for weld in assembly.weld_beads.values().filter(|weld| !weld.suppressed) {
+                    let evaluated=self.assembly_welds.values().find(|value|value.owner.definition==definition&&value.owner.node==weld.id&&value.placement.configuration.as_deref()==configuration).ok_or_else(||CadError::Invalid("Current configured assembly weld geometry is unavailable for STEP export".into()))?;
+                    let geometry =
+                        self.bodies
+                            .get(&evaluated.placement.mesh_key)
+                            .ok_or_else(|| {
+                                CadError::Invalid(
+                                    "Deposited metal B-rep is unavailable for STEP export".into(),
+                                )
+                            })?;
+                    let shape = geometry
+                        .iter()
+                        .map(|body| {
+                            for shell in body.boundaries() {
+                                validate_step_boundaries(shell)?;
+                            }
+                            StepBody::new(StepModel::from(&body.compress()).to_string())
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let weld_key = format!("assembly-weld:{key}::{}", weld.id);
+                    let child = if let Some(child) = self.nodes.get(&weld_key) {
+                        *child
+                    } else {
+                        let child = self.graph.create_node(NodeEntity {
+                            shape,
+                            attrs: attrs(&weld_key, &weld.name),
+                        });
+                        self.nodes.insert(weld_key.clone(), child);
+                        child
+                    };
+                    if !self.graph.create_edge(
+                        node,
+                        child,
+                        EdgeEntity {
+                            matrix: Matrix4::from_scale(1.),
+                            attrs: attrs(&weld.id, &weld.name),
+                        },
+                    ) {
+                        return Err(CadError::Invalid(
+                            "Cannot serialize deposited metal STEP structure".into(),
+                        ));
+                    }
+                }
             }
             self.active.remove(definition);
             Ok(node)
@@ -167,6 +212,7 @@ pub fn export_step(
         evaluated,
         bodies,
         surfaces,
+        assembly_welds,
         graph: KernelAssembly::new(),
         active: BTreeSet::new(),
         nodes: BTreeMap::new(),
@@ -275,6 +321,7 @@ pub fn import_structure(doc: &mut Document, resource: &str, root: &Path) -> Resu
                 component_patterns: BTreeMap::new(),
                 exploded_views: BTreeMap::new(),
                 inspections: BTreeMap::new(),
+                weld_beads: BTreeMap::new(),
                 parameters: BTreeMap::new(),
             };
             if has_geometry {
@@ -382,6 +429,7 @@ pub fn import_structure(doc: &mut Document, resource: &str, root: &Path) -> Resu
         component_patterns: BTreeMap::new(),
         exploded_views: BTreeMap::new(),
         inspections: BTreeMap::new(),
+        weld_beads: BTreeMap::new(),
         parameters: BTreeMap::new(),
     };
     for definition in roots {

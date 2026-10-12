@@ -165,7 +165,7 @@ fn expansion(w: &Workspace, mode: SetMode) -> cad_core::Result<Vec<viewport::Sel
         ));
     }
     let mut instances = viewport::display_instances(w, evaluation)
-        .iter()
+        .into_iter()
         .filter(|instance| instance.definition == pick.definition && instance.path == pick.path);
     let instance = instances.next().ok_or_else(|| {
         cad_core::CadError::Invalid(
@@ -329,7 +329,7 @@ fn focus_edge(
         ));
     }
     let instances = viewport::display_instances(w, evaluation)
-        .iter()
+        .into_iter()
         .filter(|instance| instance.definition == body.definition && instance.path == path)
         .collect::<Vec<_>>();
     if instances.len() != 1 {
@@ -1234,6 +1234,10 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
     // topology command to the geometry that is selected now.
     if matches!(target, SelectionTarget::Geometry { .. }) && current(w).as_ref() != Some(target) {
         w.status = "Selection changed. Select the geometry again to show its actions".into();
+        return;
+    }
+    if command.starts_with("assembly.weld-") {
+        crate::assembly_welds_ui::action(w, command, Some(&serde_json::json!(target)));
         return;
     }
     if set_action(w, command) {

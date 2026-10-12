@@ -141,7 +141,8 @@ pub(crate) fn visible_at(
     let epsilon = (limit * 1e-5).max(1e-4);
     let displayed = display_evaluation(w).unwrap_or(evaluation);
     for display_instance in display_instances(w, displayed) {
-        let input = display_instances(w, evaluation).iter().find(|instance| {
+        let inputs = display_instances(w, evaluation);
+        let input = inputs.iter().copied().find(|instance| {
             instance.path == display_instance.path
                 && instance.definition == display_instance.definition
         });
@@ -241,6 +242,75 @@ fn triangle(o: [f64; 3], d: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> 
     let t = e2.dot(q) * inverse;
     (t > 0.).then_some(t)
 }
+/// Display batches retain body ownership while allowing independent optical bead finishes.
+fn finish_batches<'a>(
+    source: &'a MeshData,
+    doc: &cad_core::Document,
+    instance: &PlacedPart,
+) -> Vec<(std::borrow::Cow<'a, MeshData>, Option<String>)> {
+    let part = cad_core::configuration::effective_part(
+        doc,
+        &instance.definition,
+        instance.configuration.as_deref(),
+    )
+    .ok();
+    let assignments = part
+        .as_ref()
+        .map(|part| {
+            part.features
+                .iter()
+                .filter_map(|feature| match &feature.operation {
+                    cad_core::Operation::WeldBead { definition } => definition
+                        .finish
+                        .as_ref()
+                        .map(|finish| (feature.id.as_str(), finish.clone())),
+                    _ => None,
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    if assignments.is_empty() {
+        return vec![(std::borrow::Cow::Borrowed(source), None)];
+    }
+    let mut groups: BTreeMap<Option<String>, Vec<&cad_core::protocol::FaceRange>> = BTreeMap::new();
+    for face in &source.faces {
+        let finish = face
+            .body
+            .as_ref()
+            .and_then(|body| assignments.get(body.node.as_str()))
+            .cloned();
+        groups.entry(finish).or_default().push(face);
+    }
+    groups
+        .into_iter()
+        .map(|(finish, faces)| {
+            let mut mesh = source.clone();
+            mesh.indices.clear();
+            mesh.faces.clear();
+            mesh.edges.clear();
+            let mut vertex_map = BTreeMap::new();
+            let mut positions = vec![];
+            let mut normals = vec![];
+            for face in faces {
+                let mut range = face.clone();
+                range.start = mesh.indices.len();
+                for index in &source.indices[face.start..face.start + face.count] {
+                    let next = vertex_map.len() as u32;
+                    let mapped = *vertex_map.entry(*index).or_insert_with(|| {
+                        positions.push(source.positions[*index as usize]);
+                        normals.push(source.normals[*index as usize]);
+                        next
+                    });
+                    mesh.indices.push(mapped);
+                }
+                mesh.faces.push(range);
+            }
+            mesh.positions = positions;
+            mesh.normals = normals;
+            (std::borrow::Cow::Owned(mesh), finish)
+        })
+        .collect()
+}
 fn render_mesh(source: &MeshData, instance: &PlacedPart) -> Mesh {
     let positions = source
         .positions
@@ -284,10 +354,19 @@ pub(crate) fn display_evaluation(w: &Workspace) -> Option<&Evaluation> {
         .filter(|_| !w.view.original || w.view.history_cursor.is_some())
         .or(w.session.evaluation.as_ref())
 }
-pub(crate) fn display_instances<'a>(w: &Workspace, e: &'a Evaluation) -> &'a [PlacedPart] {
-    cad_core::exploded_views::selected(e, w.view.exploded_view.as_ref())
-        .map(|stage| stage.instances.as_slice())
-        .unwrap_or(&e.instances)
+pub(crate) fn display_instances<'a>(w: &Workspace, e: &'a Evaluation) -> Vec<&'a PlacedPart> {
+    if let Some(stage) = cad_core::exploded_views::selected(e, w.view.exploded_view.as_ref()) {
+        return stage.instances.iter().collect();
+    }
+    e.instances
+        .iter()
+        .chain(
+            e.assembly_welds
+                .values()
+                .filter(|_| w.view.history_cursor.is_none())
+                .map(|weld| &weld.placement),
+        )
+        .collect()
 }
 pub(crate) fn display_meshes<'a>(
     w: &Workspace,
@@ -365,7 +444,11 @@ fn preview_meshes(w: &Workspace) -> Vec<PreviewMesh<'_>> {
         .map(|instance| (&instance.path, cad_core::history::mesh_key(instance)))
         .collect::<std::collections::BTreeSet<_>>();
     let mut meshes = vec![];
-    for instance in instances.iter().filter(|instance| visible(w, instance)) {
+    for instance in instances
+        .iter()
+        .copied()
+        .filter(|instance| visible(w, instance))
+    {
         let Some(change) = preview.changes.get(cad_core::history::mesh_key(instance)) else {
             continue;
         };
@@ -696,7 +779,7 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
         let matches = selection_evaluation(w)
             .map(|evaluation| {
                 display_instances(w, evaluation)
-                    .iter()
+                    .into_iter()
                     .filter(|instance| selected_instance(&s, instance) && visible(w, instance))
                     .flat_map(|instance| selection_meshes(w, evaluation, instance))
                     .map(|mesh| {
@@ -1052,58 +1135,64 @@ pub fn sync_scene(
             if !visible(&w, instance) {
                 continue;
             }
-            for m in display_meshes(&w, e, instance) {
-                if m.positions.is_empty() || m.indices.is_empty() {
-                    continue;
-                }
-                let ghost_neighbor = ghost_neighbor(&w, instance);
-                let ghost = history || ghost_neighbor;
-                let mesh = meshes.add(render_mesh(m, instance));
-                let finish = resolved_finishes
-                    .get(&instance.path)
-                    .and_then(|id| doc.finishes.get(id))
-                    .unwrap_or(&default_finish);
-                let c = finish.base_color.map(|value| value as f32);
-                let base_color = if history {
-                    style_color(&props, "comparison-color", Color::srgba(0.2, 0.4, 1., 0.22))
-                } else if ghost_neighbor {
-                    let opacity = props
-                        .get("ghost-opacity")
-                        .and_then(|s| s.parse::<f32>().ok())
-                        .filter(|v| v.is_finite())
-                        .unwrap_or(0.13)
-                        .clamp(0., 1.);
-                    Color::srgba(c[0], c[1], c[2], opacity)
-                } else {
-                    Color::srgb(c[0], c[1], c[2])
-                };
-                let has_surfaces = m
-                    .faces
-                    .iter()
-                    .any(|face| face.body_kind == cad_core::protocol::BodyKind::Surface);
-                let material = finishes.add(render_appearance::material(
-                    doc,
-                    finish,
-                    instance,
-                    &root,
-                    &mut appearance,
-                    render_appearance::SurfaceStyle {
-                        tint: ghost.then_some(base_color),
-                        translucent: ghost,
-                        two_sided: ghost || has_surfaces,
-                    },
-                ));
-                let mut entity = commands.spawn((
-                    Mesh3d(mesh.clone()),
-                    MeshMaterial3d(material.clone()),
-                    RenderLayers::layer(1),
-                    CadBody {
-                        mesh,
-                        material: CadMaterial::Finish(material),
-                    },
-                ));
-                if ghost {
-                    entity.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+            for source in display_meshes(&w, e, instance) {
+                for (batch, assigned_finish) in finish_batches(source, doc, instance) {
+                    let m = batch.as_ref();
+                    if m.positions.is_empty() || m.indices.is_empty() {
+                        continue;
+                    }
+                    let ghost_neighbor = ghost_neighbor(&w, instance);
+                    let ghost = history || ghost_neighbor;
+                    let mesh = meshes.add(render_mesh(m, instance));
+                    let finish = assigned_finish
+                        .as_ref()
+                        .or_else(|| resolved_finishes.get(&instance.path))
+                        .or(instance.finish.as_ref())
+                        .and_then(|id| doc.finishes.get(id))
+                        .unwrap_or(&default_finish);
+                    let c = finish.base_color.map(|value| value as f32);
+                    let base_color = if history {
+                        style_color(&props, "comparison-color", Color::srgba(0.2, 0.4, 1., 0.22))
+                    } else if ghost_neighbor {
+                        let opacity = props
+                            .get("ghost-opacity")
+                            .and_then(|s| s.parse::<f32>().ok())
+                            .filter(|v| v.is_finite())
+                            .unwrap_or(0.13)
+                            .clamp(0., 1.);
+                        Color::srgba(c[0], c[1], c[2], opacity)
+                    } else {
+                        Color::srgb(c[0], c[1], c[2])
+                    };
+                    let has_surfaces = m
+                        .faces
+                        .iter()
+                        .any(|face| face.body_kind == cad_core::protocol::BodyKind::Surface);
+                    let material = finishes.add(render_appearance::material(
+                        doc,
+                        finish,
+                        instance,
+                        &root,
+                        &mut appearance,
+                        render_appearance::SurfaceStyle {
+                            tint: ghost.then_some(base_color),
+                            translucent: ghost,
+                            two_sided: ghost || has_surfaces,
+                        },
+                    ));
+                    let mut entity = commands.spawn((
+                        Mesh3d(mesh.clone()),
+                        MeshMaterial3d(material.clone()),
+                        RenderLayers::layer(1),
+                        CadBody {
+                            mesh,
+                            material: CadMaterial::Finish(material),
+                        },
+                    ));
+                    if ghost {
+                        entity
+                            .insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+                    }
                 }
             }
         }
@@ -1150,7 +1239,7 @@ pub fn sync_scene(
         .filter(|selection| selection.reference.topology == "face")
         && let Some(evaluation) = selection_evaluation(&w)
         && let Some(instance) = display_instances(&w, evaluation)
-            .iter()
+            .into_iter()
             .find(|instance| selected_instance(selection, instance) && visible(&w, instance))
     {
         let faces = selection_meshes(&w, evaluation, instance)
@@ -1569,7 +1658,7 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
             .and_then(|id| w.session.visible().parts.get(id))
         && let Some(feature) = part.features.iter().find(|f| &f.id == node)
         && let Some((instance, face)) = display_instances(w, e)
-            .iter()
+            .into_iter()
             .filter(|i| i.definition == part.id)
             .find_map(|i| {
                 display_meshes(w, e, i)
@@ -1594,7 +1683,7 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
         .and_then(|c| crate::ui::color(c))
         .unwrap_or(egui::Color32::from_rgb(0, 135, 190));
     for (index, instance) in display_instances(w, e)
-        .iter()
+        .into_iter()
         .filter(|i| w.view.pinned.iter().any(|id| i.path.contains(id)))
         .enumerate()
     {

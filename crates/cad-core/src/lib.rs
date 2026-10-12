@@ -69,6 +69,7 @@ pub mod sketch_actions;
 
 pub mod modeling_tools;
 
+pub mod assembly_welds;
 pub mod mold;
 pub mod navigation;
 pub mod sheet_metal;
@@ -83,4 +84,5 @@ pub mod sketch_transform;
 pub mod sketch_trim;
 pub mod surface;
 pub mod wall;
+pub mod weld_beads;
 pub mod weldment;

@@ -272,7 +272,7 @@ pub(crate) fn selected_plane(w: &Workspace, definition: &str) -> Option<(Plane, 
     let selected = selected.filter(|s| s.reference.topology == "face")?;
     let evaluated = viewport::selection_evaluation(w)?;
     let instance = viewport::display_instances(w, evaluated)
-        .iter()
+        .into_iter()
         .find(|i| i.path == selected.path && i.definition == selected.definition)?;
     let faces = viewport::display_meshes(w, evaluated, instance)
         .into_iter()
@@ -294,6 +294,7 @@ pub(crate) fn selected_plane(w: &Workspace, definition: &str) -> Option<(Plane, 
 pub fn begin(w: &mut Workspace, existing: Option<Feature>) {
     if w.fields.contains_key("exploded-view-editor")
         || w.fields.contains_key("assembly-inspection-editor")
+        || w.fields.contains_key("assembly-weld-editor")
     {
         w.status = "Confirm or cancel the current assembly operation before sketching".into();
         return;
