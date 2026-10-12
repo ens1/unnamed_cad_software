@@ -106,9 +106,11 @@ triangles, topology, volume and CAD exchange geometry are unchanged.
 Texture-space normal transforms use inverse-transpose matrices and restore
 world-space tangent orthogonality, including on nonuniform occurrence
 transforms. Smooth shading does not remove a faceted circular silhouette.
-Display tessellation still uses the model's saved evaluation/tessellation
-tolerance; lowering that setting increases display detail and worker cost.
-Automatic zoom-dependent remeshing is not implemented in this change. Singular
+Display tessellation now refines independently as the user zooms, through a
+separate persistent worker and the versioned [viewport detail contract](viewport-display-detail.md).
+View → Display detail controls the pixel target and automatic refinement; CSS
+can override its precision bounds. The saved modeling tolerance, native shapes,
+physical map scale, bump depth and source pixels stay unchanged. Singular
 or unavailable UV/carrier data can still require approximate face-local shading.
 Triplanar projection and repetitive marks in an imported image can also remain
 visible; TCAD does not silently alter the user's map scale, depth or pixels.

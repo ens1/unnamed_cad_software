@@ -401,7 +401,7 @@ pub fn elements(w: &Workspace) -> Vec<SemanticElement> {
     for row in out.iter_mut().filter(|e| e.role == "camera-view") {
         row.data["actions"] = json!(row.commands.iter().map(|command| {
             let enabled = if command == "camera-view.recall" { can_recall } else { can_edit };
-            json!({"command":command,"label":command.rsplit('.').next().unwrap_or(command),"enabled":enabled,"disabled_reason":if enabled{None}else{Some(if command=="camera-view.recall"{"Finish the active viewport gesture"}else{"Correct, apply or cancel the active editor before changing named views"})}})
+            json!({"command":command,"label":format!("{} · {}",match command.as_str(){"camera-view.recall"=>"Recall view","camera-view.edit"=>"Edit view","camera-view.delete"=>"Delete view",_=>"Named view"},row.label),"enabled":enabled,"disabled_reason":if enabled{None}else{Some(if command=="camera-view.recall"{"Finish the active viewport gesture"}else{"Correct, apply or cancel the active editor before changing named views"})}})
         }).collect::<Vec<_>>());
     }
     out.push(SemanticElement{id:"workspace.camera-views".into(),role:"camera-views-editor".into(),label:"Named views".into(),value:None,state:if w.dialog.as_deref()==Some("camera-views"){"open"}else{"closed"}.into(),commands:vec!["camera-views".into()],relationships:vec!["camera-views".into()],data:json!({"renderer":"camera-views-editor","pose":pose,"capture_precision":"f64-or-legacy-adapter","recall_changes_geometry":false})});

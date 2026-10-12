@@ -399,7 +399,10 @@ pub fn overlay(
     };
     let parent = viewport::style_target(w);
     let view_context = view_context(w);
+    let depth_token = crate::overlay_depth::token(w, rect);
     let key = serde_json::json!({
+        "depth_visibility":depth_token,
+        "display_detail_epoch":w.display_mesh.epoch,
         "pointer":[pointer.x,pointer.y],
         "rect":rect_key(rect), "clip":rect_key(ui.clip_rect()),
         "source":evaluation.identity,

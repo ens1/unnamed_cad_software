@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod evaluate;
+pub mod display_mesh;
 mod parallel_offset;
 mod planar;
 mod prismatic_boolean;

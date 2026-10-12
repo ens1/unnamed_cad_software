@@ -666,22 +666,110 @@ pub fn expression(ui: &mut egui::Ui, id: &str, label: &str, value: &mut cad_core
         label,
         "ready",
     );
-    ui.scope(|ui| {
-        ui.style_mut().override_font_id = Some(font(ui, &props));
-        if let Some(color) = props.get("color").and_then(|value| crate::ui::color(value)) {
-            ui.visuals_mut().override_text_color = Some(color);
-        }
-        let pad = padding(&props, ui.spacing().button_padding);
-        ui.spacing_mut().button_padding = egui::vec2(pad[1], pad[0]);
-        ui.add(
-            egui::TextEdit::singleline(&mut value.0)
-                .id(ui.id().with(id))
-                .desired_width(number(&props, "width", ui.available_width()))
-                .font(font(ui, &props)),
-        )
-    })
-    .inner
+    expression_edit(
+        ui,
+        id,
+        label,
+        value,
+        false,
+        "Value, units or parameter",
+        None,
+    )
     .changed()
+}
+
+/// Source-preserving expression editor without a second caption, also used by
+/// dimension popovers whose focus and completion gestures need the response.
+pub fn expression_edit(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    value: &mut cad_core::Expr,
+    request_focus: bool,
+    hint: &str,
+    size: Option<egui::Vec2>,
+) -> Response {
+    let props = properties(id, "expression-field", &["parameter-field"], "draft");
+    if props.get("display").is_some_and(|value| value == "none") {
+        return ui.interact(egui::Rect::NOTHING, ui.id().with(id), egui::Sense::hover());
+    }
+    #[derive(Clone)]
+    struct EditBuffer {
+        source: String,
+        text: String,
+    }
+    let edit_id = ui.id().with(id);
+    let buffer_id = edit_id.with("source-buffer");
+    let focused = request_focus || ui.memory(|memory| memory.has_focus(edit_id));
+    let source = value.0.clone();
+    let display = crate::quantity_display::expression(&source);
+    let mut buffer = ui.data_mut(|data| {
+        data.get_temp::<EditBuffer>(buffer_id)
+            .unwrap_or_else(|| EditBuffer {
+                source: source.clone(),
+                text: if focused {
+                    source.clone()
+                } else {
+                    display.clone()
+                },
+            })
+    });
+    if request_focus || !focused || buffer.source != source {
+        buffer.text = if focused {
+            source.clone()
+        } else {
+            display.clone()
+        };
+    }
+    let response = ui
+        .scope(|ui| {
+            ui.style_mut().override_font_id = Some(font(ui, &props));
+            if let Some(color) = props.get("color").and_then(|value| crate::ui::color(value)) {
+                ui.visuals_mut().override_text_color = Some(color);
+            }
+            let pad = padding(&props, ui.spacing().button_padding);
+            ui.spacing_mut().button_padding = egui::vec2(pad[1], pad[0]);
+            let editor = egui::TextEdit::singleline(&mut buffer.text)
+                .id(edit_id)
+                .hint_text(hint)
+                .desired_width(number(&props, "width", ui.available_width()))
+                .font(font(ui, &props));
+            if let Some(size) = size {
+                ui.add_sized(size, editor)
+            } else {
+                ui.add(editor)
+            }
+        })
+        .inner
+        .on_hover_text(format!("{label}\nSource: {source}"));
+    if request_focus {
+        response.request_focus();
+    }
+    if response.changed() {
+        value.0.clone_from(&buffer.text);
+    } else if response.gained_focus() {
+        buffer.text.clone_from(&source);
+        if display != source {
+            select_exact_source(ui, edit_id, &source);
+        }
+    } else if !response.has_focus() {
+        buffer.text = display;
+    }
+    buffer.source.clone_from(&value.0);
+    ui.data_mut(|data| data.insert_temp(buffer_id, buffer));
+    response
+}
+
+pub(crate) fn select_exact_source(ui: &egui::Ui, id: egui::Id, source: &str) {
+    if let Some(mut state) = egui::text_edit::TextEditState::load(ui.ctx(), id) {
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(0),
+                egui::text::CCursor::new(source.chars().count()),
+            )));
+        state.store(ui.ctx(), id);
+    }
 }
 
 pub fn frame_from_properties(ui: &mut egui::Ui, props: &BTreeMap<String, String>) -> egui::Frame {

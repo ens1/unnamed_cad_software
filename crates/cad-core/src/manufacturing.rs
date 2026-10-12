@@ -534,6 +534,8 @@ pub struct CutListRow {
     pub section: Option<crate::NodeRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section_label: Option<SourceLabel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_size: Option<crate::section_size::SectionSize>,
     #[serde(default)]
     pub start_cut_angle_rad: Option<f64>,
     #[serde(default)]
@@ -550,6 +552,51 @@ pub struct CutListRow {
     pub thickness_mm: Option<f64>,
     #[serde(default)]
     pub blank_bounds_exact: Option<bool>,
+}
+pub fn section_display(row: &CutListRow, units: crate::drawing::Units, precision: usize) -> String {
+    let name = row
+        .section_label
+        .as_ref()
+        .filter(|label| label.version == SOURCE_LABEL_VERSION)
+        .map(SourceLabel::display)
+        .unwrap_or_else(|| {
+            if row.section.is_some() {
+                "Section unavailable".into()
+            } else {
+                String::new()
+            }
+        });
+    match row
+        .section_size
+        .as_ref()
+        .and_then(|size| size.display(units, precision))
+    {
+        Some(size) => format!("{name} · {size}"),
+        None => name,
+    }
+}
+fn evaluated_section_size(
+    doc: &Document,
+    evaluation: &Evaluation,
+    source: &crate::NodeRef,
+    owner: &str,
+    configuration: Option<&str>,
+) -> Option<crate::section_size::SectionSize> {
+    let configuration = if source.definition == owner {
+        configuration
+    } else {
+        doc.active_configurations
+            .get(&source.definition)
+            .map(String::as_str)
+    };
+    evaluation
+        .sketches
+        .get(&format!(
+            "{}::{}",
+            crate::configuration::key(&source.definition, configuration),
+            source.node
+        ))
+        .and_then(crate::section_size::from_sketch)
 }
 pub fn cut_list(doc: &Document) -> Result<Vec<CutListRow>> {
     let grouped = crate::bom::rows(doc, &crate::bom::Options::default())?
@@ -583,6 +630,7 @@ pub fn cut_list(doc: &Document) -> Result<Vec<CutListRow>> {
                     member_reference: None,
                     section: None,
                     section_label: None,
+                    section_size: None,
                     start_cut_angle_rad: None,
                     end_cut_angle_rad: None,
                     bend_radius_mm: None,
@@ -770,6 +818,13 @@ fn append_native_cut_list(
                     member_reference: Some(member.reference.clone()),
                     section: Some(member.section.clone()),
                     section_label: section_label(doc, &member.section),
+                    section_size: evaluated_section_size(
+                        doc,
+                        evaluation,
+                        &member.section,
+                        &definition,
+                        configuration.as_deref(),
+                    ),
                     start_cut_angle_rad: Some(member.start_cut_angle_rad),
                     end_cut_angle_rad: Some(member.end_cut_angle_rad),
                     bend_radius_mm: member.bend_radius_mm,
@@ -828,6 +883,13 @@ fn append_native_cut_list(
                     member_reference: Some(accessory.reference.clone()),
                     section: Some(accessory.profile.clone()),
                     section_label: section_label(doc, &accessory.profile),
+                    section_size: evaluated_section_size(
+                        doc,
+                        evaluation,
+                        &accessory.profile,
+                        &definition,
+                        configuration.as_deref(),
+                    ),
                     start_cut_angle_rad: Some(0.),
                     end_cut_angle_rad: Some(0.),
                     bend_radius_mm: None,
@@ -862,18 +924,7 @@ pub fn cut_list_csv_evaluated(doc: &Document, evaluation: &Evaluation) -> Result
             .as_ref()
             .map(|section| format!("{}::{}", section.definition, section.node))
             .unwrap_or_default();
-        let section = row
-            .section_label
-            .as_ref()
-            .filter(|label| label.version == SOURCE_LABEL_VERSION)
-            .map(SourceLabel::display)
-            .unwrap_or_else(|| {
-                if row.section.is_some() {
-                    "Section unavailable".into()
-                } else {
-                    String::new()
-                }
-            });
+        let section = section_display(&row, crate::drawing::Units::Millimeters, 3);
         let angle = |value: Option<f64>| {
             value
                 .map(|angle| format!("{:.6}", angle.to_degrees()))

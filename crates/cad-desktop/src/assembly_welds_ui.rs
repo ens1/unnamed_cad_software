@@ -178,6 +178,40 @@ fn selected_supports(w: &Workspace, owner: &str) -> Vec<FaceSource> {
         })
         .collect()
 }
+pub(crate) fn joint_pick_source(w: &Workspace) -> Option<(NodeRef, Definition, String)> {
+    if !w.fields.contains_key(EDITOR)
+        || w.fields.contains_key("assembly-weld-deletion")
+        || !source_is_current(w)
+    {
+        return None;
+    }
+    let definition = parsed(w).ok()?;
+    Some((
+        NodeRef {
+            definition: editor_owner(w)?.into(),
+            node: definition.id.clone(),
+        },
+        definition,
+        w.fields.get("assembly-weld-generation")?.clone(),
+    ))
+}
+pub(crate) fn picked_joint_seam(w: &Workspace, owner: &str) -> Option<SeamSource> {
+    selected_seam(w, owner)
+}
+pub(crate) fn picked_joint_support(w: &Workspace, owner: &str) -> Option<FaceSource> {
+    let selected = w
+        .selected
+        .as_ref()
+        .filter(|selected| selected.reference.topology == "face")?;
+    Some(FaceSource {
+        body: crate::reference_ui::selected_body(w, selected),
+        reference: Box::new(selected.reference.clone()),
+        path: relative_path(w, owner, &selected.path)?,
+    })
+}
+pub(crate) fn submit_joint_pick(w: &mut Workspace, definition: Definition) -> Result<()> {
+    submit(w, definition)
+}
 pub fn new(w: &mut Workspace, owner: &str) {
     let Some(seam) = selected_seam(w, owner) else {
         w.status="Select a model edge, sketch member or reference curve on a component in the owning assembly".into();
@@ -423,7 +457,11 @@ fn geometry_choices(w: &Workspace, owner: &str) -> (Vec<Value>, Vec<Value>) {
                     .any(|choice: &Value| choice["value"] == value)
             {
                 supports.push(choice(
-                    format!("{} · face {}", instance.name, index + 1),
+                    format!(
+                        "{} · {}",
+                        instance.name,
+                        crate::weld_beads_ui::face_caption(w, face, index)
+                    ),
                     source,
                 ));
             }
@@ -526,6 +564,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         "Seam and support geometry is evaluated in the owning assembly's frame using each component's current solved placement.",
     );
     out.extend(crate::weld_beads_ui::feedback(w, owner, &definition.id));
+    out.extend(crate::weld_beads_ui::pick_actions(w));
     let (seams, supports) = geometry_choices(w, owner);
     field(
         w,
@@ -568,11 +607,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             source_is_current(w),
         );
     }
-    let maximum = if definition.profile == Profile::Fillet {
-        2
-    } else {
-        1
-    };
+    let maximum = 2;
     let selected = selected_supports(w, owner)
         .into_iter()
         .find(|face| !definition.supports.contains(face));
@@ -589,7 +624,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         w,
         &mut out,
         "infer-supports",
-        "Infer adjacent model faces",
+        "Infer contact-proven joint faces",
         ACTION,
         json!({"kind":"set","pointer":"/supports","value":[]}),
         source_is_current(w) && !definition.supports.is_empty(),
@@ -856,11 +891,10 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
             .ok_or_else(|| invalid("Support list is missing"))? = json!([]);
     }
     if pointer == "/profile" {
-        let maximum = if source["profile"] == "fillet" { 2 } else { 1 };
         source["supports"]
             .as_array_mut()
             .ok_or_else(|| invalid("Support list is missing"))?
-            .truncate(maximum);
+            .truncate(2);
     }
     let next: Definition = serde_json::from_value(source)?;
     submit(w, next)

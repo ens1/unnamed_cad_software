@@ -1594,15 +1594,15 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                             .unwrap_or_else(|| "Awaiting current measurement".into()),
                     );
                 } else {
-                    let response = ui.add(
-                        egui::TextEdit::singleline(&mut c.value.0)
-                            .id_salt(("smart-value", &c.id))
-                            .hint_text("25.4 mm, 1 in, or a parameter expression")
-                            .desired_width(f32::INFINITY),
+                    let response = controls::expression_edit(
+                        ui,
+                        &format!("{}::smart-value", c.id),
+                        a::label(&c.kind),
+                        &mut c.value,
+                        editor.focus_value,
+                        "25.4 mm, 1 in, or a parameter expression",
+                        None,
                     );
-                    if editor.focus_value {
-                        response.request_focus();
-                    }
                     changed |= response.changed();
                     text_edit_started |= response.gained_focus();
                     if response.lost_focus()
@@ -2152,13 +2152,20 @@ fn nearby_dimension(
             let size = controls::field_size(ui, &field_props);
             let response = ui
                 .add_enabled_ui(value.data["editable"].as_bool().unwrap_or(false), |ui| {
-                    ui.add_sized(
-                        size,
-                        egui::TextEdit::singleline(&mut expression)
-                            .id_salt(&value.id)
-                            .desired_width(size.x)
-                            .hint_text("Value, units or parameter"),
-                    )
+                    let mut source = cad_core::Expr(expression.clone());
+                    let response = controls::expression_edit(
+                        ui,
+                        &value.id,
+                        &value.label,
+                        &mut source,
+                        focus,
+                        "Value, units or parameter",
+                        Some(size),
+                    );
+                    if response.changed() {
+                        expression = source.0;
+                    }
+                    response
                 })
                 .inner;
             if focus && value.data["editable"].as_bool().unwrap_or(false) {

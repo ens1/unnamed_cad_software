@@ -655,6 +655,13 @@ fn validate_property(name: &str, value: &str) -> Result<()> {
                 matches!(value, "auto" | "all" | "hidden")
             }
             "renderer-overlay-depth" => matches!(value, "visible" | "xray"),
+            "renderer-display-adaptive" => matches!(value, "true" | "false"),
+            "renderer-display-chord-pixels" => value
+                .parse::<f64>()
+                .is_ok_and(|v| v.is_finite() && (0.05..=8.).contains(&v)),
+            "renderer-display-minimum-mm" | "renderer-display-maximum-mm" => value
+                .parse::<f64>()
+                .is_ok_and(|v| v.is_finite() && (1e-6..=1.).contains(&v)),
             _ => true,
         };
         if !valid {

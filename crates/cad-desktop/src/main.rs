@@ -17,6 +17,7 @@ mod configuration_ui;
 mod contours_ui;
 mod curve_pattern_ui;
 mod direct_edit_ui;
+mod display_mesh;
 mod display_states_ui;
 mod document_identity_ui;
 mod drawing_dimension_groups_ui;
@@ -30,6 +31,7 @@ mod drawing_ui;
 mod environment_assets;
 mod environment_filter;
 mod exploded_views_ui;
+mod fabrication_sources_ui;
 mod fabrication_ui;
 mod feature_order_ui;
 mod finish_library_ui;
@@ -43,6 +45,7 @@ mod mold_ui;
 mod navigation;
 mod operation_editor_ui;
 mod operation_preview;
+mod overlay_depth;
 mod part_edges;
 mod placement_pattern_ui;
 mod presentation_composition;
@@ -50,6 +53,7 @@ mod presentation_controls;
 mod presentation_resources;
 mod production_ui;
 mod properties_ui;
+mod quantity_display;
 mod reference_curves_ui;
 mod reference_repair_ui;
 mod reference_ui;
@@ -101,7 +105,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/38;solver/tcad-native-lm/16";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/39;solver/tcad-native-lm/16";
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -119,6 +123,8 @@ pub struct Workspace {
     pub drawing_interaction: drawing_interaction_ui::State,
     pub jobs: background::Jobs,
     pub worker: worker::WorkerClient,
+    pub display_mesh: display_mesh::State,
+    pub overlay_depth: std::sync::Mutex<overlay_depth::Cache>,
     pub exporter: worker::WorkerClient,
     pub requested: Option<RequestIdentity>,
     pub requested_preview: Option<operation_preview::RequestKey>,
@@ -267,6 +273,8 @@ impl Workspace {
             drawing_interaction: drawing_interaction_ui::State::default(),
             jobs: background::Jobs::new(),
             worker: worker::WorkerClient::new(),
+            display_mesh: Default::default(),
+            overlay_depth: Default::default(),
             exporter: worker::WorkerClient::new(),
             requested: None,
             requested_preview: None,
@@ -423,13 +431,24 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !quantity_display::source_fields_valid(self) {
+            self.status = "Correct the current field text before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !document_identity_ui::ready_to_confirm(self) {
             self.confirm_requested = false;
             return;
         }
         if document_identity_ui::active(self) && self.session.draft.is_none() {
+            let save_as = document_identity_ui::take_after_confirm(self);
+            let destination = ui::take_save_as_destination(self);
             self.cancel_tool();
-            self.status = "Name unchanged; editor closed".into();
+            if save_as {
+                ui::save_after_confirm(self, destination);
+            } else {
+                self.status = "Name unchanged; editor closed".into();
+            }
             return;
         }
         if !properties_ui::current_source_is_valid(self) {
@@ -571,6 +590,8 @@ impl Workspace {
         let editing_edges = selection_ui::edge_feature(self).is_some();
         match self.session.apply() {
             Ok(()) => {
+                let save_as = document_identity_ui::take_after_confirm(self);
+                let destination = ui::take_save_as_destination(self);
                 assembly_tools_ui::cancel(self);
                 assembly_motion_ui::cancel(self);
                 if editing_edges {
@@ -597,6 +618,9 @@ impl Workspace {
                 drawing_interaction_ui::reset(self);
                 production_ui::reset(self);
                 drawing_ui::retain_workspace(self);
+                if save_as {
+                    ui::save_after_confirm(self, destination);
+                }
                 if let Some(feature) = self.after_confirm.take() {
                     ui::feature_preset(self, &feature);
                 }
@@ -605,6 +629,7 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        quantity_display::clear_errors(self);
         document_identity_ui::cancel(self);
         properties_ui::cancel(self);
         sensors_ui::cancel(self);
@@ -729,6 +754,9 @@ impl Workspace {
         (self.dialog.is_some() || self.recovery_draft.is_some()) && !self.manager_tree
     }
     pub fn start_tool(&mut self) {
+        if self.tool_checkpoint.is_none() {
+            quantity_display::clear_errors(self);
+        }
         navigation::stop(self);
         exploded_views_ui::collapse_for_modeling(self);
         history::latest(self);
@@ -741,6 +769,7 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        quantity_display::clear_errors(self);
         document_identity_ui::cancel(self);
         properties_ui::cancel(self);
         sensors_ui::cancel(self);
@@ -820,13 +849,24 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn confirm_tool(&mut self) {
+        if !quantity_display::source_fields_valid(self) {
+            self.status = "Correct the current field text before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !document_identity_ui::ready_to_confirm(self) {
             self.confirm_requested = false;
             return;
         }
         if document_identity_ui::active(self) && self.session.draft.is_none() {
+            let save_as = document_identity_ui::take_after_confirm(self);
+            let destination = ui::take_save_as_destination(self);
             self.cancel_tool();
-            self.status = "Name unchanged; editor closed".into();
+            if save_as {
+                ui::save_after_confirm(self, destination);
+            } else {
+                self.status = "Name unchanged; editor closed".into();
+            }
             return;
         }
         if !properties_ui::current_source_is_valid(self) {
@@ -1195,6 +1235,7 @@ fn poll_workers(mut w: ResMut<Workspace>) {
             _ => {}
         }
     }
+    display_mesh::poll(&mut w);
     // Keep completed imports queued while Settings owns a checkpoint; never merge unrelated source into it.
     let exporter_replies = if w.settings.is_none() {
         w.exporter.drain()

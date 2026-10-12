@@ -128,8 +128,12 @@ fn selector(
     changed
 }
 fn expression(ui: &mut egui::Ui, label: &str, value: &mut Expr) -> bool {
-    ui.label(label);
-    ui.text_edit_singleline(&mut value.0).changed()
+    crate::presentation_controls::expression(
+        ui,
+        &format!("holes_ui/{}", label.to_lowercase().replace(' ', "-")),
+        label,
+        value,
+    )
 }
 fn source_points(w: &Workspace, source: &NodeRef) -> Vec<(Id, [f64; 2])> {
     let doc = w.session.visible();

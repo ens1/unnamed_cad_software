@@ -79,6 +79,71 @@ fn group(command: &str) -> String {
     }
     .into()
 }
+fn target_label(w: &Workspace, source: &SemanticElement, action: &ActionDescriptor) -> String {
+    let mut label = action.label.clone();
+    let document = w.session.visible();
+    let target = ["finish", "material", "view", "sensor", "stack", "library"]
+        .into_iter()
+        .find_map(|key| {
+            let id = action
+                .arguments
+                .get(key)
+                .or_else(|| source.data.get(key))?
+                .as_str()?;
+            match key {
+                "finish" => document.finishes.get(id).map(|value| value.name.as_str()),
+                "material" => document.materials.get(id).map(|value| value.name.as_str()),
+                "view" => document
+                    .camera_views
+                    .get(id)
+                    .map(|value| value.name.as_str()),
+                _ => None,
+            }
+        });
+    let bound_record = matches!(
+        source.role.as_str(),
+        "material-library-entry"
+            | "finish-library-entry"
+            | "design-monitor"
+            | "tolerance-stack"
+            | "tolerance-stack-term"
+            | "sketch-library-entry"
+            | "camera-view"
+    );
+    let target = target.or_else(|| bound_record.then_some(source.label.as_str()));
+    if let Some(target) = target.filter(|target| !target.is_empty())
+        && !label.to_lowercase().contains(&target.to_lowercase())
+    {
+        label.push_str(" · ");
+        label.push_str(target);
+    }
+    label
+}
+fn relevant(w: &Workspace, source: &SemanticElement, action: &ActionDescriptor) -> bool {
+    if source.state == "current" || source.state == "selected" {
+        return true;
+    }
+    if let Some(finish) = action.arguments.get("finish").and_then(Value::as_str)
+        && crate::appearances_ui::selected_finish(w).as_deref() == Some(finish)
+    {
+        return true;
+    }
+    if let Some(view) = action.arguments.get("view").and_then(Value::as_str)
+        && w.fields.get("camera-view-selected").map(String::as_str) == Some(view)
+    {
+        return true;
+    }
+    let category = group(&action.command);
+    match context_editor(w) {
+        Some("appearances" | "appearance-panel" | "finish-library") => category == "Appearance",
+        Some("materials") => category == "Materials",
+        Some("camera-views") => category == "View",
+        Some("drawings" | "drawing-editor" | "production") => category == "Drawing",
+        Some("sketch") => category == "Sketch",
+        Some("assembly" | "component-insert" | "mates") => category == "Assembly",
+        _ => false,
+    }
+}
 fn candidates(w: &Workspace) -> Vec<Candidate> {
     let chrome = crate::cad_ui::semantics(w);
     let mut out = BTreeMap::new();
@@ -139,6 +204,7 @@ fn candidates(w: &Workspace) -> Vec<Candidate> {
                 | "tolerance-stack"
                 | "tolerance-stack-term"
                 | "sketch-library-entry"
+                | "camera-view"
         );
         if !(source.id.starts_with("command:")
             || source.role == "command"
@@ -158,15 +224,11 @@ fn candidates(w: &Workspace) -> Vec<Candidate> {
                 id.clone(),
                 Candidate {
                     id,
-                    label: if bound_record && !action.label.ends_with(&source.label) {
-                        format!("{} · {}", action.label, source.label)
-                    } else {
-                        action.label.clone()
-                    },
+                    label: target_label(w, &source, &action),
                     category: group(&command),
                     source: source.clone(),
+                    context: relevant(w, &source, &action),
                     action,
-                    context: false,
                 },
             );
         }
@@ -180,30 +242,13 @@ fn candidates(w: &Workspace) -> Vec<Candidate> {
     for source in crate::selection_ui::semantics(w)
         .into_iter()
         .filter(|source| source.role == "selection-action")
-        .chain(
-            crate::camera_views_ui::elements(w)
-                .into_iter()
-                .filter(|source| source.role == "camera-view"),
-        )
     {
         for action in source.action_descriptors() {
-            if source.role == "camera-view" && action.command != "camera-view.recall" {
-                continue;
-            }
-            let label = if source.role == "camera-view" {
-                format!("Recall · {}", source.label)
-            } else {
-                action.label.clone()
-            };
+            let label = target_label(w, &source, &action);
             result.push(Candidate {
                 id: format!("command-palette-context:{}:{}", source.id, action.command),
                 label,
-                category: if source.role == "camera-view" {
-                    "Named views"
-                } else {
-                    "Selected geometry"
-                }
-                .into(),
+                category: "Selected geometry".into(),
                 source: source.clone(),
                 action,
                 context: true,

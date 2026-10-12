@@ -176,16 +176,16 @@ fn selector(
     changed
 }
 fn expression(ui: &mut egui::Ui, label: &str, value: &mut Expr) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label(label);
-        changed = ui.text_edit_singleline(&mut value.0).changed();
-    });
-    changed
+    crate::presentation_controls::expression(
+        ui,
+        &format!("fabrication_ui/{}", label.to_lowercase().replace(' ', "-")),
+        label,
+        value,
+    )
 }
 pub(crate) fn members(w: &Workspace, stock: &Stock) -> Vec<(String, String)> {
     let source = source_sketch(w, &stock.profile);
-    path_members(w, &stock.profile)
+    crate::fabrication_sources_ui::base_member_labels(w, stock)
         .into_iter()
         .filter(|(id, _)| {
             source
@@ -222,21 +222,11 @@ pub(crate) fn sheet_attachment_choices(
                     .any(|child| child.attachment.as_ref() == Some(&flange.source))
             })
             .map(|flange| {
-                let name = w
-                    .session
-                    .visible()
-                    .parts
-                    .get(&flange.source.definition)
-                    .and_then(|part| {
-                        part.features
-                            .iter()
-                            .find(|feature| feature.id == flange.source.node)
-                    })
-                    .map(|feature| feature.name.as_str())
-                    .unwrap_or("Missing bend");
+                let name = crate::fabrication_sources_ui::source_name(w, &flange.source)
+                    .unwrap_or_else(|| "Missing bend".into());
                 (
                     Some(flange.source.clone()),
-                    format!("{name} · terminal edge"),
+                    format!("{name} · full-width terminal edge"),
                 )
             }),
     );
@@ -252,36 +242,7 @@ pub(crate) fn sheet_target(w: &Workspace, stock: &Stock) -> Option<(String, Opti
                     .any(|child| child.attachment.as_ref() == Some(source))
         })
     };
-    let model_terminal = w.selected.as_ref().and_then(|selected| {
-        // Rebuilt sheet geometry is owned by the latest feature, even for
-        // retained earlier strips. The selected carrier's complete source
-        // closure, rather than that ownership field, identifies its flange.
-        let identity = cad_core::provenance::normalized_reference(&selected.reference).ok()?;
-        let mut pending = vec![&identity];
-        let mut sources = std::collections::BTreeSet::new();
-        while let Some(value) = pending.pop() {
-            match value {
-                serde_json::Value::Object(object) => {
-                    if object
-                        .get("role")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|role| role.starts_with("member:"))
-                        && let Some(producer) = object.get("producer")
-                        && let Ok(producer) = serde_json::from_value::<NodeRef>(producer.clone())
-                        && terminal(&producer).is_some()
-                    {
-                        sources.insert(producer);
-                    }
-                    pending.extend(object.values());
-                }
-                serde_json::Value::Array(array) => pending.extend(array),
-                _ => {}
-            }
-        }
-        (sources.len() == 1)
-            .then(|| sources.into_iter().next())
-            .flatten()
-    });
+    let model_terminal = crate::fabrication_sources_ui::picked_terminal(w, stock);
     let explicit = model_terminal
         .or_else(|| match w.context_selection.as_ref() {
             Some(cad_core::selection_actions::SelectionTarget::Feature {
@@ -890,45 +851,44 @@ fn closed_profile(w: &Workspace, profile: &NodeRef) -> bool {
         })
 }
 
-pub(crate) fn path_members(w: &Workspace, profile: &NodeRef) -> Vec<(String, String)> {
-    source_sketch(w, profile)
-        .map(|sketch| {
-            sketch
-                .members
-                .keys()
-                .filter_map(|id| {
-                    let cad_core::SketchCurve::Line { start, end } =
-                        cad_core::sketch_edit::effective_curve(&sketch, id).ok()?
-                    else {
-                        return None;
-                    };
-                    let a = sketch.points.get(&start)?;
-                    let b = sketch.points.get(&end)?;
-                    Some((
-                        id.clone(),
-                        format!("({:.2}, {:.2}) → ({:.2}, {:.2}) mm", a[0], a[1], b[0], b[1]),
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// Structural stock uses exact line/circular paths; sheet-edge selection stays linear.
 pub(crate) fn structural_path_members(w: &Workspace, profile: &NodeRef) -> Vec<(String, String)> {
+    let settings = &w.session.visible().settings;
+    let evaluated = viewport::display_evaluation(w).and_then(|evaluation| {
+        evaluation
+            .sketches
+            .get(&format!("{}::{}", profile.definition, profile.node))
+    });
     source_sketch(w, profile)
         .map(|sketch| {
             sketch
                 .members
                 .keys()
-                .filter_map(|id| {
+                .enumerate()
+                .filter_map(|(ordinal, id)| {
                     let label = match cad_core::sketch_edit::effective_curve(&sketch, id).ok()? {
                         cad_core::SketchCurve::Line { start, end } => {
                             let a = sketch.points.get(&start)?;
                             let b = sketch.points.get(&end)?;
+                            let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                            let length = dx.hypot(dy);
+                            let location = if dy.abs() <= length * 1e-9 {
+                                format!(
+                                    "horizontal · Y {}",
+                                    settings.format_length((a[1] + b[1]) * 0.5)
+                                )
+                            } else if dx.abs() <= length * 1e-9 {
+                                format!(
+                                    "vertical · X {}",
+                                    settings.format_length((a[0] + b[0]) * 0.5)
+                                )
+                            } else {
+                                "diagonal".into()
+                            };
                             format!(
-                                "Line ({:.2}, {:.2}) → ({:.2}, {:.2}) mm",
-                                a[0], a[1], b[0], b[1]
+                                "Path {} · {} · {location}",
+                                ordinal + 1,
+                                settings.format_length(length)
                             )
                         }
                         cad_core::SketchCurve::Arc {
@@ -942,10 +902,33 @@ pub(crate) fn structural_path_members(w: &Workspace, profile: &NodeRef) -> Vec<(
                                 *sketch.points.get(&end)?,
                             )
                             .ok()?;
-                            format!("Arc R{radius:.2} mm · {:.2}°", angle.to_degrees())
+                            format!(
+                                "Path {} · arc {} · R {} · {}",
+                                ordinal + 1,
+                                settings.format_length(radius * angle.abs()),
+                                settings.format_length(radius),
+                                settings.format_angle_radians(angle.abs())
+                            )
                         }
                         cad_core::SketchCurve::Circle { radius, .. } => {
-                            format!("Circular rolled member · R{}", radius.0)
+                            if let Some(radius) = evaluated
+                                .and_then(|output| output.circles.get(id))
+                                .map(|circle| circle.radius_mm)
+                                .filter(|radius| radius.is_finite() && *radius > 0.)
+                            {
+                                format!(
+                                    "Path {} · circular {} · R {}",
+                                    ordinal + 1,
+                                    settings.format_length(2. * std::f64::consts::PI * radius),
+                                    settings.format_length(radius)
+                                )
+                            } else {
+                                format!(
+                                    "Path {} · circular · radius {} (source)",
+                                    ordinal + 1,
+                                    crate::quantity_display::expression(&radius.0)
+                                )
+                            }
                         }
                         _ => return None,
                     };

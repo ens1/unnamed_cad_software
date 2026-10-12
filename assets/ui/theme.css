@@ -651,3 +651,19 @@
 [role=design-monitor][state=within-limits] { color: var(--valid); }
 [role=design-monitor][state=limit-exceeded], [role=design-monitor-field][state=invalid] { color: var(--error); }
 [role=design-monitor][state=unavailable], [role=display-state-diagnostic] { color: var(--warning); }
+[role=project-location] {
+  width: 180px;
+  font-size: 10px;
+  text-overflow: ellipsis;
+}
+[role=operation-preview-status].viewport-overlay {
+  font-size: 11px;
+}
+[role=operation-preview-status][state=retained],
+[role=operation-preview-status][state=partial],
+[role=operation-preview-status][state=approximate] { color: var(--warning); }
+[role=operation-preview-status][state=unavailable] { color: var(--error); }
+[role=fabrication-source-guide] {
+  stroke-width: 2px;
+  opacity: 0.85;
+}

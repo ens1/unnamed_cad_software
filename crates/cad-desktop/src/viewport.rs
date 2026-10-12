@@ -152,98 +152,9 @@ pub(crate) fn visible_at(
     point: [f64; 3],
     remaining: &mut usize,
 ) -> bool {
-    let Some(screen) = project(w, rect, point) else {
-        return false;
-    };
-    let Some(evaluation) = selection_evaluation(w) else {
-        return false;
-    };
-    let (origin, direction) = ray(w, rect, screen);
-    let origin = DVec3::from_array(origin);
-    let direction = DVec3::from_array(direction);
-    let limit = (DVec3::from_array(point) - origin).dot(direction);
-    if !limit.is_finite() || limit <= 0. {
-        return false;
-    }
-    let epsilon = (limit * 1e-5).max(1e-4);
-    let displayed = display_evaluation(w).unwrap_or(evaluation);
-    for display_instance in display_instances(w, displayed) {
-        let inputs = display_instances(w, evaluation);
-        let input = inputs.iter().copied().find(|instance| {
-            instance.path == display_instance.path
-                && instance.definition == display_instance.definition
-        });
-        let input_meshes = input
-            .map(|instance| selection_meshes(w, evaluation, instance))
-            .unwrap_or_default();
-        let (instance, meshes) = if let Some(input) = input.filter(|_| !input_meshes.is_empty()) {
-            (input, input_meshes)
-        } else {
-            // Edge-feature picking filters unrelated occurrences; those solids
-            // still render and must continue to occlude the input-edge guides.
-            (
-                display_instance,
-                display_meshes(w, displayed, display_instance),
-            )
-        };
-        if !visible(w, instance) || ghost_neighbor(w, instance) {
-            continue;
-        }
-        let from_local =
-            bevy::math::DMat4::from_cols_array(&std::array::from_fn::<_, 16, _>(|index| {
-                instance.matrix[index % 4][index / 4]
-            }));
-        let to_local = from_local.inverse();
-        if !to_local.is_finite() {
-            continue;
-        }
-        let local_origin = to_local.transform_point3(origin);
-        let local_direction = to_local.transform_vector3(direction);
-        for mesh in meshes {
-            if mesh.indices.is_empty()
-                || !ray_bounds(local_origin, local_direction, mesh.bounds, limit)
-            {
-                continue;
-            }
-            for indices in mesh.indices.as_chunks::<3>().0 {
-                // Optional hover feedback yields conservatively under extreme
-                // display work instead of stalling a navigation or drawing gesture.
-                if *remaining == 0 {
-                    return false;
-                }
-                *remaining -= 1;
-                let [a, b, c] = indices.map(|index| mesh.positions[index as usize]);
-                if triangle(local_origin.to_array(), local_direction.to_array(), a, b, c)
-                    .is_some_and(|distance| distance < limit - epsilon)
-                {
-                    return false;
-                }
-            }
-        }
-    }
-    true
+    crate::overlay_depth::visible(w, rect, point, remaining)
 }
 
-fn ray_bounds(origin: DVec3, direction: DVec3, bounds: [[f64; 3]; 2], limit: f64) -> bool {
-    let mut near = 0_f64;
-    let mut far = limit;
-    for axis in 0..3 {
-        if direction[axis].abs() < 1e-15 {
-            if origin[axis] < bounds[0][axis] || origin[axis] > bounds[1][axis] {
-                return false;
-            }
-        } else {
-            let a = (bounds[0][axis] - origin[axis]) / direction[axis];
-            let b = (bounds[1][axis] - origin[axis]) / direction[axis];
-            near = near.max(a.min(b));
-            far = far.min(a.max(b));
-            if near > far {
-                return false;
-            }
-        }
-    }
-    true
-}
 fn triangle(o: [f64; 3], d: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Option<f64> {
     let o = DVec3::from_array(o);
     let d = DVec3::from_array(d);
@@ -353,22 +264,41 @@ fn finish_batches<'a>(
         })
         .collect()
 }
+fn normal_matrix(instance: &PlacedPart) -> bevy::math::DMat3 {
+    bevy::math::DMat3::from_cols(
+        DVec3::new(
+            instance.matrix[0][0],
+            instance.matrix[1][0],
+            instance.matrix[2][0],
+        ),
+        DVec3::new(
+            instance.matrix[0][1],
+            instance.matrix[1][1],
+            instance.matrix[2][1],
+        ),
+        DVec3::new(
+            instance.matrix[0][2],
+            instance.matrix[1][2],
+            instance.matrix[2][2],
+        ),
+    )
+    .inverse()
+    .transpose()
+}
 fn render_mesh(source: &MeshData, instance: &PlacedPart) -> Mesh {
     let positions = source
         .positions
         .iter()
         .map(|point| render_point(placed(*point, instance)).to_array())
         .collect::<Vec<_>>();
+    let normal_matrix = normal_matrix(instance);
     let normals = source
         .normals
         .iter()
         .map(|normal| {
-            let normal: [f64; 3] = std::array::from_fn(|axis| {
-                instance.matrix[axis][0] * normal[0]
-                    + instance.matrix[axis][1] * normal[1]
-                    + instance.matrix[axis][2] * normal[2]
-            });
-            render_point(normal).normalize_or_zero().to_array()
+            render_point((normal_matrix * DVec3::from_array(*normal)).to_array())
+                .normalize_or_zero()
+                .to_array()
         })
         .collect::<Vec<_>>();
     Mesh::new(
@@ -411,11 +341,13 @@ pub(crate) fn display_instances<'a>(w: &Workspace, e: &'a Evaluation) -> Vec<&'a
         .collect()
 }
 pub(crate) fn display_meshes<'a>(
-    w: &Workspace,
+    w: &'a Workspace,
     e: &'a Evaluation,
     i: &PlacedPart,
 ) -> Vec<&'a MeshData> {
-    let mut meshes = cad_core::history::display_meshes(e, i, w.view.history_cursor.as_ref());
+    let mut meshes = crate::display_mesh::replacement(w, e, i)
+        .map(|mesh| vec![mesh])
+        .unwrap_or_else(|| cad_core::history::display_meshes(e, i, w.view.history_cursor.as_ref()));
     let key = if i.mesh_key.is_empty() {
         &i.definition
     } else {
@@ -668,7 +600,8 @@ pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
     {
         return Some(evaluation);
     }
-    let selecting_input = w.fields.contains_key("assembly-weld-editor")
+    let selecting_input = crate::fabrication_sources_ui::input_body(w).is_some()
+        || w.fields.contains_key("assembly-weld-editor")
         || w.dialog.as_deref() == Some("feature")
             && serde_json::from_str::<cad_core::Feature>(&w.json).is_ok_and(|f| {
                 matches!(
@@ -697,10 +630,30 @@ pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
 /// Editing an existing edge feature selects its authored input from the history
 /// cache. The checkpoint's final mesh may already contain the old fillet/chamfer.
 pub(crate) fn selection_meshes<'a>(
-    w: &Workspace,
+    w: &'a Workspace,
     e: &'a Evaluation,
     i: &PlacedPart,
 ) -> Vec<&'a MeshData> {
+    if let Some(body) = crate::fabrication_sources_ui::input_body(w) {
+        if i.definition != body.definition || !crate::selection_ui::edge_occurrence(w, &i.path) {
+            return vec![];
+        }
+        if let Some(mesh) = e
+            .history
+            .get(cad_core::history::mesh_key(i))
+            .and_then(|history| history.meshes.get(&body.node))
+        {
+            return vec![mesh.as_ref()];
+        }
+        return display_meshes(w, e, i)
+            .into_iter()
+            .filter(|mesh| {
+                mesh.edges
+                    .iter()
+                    .any(|edge| edge.body.as_ref() == Some(&body))
+            })
+            .collect();
+    }
     if let Some(feature) = crate::selection_ui::edge_feature(w)
         && let Some((body, _)) = crate::selection_ui::edge_selection(&feature)
     {
@@ -1446,7 +1399,8 @@ pub fn sync_scene(
         ))
     );
     let key = format!(
-        "{key}:{:?}:{:?}",
+        "{key}:{}:{:?}:{:?}",
+        w.display_mesh.epoch,
         display_evaluation(&w).map(|e| (&e.identity, e.valid)),
         w.geometry_selection
             .iter()
@@ -1679,16 +1633,16 @@ pub fn sync_scene(
                         render_point(placed(source.positions[*index as usize], instance)).to_array()
                     })
                     .collect::<Vec<_>>();
+                let normal_matrix = normal_matrix(instance);
                 let normals = indices
                     .iter()
                     .map(|index| {
-                        let normal = source.normals[*index as usize];
-                        let normal: [f64; 3] = std::array::from_fn(|axis| {
-                            instance.matrix[axis][0] * normal[0]
-                                + instance.matrix[axis][1] * normal[1]
-                                + instance.matrix[axis][2] * normal[2]
-                        });
-                        render_point(normal).normalize_or_zero().to_array()
+                        render_point(
+                            (normal_matrix * DVec3::from_array(source.normals[*index as usize]))
+                                .to_array(),
+                        )
+                        .normalize_or_zero()
+                        .to_array()
                     })
                     .collect::<Vec<_>>();
                 let mesh = meshes.add(
@@ -1905,7 +1859,15 @@ fn weld_guides(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                     painter.text(
                         b,
                         egui::Align2::LEFT_BOTTOM,
-                        format!("Support {} direction", index + 1),
+                        if preview.source.profile == cad_core::weld_beads::Profile::Butt {
+                            if index == 0 {
+                                "Bead width".into()
+                            } else {
+                                "Crown direction".into()
+                            }
+                        } else {
+                            format!("Support {} direction", index + 1)
+                        },
                         egui::FontId::proportional(crate::presentation_controls::number(
                             &props,
                             "font-size",
@@ -1920,6 +1882,7 @@ fn weld_guides(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
 }
 pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
     weld_guides(w, ui, rect);
+    crate::fabrication_sources_ui::overlay(w, ui, rect);
     crate::reference_ui::overlay(w, ui, rect);
     let painter = ui.painter().with_clip_rect(rect);
     let origin = rect.right_bottom() - egui::vec2(58., 66.);

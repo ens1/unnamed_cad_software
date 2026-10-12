@@ -1559,8 +1559,12 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             ui.checkbox(&mut s.clockwise, "Clockwise arc");
         }
         if s.tool == Tool::Conic {
-            ui.label("Rho (0–1; 0.5 is parabolic)");
-            ui.text_edit_singleline(&mut s.conic_rho.0);
+            crate::presentation_controls::expression(
+                ui,
+                &format!("{}::conic-rho", s.sketch_id),
+                "Rho (0–1; 0.5 is parabolic)",
+                &mut s.conic_rho,
+            );
         }
         crate::presentation_controls::collapsing(
             ui,
@@ -1683,7 +1687,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                                         crate::presentation_controls::label(ui, &format!("{key}::radius.evaluated"), "sketch-evaluated-size", &[], value, if s.error.is_some() { "last-valid" } else { "evaluated" });
                                         ui.small(if s.error.is_some() { "Last valid radius · correct the sketch to update" } else { "Controlled by dimension / relation" });
                                     } else {
-                                        changed |= ui.text_edit_singleline(&mut radius.0).changed();
+                                        changed |= crate::presentation_controls::expression_edit(ui, &format!("{key}::radius"), "Radius", radius, false, "Radius, units or parameter", None).changed();
                                     }
                                 }
                                 SketchCurve::Ellipse { major, minor, angle, .. } => {
@@ -1699,7 +1703,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                                             crate::presentation_controls::label(ui, &format!("{key}::{kind}.evaluated"), "sketch-evaluated-size", &[], value, if s.error.is_some() { "last-valid" } else { "evaluated" });
                                             ui.small("Controlled by dimension / relation");
                                         } else {
-                                            changed |= ui.text_edit_singleline(&mut value.0).changed();
+                                            changed |= crate::presentation_controls::expression_edit(ui, &format!("{key}::{kind}"), label, value, false, "Value, units or parameter", None).changed();
                                         }
                                     }
                                 }

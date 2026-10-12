@@ -950,6 +950,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::quantity_display::source_fields_valid(w) {
+        return Some("Correct the current field text before applying");
+    }
     if !crate::document_identity_ui::current_source_is_valid(w) {
         return Some("Correct the document name before confirming");
     }
@@ -2197,7 +2200,7 @@ pub fn properties(ui: &mut egui::Ui, w: &mut Workspace) {
 }
 pub fn confirmation_label(w: &Workspace) -> String {
     if crate::document_identity_ui::active(w) {
-        return "Rename Document".into();
+        return crate::document_identity_ui::confirmation_label(w).into();
     }
     if w.sketch.is_some() {
         return crate::holes_ui::sketch_semantics(w)
@@ -3786,6 +3789,8 @@ pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
 }
 pub fn status(ui: &mut egui::Ui, w: &mut Workspace) {
     ui.horizontal(|ui| {
+        crate::document_identity_ui::location_control(ui, w);
+        ui.separator();
         if w.session.draft.as_ref().is_some_and(|d| d.pending) {
             ui.spinner();
         }

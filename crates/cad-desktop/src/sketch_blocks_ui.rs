@@ -228,12 +228,15 @@ impl Editor {
     }
 }
 fn expression(ui: &mut egui::Ui, label: &str, value: &mut Expr) -> bool {
-    ui.horizontal(|ui| {
-        ui.label(label);
-        ui.add(egui::TextEdit::singleline(&mut value.0).desired_width(115.))
-            .changed()
-    })
-    .inner
+    crate::presentation_controls::expression(
+        ui,
+        &format!(
+            "sketch_blocks_ui/{}",
+            label.to_lowercase().replace(' ', "-")
+        ),
+        label,
+        value,
+    )
 }
 fn point_fields(ui: &mut egui::Ui, label: &str, point: &mut [f64; 2]) -> bool {
     ui.horizontal(|ui| {

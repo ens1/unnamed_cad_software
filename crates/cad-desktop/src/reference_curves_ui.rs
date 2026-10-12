@@ -3,11 +3,15 @@ use crate::{Workspace, reference_ui, ui};
 use bevy_egui::egui;
 use cad_core::{commands::Command, reference_curves::*, reference_geometry::*, *};
 fn expression(ui: &mut egui::Ui, label: &str, value: &mut Expr) -> bool {
-    ui.horizontal(|ui| {
-        ui.label(label);
-        ui.text_edit_singleline(&mut value.0).changed()
-    })
-    .inner
+    crate::presentation_controls::expression(
+        ui,
+        &format!(
+            "reference_curves_ui/{}",
+            label.to_lowercase().replace(' ', "-")
+        ),
+        label,
+        value,
+    )
 }
 fn feature_name(doc: &Document, node: &NodeRef) -> String {
     doc.parts

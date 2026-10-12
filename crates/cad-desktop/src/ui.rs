@@ -74,6 +74,7 @@ pub fn workspace_ui(
 
     let size = ctx.content_rect().size();
     crate::presentation_controls::begin_frame(&w.theme, &w.view.active_layout);
+    crate::quantity_display::begin_frame(&w.session.visible().settings);
     let semantics = crate::presentation_composition::semantics(&w);
     // Only a viewport rendered during this frame may retain transient hover feedback.
     w.hover_guide = None;
@@ -631,6 +632,9 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     registry.register("parameter-instrument", |ui, w, _| property_manager(ui, w));
     registry.register("property-manager", |ui, w, _| property_manager(ui, w));
     registry.register("preview-status", |ui, w, _| preview_status(ui, w));
+    registry.register("project-location", |ui, w, _| {
+        crate::document_identity_ui::location_control(ui, w)
+    });
     registry.register("document-identity-editor", |ui, w, _| {
         crate::document_identity_ui::controls(ui, w)
     });
@@ -965,7 +969,9 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         crate::display_states_ui::semantic_action(w, element, command);
         return;
     }
-    if crate::sketch_block_library_ui::action(w, command, Some(&element.data))
+    if crate::fabrication_sources_ui::action(w, command, &element.data)
+        || crate::weld_beads_ui::action(w, command, Some(&element.data))
+        || crate::sketch_block_library_ui::action(w, command, Some(&element.data))
         || crate::command_palette::action(w, command, Some(&element.data))
         || crate::inspection_ui::action(w, command, Some(&element.data))
         || crate::reference_repair_ui::action(w, command, Some(&element.data))
@@ -1151,6 +1157,10 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         .get("editor")
         .and_then(Value::as_str)
         .unwrap_or("");
+    let buffer_error_key = format!(
+        "presentation-field-error:{}:{editor_generation}",
+        element.id
+    );
     let role = if element
         .data
         .get("setter")
@@ -1196,7 +1206,11 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     }
     let field_state = format!(
         "{} {}",
-        element.state,
+        if w.fields.contains_key(&buffer_error_key) {
+            "invalid"
+        } else {
+            &element.state
+        },
         if editable { "editable" } else { "readonly" }
     );
     let props =
@@ -1245,7 +1259,18 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
             let unit = descriptor
                 .unit
                 .as_deref()
-                .filter(|unit| !unit.is_empty() && !value.is_boolean());
+                .filter(|unit| !unit.is_empty() && !value.is_boolean())
+                .filter(|_| {
+                    // Literal expressions already carry a visible unit. Their
+                    // source unit is available in semantic data and the tooltip.
+                    value.as_str().is_none_or(|source| {
+                        crate::quantity_display::expression_with(
+                            &w.session.visible().settings,
+                            source,
+                        )
+                        .is_none_or(|display| display.split_whitespace().count() != 2)
+                    })
+                });
             let label_props = crate::presentation_controls::properties(
                 &label_id,
                 "field-label",
@@ -1452,7 +1477,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     .map(str::to_string)
                     .unwrap_or_else(|| value.to_string());
                 let key = format!("presentation-field:{}:{editor_generation}", element.id);
-                let keep_invalid_text = crate::assembly_tools_ui::field_is_invalid(w, element)
+                let keep_invalid_text = w.fields.contains_key(&buffer_error_key)
+                    || crate::assembly_tools_ui::field_is_invalid(w, element)
                     || crate::properties_ui::field_is_invalid(w, element)
                     || crate::sensors_ui::field_is_invalid(w, element)
                     || crate::appearances_ui::field_is_invalid(w, element)
@@ -1469,18 +1495,33 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     || crate::drawing_interaction_ui::field_is_invalid(w, element)
                     || crate::configuration_ui::field_is_invalid(w, element)
                     || crate::production_ui::field_is_invalid(w, element);
-                let text = w.fields.entry(key).or_insert(current.clone());
+                let display =
+                    crate::quantity_display::field(&w.session.visible().settings, element, &value);
+                let edit_id = ui.make_persistent_id((&element.id, editor_generation));
+                let focused = ui.memory(|memory| memory.has_focus(edit_id));
+                let buffered = w
+                    .fields
+                    .entry(key.clone())
+                    .or_insert(current.clone())
+                    .clone();
+                // A user layout may show several copies of this field. Compact
+                // copies never overwrite the exact text of the focused copy.
+                let mut text = if request_focus && !keep_invalid_text {
+                    current.clone()
+                } else if focused || keep_invalid_text {
+                    buffered
+                } else {
+                    display.clone()
+                };
                 let editor = if element.data.get("multiline").and_then(Value::as_bool) == Some(true)
                 {
-                    egui::TextEdit::multiline(text)
+                    egui::TextEdit::multiline(&mut text)
                         .code_editor()
                         .desired_rows(12)
                 } else {
-                    egui::TextEdit::singleline(text)
+                    egui::TextEdit::singleline(&mut text)
                 };
-                let editor = editor
-                    .id_salt((&element.id, editor_generation))
-                    .desired_width(control_size.x);
+                let editor = editor.id(edit_id).desired_width(control_size.x);
                 let response = ui
                     .add_enabled_ui(editable, |ui| {
                         if element.data.get("multiline").and_then(Value::as_bool) == Some(true)
@@ -1492,19 +1533,32 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                             ui.add_sized(control_size, editor)
                         }
                     })
-                    .inner;
+                    .inner
+                    .on_hover_text(format!(
+                        "{}\nSource: {current}",
+                        descriptor.accessibility_label
+                    ));
                 if request_focus {
                     response.request_focus();
                 }
+                if (response.gained_focus() || request_focus)
+                    && !response.changed()
+                    && !keep_invalid_text
+                {
+                    w.fields.insert(key.clone(), current.clone());
+                    if display != current {
+                        crate::presentation_controls::select_exact_source(ui, edit_id, &current);
+                    }
+                }
                 if !response.has_focus() && !response.changed() && !keep_invalid_text {
-                    *text = current;
                     appearance_error = Some(None);
                 }
                 if response.changed() {
+                    w.fields.insert(key, text.clone());
                     if value.is_string() {
                         Some(Value::String(text.clone()))
                     } else {
-                        match serde_json::from_str(text) {
+                        match serde_json::from_str(&text) {
                             Ok(value) => Some(value),
                             Err(_)
                                 if element
@@ -1561,6 +1615,11 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         draw(ui)
     };
     if let Some(error) = appearance_error {
+        if let Some(message) = &error {
+            w.fields.insert(buffer_error_key.clone(), message.clone());
+        } else {
+            w.fields.remove(&buffer_error_key);
+        }
         crate::document_identity_ui::field_error(w, element, error.clone());
         crate::properties_ui::field_error(w, element, error.clone());
         crate::sensors_ui::field_error(w, element, error.clone());
@@ -1582,6 +1641,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     if let Some(next) = next {
         match crate::presentation_composition::set_value(w, element, next) {
             Ok(()) => {
+                w.fields.remove(&buffer_error_key);
                 crate::properties_ui::field_error(w, element, None);
                 crate::document_identity_ui::field_error(w, element, None);
                 crate::sensors_ui::field_error(w, element, None);
@@ -1601,6 +1661,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::configuration_ui::field_error(w, element, None);
             }
             Err(error) => {
+                w.fields.insert(buffer_error_key.clone(), error.to_string());
                 crate::properties_ui::field_error(w, element, Some(error.to_string()));
                 crate::document_identity_ui::field_error(w, element, Some(error.to_string()));
                 crate::sensors_ui::field_error(w, element, Some(error.to_string()));
@@ -1621,6 +1682,16 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::configuration_ui::field_error(w, element, Some(error.to_string()));
             }
         }
+    }
+    if let Some(message) = w.fields.get(&buffer_error_key) {
+        crate::presentation_controls::label(
+            ui,
+            &format!("{}:buffer-diagnostic", element.id),
+            "field-diagnostic",
+            &field_classes,
+            message,
+            "error",
+        );
     }
     for (index, message) in descriptor.diagnostics.iter().enumerate() {
         crate::presentation_controls::label(
@@ -1698,6 +1769,7 @@ fn model_view(
         crate::workspace_controls::toolbar(&mut tools, w);
     }
     let cube = viewport::view_cube(w, ui, r);
+    crate::operation_preview::viewport_status(ui, w, r);
     let motion_owned = crate::assembly_motion_ui::viewport(w, ui, r, &response, &[toolbar, cube]);
     if !motion_owned && viewport::navigate(w, ui.ctx(), &response) {
         w.selection_popup = None;
@@ -2322,63 +2394,118 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
     }
 }
 fn save(w: &mut Workspace, choose: bool) -> bool {
+    if (choose || w.project.is_none())
+        && w.settings.is_none()
+        && w.sketch.is_none()
+        && (w.tool_checkpoint.is_none() && w.session.draft.is_none()
+            || crate::document_identity_ui::active(w))
+    {
+        let Some(path) = choose_save_destination(w) else {
+            return false;
+        };
+        crate::document_identity_ui::begin_save_as(w);
+        if crate::document_identity_ui::pending_save_as(w) {
+            w.fields.insert(
+                "document-identity-save-as-path".into(),
+                path.to_string_lossy().into_owned(),
+            );
+        }
+        return false;
+    }
+    save_now(w, choose)
+}
+pub(crate) fn take_save_as_destination(w: &mut Workspace) -> Option<std::path::PathBuf> {
+    w.fields
+        .remove("document-identity-save-as-path")
+        .map(Into::into)
+}
+pub(crate) fn save_after_confirm(w: &mut Workspace, destination: Option<std::path::PathBuf>) {
+    if let Some(destination) = destination {
+        save_committed_to(w, destination);
+    } else {
+        save_now(w, true);
+    }
+}
+fn choose_save_destination(w: &mut Workspace) -> Option<std::path::PathBuf> {
+    let name = w
+        .session
+        .visible()
+        .name
+        .chars()
+        .map(|c| if "/\\:*?\"<>|".contains(c) { '_' } else { c })
+        .collect::<String>();
+    let path = rfd::FileDialog::new()
+        .set_title("Save TCAD project folder")
+        .set_file_name(format!("{name}.tcad"))
+        .save_file()?;
+    // Every copy owns its parts/resources directory. Two manifests in one
+    // shared root would otherwise overwrite the original part files on Save As.
+    let path = if path.file_name().and_then(|name| name.to_str()) == Some("project.json") {
+        path
+    } else if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+        path.with_extension("tcad").join("project.json")
+    } else {
+        path.join("project.json")
+    };
+    if path
+        .parent()
+        .is_some_and(|parent| parent.exists() && !parent.is_dir())
+    {
+        w.status = "The Save As destination must be a project folder".into();
+        return None;
+    }
+    Some(path)
+}
+pub(crate) fn save_now(w: &mut Workspace, choose: bool) -> bool {
     let path = if choose || w.project.is_none() {
-        let file_name = w
-            .project
-            .as_ref()
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("project.json");
-        rfd::FileDialog::new()
-            .set_title("Save TCAD project")
-            .set_file_name(file_name)
-            .add_filter("TCAD project", &["json"])
-            .save_file()
+        choose_save_destination(w)
     } else {
         w.project.clone()
     };
     if let Some(path) = path {
-        if path.exists() {
-            match FileStore.load(&path) {
-                Ok(on_disk) if on_disk.fingerprint() != w.saved_source => {
-                    w.status="Project changed on disk. Open it for comparison or choose a new destination before saving.".into();
-                    return false;
-                }
-                Err(error) => {
-                    w.status = format!("Cannot safely read the existing project: {error}");
-                    return false;
-                }
-                _ => {}
+        return save_committed_to(w, path);
+    }
+    false
+}
+fn save_committed_to(w: &mut Workspace, path: std::path::PathBuf) -> bool {
+    if path.exists() {
+        match FileStore.load(&path) {
+            Ok(on_disk) if on_disk.fingerprint() != w.saved_source => {
+                w.status="Project changed on disk. Open it for comparison or choose a new destination before saving.".into();
+                return false;
             }
+            Err(error) => {
+                w.status = format!("Cannot safely read the existing project: {error}");
+                return false;
+            }
+            _ => {}
         }
-        let old_root = w.root();
-        let new_root = cad_core::persistence::project_root(&path);
-        let result = (|| {
-            let sources = [old_root];
-            cad_core::persistence::copy_resources(&w.session.committed, &sources, &new_root)?;
-            cad_core::persistence::copy_resources(w.session.visible(), &sources, &new_root)?;
-            if let Some(checkpoint) = &w.tool_checkpoint {
-                cad_core::persistence::copy_resources(checkpoint.visible(), &sources, &new_root)?;
-            }
-            FileStore.save(&path, &w.session.committed)
-        })();
-        match result {
-            Ok(()) => {
-                let saved_path = path.display().to_string();
-                w.project = Some(path);
-                w.rendered_key.clear();
-                w.saved_source = w.session.committed.fingerprint();
-                w.status = if w.session.draft.is_some() {
-                    format!(
-                        "Saved committed revision to {saved_path}. The draft still needs Apply."
-                    )
-                } else {
-                    format!("Saved project to {saved_path}")
-                };
-                return true;
-            }
-            Err(e) => w.status = e.to_string(),
+    }
+    let old_root = w.root();
+    let new_root = cad_core::persistence::project_root(&path);
+    let result = (|| {
+        let sources = [old_root];
+        cad_core::persistence::copy_resources(&w.session.committed, &sources, &new_root)?;
+        cad_core::persistence::copy_resources(w.session.visible(), &sources, &new_root)?;
+        if let Some(checkpoint) = &w.tool_checkpoint {
+            cad_core::persistence::copy_resources(checkpoint.visible(), &sources, &new_root)?;
         }
+        FileStore.save(&path, &w.session.committed)
+    })();
+    match result {
+        Ok(()) => {
+            let saved_path = path.display().to_string();
+            w.project = Some(path);
+            w.rendered_key.clear();
+            w.saved_source = w.session.committed.fingerprint();
+            w.status = if w.session.draft.is_some() {
+                format!("Saved committed revision to {saved_path}. The draft still needs Apply.")
+            } else {
+                format!("Saved project to {saved_path}")
+            };
+            return true;
+        }
+        Err(e) => w.status = e.to_string(),
     }
     false
 }
@@ -3409,6 +3536,14 @@ pub(crate) fn preview_feature(w: &mut Workspace, feature: Feature) {
     }
 }
 fn capture_feature_selection(w: &mut Workspace, cycle: bool, toggle: bool) {
+    if let Some(selected) = w.selected.clone()
+        && crate::fabrication_sources_ui::capture_selection(w, &selected)
+    {
+        return;
+    }
+    if crate::weld_beads_ui::capture_selection(w) {
+        return;
+    }
     if w.dialog.as_deref() != Some("feature") || w.fields.contains_key("feature-source-invalid") {
         return;
     }

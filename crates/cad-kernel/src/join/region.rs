@@ -32,7 +32,7 @@ impl Segment {
             }
         }
     }
-    fn fraction(&self, p: Point2) -> Option<f64> {
+    pub(crate) fn fraction(&self, p: Point2) -> Option<f64> {
         match self.kind {
             Kind::Line => {
                 let v = self.b - self.a;

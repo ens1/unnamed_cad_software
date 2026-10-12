@@ -1475,6 +1475,8 @@ impl OverlayVisibility {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PresentationState {
+    #[serde(default)]
+    pub display_quality: crate::display_mesh::Quality,
     /// Transient feature-history inspection. Saved projects reopen at Latest.
     #[serde(skip)]
     pub history_cursor: Option<crate::NodeRef>,
@@ -1565,6 +1567,7 @@ fn default_toolbar_height() -> f32 {
 impl Default for PresentationState {
     fn default() -> Self {
         Self {
+            display_quality: Default::default(),
             history_cursor: None,
             exploded_view: None,
             display_state: None,

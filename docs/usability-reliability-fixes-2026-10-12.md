@@ -27,8 +27,22 @@ This implementation follows the [saved-part usability review](usability-review-2
 
 ## Validation and review
 
-Backend cache identity is `monstertruck/0.4.1+fc2306852a46;adapter/38;solver/tcad-native-lm/16`. Saved source schema remains 1 with additive optional display metadata. Source closures, native body counts and fabrication source labels are independent application-owned versioned contracts.
+Backend cache identity is `monstertruck/0.4.1+fc2306852a46;adapter/39;solver/tcad-native-lm/16`. Saved source schema remains 1 with additive optional display metadata. Source closures, native body counts and fabrication source labels are independent application-owned versioned contracts.
 
 Checks performed: workspace compilation, Rust formatting, strict Clippy for libraries/binaries, whitespace checks, and macOS bundle compilation/signature verification. No code tests, geometry probes, manual smoke runs or interactive acceptance were performed. Rust compilation does not exercise GPU shader pipeline creation.
 
-The saved review files retain their original accepted features and rejected-operation repro sketches. They can be reopened for user acceptance of the original sheet cut, mounting counterbores/pockets and adjoining chamfer. Unresolved mixed-carrier fillet/chamfer junctions, unsupported curved Boolean cases, automatic zoom remeshing, and inferred weld seams without proven support contact remain separate limitations.
+The saved review files retain their original accepted features and rejected-operation repro sketches. They can be reopened for user acceptance of the original sheet cut, mounting counterbores/pockets and adjoining chamfer. Unresolved mixed-carrier fillet/chamfer junctions and unsupported intersecting curved Boolean cases remain broader kernel limitations.
+
+## Follow-up completion work
+
+The earlier checkpoint did not close every review finding. This follow-up adds:
+
+- **Weld authoring:** complete two-face coplanar butt/miter contact, bounded unique native support inference, explicit seam/support picks and highlights, and profile/end-trim recovery. The exact rejected weld was not saved; no claim is made that a physically invalid free edge now becomes a valid joint. See [native weld contacts](native-weld-joint-contacts.md).
+- **Fabrication sources:** separate viewport pick intents for original base perimeter and available flange terminal, using native adjacent-face constructor ancestry. Source guides highlight the chosen attachment, section and path independently of material previews. Flange faces and thickness edges no longer silently imply a terminal.
+- **Quantities:** compact finite literals with exact authored values restored on focus, shared semantic presentation metadata, retained invalid input and confirmation gates. Compound expressions remain authored. See [quantity presentation](quantity-presentation.md).
+- **Display:** separate persistent zoom-dependent native tessellation, bounded display budgets, identity/generation/root rejection of stale results, inverse-transpose instance normals and continuous projected depth clipping of optional overlays. Geometry tolerances and Apply validation remain independent. See [viewport display detail](viewport-display-detail.md).
+- **Names and saves:** first Save and Save As choose a project-folder destination, then expose document/part name before confirming the copy. The chosen destination and current saved location have independent semantic controls. Cancel before confirmation does not rename source or write a copy. Palette results distinguish editor targets, finishes and named camera actions.
+- **Cut-list sections:** configured solved analytic section extents accompany named profile references. Source IDs, grouping and quantity remain unchanged; display measurements never come from render meshes.
+- **Preview feedback:** a user-styleable status beside the viewport geometry identifies retained, invalid, partial and approximate previews.
+
+Native cuts through the final chamfered/filleted solid and direct constructor material previews are still being implemented after this checkpoint. Interactive acceptance remains pending for every change.

@@ -34,6 +34,10 @@ pub(crate) struct ResolvedSeam {
     pub curves: Vec<Curve>,
     pub sources: Vec<TopologyRef>,
     pub adjacent_faces: Vec<(Face, TopologyRef)>,
+    /// Native faces in the explicitly selected seam body's scope. A welded
+    /// multibody stock may contact another member without sharing an edge ID.
+    pub inference_faces: Vec<(Face, TopologyRef)>,
+    pub inference_complete: bool,
 }
 impl ResolvedSeam {
     /// The assembly evaluator supplies the configured occurrence's rigid pose.
@@ -50,6 +54,12 @@ impl ResolvedSeam {
                 .iter()
                 .map(|(face, source)| (builder::transformed(face, transform), source.clone()))
                 .collect(),
+            inference_faces: self
+                .inference_faces
+                .iter()
+                .map(|(face, source)| (builder::transformed(face, transform), source.clone()))
+                .collect(),
+            inference_complete: self.inference_complete,
         }
     }
 }
@@ -61,6 +71,8 @@ pub(crate) fn seam(
     inputs: &BTreeMap<NodeRef, Shape>,
 ) -> Result<ResolvedSeam> {
     let mut adjacent_faces = vec![];
+    let mut inference_faces = vec![];
+    let mut inference_complete = true;
     let pieces = match source {
         SeamSource::ModelEdge {
             body, reference, ..
@@ -92,6 +104,12 @@ pub(crate) fn seam(
                 .into_iter()
                 .flatten()
             {
+                if inference_faces.len() < 512 {
+                    inference_faces
+                        .push((face.clone(), adapter.boundary_face_reference(body, face)?));
+                } else {
+                    inference_complete = false;
+                }
                 if face.edge_iter().any(|boundary| boundary.id() == edge.id())
                     && seen.insert(face.id())
                 {
@@ -161,6 +179,8 @@ pub(crate) fn seam(
         curves,
         sources,
         adjacent_faces,
+        inference_faces,
+        inference_complete,
     })
 }
 pub(crate) fn support(
@@ -531,16 +551,28 @@ fn frame(
                 Ok((u, v))
             }
             Profile::Butt => {
-                if normals.len() != 1 {
-                    return Err(invalid("A butt bead needs one selected support face"));
+                if !(1..=2).contains(&normals.len()) {
+                    return Err(invalid(
+                        "A butt bead needs one planar support or two coplanar joint faces",
+                    ));
                 }
                 let v = unit(normals[0] - tangent * normals[0].dot(tangent))?;
-                if !matches!(
-                    supports[0].carrier,
-                    crate::analytic_offset::Carrier::Plane { .. }
-                ) {
+                if supports.iter().any(|support| {
+                    !matches!(
+                        support.carrier,
+                        crate::analytic_offset::Carrier::Plane { .. }
+                    )
+                }) {
                     return Err(unsupported(
                         "Butt bead width currently requires a planar root support",
+                    ));
+                }
+                if normals.len() == 2
+                    && (normals[0].dot(normals[1]) < 1. - REL
+                        || normals[1].dot(tangent).abs() > REL)
+                {
+                    return Err(invalid(
+                        "Two-face butt supports must be coplanar with matching outward normals; opposing end faces need a groove preparation",
                     ));
                 }
                 Ok((unit(tangent.cross(v))?, v))
@@ -669,7 +701,7 @@ fn planar_contact(
         ) {
             if locate(segment.at(t), &region)? == Location::Outside {
                 return Err(invalid(
-                    "The bead toe extends outside the selected support's trimmed boundaries; reduce size or end offsets, or replace the support",
+                    "The bead toe extends outside the selected support's trimmed boundaries; reduce bead size, increase start/end trimming where the toe crosses an end, or replace the support",
                 ));
             }
         }
@@ -824,6 +856,372 @@ fn contact(support: &Support, path: &Path, offset: Vector3, start: f64, end: f64
         _ => Err(unsupported("The joint contact carrier is unresolved")),
     }
 }
+
+/// Prove the complete planar deposited leg/root footprint, including transverse
+/// ends and interior cutouts. Root and toe curves alone do not exclude a hole
+/// lying entirely between them. Display tessellation never supplies this proof.
+fn footprint(support: &Support, path: &Path, toe: Vector3, start: f64, end: f64) -> Result<()> {
+    contact(support, path, Vector3::zero(), start, end)?;
+    contact(support, path, toe, start, end)?;
+    let crate::analytic_offset::Carrier::Plane { origin, normal } = support.carrier else {
+        // Circular fillet contacts on cylinders have axial straight legs. The
+        // existing exact rectangular angular/axial patch proof covers that strip.
+        return Ok(());
+    };
+    if toe.magnitude() <= EPS {
+        return Ok(());
+    }
+    use crate::join::region::{Frame, Location, checked_intersections, locate};
+    let x = unit(normal.cross(if normal.x.abs() < 0.8 {
+        Vector3::unit_x()
+    } else {
+        Vector3::unit_y()
+    }))?;
+    let frame = Frame {
+        origin,
+        axes: [x, normal.cross(x)],
+        normal,
+    };
+    let full = matches!(path, Path::Circle { radius, .. } if ((end-start)/radius-std::f64::consts::TAU).abs() <= REL);
+    let spans = match path {
+        Path::Line { .. } => 1,
+        Path::Circle { radius, .. } => ((end - start) / radius / std::f64::consts::FRAC_PI_2)
+            .ceil()
+            .max(1.) as usize,
+    };
+    let point =
+        |position: f64, offset: Vector3| path.point(position) + path.rotation(position) * offset;
+    let mut ribbon = vec![];
+    for offset in [Vector3::zero(), toe] {
+        for span in 0..spans {
+            let a = start + (end - start) * span as f64 / spans as f64;
+            let b = start + (end - start) * (span + 1) as f64 / spans as f64;
+            let av = builder::vertex(point(a, offset));
+            let bv = builder::vertex(point(b, offset));
+            let edge = match path {
+                Path::Line { .. } => builder::line(&av, &bv),
+                Path::Circle { .. } => {
+                    builder::try_circle_arc(&av, &bv, point((a + b) * 0.5, offset))
+                        .map_err(invalid)?
+                }
+            };
+            ribbon.push(
+                frame.segment(&edge)?.ok_or_else(|| {
+                    unsupported("The contact footprint has no exact planar carrier")
+                })?,
+            );
+        }
+    }
+    if !full {
+        for position in [start, end] {
+            let p = path.point(position);
+            let offset = path.rotation(position) * toe;
+            let length = offset.magnitude();
+            let crossing = Path::Line {
+                start: p,
+                tangent: unit(offset)?,
+                length,
+            };
+            contact(support, &crossing, Vector3::zero(), 0., length)?;
+            let edge = builder::line(&builder::vertex(p), &builder::vertex(p + offset));
+            ribbon.push(
+                frame
+                    .segment(&edge)?
+                    .ok_or_else(|| unsupported("The contact end has no exact planar carrier"))?,
+            );
+        }
+    }
+    for edge in support.face.edge_iter() {
+        let boundary = frame.segment(&edge)?.ok_or_else(|| {
+            unsupported("Complete contact containment needs line/circle support boundaries")
+        })?;
+        let mut partitions = vec![0., 1.];
+        for side in &ribbon {
+            for hit in checked_intersections(&boundary, side)? {
+                partitions.push(boundary.fraction(hit).ok_or_else(|| {
+                    unsupported(
+                        "A footprint intersection could not retain its bounded native interval",
+                    )
+                })?);
+            }
+        }
+        partitions.sort_by(f64::total_cmp);
+        partitions.dedup_by(|a, b| (*a - *b).abs() <= 1e-12);
+        for range in partitions.windows(2) {
+            if locate(boundary.at((range[0] + range[1]) * 0.5), &ribbon)? == Location::Inside {
+                return Err(invalid(
+                    "The deposited contact footprint crosses a support cutout or trim boundary; replace the support or reduce bead size/end extent",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+struct ContactBudget {
+    remaining: usize,
+}
+impl ContactBudget {
+    fn new() -> Self {
+        Self {
+            remaining: 2_000_000,
+        }
+    }
+    fn charge(&mut self, support: &Support, path: &Path, spans: &[[f64; 2]]) -> Result<()> {
+        let boundaries = support
+            .face
+            .boundaries()
+            .iter()
+            .map(|wire| wire.len())
+            .sum::<usize>();
+        let divisions = spans
+            .iter()
+            .map(|[start, end]| match path {
+                Path::Line { .. } => 1,
+                Path::Circle { radius, .. } => {
+                    ((end - start) / radius / std::f64::consts::FRAC_PI_2)
+                        .ceil()
+                        .max(1.) as usize
+                }
+            })
+            .sum::<usize>();
+        let cost = boundaries
+            .checked_mul(divisions)
+            .and_then(|n| n.checked_mul(16))
+            .ok_or_else(|| unsupported("The joint contact proof exceeds its bounded work"))?;
+        self.remaining=self.remaining.checked_sub(cost).ok_or_else(||unsupported("The joint contact proof exceeds its bounded work; narrow the seam or select explicit supports"))?;
+        Ok(())
+    }
+}
+
+/// Butt contacts on two coplanar stock faces occupy opposite halves of the
+/// section. Prefer the first ordering only if the complete native footprints
+/// pass; a failed ordering remains visible in the ordinary per-toe diagnostics.
+fn support_toes(
+    profile: Profile,
+    supports: &[Support],
+    path: &Path,
+    toes: &[Vector3],
+    spans: &[[f64; 2]],
+    budget: &mut ContactBudget,
+) -> Result<Vec<Vec<(usize, Vector3)>>> {
+    if profile == Profile::Fillet {
+        return Ok(toes
+            .iter()
+            .copied()
+            .enumerate()
+            .take(supports.len())
+            .map(|(index, toe)| vec![(index, toe)])
+            .collect());
+    }
+    if supports.len() == 1 {
+        return Ok(vec![toes.iter().copied().enumerate().collect()]);
+    }
+    let mut assignment = vec![vec![(0, toes[0])], vec![(1, toes[1])]];
+    let mut pass = |first: usize| -> Result<bool> {
+        for (support, index) in [(0, first), (1, 1 - first)] {
+            budget.charge(&supports[support], path, spans)?;
+            for [start, end] in spans {
+                match footprint(&supports[support], path, toes[index], *start, *end) {
+                    Ok(()) => {}
+                    Err(CadError::Unsupported(message)) => {
+                        return Err(CadError::Unsupported(message));
+                    }
+                    Err(_) => return Ok(false),
+                }
+            }
+        }
+        Ok(true)
+    };
+    if !pass(0)? {
+        let mut reversed = pass(1)?;
+        if !reversed {
+            // A unique miter joint can have a valid middle but require end
+            // trimming. Use that native interior contact only to orient its
+            // diagnostic toes, never to accept the complete footprint.
+            if let Some([start, end]) = spans
+                .iter()
+                .max_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])))
+            {
+                let middle = (start + end) * 0.5;
+                let half = (end - start) * 0.125;
+                let interior = [[middle - half, middle + half]];
+                for support in supports {
+                    budget.charge(support, path, &interior)?;
+                }
+                reversed = footprint(&supports[0], path, toes[1], interior[0][0], interior[0][1])
+                    .is_ok()
+                    && footprint(&supports[1], path, toes[0], interior[0][0], interior[0][1])
+                        .is_ok();
+            }
+        }
+        if reversed {
+            assignment = vec![vec![(1, toes[1])], vec![(0, toes[0])]];
+        }
+    }
+    Ok(assignment)
+}
+
+fn inferred_joint(
+    definition: &Definition,
+    values: &Values,
+    resolved: &ResolvedSeam,
+    path: &Path,
+    budget: &mut ContactBudget,
+) -> Result<Vec<(Face, TopologyRef)>> {
+    if !resolved.inference_complete {
+        return Err(unsupported(
+            "The selected seam body exceeds the bounded joint inference face budget; choose explicit support faces",
+        ));
+    }
+    let spans = intervals(values, path.length())?;
+    let mut candidates = vec![];
+    for face in &resolved.inference_faces {
+        let Ok(mut carriers) = supports(std::slice::from_ref(face)) else {
+            continue;
+        };
+        let support = carriers.remove(0);
+        let root_carrier = match (support.carrier, path) {
+            (
+                crate::analytic_offset::Carrier::Plane { origin, normal },
+                Path::Line {
+                    start,
+                    tangent,
+                    length,
+                },
+            ) => {
+                (*start - origin).dot(normal).abs() <= EPS
+                    && tangent.dot(normal).abs() * length <= EPS
+            }
+            (
+                crate::analytic_offset::Carrier::Plane { origin, normal },
+                Path::Circle { center, axis, .. },
+            ) => (*center - origin).dot(normal).abs() <= EPS && normal.dot(*axis).abs() > 1. - REL,
+            (
+                crate::analytic_offset::Carrier::Cone {
+                    origin,
+                    axis,
+                    radius,
+                    slope: 0.,
+                },
+                Path::Circle {
+                    center,
+                    axis: seam_axis,
+                    radius: seam_radius,
+                    ..
+                },
+            ) => {
+                axis.dot(*seam_axis).abs() > 1. - REL
+                    && (origin - *center).cross(axis).magnitude() <= EPS
+                    && (radius - seam_radius).abs() <= EPS
+            }
+            _ => false,
+        };
+        if !root_carrier {
+            continue;
+        }
+        budget.charge(&support, path, &spans)?;
+        let mut root_contact = true;
+        for [start, end] in &spans {
+            match contact(&support, path, Vector3::zero(), *start, *end) {
+                Ok(()) => {}
+                Err(CadError::Unsupported(message)) => return Err(CadError::Unsupported(message)),
+                Err(_) => {
+                    root_contact = false;
+                    break;
+                }
+            }
+        }
+        if root_contact {
+            candidates.push((face.clone(), support));
+            if candidates.len() > 32 {
+                return Err(unsupported(
+                    "The seam has too many contacting faces for unique inference; select explicit support faces",
+                ));
+            }
+        }
+    }
+    let mut matches = vec![];
+    let mut diagnostic_butt_joints = vec![];
+    for first in 0..candidates.len() {
+        let seconds = if definition.profile == Profile::Butt {
+            first..candidates.len()
+        } else {
+            first + 1..candidates.len()
+        };
+        for second in seconds {
+            let single = first == second;
+            let faces = if single {
+                vec![candidates[first].0.clone()]
+            } else {
+                vec![candidates[first].0.clone(), candidates[second].0.clone()]
+            };
+            let native = supports(&faces)?;
+            let Ok((u, v)) = frame(definition, values, path, &native) else {
+                continue;
+            };
+            if definition.profile == Profile::Butt && !single {
+                diagnostic_butt_joints.push(faces.clone());
+            }
+            let toes = if definition.profile == Profile::Fillet {
+                vec![u * values.size_mm, v * values.size_mm]
+            } else {
+                vec![-u * (values.size_mm * 0.5), u * (values.size_mm * 0.5)]
+            };
+            let assignments =
+                support_toes(definition.profile, &native, path, &toes, &spans, budget)?;
+            let mut valid = true;
+            for (support, assigned) in native.iter().zip(assignments) {
+                budget.charge(support, path, &spans)?;
+                for (_, toe) in assigned {
+                    for [start, end] in &spans {
+                        match footprint(support, path, toe, *start, *end) {
+                            Ok(()) => {}
+                            Err(CadError::Unsupported(message)) => {
+                                return Err(CadError::Unsupported(message));
+                            }
+                            Err(_) => {
+                                valid = false;
+                                break;
+                            }
+                        }
+                    }
+                    if !valid {
+                        break;
+                    }
+                }
+                if !valid {
+                    break;
+                }
+            }
+            if valid {
+                matches.push(faces);
+            }
+            if matches.len() > 1 {
+                return Err(invalid(
+                    "Several complete native support joints fit this seam; select explicit support faces instead of guessing",
+                ));
+            }
+        }
+    }
+    if matches.is_empty() && diagnostic_butt_joints.len() == 1 {
+        // Root contact and coplanar orientation are proved, but no deposited
+        // solid is accepted until the full toes/ends pass below. Showing this
+        // unique candidate exposes the required end trim instead of reverting
+        // to the unrelated convex faces adjacent to the picked edge.
+        return Ok(diagnostic_butt_joints.remove(0));
+    }
+    if matches.is_empty() && diagnostic_butt_joints.len() > 1 {
+        return Err(invalid(
+            "Several coplanar butt joints share the seam but none has complete footprint contact; pick explicit support faces and end trims",
+        ));
+    }
+    // Preserve the original adjacent-face attempt when no complete inferred
+    // joint exists: its seam/toe curves explain the rejection and recovery.
+    Ok(matches
+        .pop()
+        .unwrap_or_else(|| resolved.adjacent_faces.clone()))
+}
 fn intervals(values: &Values, length: f64) -> Result<Vec<[f64; 2]>> {
     let first = values.start_offset_mm;
     let last = length - values.end_offset_mm;
@@ -929,27 +1327,11 @@ pub(crate) fn build(
             },
         });
     }
+    let mut budget = ContactBudget::new();
     let support_faces = if !explicit_supports.is_empty() {
         explicit_supports.to_vec()
     } else if !resolved.adjacent_faces.is_empty() {
-        match definition.profile {
-            Profile::Fillet => resolved.adjacent_faces.clone(),
-            Profile::Butt => {
-                let planes = resolved
-                    .adjacent_faces
-                    .iter()
-                    .filter(|(face, _)| {
-                        crate::planar::boundary_plane(face).ok().flatten().is_some()
-                    })
-                    .collect::<Vec<_>>();
-                if planes.len() != 1 {
-                    return Err(invalid(
-                        "The butt bead's root support is ambiguous; select one explicit planar face",
-                    ));
-                }
-                vec![planes[0].clone()]
-            }
-        }
+        inferred_joint(definition, &values, resolved, &path, &mut budget)?
     } else {
         vec![]
     };
@@ -965,12 +1347,7 @@ pub(crate) fn build(
     }
     let supports = supports(&support_faces)?;
     if !supports.is_empty()
-        && supports.len()
-            != if definition.profile == Profile::Fillet {
-                2
-            } else {
-                1
-            }
+        && (supports.len() > 2 || (definition.profile == Profile::Fillet && supports.len() != 2))
     {
         return Err(invalid(
             "The resolved joint has the wrong number of supporting faces",
@@ -982,26 +1359,32 @@ pub(crate) fn build(
     let mut sources = resolved.sources.clone();
     sources.extend(support_faces.iter().map(|(_, source)| source.clone()));
     let spans = intervals(&values, path.length())?;
+    let assignments = if supports.is_empty() {
+        vec![]
+    } else {
+        support_toes(
+            definition.profile,
+            &supports,
+            &path,
+            &section.toes,
+            &spans,
+            &mut budget,
+        )?
+    };
+    for support in &supports {
+        budget.charge(support, &path, &spans)?;
+    }
     for (segment, [start, end]) in spans.iter().copied().enumerate() {
-        for support in 0..supports.len() {
-            let toes = if definition.profile == Profile::Fillet {
-                vec![section.toes[support]]
-            } else {
-                section.toes.to_vec()
-            };
-            for (index, offset) in std::iter::once(Vector3::zero()).chain(toes).enumerate() {
+        for (support, assigned) in assignments.iter().enumerate() {
+            for (index, (toe, offset)) in std::iter::once((0, Vector3::zero()))
+                .chain(assigned.iter().copied())
+                .enumerate()
+            {
                 preview.as_mut().unwrap().guides.push(ContactGuide {
                     label: if index == 0 {
                         "Seam root".into()
                     } else {
-                        format!(
-                            "Toe {}",
-                            if definition.profile == Profile::Fillet {
-                                support + 1
-                            } else {
-                                index
-                            }
-                        )
+                        format!("Toe {}", toe + 1)
                     },
                     support,
                     segment,
@@ -1016,13 +1399,15 @@ pub(crate) fn build(
     let mut metadata = vec![];
     for (index, [start, end]) in spans.into_iter().enumerate() {
         for (support_index, support) in supports.iter().enumerate() {
-            let toes = if definition.profile == Profile::Fillet {
-                vec![section.toes[support_index]]
-            } else {
-                section.toes.to_vec()
-            };
-            for (toe_index, offset) in std::iter::once(Vector3::zero()).chain(toes).enumerate() {
-                let result = contact(support, &path, offset, start, end);
+            for (toe_index, (_, offset)) in std::iter::once((0, Vector3::zero()))
+                .chain(assignments[support_index].iter().copied())
+                .enumerate()
+            {
+                let result = if toe_index == 0 {
+                    contact(support, &path, offset, start, end)
+                } else {
+                    footprint(support, &path, offset, start, end)
+                };
                 let guide = preview
                     .as_mut()
                     .unwrap()

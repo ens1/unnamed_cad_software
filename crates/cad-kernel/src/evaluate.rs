@@ -82,6 +82,10 @@ impl Default for Evaluator {
     }
 }
 impl<K: KernelAdapter> Evaluator<K> {
+    /// Remesh retained native output shapes without changing construction tolerance.
+    pub(crate) fn display_output(&self, part: &cad_core::Part, tolerance: f64) -> Result<MeshData> {
+        self.part_output(part, tolerance).map(|(mesh, _, _)| mesh)
+    }
     fn failure_evaluation(
         &mut self,
         identity: RequestIdentity,

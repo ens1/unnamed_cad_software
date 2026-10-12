@@ -269,6 +269,9 @@ pub struct EvaluatedCircle {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum WorkerRequest {
+    DisplayMesh {
+        request: Box<crate::display_mesh::Request>,
+    },
     AnalyzeSketch {
         identity: RequestIdentity,
         document: Document,
@@ -315,6 +318,9 @@ pub enum WorkerRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkerResponse {
+    DisplayMesh {
+        output: Box<crate::display_mesh::Output>,
+    },
     SketchAnalyzed {
         identity: RequestIdentity,
         owner: Id,

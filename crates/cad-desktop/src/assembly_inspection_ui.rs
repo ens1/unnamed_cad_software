@@ -370,11 +370,15 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>
     true
 }
 fn expression(ui: &mut egui::Ui, label: &str, value: &mut cad_core::Expr) -> bool {
-    ui.horizontal(|ui| {
-        ui.label(label);
-        ui.text_edit_singleline(&mut value.0).changed()
-    })
-    .inner
+    crate::presentation_controls::expression(
+        ui,
+        &format!(
+            "assembly_inspection_ui/{}",
+            label.to_lowercase().replace(' ', "-")
+        ),
+        label,
+        value,
+    )
 }
 fn advanced_source(ui: &mut egui::Ui, w: &mut Workspace, open: bool) {
     egui::CollapsingHeader::new("Advanced Source")

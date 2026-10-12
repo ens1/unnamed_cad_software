@@ -11,6 +11,7 @@ fn run() -> Result<()> {
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
     let mut evaluator = Evaluator::default();
+    let mut display = cad_kernel::display_mesh::Service::default();
     loop {
         let request = match read_frame::<WorkerRequest>(&mut input) {
             Ok(r) => r,
@@ -18,6 +19,7 @@ fn run() -> Result<()> {
             Err(e) => return Err(e),
         };
         let identity = match &request {
+            WorkerRequest::DisplayMesh { request } => Some(request.identity.clone()),
             WorkerRequest::AnalyzeSketch { identity, .. }
             | WorkerRequest::ManipulateAssembly { identity, .. }
             | WorkerRequest::Evaluate { identity, .. }
@@ -27,6 +29,11 @@ fn run() -> Result<()> {
             WorkerRequest::Shutdown => break,
         };
         let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match request {
+            WorkerRequest::DisplayMesh { request } => display
+                .mesh(*request, evaluator.fingerprint())
+                .map(|output| WorkerResponse::DisplayMesh {
+                    output: Box::new(output),
+                }),
             WorkerRequest::AnalyzeSketch {
                 identity,
                 document,
@@ -167,6 +174,7 @@ fn run() -> Result<()> {
             },
             Err(_) => {
                 evaluator = Evaluator::default();
+                display = cad_kernel::display_mesh::Service::default();
                 WorkerResponse::Error {
                     identity,
                     message: "Geometry kernel panicked; worker geometry was invalidated".into(),

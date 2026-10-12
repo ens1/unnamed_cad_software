@@ -7,8 +7,12 @@ use cad_core::{
 };
 
 fn expression(ui: &mut egui::Ui, label: &str, value: &mut Expr) -> bool {
-    ui.label(label);
-    ui.text_edit_singleline(&mut value.0).changed()
+    crate::presentation_controls::expression(
+        ui,
+        &format!("reference_ui/{}", label.to_lowercase().replace(' ', "-")),
+        label,
+        value,
+    )
 }
 fn candidates<'a>(
     doc: &'a Document,

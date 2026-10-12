@@ -973,6 +973,9 @@ fn sheet_attachment_fields(fields: &mut Fields<'_>, body: &NodeRef, attachment: 
                 "ready",
             );
         }
+        fields
+            .out
+            .extend(crate::fabrication_sources_ui::sheet_controls(fields.w));
     }
 }
 fn sheet_fields(fields: &mut Fields<'_>, operation: &cad_core::sheet_metal::SheetOperation) {
@@ -1242,6 +1245,9 @@ fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::
         fields.owner,
         &fields.feature.id,
     ));
+    fields
+        .out
+        .extend(crate::weld_beads_ui::pick_actions(fields.w));
     let mut seams = crate::weld_beads_ui::seam_choices(fields.w, fields.owner, &fields.feature.id)
         .into_iter()
         .map(|(source, label)| choice(label, source))
@@ -1279,21 +1285,17 @@ fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::
                 && face.body.node != fields.feature.id
                 && !definition.supports.contains(face)
         });
-    let maximum = if definition.profile == Profile::Fillet {
-        2
-    } else {
-        1
-    };
+    let maximum = 2;
     fields.action(
         "add-support",
         "Add selected support face",
         json!({"kind":"append","pointer":format!("{P}/supports"),"value":selected}),
         selected.is_some() && definition.supports.len() < maximum,
-        "Select a face on a joint body; fillet welds use two faces and butt beads use one",
+        "Pick joint support faces; fillets use two, butt beads use one planar face or two coplanar faces",
     );
     fields.action(
         "infer-supports",
-        "Infer adjacent model faces",
+        "Infer contact-proven joint faces",
         json!({"kind":"set","pointer":format!("{P}/supports"),"value":[]}),
         !definition.supports.is_empty(),
         "Adjacent faces are already inferred",

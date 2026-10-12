@@ -95,6 +95,7 @@ fn spawn() -> cad_core::Result<Process> {
 }
 fn request_id(r: &WorkerRequest) -> Option<RequestIdentity> {
     match r {
+        WorkerRequest::DisplayMesh { request } => Some(request.identity.clone()),
         WorkerRequest::AnalyzeSketch { identity, .. }
         | WorkerRequest::ManipulateAssembly { identity, .. }
         | WorkerRequest::Evaluate { identity, .. }
@@ -122,6 +123,9 @@ fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerRes
                             queue.clear();
                         }
                         Some(r) => {
+                            if matches!(r, WorkerRequest::DisplayMesh { .. }) {
+                                queue.retain(|q| !matches!(q, WorkerRequest::DisplayMesh { .. }));
+                            }
                             if matches!(
                                 r,
                                 WorkerRequest::Evaluate { .. }

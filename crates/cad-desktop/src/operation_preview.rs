@@ -224,6 +224,47 @@ pub fn status_control(ui: &mut bevy_egui::egui::Ui, w: &Workspace) {
     }
 }
 
+pub fn viewport_status(ui: &mut bevy_egui::egui::Ui, w: &Workspace, rect: bevy_egui::egui::Rect) {
+    use bevy_egui::egui;
+    let Some((state, label)) = summary(w) else {
+        return;
+    };
+    let Some(area) = crate::presentation_controls::overlay_rect_state(
+        "viewport.operation-preview",
+        "operation-preview-status",
+        &state,
+        rect,
+        egui::Rect::from_min_size(
+            rect.min + egui::vec2(12., 98.),
+            egui::vec2((rect.width() - 120.).clamp(0., 540.), 40.),
+        ),
+    ) else {
+        return;
+    };
+    let mut status = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(area)
+            .id_salt("operation-preview-overlay"),
+    );
+    status.set_clip_rect(area.intersect(rect));
+    let props = crate::presentation_controls::properties(
+        "viewport.operation-preview",
+        "operation-preview-status",
+        &["viewport-overlay"],
+        &state,
+    );
+    crate::presentation_controls::apply_properties(&mut status, &props);
+    crate::presentation_controls::label(
+        &mut status,
+        "viewport.operation-preview",
+        "operation-preview-status",
+        &["viewport-overlay"],
+        &label,
+        &state,
+    )
+    .on_hover_text(tooltip(w));
+}
+
 pub fn tooltip(w: &Workspace) -> String {
     let mut messages = Vec::new();
     if let Some(preview) = displayed(w) {
@@ -263,7 +304,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         id: "workspace.operation-preview".into(),
         role: "operation-preview-status".into(),
         label: "Operation material preview".into(),
-        value: Some(label),
+        value: Some(label.clone()),
         state: state.clone(),
         commands: vec![],
         relationships: vec!["workspace.draft.status".into()],
@@ -279,6 +320,14 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "diagnostic":tooltip(w),
             "display_only":true,"apply_eligible":false}),
     }];
+    elements.push(SemanticElement {
+        id: "viewport.operation-preview".into(), role: "operation-preview-status".into(),
+        label: "Viewport operation preview".into(), value: Some(label), state: state.clone(),
+        commands: vec![], relationships: vec!["workspace.operation-preview".into(), "workspace.viewport".into()],
+        data: serde_json::json!({"contract":"tcad.operation-preview","version":OPERATION_PREVIEW_VERSION,
+            "diagnostic":tooltip(w),"retained":retained,"display_only":true,"apply_eligible":false,
+            "classes":["viewport-overlay"],"layout_anchor":"viewport"}),
+    });
     if let Some(preview) = preview {
         for (key, change) in &preview.changes {
             for (kind, mesh) in [

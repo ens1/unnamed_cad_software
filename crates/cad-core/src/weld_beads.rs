@@ -2,7 +2,7 @@
 use crate::{CadError, Dimension, Document, Expr, Id, NodeRef, Result, TopologyRef};
 use serde::{Deserialize, Serialize};
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 pub const MAX_SEGMENTS: usize = 1024;
 pub const JOINT_PREVIEW_VERSION: u32 = 1;
 
@@ -122,7 +122,8 @@ pub struct Definition {
     pub suppressed: bool,
     pub seam: SeamSource,
     /// Zero infers adjacent model faces, or uses the authored seam's direction.
-    /// Two explicit faces define a fillet joint; one defines a butt cap support.
+    /// Two explicit faces define a fillet joint. Butt beads use one planar cap
+    /// support, or two same-facing coplanar faces at a genuine butt/miter seam.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supports: Vec<FaceSource>,
     #[serde(default)]
@@ -228,15 +229,21 @@ impl Definition {
                 "Seams need saved edge ancestry and supports need saved face ancestry",
             ));
         }
-        if self.supports.len()
-            > if self.profile == Profile::Fillet {
-                2
-            } else {
-                1
-            }
+        if self.supports.len() > 2 {
+            return Err(invalid(
+                "A weld supports at most two faces; a two-face butt joint needs same-facing coplanar contacts, checked by native geometry before Apply",
+            ));
+        }
+        if self.supports.len() == 2
+            && self.supports[0].body == self.supports[1].body
+            && self.supports[0].path == self.supports[1].path
+            && crate::provenance::equivalent(
+                &self.supports[0].reference,
+                &self.supports[1].reference,
+            )?
         {
             return Err(invalid(
-                "A fillet joint supports at most two faces and a butt bead supports one; complete contact is checked by geometry evaluation before Apply",
+                "Two joint supports must reference distinct native faces",
             ));
         }
         if matches!(&self.seam, SeamSource::SketchMember {member,..} if !portable(member))
@@ -443,6 +450,6 @@ pub fn semantic_fields(
         data:serde_json::json!({"contract":"tcad.weld-bead","version":CONTRACT_VERSION,"field":field,"type":"quantity","dimension":dimension,"expression":expr,"evaluated":crate::expression::value(doc,owner,expr,dimension).ok(),"editable":true}),
     }).collect();
     fields.push(crate::presentation::SemanticElement {id:format!("{node}::weld::options"),role:"feature-options".into(),label:definition.name.clone(),value:None,state:state.into(),commands:vec!["feature.edit".into(),"weld.bead".into()],relationships:definition.dependencies().into_iter().map(|source| source.node).collect(),
-        data:serde_json::json!({"contract":"tcad.weld-bead","version":CONTRACT_VERSION,"source":definition,"editable":true,"capabilities":{"real_solid":true,"seam_sources":["construction_model_edge","sketch_member","native_reference_curve"],"native_carriers":["collinear_lines","coplanar_coaxial_circular_arcs"],"patterns":["continuous","intermittent"],"profiles":["equal_leg_fillet_with_circular_crown","butt_circular_cap"],"assemblies":"saved_occurrence_paths","independent_finish_and_material":true,"fusion":false,"cosmetic_mesh_authority":false}})});
+        data:serde_json::json!({"contract":"tcad.weld-bead","version":CONTRACT_VERSION,"source":definition,"editable":true,"capabilities":{"real_solid":true,"seam_sources":["construction_model_edge","sketch_member","native_reference_curve"],"native_carriers":["collinear_lines","coplanar_coaxial_circular_arcs"],"patterns":["continuous","intermittent"],"profiles":["equal_leg_fillet_with_circular_crown","butt_circular_cap","coplanar_two_face_butt_joint"],"support_inference":"unique_complete_native_contacts","assemblies":"saved_occurrence_paths","independent_finish_and_material":true,"fusion":false,"cosmetic_mesh_authority":false}})});
     fields
 }

@@ -915,18 +915,7 @@ pub fn cells(
         .map(|column| match column {
             Column::Item => number.to_string(),
             Column::Description => row.description.clone(),
-            Column::Section => row
-                .section_label
-                .as_ref()
-                .filter(|label| label.version == crate::manufacturing::SOURCE_LABEL_VERSION)
-                .map(crate::manufacturing::SourceLabel::display)
-                .unwrap_or_else(|| {
-                    if row.section.is_some() {
-                        "Section unavailable".into()
-                    } else {
-                        String::new()
-                    }
-                }),
+            Column::Section => crate::manufacturing::section_display(row, units, precision),
             Column::Length => length(row.length_mm),
             Column::StartCutAngle => angle(row.start_cut_angle_rad),
             Column::EndCutAngle => angle(row.end_cut_angle_rad),

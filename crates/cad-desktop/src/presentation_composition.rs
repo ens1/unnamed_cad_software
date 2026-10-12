@@ -410,6 +410,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::body_inventory::semantics(w));
     elements.extend(crate::document_identity_ui::semantics(w));
     elements.extend(crate::operation_editor_ui::semantics(w));
+    elements.extend(crate::fabrication_sources_ui::semantics(w));
     elements.extend(crate::assembly_tools_ui::semantics(w));
     elements.extend(crate::assembly_welds_ui::semantics(w));
     elements.extend(crate::weld_beads_ui::semantics(w));
@@ -491,6 +492,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         }
     }
     crate::appearances_ui::reconcile_semantics(w, &mut elements);
+    for element in &mut elements {
+        crate::quantity_display::publish(&w.session.visible().settings, element);
+    }
     elements
 }
 
@@ -559,11 +563,19 @@ fn active_fields(w: &Workspace, elements: &mut Vec<SemanticElement>) {
                     "id" | "kind" | "definition" | "node" | "topology" | "role"
                 ) && !key.ends_with("_id")
                     && !value.is_null();
+                let quantity = value.as_str().and_then(|source| {
+                    crate::quantity_display::expression_with(
+                        &cad_core::settings::ModelSettings::default(),
+                        source,
+                    )
+                    .filter(|display| display.split_whitespace().count() == 2)
+                });
                 out.push(SemanticElement {
                     id: identity.clone(), role: "operation-field".into(), label:key.replace('_', " "),
                     value:Some(value.as_str().map(str::to_string).unwrap_or_else(||value.to_string())),
                     state:"draft".into(), commands:vec![], relationships:vec![owner.into()],
-                    data:serde_json::json!({"contract":"tcad.presentation.field","version":1,"setter":"document-pointer","pointer":pointer,"json":value,"editable":editable,"accessibility_label":identity}),
+                    data:serde_json::json!({"contract":"tcad.presentation.field","version":1,"setter":"document-pointer","pointer":pointer,"json":value,"editable":editable,"accessibility_label":identity,
+                        "value_type":if quantity.is_some(){"quantity"}else if value.is_number(){"number"}else{"text"}}),
                 });
             }
         }

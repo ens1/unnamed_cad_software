@@ -1,6 +1,5 @@
 //! Presentation-only sketch/reference visibility and bounded display occlusion.
 use crate::{Workspace, presentation_controls as controls, viewport};
-use bevy::math::DVec3;
 use bevy_egui::egui;
 use cad_core::presentation::{OverlayVisibility, SemanticElement};
 use std::collections::BTreeMap;
@@ -67,6 +66,9 @@ pub fn hidden(props: &BTreeMap<String, String>) -> bool {
             .is_some_and(|value| value == "hidden")
 }
 pub fn action(w: &mut Workspace, command: &str) -> bool {
+    if crate::display_mesh::action(w, command) {
+        return true;
+    }
     match command {
         "viewport.sketches.auto" => w.view.sketch_overlay_mode = OverlayVisibility::Auto,
         "viewport.sketches.all" => w.view.sketch_overlay_mode = OverlayVisibility::All,
@@ -87,7 +89,7 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
     true
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
-    let mut elements = Vec::new();
+    let mut elements = crate::display_mesh::semantics(w);
     for (sketches, label, role, prefix) in [
         (
             true,
@@ -146,6 +148,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements
 }
 pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    crate::display_mesh::controls(ui, w);
     for (sketches, label, prefix) in [
         (true, "Sketch outlines", "sketches"),
         (false, "References", "references"),
@@ -195,7 +198,7 @@ pub fn snap_controls(ui: &mut egui::Ui, w: &mut Workspace) {
         action(w, "sketch.snap-entities");
     }
 }
-/// Short display fragments are culled by the same occluders as viewport guides.
+/// Clip continuous projected lines against indexed disposable display triangles.
 /// Work exhaustion hides optional decoration instead of drawing false geometry
 /// over solids. Explicit X-ray skips occlusion; neither path changes CAD data.
 pub fn line(
@@ -218,22 +221,9 @@ pub fn line(
             .line_segment([a, b], stroke);
         return;
     }
-    let steps = ((b - a).length() / 10.).ceil().clamp(1., 192.) as usize;
-    let start = DVec3::from_array(endpoints[0]);
-    let delta = DVec3::from_array(endpoints[1]) - start;
-    for step in 0..steps {
-        let lo = step as f64 / steps as f64;
-        let hi = (step + 1) as f64 / steps as f64;
-        let point = (start + delta * ((lo + hi) * 0.5)).to_array();
-        if !viewport::visible_at(w, rect, point, remaining) {
-            continue;
-        }
-        if let Some((a, b)) = viewport::project(w, rect, (start + delta * lo).to_array())
-            .zip(viewport::project(w, rect, (start + delta * hi).to_array()))
-        {
-            ui.painter()
-                .with_clip_rect(rect)
-                .line_segment([a, b], stroke);
-        }
+    for segment in crate::overlay_depth::segments(w, rect, endpoints, remaining) {
+        ui.painter()
+            .with_clip_rect(rect)
+            .line_segment(segment, stroke);
     }
 }

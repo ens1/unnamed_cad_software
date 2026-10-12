@@ -78,9 +78,431 @@ pub(crate) fn joint_help(definition: &Definition) -> &'static str {
             "Fillet beads need two joint faces with room for both toes. Choose an inside joint seam; a free outer plate edge usually places a toe outside its face. Select two support faces to make the joint explicit."
         }
         Profile::Butt => {
-            "Butt beads need a planar support with room on both sides of the seam. Select that face explicitly when a model edge has more than one possible root support."
+            "Butt beads span one planar face, or two same-facing coplanar faces meeting at a butt/miter seam. Pick both joint faces for a tube corner. The complete root footprint must remain on the selected stock; a free outer edge or a gap is not a supported joint."
         }
     }
+}
+
+const PICK: &str = "weld-joint-pick";
+const ACTION: &str = "weld.joint-action";
+
+fn authoring(w: &Workspace) -> Option<(NodeRef, Definition, String, bool)> {
+    if w.tool_checkpoint.is_none() || w.settings.is_some() || w.confirm_requested {
+        return None;
+    }
+    if let Some((owner, definition, generation)) = crate::assembly_welds_ui::joint_pick_source(w) {
+        return Some((owner, definition, generation, false));
+    }
+    if w.dialog.as_deref() != Some("feature") || w.fields.contains_key("feature-source-invalid") {
+        return None;
+    }
+    let owner = w.view.active_part.as_ref()?;
+    let feature: Feature = serde_json::from_str(&w.json).ok()?;
+    if w.fields.get("feature-editor-id") != Some(&feature.id)
+        || !w
+            .session
+            .visible()
+            .parts
+            .get(owner)?
+            .features
+            .contains(&feature)
+    {
+        return None;
+    }
+    let Operation::WeldBead { definition } = feature.operation else {
+        return None;
+    };
+    Some((
+        NodeRef {
+            definition: owner.clone(),
+            node: feature.id,
+        },
+        *definition,
+        w.fields.get("feature-editor-generation")?.clone(),
+        true,
+    ))
+}
+
+/// Selection intent is transient presentation state. Every source mutation
+/// still enters the shared validated feature/assembly draft and one undo step.
+pub(crate) fn pick_actions(w: &Workspace) -> Vec<SemanticElement> {
+    let Some((owner, definition, generation, part)) = authoring(w) else {
+        return vec![];
+    };
+    let prefix = if part {
+        "operation-editor"
+    } else {
+        "assembly-weld-editor"
+    };
+    let current = w
+        .fields
+        .get(PICK)
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
+    let selected = current
+        .as_ref()
+        .filter(|value| value["owner"] == json!(owner) && value["editor"] == generation)
+        .and_then(|value| value["mode"].as_str());
+    let preview = current_joint_previews(w)
+        .into_iter()
+        .find(|preview| preview.owner == owner);
+    let mut out = vec![];
+    for (mode, label, enabled) in [
+        ("seam", "Pick seam on model", true),
+        ("support-0", "Pick support face 1", true),
+        (
+            "support-1",
+            "Pick support face 2",
+            !definition.supports.is_empty() || preview.is_some_and(|p| !p.supports.is_empty()),
+        ),
+        ("stop", "Stop joint picking", selected.is_some()),
+        (
+            "keep",
+            "Keep evaluated supports",
+            definition.supports.is_empty()
+                && preview.is_some_and(|p| p.complete && !p.supports.is_empty()),
+        ),
+        (
+            "butt",
+            "Use butt / miter bead",
+            definition.profile == Profile::Fillet && preview.is_some_and(|p| !p.complete),
+        ),
+        (
+            "trim",
+            if definition.profile == Profile::Fillet {
+                "Trim ends by current leg size"
+            } else {
+                "Trim ends by current half width"
+            },
+            preview.is_some_and(|preview| {
+                preview
+                    .guides
+                    .iter()
+                    .any(|guide| guide.valid == Some(false))
+            }),
+        ),
+    ] {
+        let enabled = enabled
+            && (mode == "stop"
+                || mode == "butt"
+                || mode == "trim"
+                || mode == "keep"
+                || viewport::selection_evaluation(w).is_some());
+        let id = format!("{prefix}:{}/action/joint-{mode}", owner.node);
+        let data = json!({"contract":"tcad.presentation.weld-joint-picker","version":1,"element":id,"document":w.session.visible().id,"owner":owner,"editor":generation,"source":definition,"mode":mode,"group":if part {"sources"} else {"seam"},"classes":["modeling-action","weld-joint-picker"],"shared_draft":true,"requires_current_validation":true});
+        let mut data = data;
+        data["actions"] = json!([{"command":ACTION,"label":label,"enabled":enabled,"disabled_reason":(!enabled).then_some("Use current source geometry; pick the first face before the second"),"arguments":data.clone()}]);
+        out.push(SemanticElement {
+            id,
+            role: if part {
+                "operation-editor-action"
+            } else {
+                "assembly-weld-action"
+            }
+            .into(),
+            label: label.into(),
+            value: None,
+            state: if !enabled {
+                "disabled"
+            } else if selected == Some(mode) {
+                "selected"
+            } else {
+                "ready"
+            }
+            .into(),
+            commands: vec![ACTION.into()],
+            relationships: vec![owner.node.clone()],
+            data,
+        });
+    }
+    if let Some(preview) = preview {
+        for (index, support) in preview.supports.iter().enumerate() {
+            let id = format!("{prefix}:{}/action/joint-focus-{index}", owner.node);
+            let label = format!("Highlight support face {}", index + 1);
+            let enabled = viewport::selection_evaluation(w).is_some();
+            let mut data = json!({"contract":"tcad.presentation.weld-joint-picker","version":1,"element":id,"document":w.session.visible().id,"owner":owner,"editor":generation,"source":definition,"mode":"focus","support":support,"joint_identity":joint_evaluation(w).map(|evaluation|&evaluation.identity),"path":preview.path,"group":if part {"sources"} else {"seam"},"classes":["modeling-action","weld-joint-picker"],"display_only":true});
+            data["actions"] = json!([{"command":ACTION,"label":label,"enabled":enabled,"arguments":data.clone()}]);
+            out.push(SemanticElement {
+                id,
+                role: if part {
+                    "operation-editor-action"
+                } else {
+                    "assembly-weld-action"
+                }
+                .into(),
+                label,
+                value: None,
+                state: if enabled { "ready" } else { "disabled" }.into(),
+                commands: vec![ACTION.into()],
+                relationships: vec![support.body.node.clone()],
+                data,
+            });
+        }
+    }
+    out
+}
+
+pub(crate) fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>) -> bool {
+    if command != ACTION {
+        return false;
+    }
+    let result = (|| -> cad_core::Result<()> {
+        let data = data.ok_or_else(|| {
+            cad_core::CadError::Invalid("Choose a current weld joint action".into())
+        })?;
+        let fresh = pick_actions(w)
+            .into_iter()
+            .find(|element| data["element"] == element.id)
+            .ok_or_else(|| {
+                cad_core::CadError::Invalid("The weld editor or joint action changed".into())
+            })?;
+        for key in [
+            "document",
+            "owner",
+            "editor",
+            "source",
+            "mode",
+            "support",
+            "joint_identity",
+            "path",
+        ] {
+            if fresh.data[key] != data[key] {
+                return Err(cad_core::CadError::Invalid(
+                    "Use the current weld joint selection action".into(),
+                ));
+            }
+        }
+        if !fresh
+            .action_descriptors()
+            .iter()
+            .any(|action| action.enabled)
+        {
+            return Err(cad_core::CadError::Invalid(
+                "This weld joint action is unavailable".into(),
+            ));
+        }
+        let (owner, mut definition, generation, part) = authoring(w)
+            .ok_or_else(|| cad_core::CadError::Invalid("The weld editor closed".into()))?;
+        match data["mode"].as_str() {
+            Some("trim") => {
+                let offset = if definition.profile == Profile::Fillet {
+                    definition.size.clone()
+                } else {
+                    cad_core::Expr(format!("({}) / 2", definition.size.0))
+                };
+                definition.start_offset = offset.clone();
+                definition.end_offset = offset;
+                submit_joint(w, definition, part)?;
+                w.status="Both end trims updated from the current bead size; native contact is being reevaluated".into();
+            }
+            Some("focus") => {
+                let support: FaceSource = serde_json::from_value(data["support"].clone())?;
+                let mut path: Vec<String> = serde_json::from_value(data["path"].clone())?;
+                path.extend(support.path.iter().cloned());
+                let selection=viewport::selection_evaluation(w).and_then(|evaluation| {
+                    for instance in viewport::display_instances(w,evaluation).into_iter().filter(|instance|instance.path==path) {
+                        for mesh in viewport::selection_meshes(w,evaluation,instance) {
+                            if let Some(face)=mesh.faces.iter().find(|face|face.body.as_ref()==Some(&support.body) && cad_core::selection_sets::same_reference(&face.reference,&support.reference)) {
+                                let local=face.reference.signature.as_ref().map(|signature|signature.center).or_else(||mesh.indices.get(face.start).and_then(|index|mesh.positions.get(*index as usize)).copied())?;
+                                return Some(viewport::Selection{instance:instance.path.last().cloned().unwrap_or_else(||instance.definition.clone()),path:path.clone(),name:instance.name.clone(),definition:instance.definition.clone(),reference:face.reference.clone(),body:face.body.clone(),distance:0.,point:viewport::placed(local,instance)});
+                            }
+                        }
+                    }
+                    None
+                }).ok_or_else(||cad_core::CadError::Invalid("This support is no longer in the current selectable source; evaluate or pick its replacement".into()))?;
+                if !viewport::select(w, selection) {
+                    return Err(cad_core::CadError::Invalid(w.status.clone()));
+                }
+                w.fields.remove(PICK);
+                w.status="Support face highlighted; seam and toe guides show the evaluated contact extent".into();
+            }
+            Some("stop") => {
+                w.fields.remove(PICK);
+                w.status = "Joint picking stopped; the current weld draft is unchanged".into();
+            }
+            Some("keep") => {
+                definition.supports = current_joint_previews(w)
+                    .into_iter()
+                    .find(|preview| preview.owner == owner && preview.complete)
+                    .ok_or_else(|| {
+                        cad_core::CadError::Invalid(
+                            "Current native joint contact has not passed validation".into(),
+                        )
+                    })?
+                    .supports
+                    .clone();
+                submit_joint(w, definition, part)?;
+            }
+            Some("butt") => {
+                definition.profile = Profile::Butt;
+                definition.supports.clear();
+                submit_joint(w, definition, part)?;
+                w.status =
+                    "Butt / miter profile selected; native contact is being evaluated".into();
+            }
+            Some(mode @ ("seam" | "support-0" | "support-1")) => {
+                w.fields.insert(
+                    PICK.into(),
+                    json!({"owner":owner,"editor":generation,"mode":mode}).to_string(),
+                );
+                w.status=if mode=="seam" {"Click a native joint edge; Tab cycles overlapping geometry"} else {"Click the intended support face; Tab cycles overlapping faces. Its root and complete footprint must contact the seam"}.into();
+            }
+            _ => {
+                return Err(cad_core::CadError::Invalid(
+                    "Unknown weld joint action".into(),
+                ));
+            }
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        w.status = error.to_string();
+    }
+    true
+}
+
+fn submit_joint(w: &mut Workspace, definition: Definition, part: bool) -> cad_core::Result<()> {
+    definition.validate()?;
+    if !part {
+        return crate::assembly_welds_ui::submit_joint_pick(w, definition);
+    }
+    let mut feature: Feature = serde_json::from_str(&w.json)?;
+    feature.operation = Operation::WeldBead {
+        definition: Box::new(definition),
+    };
+    ui::preview_feature(w, feature.clone());
+    if w.fields.contains_key("feature-source-invalid") {
+        return Err(cad_core::CadError::Invalid(w.status.clone()));
+    }
+    w.json = serde_json::to_string_pretty(&feature)?;
+    Ok(())
+}
+
+fn upstream_part_source(w: &Workspace, owner: &NodeRef, source: &NodeRef) -> bool {
+    source.definition == owner.definition
+        && w.session
+            .visible()
+            .parts
+            .get(&owner.definition)
+            .is_some_and(|part| {
+                part.features
+                    .iter()
+                    .take_while(|feature| feature.id != owner.node)
+                    .any(|feature| feature.id == source.node && !feature.suppressed)
+            })
+}
+
+pub(crate) fn capture_selection(w: &mut Workspace) -> bool {
+    let Some(pick) = w
+        .fields
+        .get(PICK)
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+    else {
+        return false;
+    };
+    let Some((owner, mut definition, generation, part)) = authoring(w) else {
+        w.fields.remove(PICK);
+        return false;
+    };
+    if pick["owner"] != json!(owner) || pick["editor"] != generation {
+        w.fields.remove(PICK);
+        return false;
+    }
+    let Some(mode) = pick["mode"].as_str() else {
+        return false;
+    };
+    let result = (|| -> cad_core::Result<()> {
+        if mode == "seam" {
+            let source = if part {
+                selected_seam(w, true)
+            } else {
+                crate::assembly_welds_ui::picked_joint_seam(w, &owner.definition)
+            }
+            .ok_or_else(|| {
+                cad_core::CadError::Invalid("Pick a native edge or authored seam source".into())
+            })?;
+            if part && !upstream_part_source(w, &owner, source.dependency()) {
+                return Err(cad_core::CadError::Invalid(
+                    "Pick upstream seam geometry in this part".into(),
+                ));
+            }
+            definition.seam = source;
+            definition.supports.clear();
+        } else {
+            let index = if mode == "support-0" { 0 } else { 1 };
+            let selected = w
+                .selected
+                .as_ref()
+                .filter(|selected| selected.reference.topology == "face")
+                .ok_or_else(|| {
+                    cad_core::CadError::Invalid(
+                        "Pick a support face; Tab cycles the nearby candidates".into(),
+                    )
+                })?;
+            let source = if part {
+                Some(FaceSource {
+                    body: crate::reference_ui::selected_body(w, selected),
+                    reference: Box::new(selected.reference.clone()),
+                    path: vec![],
+                })
+            } else {
+                crate::assembly_welds_ui::picked_joint_support(w, &owner.definition)
+            }
+            .ok_or_else(|| {
+                cad_core::CadError::Invalid("Pick a face within the owning assembly".into())
+            })?;
+            if part && !upstream_part_source(w, &owner, &source.body) {
+                return Err(cad_core::CadError::Invalid(
+                    "Pick upstream support geometry in this part".into(),
+                ));
+            }
+            if definition.supports.is_empty()
+                && let Some(preview) = current_joint_previews(w)
+                    .into_iter()
+                    .find(|preview| preview.owner == owner)
+            {
+                definition.supports = preview.supports.clone();
+            }
+            if index > definition.supports.len() {
+                return Err(cad_core::CadError::Invalid(
+                    "Pick support face 1 before support face 2".into(),
+                ));
+            }
+            if definition.supports.iter().enumerate().any(|(old, face)| {
+                old != index
+                    && face.body == source.body
+                    && face.path == source.path
+                    && cad_core::selection_sets::same_reference(&face.reference, &source.reference)
+            }) {
+                return Err(cad_core::CadError::Invalid(
+                    "The two support slots must refer to distinct joint faces".into(),
+                ));
+            }
+            if index == definition.supports.len() {
+                definition.supports.push(source);
+            } else {
+                definition.supports[index] = source;
+            }
+        }
+        let next = definition.profile == Profile::Fillet && definition.supports.len() == 1;
+        submit_joint(w, definition, part)?;
+        if next {
+            w.fields.insert(
+                PICK.into(),
+                json!({"owner":owner,"editor":generation,"mode":"support-1"}).to_string(),
+            );
+            w.status = "First support set; pick support face 2 to complete the fillet joint".into();
+        } else {
+            w.fields.remove(PICK);
+            w.status =
+                "Weld joint source updated; inspecting current native contact and bead preview"
+                    .into();
+        }
+        Ok(())
+    })();
+    if let Err(error) = result {
+        w.status = error.to_string();
+    }
+    true
 }
 
 pub(crate) fn feedback(w: &Workspace, owner: &str, node: &str) -> Vec<SemanticElement> {
@@ -444,11 +866,60 @@ pub(crate) fn support_choices(
                 path: vec![],
             };
             if !result.iter().any(|(old, _)| *old == source) {
-                result.push((source, format!("Face {}", index + 1)));
+                result.push((source, face_caption(w, face, index)));
             }
         }
     }
     result
+}
+pub(crate) fn face_caption(
+    w: &Workspace,
+    face: &cad_core::protocol::FaceRange,
+    index: usize,
+) -> String {
+    let part = w
+        .session
+        .visible()
+        .parts
+        .get(&face.reference.producer.definition);
+    let name = part
+        .and_then(|part| {
+            part.features
+                .iter()
+                .find(|feature| feature.id == face.reference.producer.node)
+        })
+        .map(|feature| feature.name.as_str())
+        .unwrap_or("Body");
+    let geometry = face
+        .plane
+        .as_ref()
+        .map(|plane| {
+            let u = plane.u;
+            let v = plane.v;
+            let n = [
+                u[1] * v[2] - u[2] * v[1],
+                u[2] * v[0] - u[0] * v[2],
+                u[0] * v[1] - u[1] * v[0],
+            ];
+            let axis = (0..3)
+                .max_by(|a, b| n[*a].abs().total_cmp(&n[*b].abs()))
+                .unwrap_or(0);
+            if n[axis].abs() > 1. - 1e-8 {
+                format!(
+                    "plane {}{} · {}",
+                    if n[axis] < 0. { "−" } else { "+" },
+                    ["X", "Y", "Z"][axis],
+                    w.session
+                        .visible()
+                        .settings
+                        .format_length(plane.origin[axis])
+                )
+            } else {
+                "planar face".into()
+            }
+        })
+        .unwrap_or_else(|| "curved face".into());
+    format!("{name} · face {} · {geometry}", index + 1)
 }
 pub(crate) fn preset(w: &mut Workspace) {
     crate::history::latest(w);
