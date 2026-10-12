@@ -245,17 +245,10 @@ fn triangle(o: [f64; 3], d: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> 
 /// Display batches retain body ownership while allowing independent optical bead finishes.
 fn finish_batches<'a>(
     source: &'a MeshData,
-    doc: &cad_core::Document,
-    instance: &PlacedPart,
+    part: Option<&cad_core::Part>,
+    face_finishes: &cad_core::appearance::FaceFinishResolution,
 ) -> Vec<(std::borrow::Cow<'a, MeshData>, Option<String>)> {
-    let part = cad_core::configuration::effective_part(
-        doc,
-        &instance.definition,
-        instance.configuration.as_deref(),
-    )
-    .ok();
     let assignments = part
-        .as_ref()
         .map(|part| {
             part.features
                 .iter()
@@ -269,25 +262,47 @@ fn finish_batches<'a>(
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default();
-    if assignments.is_empty() {
+    if assignments.is_empty() && face_finishes.resolved.is_empty() {
         return vec![(std::borrow::Cow::Borrowed(source), None)];
     }
+    let overrides = face_finishes
+        .resolved
+        .iter()
+        .map(|assignment| {
+            (
+                (
+                    &assignment.body,
+                    &assignment.face.producer,
+                    assignment.face.role.as_str(),
+                ),
+                &assignment.finish,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut groups: BTreeMap<Option<String>, Vec<&cad_core::protocol::FaceRange>> = BTreeMap::new();
     for face in &source.faces {
-        let finish = face
-            .body
-            .as_ref()
-            .and_then(|body| assignments.get(body.node.as_str()))
-            .cloned();
+        let finish = face.body.as_ref().and_then(|body| {
+            overrides
+                .get(&(body, &face.reference.producer, face.reference.role.as_str()))
+                .map(|finish| (*finish).clone())
+                .or_else(|| assignments.get(body.node.as_str()).cloned())
+        });
         groups.entry(finish).or_default().push(face);
     }
     groups
         .into_iter()
         .map(|(finish, faces)| {
-            let mut mesh = source.clone();
-            mesh.indices.clear();
-            mesh.faces.clear();
-            mesh.edges.clear();
+            // Copy only this optical batch's vertices. Cloning the complete
+            // part for every finish scales badly for many painted faces.
+            let mut mesh = MeshData {
+                positions: vec![],
+                normals: vec![],
+                indices: vec![],
+                faces: vec![],
+                edges: vec![],
+                bounds: source.bounds,
+                volume_mm3: source.volume_mm3,
+            };
             let mut vertex_map = BTreeMap::new();
             let mut positions = vec![];
             let mut normals = vec![];
@@ -1271,12 +1286,37 @@ pub fn sync_scene(
     for (e, doc, history) in layers {
         let resolved_finishes = cad_core::appearance::resolved_finishes(doc).unwrap_or_default();
         let default_finish = cad_core::appearance::Finish::default();
+        let mut configured_parts = BTreeMap::new();
         for instance in display_instances(&w, e) {
             if !visible(&w, instance) {
                 continue;
             }
-            for source in display_meshes(&w, e, instance) {
-                for (batch, assigned_finish) in finish_batches(source, doc, instance) {
+            let sources = display_meshes(&w, e, instance);
+            let has_overrides = doc.parts.get(&instance.definition).is_some_and(|part| {
+                !part.face_finishes.is_empty() || part.features.iter().any(|feature| matches!(
+                    &feature.operation, cad_core::Operation::WeldBead { definition } if definition.finish.is_some()
+                ))
+            });
+            let part = if has_overrides {
+                configured_parts
+                    .entry((instance.definition.clone(), instance.configuration.clone()))
+                    .or_insert_with(|| {
+                        cad_core::configuration::effective_part(
+                            doc,
+                            &instance.definition,
+                            instance.configuration.as_deref(),
+                        )
+                        .ok()
+                    })
+                    .as_ref()
+            } else {
+                None
+            };
+            let face_finishes = part
+                .map(|part| cad_core::appearance::resolve_face_finishes(part, &sources))
+                .unwrap_or_default();
+            for source in sources {
+                for (batch, assigned_finish) in finish_batches(source, part, &face_finishes) {
                     let m = batch.as_ref();
                     if m.positions.is_empty() || m.indices.is_empty() {
                         continue;

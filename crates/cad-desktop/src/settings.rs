@@ -356,6 +356,7 @@ pub fn new_document(w: &Workspace, assembly: bool) -> Document {
     document.settings = w.application_preferences.default_model.clone();
     for part in document.parts.values_mut() {
         part.finish = document.settings.default_new_part_finish.clone();
+        part.material = document.settings.default_new_part_material.clone();
     }
     document
 }
@@ -365,12 +366,16 @@ pub fn save_live_application(w: &mut Workspace) {
     if let Some(state) = &mut w.settings {
         state.application.ui_scale = w.view.ui_scale;
         state.application.navigation = w.view.navigation.clone();
+        state.application.library_favorites = w.view.library_favorites.clone();
+        state.application.library_recent = w.view.library_recent.clone();
         state.application.watch_presentation_files = w.presentation_resources.watch;
         return;
     }
     let mut preferences = w.application_preferences.clone();
     preferences.ui_scale = w.view.ui_scale;
     preferences.navigation = w.view.navigation.clone();
+    preferences.library_favorites = w.view.library_favorites.clone();
+    preferences.library_recent = w.view.library_recent.clone();
     preferences.watch_presentation_files = w.presentation_resources.watch;
     match settings_preferences::save(&preferences) {
         Ok(()) => w.application_preferences = preferences,

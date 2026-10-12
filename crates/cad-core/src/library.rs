@@ -127,6 +127,9 @@ pub fn link(
         mapping.insert(key.clone(), mapped(&link_id, key));
     }
     for part in src.parts.values() {
+        for assignment in &part.face_finishes {
+            mapping.insert(assignment.id.clone(), mapped(&link_id, &assignment.id));
+        }
         for f in &part.features {
             mapping.insert(f.id.clone(), mapped(&link_id, &f.id));
             if let crate::Operation::ReferenceCurve { definition } = &f.operation {
@@ -366,6 +369,7 @@ fn remap_source_inner(
         matches!(
             field,
             "name"
+                | "metadata"
                 | "description"
                 | "properties"
                 | "title"
@@ -429,6 +433,8 @@ fn remap_source_inner(
                 | "active_configurations"
                 | "features"
                 | "feature_dimensions"
+                | "sketch_dimensions"
+                | "__sketch_dimension_constraints"
                 | "components"
                 | "mates"
                 | "component_configurations"
@@ -455,12 +461,44 @@ fn remap_source_inner(
                         || object.contains_key("features") && object.contains_key("sketches"));
         }
         match key {
-            "id" | "definition" | "root" | "configuration" | "parent" | "node" | "material"
-            | "finish" | "resource" | "instance" | "relative_to" | "sketch" | "outputs"
-            | "profile_order" | "path" | "instance_path" | "occurrence_path" | "parent_path"
-            | "seed" | "seeds" | "mate" | "source" | "sources" | "segments" | "entities"
-            | "point" | "member" | "members" | "points" | "through" | "controls" | "lines"
-            | "trim" | "arc" | "arcs" | "anchor" | "support" => true,
+            "id"
+            | "definition"
+            | "root"
+            | "configuration"
+            | "parent"
+            | "node"
+            | "material"
+            | "default_new_part_material"
+            | "finish"
+            | "resource"
+            | "instance"
+            | "relative_to"
+            | "sketch"
+            | "outputs"
+            | "profile_order"
+            | "path"
+            | "instance_path"
+            | "occurrence_path"
+            | "parent_path"
+            | "seed"
+            | "seeds"
+            | "mate"
+            | "source"
+            | "sources"
+            | "segments"
+            | "entities"
+            | "point"
+            | "member"
+            | "members"
+            | "points"
+            | "through"
+            | "controls"
+            | "lines"
+            | "trim"
+            | "arc"
+            | "arcs"
+            | "anchor"
+            | "support" => true,
             "base_color" | "normal" | "roughness" | "metallic" | "occlusion" | "height" => {
                 field == "textures" && object.get(key).is_some_and(serde_json::Value::is_string)
             }
@@ -566,6 +604,10 @@ fn remap_source_inner(
                     // Dictionary keys are native identities or parameter names, not schema field names.
                     let child_field = if field == "feature_dimensions" {
                         "__feature_dimension_fields"
+                    } else if field == "sketch_dimensions" {
+                        "__sketch_dimension_constraints"
+                    } else if field == "__sketch_dimension_constraints" {
+                        "__sketch_dimension_expression"
                     } else if field == "__feature_dimension_fields" {
                         "__feature_dimension_expression"
                     } else if matches!(field, "parameters" | "__parameter_expressions") {

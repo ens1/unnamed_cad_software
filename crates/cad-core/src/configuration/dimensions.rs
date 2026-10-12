@@ -8,8 +8,17 @@ use serde::{Serialize, Serializer, ser};
 use serde_json::{Value, value::Serializer as JsonSerializer};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const FIELD_CONTRACT_VERSION: u32 = 2;
+pub const FIELD_CONTRACT_VERSION: u32 = 3;
 const MARKER: &str = "__tcad_expression_field_v1";
+const INTEGER: &str = "__tcad_integer_field_v1";
+
+#[derive(Clone, Copy, Debug, Default, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldKind {
+    #[default]
+    Expression,
+    Count,
+}
 
 #[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq)]
 pub struct DimensionField {
@@ -26,6 +35,10 @@ pub struct DimensionField {
     pub positional: bool,
     pub label: String,
     pub expression: Expr,
+    #[serde(default)]
+    pub kind: FieldKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum: Option<u64>,
 }
 
 pub fn fields(feature: &Feature) -> Result<Vec<DimensionField>> {
@@ -33,7 +46,7 @@ pub fn fields(feature: &Feature) -> Result<Vec<DimensionField>> {
     let operation = serde_json::to_value(&feature.operation)?;
     let mut expressions = BTreeMap::new();
     collect(&tagged, "", &mut expressions)?;
-    expressions
+    let mut fields = expressions
         .into_iter()
         .map(|(path, expression)| {
             let (pointer, positional) = resolve_pointer(&operation, &path)?;
@@ -45,9 +58,94 @@ pub fn fields(feature: &Feature) -> Result<Vec<DimensionField>> {
                 pointer,
                 positional,
                 expression,
+                kind: FieldKind::Expression,
+                maximum: None,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    let mut integers = BTreeMap::new();
+    collect_integers(&tagged, "", None, &mut integers)?;
+    for (path, (value, maximum)) in integers {
+        let (pointer, positional) = resolve_pointer(&operation, &path)?;
+        fields.push(DimensionField {
+            version: FIELD_CONTRACT_VERSION,
+            feature: feature.id.clone(),
+            label: format!("{} · {} count", feature.name, label(&pointer)),
+            path,
+            pointer,
+            positional,
+            expression: Expr(value.to_string()),
+            kind: FieldKind::Count,
+            maximum: Some(maximum),
+        });
+    }
+    fields.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(fields)
+}
+
+pub fn authored_value(field: &DimensionField, expression: &Expr) -> Result<Value> {
+    if field.kind == FieldKind::Expression {
+        return Ok(serde_json::to_value(expression)?);
+    }
+    let text = expression.0.trim();
+    let value = text
+        .parse::<u64>()
+        .map_err(|_| invalid("Count overrides require an unsigned integer literal"))?;
+    if field.maximum.is_some_and(|maximum| value > maximum) {
+        return Err(invalid("Count exceeds its native integer type"));
+    }
+    Ok(Value::from(value))
+}
+fn collect_integers(
+    value: &Value,
+    path: &str,
+    field: Option<&str>,
+    out: &mut BTreeMap<String, (u64, u64)>,
+) -> Result<()> {
+    match value {
+        Value::Object(object) if object.len() == 1 && object.contains_key(INTEGER) => {
+            // Engineering repetition counts are configurable; schema versions,
+            // reference indices and adapter limits are not dimension intent.
+            if field.is_some_and(|field| {
+                matches!(
+                    field,
+                    "count" | "counts" | "copies" | "instances" | "sides" | "rows" | "columns"
+                )
+            }) && let (Some(value), Some(maximum)) = (
+                object[INTEGER]["value"].as_u64(),
+                object[INTEGER]["maximum"].as_u64(),
+            ) {
+                out.insert(path.into(), (value, maximum));
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object {
+                collect_integers(value, &format!("{path}/{}", escape(key)), Some(key), out)?;
+            }
+        }
+        Value::Array(array) => {
+            let mut identities = BTreeSet::new();
+            for (index, value) in array.iter().enumerate() {
+                let segment = if let Some(id) = value.get("id") {
+                    let id = id
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .ok_or_else(|| invalid("Array identities must be nonempty strings"))?;
+                    if !identities.insert(id) {
+                        return Err(invalid(
+                            "Duplicate authored identity in a count record array",
+                        ));
+                    }
+                    format!("@id={}", escape(id))
+                } else {
+                    index.to_string()
+                };
+                collect_integers(value, &format!("{path}/{segment}"), field, out)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn label(path: &str) -> String {
@@ -221,9 +319,20 @@ impl Serializer for ExpressionSerializer {
     type SerializeStruct = Compound<<JsonSerializer as Serializer>::SerializeStruct>;
     type SerializeStructVariant = Compound<<JsonSerializer as Serializer>::SerializeStructVariant>;
     scalar!(serialize_bool: bool, serialize_i8: i8, serialize_i16: i16, serialize_i32: i32,
-        serialize_i64: i64, serialize_i128: i128, serialize_u8: u8, serialize_u16: u16,
-        serialize_u32: u32, serialize_u64: u64, serialize_u128: u128, serialize_f32: f32,
+        serialize_i64: i64, serialize_i128: i128, serialize_u128: u128, serialize_f32: f32,
         serialize_f64: f64, serialize_char: char, serialize_str: &str, serialize_bytes: &[u8]);
+    fn serialize_u8(self, value: u8) -> std::result::Result<Value, Self::Error> {
+        Ok(serde_json::json!({(INTEGER):{"value":value,"maximum":u8::MAX}}))
+    }
+    fn serialize_u16(self, value: u16) -> std::result::Result<Value, Self::Error> {
+        Ok(serde_json::json!({(INTEGER):{"value":value,"maximum":u16::MAX}}))
+    }
+    fn serialize_u32(self, value: u32) -> std::result::Result<Value, Self::Error> {
+        Ok(serde_json::json!({(INTEGER):{"value":value,"maximum":u32::MAX}}))
+    }
+    fn serialize_u64(self, value: u64) -> std::result::Result<Value, Self::Error> {
+        Ok(serde_json::json!({(INTEGER):{"value":value,"maximum":u64::MAX}}))
+    }
     fn serialize_none(self) -> std::result::Result<Value, Self::Error> {
         JsonSerializer.serialize_none()
     }

@@ -21,11 +21,13 @@ mod drawing_ui;
 mod exploded_views_ui;
 mod fabrication_ui;
 mod feature_order_ui;
+mod finish_library_ui;
 mod graph_ui;
 mod history;
 mod holes_ui;
 mod inspection_ui;
 mod mate_ui;
+mod materials_ui;
 mod mold_ui;
 mod navigation;
 mod operation_editor_ui;
@@ -174,6 +176,7 @@ impl Workspace {
         doc.settings = application_preferences.default_model.clone();
         for part in doc.parts.values_mut() {
             part.finish = doc.settings.default_new_part_finish.clone();
+            part.material = doc.settings.default_new_part_material.clone();
         }
         for arg in std::env::args().skip(1).filter(|a| !a.starts_with("--")) {
             let path = PathBuf::from(arg);
@@ -202,6 +205,8 @@ impl Workspace {
         }
         view.navigation = application_preferences.navigation.clone();
         view.ui_scale = application_preferences.ui_scale;
+        view.library_favorites = application_preferences.library_favorites.clone();
+        view.library_recent = application_preferences.library_recent.clone();
         if reset {
             view.roll = 0.;
         }
@@ -397,6 +402,11 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !materials_ui::current_source_is_valid(self) {
+            self.status = "Correct the current material library fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !components_ui::current_source_is_valid(self) {
             self.status = "Correct the component placement fields before applying".into();
             self.confirm_requested = false;
@@ -531,6 +541,7 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        materials_ui::cancel(self);
         components_ui::cancel(self);
         assembly_tools_ui::cancel(self);
         assembly_welds_ui::cancel(self);
@@ -578,6 +589,8 @@ impl Workspace {
             ..Default::default()
         };
         self.view.active_part = self.session.committed.parts.keys().next().cloned();
+        self.view.library_favorites = self.application_preferences.library_favorites.clone();
+        self.view.library_recent = self.application_preferences.library_recent.clone();
         self.activate_context(self.view.active_part.clone(), None);
         self.requested = None;
         self.changed = Instant::now();
@@ -654,6 +667,7 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        materials_ui::cancel(self);
         components_ui::cancel(self);
         assembly_tools_ui::cancel(self);
         assembly_welds_ui::cancel(self);
@@ -725,6 +739,11 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn confirm_tool(&mut self) {
+        if !materials_ui::current_source_is_valid(self) {
+            self.status = "Correct the current material library fields before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !components_ui::current_source_is_valid(self) {
             self.status = "Correct the component placement fields before applying".into();
             self.confirm_requested = false;

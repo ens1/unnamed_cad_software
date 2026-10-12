@@ -942,6 +942,8 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         return;
     }
     if crate::reference_repair_ui::action(w, command, Some(&element.data))
+        || crate::materials_ui::action(w, command, Some(&element.data))
+        || crate::finish_library_ui::action(w, command, Some(&element.data))
         || crate::drawing_ui::semantic_action(w, element, command)
         || crate::sketch_relations_ui::semantic_action(w, element, command)
         || crate::feature_order_ui::action(w, command, Some(&element.data))
@@ -1110,6 +1112,9 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     "operation-editor"
                         | "component-placement"
                         | "component-insert"
+                        | "material-ui"
+                        | "finish-library"
+                        | "material-editor"
                         | "drawing-editor"
                         | "drawing-interaction"
                         | "production"
@@ -1379,6 +1384,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     .unwrap_or_else(|| value.to_string());
                 let key = format!("presentation-field:{}:{editor_generation}", element.id);
                 let keep_invalid_text = crate::assembly_tools_ui::field_is_invalid(w, element)
+                    || crate::materials_ui::field_is_invalid(w, element)
                     || crate::components_ui::field_is_invalid(w, element)
                     || crate::assembly_welds_ui::field_is_invalid(w, element)
                     || crate::operation_editor_ui::field_is_invalid(w, element)
@@ -1475,6 +1481,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         draw(ui)
     };
     if let Some(error) = appearance_error {
+        crate::materials_ui::field_error(w, element, error.clone());
         crate::components_ui::field_error(w, element, error.clone());
         crate::assembly_tools_ui::field_error(w, element, error.clone());
         crate::assembly_welds_ui::field_error(w, element, error.clone());
@@ -1488,6 +1495,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     if let Some(next) = next {
         match crate::presentation_composition::set_value(w, element, next) {
             Ok(()) => {
+                crate::materials_ui::field_error(w, element, None);
                 crate::components_ui::field_error(w, element, None);
                 crate::assembly_tools_ui::field_error(w, element, None);
                 crate::assembly_welds_ui::field_error(w, element, None);
@@ -1499,6 +1507,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::configuration_ui::field_error(w, element, None);
             }
             Err(error) => {
+                crate::materials_ui::field_error(w, element, Some(error.to_string()));
                 crate::components_ui::field_error(w, element, Some(error.to_string()));
                 crate::assembly_tools_ui::field_error(w, element, Some(error.to_string()));
                 crate::assembly_welds_ui::field_error(w, element, Some(error.to_string()));
@@ -1857,6 +1866,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         return;
     }
     if crate::workspace_controls::action(w, cmd)
+        || crate::materials_ui::action(w, cmd, None)
+        || crate::finish_library_ui::action(w, cmd, None)
         || crate::drawing_ui::action(w, cmd)
         || crate::components_ui::action(w, cmd)
         || crate::reference_repair_ui::action(w, cmd, None)
@@ -1896,6 +1907,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
     if (crate::assembly_tools_ui::active(w)
         || w.assembly_motion.is_some()
         || w.fields.contains_key("appearance-tool")
+        || w.fields.contains_key("material-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -2343,6 +2355,7 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
     if crate::assembly_tools_ui::active(w)
         || w.assembly_motion.is_some()
         || w.fields.contains_key("appearance-tool")
+        || w.fields.contains_key("material-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -2410,6 +2423,7 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
     }
     if crate::assembly_tools_ui::active(w)
         || w.fields.contains_key("appearance-tool")
+        || w.fields.contains_key("material-tool")
         || w.fields.contains_key("configuration-editor")
         || w.fields.contains_key("component-pattern-editor")
         || w.fields.contains_key("exploded-view-editor")
@@ -3004,6 +3018,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 | "sketch"
                 | "configurations"
                 | "appearances"
+                | "materials"
                 | "reference-repair"
                 | "feature-order"
                 | "assembly-motion"
@@ -3724,60 +3739,7 @@ fn bom(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::production_ui::show(ui, w);
 }
 fn materials(ui: &mut egui::Ui, w: &mut Workspace) {
-    let doc = w.session.visible().clone();
-    ui.small("Engineering materials control density and manufacturing data. Edit visual finishes separately.");
-    if ui.button("Visual finishes…").clicked() {
-        crate::appearances_ui::begin(w, false);
-        return;
-    }
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        for m in doc.materials.values() {
-            egui::CollapsingHeader::new(&m.name)
-                .id_salt(&m.id)
-                .show(ui, |ui| {
-                    let mut m = m.clone();
-                    let mut changed = ui.text_edit_singleline(&mut m.name).changed();
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut m.density_kg_m3)
-                                .range(0.001..=100000.)
-                                .speed(10.)
-                                .prefix("Density ")
-                                .suffix(" kg/m³"),
-                        )
-                        .changed();
-                    if changed {
-                        w.dispatch(Command::PutMaterial {
-                            material: m.clone(),
-                        });
-                    }
-                    if ui.button("Assign to active part").clicked()
-                        && let Some(part) =
-                            w.view.active_part.as_ref().and_then(|i| doc.parts.get(i))
-                    {
-                        let mut part = part.clone();
-                        part.material = m.id;
-                        w.dispatch(Command::PutPart {
-                            part,
-                            assembly: None,
-                            placement: Default::default(),
-                        });
-                    }
-                });
-        }
-        if ui.button("New material").clicked() {
-            w.dispatch(Command::PutMaterial {
-                material: cad_core::Material {
-                    id: id(),
-                    name: "Custom material".into(),
-                    density_kg_m3: 1000.,
-                    color: [0.5; 3],
-                    metallic: 0.,
-                    roughness: 0.4,
-                },
-            });
-        }
-    });
+    crate::materials_ui::show(ui, w);
 }
 fn drawings(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::drawing_ui::editor(ui, w);

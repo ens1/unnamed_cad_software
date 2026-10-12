@@ -10,6 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const FILTER: &str = "sketch-relations-filter";
 const MOTION: &str = "sketch-motion-display";
+const SEARCH: &str = "sketch-relations-search";
+const CATEGORY: &str = "sketch-relations-category";
+const SORT: &str = "sketch-relations-sort";
 
 #[derive(Clone, Default)]
 pub struct Feedback {
@@ -282,7 +285,7 @@ pub fn constraint_emphasized(s: &sketch::EditingSketch, relation: &SketchConstra
     })
 }
 
-fn visible(w: &Workspace, keys: &BTreeSet<Id>, relation: &SketchConstraint) -> bool {
+fn scope_visible(w: &Workspace, keys: &BTreeSet<Id>, relation: &SketchConstraint) -> bool {
     let Some(s) = &w.sketch else { return false };
     match filter(w) {
         "unsatisfied" => s.feedback.unsatisfied.contains_key(&relation.id),
@@ -303,6 +306,112 @@ fn visible(w: &Workspace, keys: &BTreeSet<Id>, relation: &SketchConstraint) -> b
     }
 }
 
+fn visible(
+    w: &Workspace,
+    source: &Sketch,
+    keys: &BTreeSet<Id>,
+    relation: &SketchConstraint,
+) -> bool {
+    if !scope_visible(w, keys, relation) {
+        return false;
+    }
+    let category = w.fields.get(CATEGORY).map(String::as_str).unwrap_or("all");
+    let dimension = actions::is_dimension(&relation.kind);
+    if category == "dimensions" && !dimension || category == "relations" && dimension {
+        return false;
+    }
+    let search = w.fields.get(SEARCH).map(String::as_str).unwrap_or_default();
+    if search.trim().is_empty() {
+        return true;
+    }
+    let searchable = format!(
+        "{} {} {} {} {}",
+        actions::label(&relation.kind),
+        relation.kind,
+        relation.value.0,
+        geometry_keys(relation)
+            .iter()
+            .map(|key| entity_name(source, key))
+            .collect::<Vec<_>>()
+            .join(" "),
+        if relation.driven {
+            "reference driven"
+        } else if dimension {
+            "driving dimension"
+        } else {
+            "relation"
+        }
+    )
+    .to_lowercase();
+    w.fields
+        .get(SEARCH)
+        .map(String::as_str)
+        .unwrap_or_default()
+        .split_whitespace()
+        .all(|term| searchable.contains(&term.to_lowercase()))
+}
+fn visible_rows(w: &Workspace, source: &Sketch, keys: &BTreeSet<Id>) -> Vec<SketchConstraint> {
+    let mut rows = source
+        .constraints
+        .iter()
+        .filter(|relation| visible(w, source, keys, relation))
+        .cloned()
+        .collect::<Vec<_>>();
+    match w.fields.get(SORT).map(String::as_str).unwrap_or("authored") {
+        "type" => rows.sort_by(|a, b| {
+            actions::label(&a.kind)
+                .cmp(actions::label(&b.kind))
+                .then_with(|| a.id.cmp(&b.id))
+        }),
+        "status" => {
+            if let Some(sketch) = w.sketch.as_ref() {
+                rows.sort_by(|a, b| {
+                    let rank = |relation: &SketchConstraint| match relation_state(sketch, relation)
+                    {
+                        "selected" => 0,
+                        "unsatisfied" => 1,
+                        "dependent" => 2,
+                        "reference" => 3,
+                        _ => 4,
+                    };
+                    rank(a)
+                        .cmp(&rank(b))
+                        .then_with(|| {
+                            sketch
+                                .feedback
+                                .unsatisfied
+                                .get(&b.id)
+                                .copied()
+                                .unwrap_or_default()
+                                .total_cmp(
+                                    &sketch
+                                        .feedback
+                                        .unsatisfied
+                                        .get(&a.id)
+                                        .copied()
+                                        .unwrap_or_default(),
+                                )
+                        })
+                        .then_with(|| a.id.cmp(&b.id))
+                });
+            }
+        }
+        _ => {}
+    }
+    rows
+}
+fn browser_fields(w: &Workspace) -> Vec<SemanticElement> {
+    let Some(sketch) = w.sketch.as_ref() else {
+        return vec![];
+    };
+    [("search","Search relations",w.fields.get(SEARCH).cloned().unwrap_or_default(),serde_json::json!([])),
+        ("category","Type",w.fields.get(CATEGORY).cloned().unwrap_or_else(||"all".into()),serde_json::json!([{"value":"all","label":"Dimensions and relations"},{"value":"dimensions","label":"Dimensions only"},{"value":"relations","label":"Relations only"}])),
+        ("sort","Order",w.fields.get(SORT).cloned().unwrap_or_else(||"authored".into()),serde_json::json!([{"value":"authored","label":"Created order"},{"value":"type","label":"Relation type"},{"value":"status","label":"Selection / problems first"}]))].into_iter().map(|(key,label,value,choices)| {
+            let mut element=field(sketch,format!("{}::feedback.{key}",sketch.sketch_id),label,key,serde_json::json!(value),None,true);
+            element.role="sketch-relation-browser-field".into();element.data["choices"]=choices;
+            element.data["view_only"]=true.into();element.data["classes"]=serde_json::json!(["modeling-field"]);element
+        }).collect()
+}
 fn entity_name(source: &Sketch, key: &str) -> String {
     match key {
         actions::ORIGIN => "Origin".into(),
@@ -310,15 +419,37 @@ fn entity_name(source: &Sketch, key: &str) -> String {
         actions::Y_AXIS => "Y Axis".into(),
         _ => source
             .members
-            .keys()
-            .position(|member| member == key)
-            .map(|i| format!("Member {}", i + 1))
+            .get(key)
+            .map(|member| {
+                let kind = match member.curve {
+                    SketchCurve::Line { .. } => "Line",
+                    SketchCurve::Arc { .. } => "Arc",
+                    SketchCurve::Bezier { .. } => "Spline",
+                    SketchCurve::Nurbs { .. } => "NURBS",
+                    SketchCurve::Ellipse { .. } => "Ellipse",
+                    SketchCurve::Circle { .. } => "Circle",
+                };
+                let index = source
+                    .members
+                    .keys()
+                    .position(|member| member == key)
+                    .unwrap_or_default()
+                    + 1;
+                format!(
+                    "{kind} {index}{}",
+                    if member.construction {
+                        " · Construction"
+                    } else {
+                        ""
+                    }
+                )
+            })
             .or_else(|| {
                 source
                     .points
                     .keys()
                     .position(|point| point == key)
-                    .map(|i| format!("Point {}", i + 1))
+                    .map(|index| format!("Point {}", index + 1))
             })
             .unwrap_or_else(|| "Missing geometry".into()),
     }
@@ -449,6 +580,9 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
             "ready",
         );
     }
+    for element in browser_fields(w) {
+        crate::ui::semantic_field(ui, w, &element);
+    }
     let selected_filter = filter(w).to_string();
     let mut command = None;
     ui.horizontal_wrapped(|ui| {
@@ -497,6 +631,7 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
         }
     });
     ui.horizontal_wrapped(|ui| {
+        if controls::button(ui,&format!("{prefix}.clear-filters"),"sketch-feedback-filter",&["compact"],"Clear filters",true,false).clicked(){command=Some("sketch.feedback-clear-filters".into());}
         let duplicates = w.sketch.as_ref().map(|s| s.feedback.duplicates.len()).unwrap_or(0);
         let can_repair = editable(w).is_ok() && w.sketch.as_ref().is_some_and(|s| s.dimension.is_none() && s.dimension_pick.is_none());
         if controls::button(ui, &format!("{prefix}.remove-duplicates"), "sketch-repair-action", &["compact"], &format!("Remove duplicates ({duplicates})"), duplicates > 0 && can_repair, false).on_hover_text("Remove only authored equations with identical kind, ordered geometry, expression, contact and side. Dimension-group IDs are retained.").clicked() {
@@ -509,12 +644,7 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
     if let Some(command) = command {
         action(w, &command);
     }
-    let rows = source
-        .constraints
-        .iter()
-        .filter(|relation| visible(w, &selected_keys, relation))
-        .cloned()
-        .collect::<Vec<_>>();
+    let rows = visible_rows(w, &source, &selected_keys);
     let inactive = sketch_transform::inactive_entities(&source);
     let count = rows.len();
     let total = source.constraints.len();
@@ -579,10 +709,12 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
                 text(ui, &format!("{}.geometry", relation.id), "sketch-constraint-geometry", &description, state);
                 if dimension && w.sketch.as_ref().is_some_and(|s| s.dimension.is_none()) { dimension_controls(ui, w, &relation); }
                 contact_controls(ui, w, &relation);
+                if controls::button(ui,&format!("{}.focus",relation.id),"sketch-constraint-focus",&["compact"],"Show referenced geometry",editable(w).is_ok(),false).clicked()
+                    && let Err(error)=focus_relation(w,&relation.id){w.status=error.to_string();}
             }
         }
         if count == 0 {
-            let empty = if selected_filter == "dependent" {
+            let empty = if w.fields.get(SEARCH).is_some_and(|text|!text.trim().is_empty()) {"No dimensions or relations match the search and active filters. Clear filters to see all equations."} else if selected_filter == "dependent" {
                 "No exact duplicates or local positional dependencies are available for this geometry. Local dependence is not proof of a global conflict."
             } else if selected_filter == "unsatisfied" {
                 if w.sketch.as_ref().is_some_and(|s| s.feedback.error.is_some()) { "Equation feedback is unavailable; correct the reported expression or reference." } else { "No equations exceed the solver's 1e-6 scaled residual threshold at this geometry." }
@@ -792,6 +924,89 @@ fn editable(w: &Workspace) -> Result<()> {
     Ok(())
 }
 
+fn focus_relation(w: &mut Workspace, key: &str) -> Result<()> {
+    editable(w)?;
+    let sketch = w
+        .sketch
+        .as_ref()
+        .ok_or_else(|| CadError::Invalid("Open the related sketch".into()))?;
+    if sketch.dimension.is_some()
+        || sketch.dimension_pick.is_some()
+        || !sketch.chain.is_empty()
+        || !sketch.clicks.is_empty()
+    {
+        return Err(CadError::Invalid(
+            "Finish or cancel the current sketch gesture before focusing a relation".into(),
+        ));
+    }
+    let source = sketch::sketch_definition(sketch);
+    let relation = source
+        .constraints
+        .iter()
+        .find(|relation| relation.id == key)
+        .ok_or_else(|| CadError::Invalid("This relation no longer exists".into()))?;
+    let keys = geometry_keys(relation)
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    let mut points = source
+        .points
+        .iter()
+        .filter(|(key, _)| keys.contains(*key))
+        .map(|(_, point)| *point)
+        .collect::<Vec<_>>();
+    if keys.contains(actions::ORIGIN) {
+        points.push([0.; 2]);
+    }
+    points.extend(
+        source
+            .members
+            .iter()
+            .filter(|(member, _)| keys.contains(*member))
+            .flat_map(|(_, member)| member.curve.points())
+            .filter_map(|key| source.points.get(key).copied()),
+    );
+    // Display samples frame the camera only; they never establish constraints or references.
+    // Invalid equations still permit framing the remaining authored points.
+    if let Ok(polylines) =
+        sketch_geometry::polylines(w.session.visible(), &sketch.definition, &source)
+    {
+        points.extend(
+            polylines
+                .into_iter()
+                .filter(|polyline| keys.contains(&polyline.member))
+                .flat_map(|polyline| polyline.points),
+        );
+    }
+    let mut min = [f64::INFINITY; 2];
+    let mut max = [f64::NEG_INFINITY; 2];
+    for point in points {
+        for axis in 0..2 {
+            min[axis] = min[axis].min(point[axis]);
+            max[axis] = max[axis].max(point[axis]);
+        }
+    }
+    let center = std::array::from_fn(|axis| (min[axis] + max[axis]) * 0.5);
+    let target = (min.iter().chain(max.iter()).all(|value| value.is_finite())).then(|| {
+        crate::viewport::render_point(sketch::world(&sketch.plane, &sketch.matrix, center))
+            .to_array()
+    });
+    let extent = ((max[0] - min[0]).hypot(max[1] - min[1]) * 0.014).max(0.08) as f32;
+    sketch_ui::select(
+        w,
+        Some(SketchEntity::Constraint {
+            constraint: key.into(),
+        }),
+        false,
+    );
+    if let Some(target) = target {
+        w.view.target = target;
+        w.view.distance = extent;
+        w.pending_context_focus = false;
+        crate::navigation::stop(w);
+    }
+    Ok(())
+}
 fn change(w: &mut Workspace, key: &str, field: &str, value: serde_json::Value) -> Result<()> {
     editable(w)?;
     let s = w.sketch.as_mut().unwrap();
@@ -981,6 +1196,11 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
     }
     end_edit(w);
     match command {
+        "sketch.feedback-clear-filters" => {
+            w.fields.remove(SEARCH);
+            w.fields.remove(CATEGORY);
+            w.fields.insert(FILTER.into(), "all".into());
+        }
         "sketch.feedback-filter-selected"
         | "sketch.feedback-filter-all"
         | "sketch.feedback-filter-unsatisfied"
@@ -1053,7 +1273,10 @@ pub fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &s
     }
     if !matches!(
         element.role.as_str(),
-        "sketch-constraint" | "sketch-constraint-delete" | "sketch-dimension-mode"
+        "sketch-constraint"
+            | "sketch-constraint-delete"
+            | "sketch-dimension-mode"
+            | "sketch-constraint-focus"
     ) || w.sketch.as_ref().is_none_or(|s| {
         element.data.get("sketch").and_then(|value| value.as_str()) != Some(&s.sketch_id)
     }) {
@@ -1066,6 +1289,11 @@ pub fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &s
         .unwrap_or(&element.id)
         .to_string();
     match command {
+        "sketch.focus-relation" => {
+            if let Err(error) = focus_relation(w, &key) {
+                w.status = error.to_string();
+            }
+        }
         "sketch.select-entity" => {
             sketch_ui::select(w, Some(SketchEntity::Constraint { constraint: key }), false)
         }
@@ -1113,6 +1341,35 @@ pub fn set_field(
         .and_then(|value| value.as_str())
         .unwrap_or_default();
     match field {
+        "search" => {
+            let text = value
+                .as_str()
+                .filter(|text| text.len() <= 512)
+                .ok_or_else(|| {
+                    CadError::Invalid("Relation search supports at most 512 bytes of text".into())
+                })?;
+            w.fields.insert(SEARCH.into(), text.into());
+            Ok(())
+        }
+        "category" | "sort" => {
+            let text = value
+                .as_str()
+                .filter(|text| {
+                    if field == "category" {
+                        matches!(*text, "all" | "dimensions" | "relations")
+                    } else {
+                        matches!(*text, "authored" | "type" | "status")
+                    }
+                })
+                .ok_or_else(|| {
+                    CadError::Invalid("Choose an available relation browser option".into())
+                })?;
+            w.fields.insert(
+                if field == "category" { CATEGORY } else { SORT }.into(),
+                text.into(),
+            );
+            Ok(())
+        }
         "filter" => {
             let value = value
                 .as_str()
@@ -1158,6 +1415,21 @@ pub fn field_value(w: &Workspace, element: &SemanticElement) -> Option<serde_jso
     }
     let field = element.data.get("field")?.as_str()?;
     match field {
+        "search" => Some(serde_json::json!(
+            w.fields.get(SEARCH).cloned().unwrap_or_default()
+        )),
+        "category" => Some(serde_json::json!(
+            w.fields
+                .get(CATEGORY)
+                .cloned()
+                .unwrap_or_else(|| "all".into())
+        )),
+        "sort" => Some(serde_json::json!(
+            w.fields
+                .get(SORT)
+                .cloned()
+                .unwrap_or_else(|| "authored".into())
+        )),
         "filter" => Some(serde_json::json!(filter(w))),
         "show-dimensions" => Some(serde_json::json!(w.view.sketch_annotation_visibility[0])),
         "show-relations" => Some(serde_json::json!(w.view.sketch_annotation_visibility[1])),
@@ -1243,11 +1515,20 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         relationships: vec![s.sketch_id.clone()],
         data: serde_json::json!({"renderer":"sketch-feedback","definition":s.definition,"sketch":s.sketch_id,"filter":filter(w),"solve_report":retain_report(s),"equation_residuals":s.feedback.residuals,"maximum_equation_residual":s.feedback.maximum_residual,"unsatisfied":s.feedback.unsatisfied,"residual_error":s.feedback.error,"residual_geometry":"current-authored-geometry","residual_length_unit":"mm","residual_angle_scale_mm_per_rad":100.0,"residual_threshold":1e-6,"minimal_conflicts":false,"current_error":s.error,"shared_draft":true,"motion_analysis":motion(s),"motion_error":s.feedback.motion_error,"motion_pending":s.feedback.motion_pending,"analysis_token":s.feedback.analysis_token,"show_motion":motion_display(w),"exact_duplicates":s.feedback.duplicates,"dependency_geometry":"local-linearized-authoritative-equations"}),
     }];
-    let shown = source
-        .constraints
-        .iter()
-        .filter(|relation| visible(w, &selected_keys, relation))
-        .map(|relation| relation.id.clone())
+    out.extend(browser_fields(w));
+    out.push(SemanticElement {
+        id: format!("{prefix}.clear-filters"),
+        role: "sketch-feedback-filter".into(),
+        label: "Clear filters".into(),
+        value: None,
+        state: "ready".into(),
+        commands: vec!["sketch.feedback-clear-filters".into()],
+        relationships: vec![s.sketch_id.clone()],
+        data: serde_json::json!({"sketch":s.sketch_id,"view_only":true}),
+    });
+    let shown = visible_rows(w, &source, &selected_keys)
+        .into_iter()
+        .map(|relation| relation.id)
         .collect::<Vec<_>>();
     for (key, role, label, value) in [
         (
@@ -1448,7 +1729,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         if let Some(data) = element.data.as_object_mut() {
             data.insert(
                 "shown_in_relation_list".into(),
-                serde_json::json!(visible(w, &selected_keys, relation)),
+                serde_json::json!(visible(w, &source, &selected_keys, relation)),
             );
             data.insert(
                 "equation_residual".into(),
@@ -1470,6 +1751,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             );
         }
         out.push(element);
+        out.push(SemanticElement{id:format!("{}.focus",relation.id),role:"sketch-constraint-focus".into(),label:"Show referenced geometry".into(),value:None,state:if can_edit{"ready"}else{"disabled"}.into(),commands:vec!["sketch.focus-relation".into()],relationships:std::iter::once(s.sketch_id.clone()).chain(geometry_keys(relation).into_iter().map(str::to_owned)).collect(),data:serde_json::json!({"sketch":s.sketch_id,"constraint":relation.id,"view_only":true,"geometry":geometry_keys(relation),"geometry_labels":geometry_keys(relation).into_iter().map(|key|entity_name(&source,key)).collect::<Vec<_>>()})});
         out.push(SemanticElement {
             id: format!("{}.delete", relation.id),
             role: "sketch-constraint-delete".into(),

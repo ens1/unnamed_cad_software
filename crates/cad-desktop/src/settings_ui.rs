@@ -165,6 +165,17 @@ fn model_fields(w: &Workspace, application_defaults: bool) -> Vec<SemanticElemen
             .map(|finish| json!({"value":finish.id,"label":finish.name}))
             .collect(),
     );
+    let materials = if application_defaults {
+        cad_core::Document::blank_part("Part1").materials
+    } else {
+        w.session.visible().materials.clone()
+    };
+    let material_choices = Value::Array(
+        materials
+            .values()
+            .map(|material| json!({"value":material.id,"label":material.name}))
+            .collect(),
+    );
     [
         (
             units,
@@ -197,6 +208,14 @@ fn model_fields(w: &Workspace, application_defaults: bool) -> Vec<SemanticElemen
             Some([0.001, 1.]),
             json!([]),
             Some("mm"),
+        ),
+        (
+            geometry,
+            "/default_new_part_material",
+            "Default material for new parts",
+            None,
+            material_choices,
+            None,
         ),
         (
             geometry,

@@ -76,6 +76,12 @@ pub struct ModelSettings {
     pub evaluation_tolerance_mm: f64,
     /// Applied to subsequently created part definitions; existing assignments are preserved.
     pub default_new_part_finish: Id,
+    /// Engineering assignment for subsequently created parts, independent of finish.
+    #[serde(
+        default = "default_new_part_material",
+        skip_serializing_if = "is_default_new_part_material"
+    )]
+    pub default_new_part_material: Id,
     pub production: crate::production::Preferences,
 }
 impl Default for ModelSettings {
@@ -87,6 +93,7 @@ impl Default for ModelSettings {
             angle_decimal_places: 2,
             evaluation_tolerance_mm: 0.15,
             default_new_part_finish: crate::appearance::default_finish(),
+            default_new_part_material: default_new_part_material(),
             production: Default::default(),
         }
     }
@@ -125,6 +132,18 @@ impl ModelSettings {
                 "The default new-part finish requires a portable stable identity".into(),
             ));
         }
+        let material = &self.default_new_part_material;
+        if material.is_empty()
+            || material.len() > 256
+            || matches!(material.as_str(), "." | "..")
+            || material
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '/' | '\\' | ':'))
+        {
+            return Err(CadError::Invalid(
+                "The default new-part material requires a portable stable identity".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -137,6 +156,15 @@ impl ModelSettings {
             return Err(CadError::Invalid(format!(
                 "The default new-part finish {} does not exist in this model",
                 self.default_new_part_finish
+            )));
+        }
+        if !document
+            .materials
+            .contains_key(&self.default_new_part_material)
+        {
+            return Err(CadError::Invalid(format!(
+                "The default new-part material {} does not exist in this model",
+                self.default_new_part_material
             )));
         }
         Ok(())
@@ -159,4 +187,10 @@ impl ModelSettings {
 /// Omitting the unchanged default preserves existing native source fingerprints.
 pub fn is_default_settings(settings: &ModelSettings) -> bool {
     *settings == ModelSettings::default()
+}
+pub fn default_new_part_material() -> Id {
+    "aluminum".into()
+}
+pub fn is_default_new_part_material(material: &Id) -> bool {
+    material == "aluminum"
 }

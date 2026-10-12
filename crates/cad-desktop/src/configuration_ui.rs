@@ -9,6 +9,8 @@ use cad_core::{
 use std::collections::BTreeMap;
 #[path = "configuration_poses_ui.rs"]
 mod poses;
+#[path = "configuration_sketch_dimensions_ui.rs"]
+mod sketch_dimensions;
 
 fn owner(w: &Workspace) -> Option<Id> {
     w.fields.get("configuration-owner").cloned()
@@ -413,6 +415,13 @@ fn fields(
             }
         });
     if let Some(part) = doc.parts.get(owner) {
+        egui::CollapsingHeader::new("Sketch driving dimensions").default_open(true).show(ui, |ui| {
+            let resolved = configuration::resolve(doc, owner, &c.id).ok();
+            for dimension in configuration::sketch_dimensions::fields(part) {
+                changed |= sketch_dimensions::cell(ui, owner, c, &dimension, resolved.as_ref());
+            }
+            ui.weak("Unchecked dimensions inherit. Saved driving dimensions accept unit expressions and @parameters; reference dimensions are measurements.");
+        });
         egui::CollapsingHeader::new("Feature dimensions")
             .default_open(true)
             .show(ui, |ui| {
@@ -736,9 +745,14 @@ fn table(ui: &mut egui::Ui, w: &mut Workspace, doc: &Document, owner: &str) {
             }
         }
     });
-    ui.small("Select a row to preview it. Parameter and feature dimension cells accept unit expressions. Unchecked cells inherit. CSV columns may use unique names or stable IDs; JSON preserves the native table.");
+    ui.small("Select a row to preview it. Parameters and driving dimensions accept unit expressions; pattern counts require integer literals. Unchecked cells inherit. CSV columns may use unique owner names or stable IDs; sketch constraints retain stable IDs.");
     let params = parameters(doc, owner);
     let dimensions = configuration::dimension_fields(doc, owner).unwrap_or_default();
+    let sketch_fields = doc
+        .parts
+        .get(owner)
+        .map(configuration::sketch_dimensions::fields)
+        .unwrap_or_default();
     let mut filter = w
         .fields
         .get("configuration-dimension-filter")
@@ -749,7 +763,7 @@ fn table(ui: &mut egui::Ui, w: &mut Workspace, doc: &Document, owner: &str) {
         .get("configuration-show-dimensions")
         .is_none_or(|value| value != "false");
     ui.horizontal(|ui| {
-        ui.checkbox(&mut show_dimensions, "Feature dimensions");
+        ui.checkbox(&mut show_dimensions, "Dimensions and counts");
         ui.add_enabled(
             show_dimensions,
             egui::TextEdit::singleline(&mut filter).hint_text("Filter feature or field…"),
@@ -762,6 +776,12 @@ fn table(ui: &mut egui::Ui, w: &mut Workspace, doc: &Document, owner: &str) {
         show_dimensions.to_string(),
     );
     let dimensions = dimensions
+        .into_iter()
+        .filter(|field| {
+            show_dimensions && field.label.to_lowercase().contains(&filter.to_lowercase())
+        })
+        .collect::<Vec<_>>();
+    let sketch_fields = sketch_fields
         .into_iter()
         .filter(|field| {
             show_dimensions && field.label.to_lowercase().contains(&filter.to_lowercase())
@@ -781,6 +801,12 @@ fn table(ui: &mut egui::Ui, w: &mut Workspace, doc: &Document, owner: &str) {
                     for field in &dimensions {
                         ui.strong(&field.label)
                             .on_hover_text(format!("dimension:{}:{}", field.feature, field.path));
+                    }
+                    for field in &sketch_fields {
+                        ui.strong(&field.label).on_hover_text(format!(
+                            "sketch-dimension:{}:{}",
+                            field.sketch, field.constraint
+                        ));
                     }
                     ui.strong("Suppressed");
                     ui.end_row();
@@ -855,6 +881,17 @@ fn table(ui: &mut egui::Ui, w: &mut Workspace, doc: &Document, owner: &str) {
                             ui.push_id((c.id.clone(), &field.feature, &field.path), |ui| {
                                 changed |=
                                     dimension_cell(ui, owner, &mut c, field, resolved.as_ref());
+                            });
+                        }
+                        for field in &sketch_fields {
+                            ui.push_id((c.id.clone(), &field.sketch, &field.constraint), |ui| {
+                                changed |= sketch_dimensions::cell(
+                                    ui,
+                                    owner,
+                                    &mut c,
+                                    field,
+                                    resolved.as_ref(),
+                                );
                             });
                         }
                         ui.label(
@@ -1091,6 +1128,7 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
     };
     let mut out = Vec::new();
     out.extend(poses::semantics(w));
+    out.extend(sketch_dimensions::semantics(w));
     for mut c in configuration::definitions(doc, &owner).into_values() {
         if let Ok(local) = source(w)
             && local.id == c.id
@@ -1147,9 +1185,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
                     relationships: vec![owner.clone(), format!("{owner}@{}", c.id), dimension.feature.clone()],
                     data: serde_json::json!({"contract":"tcad.configuration.dimension-field","version":configuration::FIELD_CONTRACT_VERSION,
                         "setter":"configuration-dimension","owner":owner,"configuration":c.id,"feature":dimension.feature,
-                        "path":dimension.path,"field":field,"kind":if field=="override" {"boolean"}else{"expression"},
+                        "path":dimension.path,"field":field,"kind":if field=="override" {"boolean"}else if dimension.kind==configuration::dimensions::FieldKind::Count {"count"}else{"expression"},
                         "json":value,"editable":editable,"expression":true,"base_expression":dimension.expression.0,
-                        "current_pointer":dimension.pointer,"positional":dimension.positional,
+                        "current_pointer":dimension.pointer,"positional":dimension.positional,"value_kind":dimension.kind,"maximum":dimension.maximum,"integer_literal_required":dimension.kind==configuration::dimensions::FieldKind::Count,
                         "accessibility_label":format!("{} {} {}",c.name,dimension.label,field)}),
                 });
             }
@@ -1173,6 +1211,9 @@ pub fn current_value(
     w: &Workspace,
     element: &cad_core::presentation::SemanticElement,
 ) -> Option<serde_json::Value> {
+    if element.role == "configuration-sketch-dimension-field" {
+        return sketch_dimensions::current_value(w, element);
+    }
     if element.role == "configuration-placement-field" {
         return poses::current_value(w, element);
     }
@@ -1226,6 +1267,9 @@ pub fn set_value(
     element: &cad_core::presentation::SemanticElement,
     value: serde_json::Value,
 ) -> cad_core::Result<()> {
+    if element.role == "configuration-sketch-dimension-field" {
+        return sketch_dimensions::set_value(w, element, value);
+    }
     if element.role == "configuration-placement-field" {
         return poses::set_value(w, element, value);
     }

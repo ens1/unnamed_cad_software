@@ -136,6 +136,17 @@ pub enum Command {
     PutMaterial {
         material: Material,
     },
+    ImportMaterialLibrary {
+        catalog: Box<crate::material_library::Catalog>,
+        collision: crate::material_library::CollisionPolicy,
+    },
+    DeleteMaterial {
+        material: Id,
+    },
+    SetPartMaterial {
+        definition: Id,
+        material: Id,
+    },
     PutFinish {
         finish: Box<crate::appearance::Finish>,
     },
@@ -145,6 +156,14 @@ pub enum Command {
     SetPartFinish {
         definition: Id,
         finish: Id,
+    },
+    SetFaceFinish {
+        definition: Id,
+        assignment: Box<crate::appearance::FaceFinish>,
+    },
+    DeleteFaceFinish {
+        definition: Id,
+        assignment: Id,
     },
     SetInstanceFinish {
         assembly: Id,
@@ -502,8 +521,19 @@ impl Command {
                 }
             }
             Self::PutMaterial { material } => {
-                document.materials.insert(material.id.clone(), material);
+                crate::materials::put_edited(document, material)?;
             }
+            Self::ImportMaterialLibrary { catalog, collision } => {
+                let plan = crate::material_library::plan_import(document, &catalog, collision)?;
+                crate::material_library::apply_import(document, plan)?;
+            }
+            Self::DeleteMaterial { material } => {
+                crate::materials::delete_material(document, &material)?
+            }
+            Self::SetPartMaterial {
+                definition,
+                material,
+            } => crate::materials::assign(document, &definition, &material)?,
             Self::PutFinish { finish } => {
                 crate::appearance::validate_finish(document, &finish)?;
                 document.finishes.insert(finish.id.clone(), *finish);
@@ -540,6 +570,18 @@ impl Command {
                     .and_then(|a| a.instances.get_mut(&instance))
                     .ok_or_else(missing)?
                     .finish = finish;
+            }
+            Self::SetFaceFinish {
+                definition,
+                assignment,
+            } => {
+                crate::appearance::set_face_finish(document, &definition, *assignment)?;
+            }
+            Self::DeleteFaceFinish {
+                definition,
+                assignment,
+            } => {
+                crate::appearance::delete_face_finish(document, &definition, &assignment)?;
             }
             Self::SetLighting { lighting } => {
                 crate::appearance::validate_lighting(&lighting)?;

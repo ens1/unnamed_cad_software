@@ -1384,6 +1384,10 @@ pub struct PresentationState {
     pub ghost_others: bool,
     pub pinned: Vec<Id>,
     pub mode: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub library_favorites: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub library_recent: Vec<String>,
     /// Paper workspace preferences are presentation intent, never drawing source.
     #[serde(default)]
     pub drawing_workspace: bool,
@@ -1441,6 +1445,8 @@ impl Default for PresentationState {
             ghost_others: true,
             pinned: vec![],
             mode: "Model".into(),
+            library_favorites: vec![],
+            library_recent: vec![],
             drawing_workspace: false,
             drawing_sheet: None,
             drawing_page: 0,

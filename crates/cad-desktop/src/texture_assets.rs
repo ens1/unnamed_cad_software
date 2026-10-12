@@ -230,8 +230,21 @@ pub(crate) fn load_height(root: &Path, resource: &Resource) -> Result<Image, Str
 
 /// The bundled original grayscale texture follows exactly the imported height
 /// path: red-channel heights, floating-point mip averaging, physical gradients.
-pub(crate) fn builtin_brushed_height() -> Result<Image, String> {
-    let bytes = include_bytes!("../../../assets/appearance/brushed-height-v1.png");
+pub(crate) fn builtin_height(kind: cad_core::appearance::BuiltinBump) -> Result<Image, String> {
+    use cad_core::appearance::BuiltinBump;
+    let bytes: &[u8] = match kind {
+        BuiltinBump::None => return Err("The finish has no built-in height map".into()),
+        BuiltinBump::Brushed => include_bytes!("../../../assets/appearance/brushed-height-v1.png"),
+        BuiltinBump::Blasted => include_bytes!("../../../assets/appearance/blasted-height-v1.png"),
+        BuiltinBump::Machined => {
+            include_bytes!("../../../assets/appearance/machined-height-v1.png")
+        }
+        BuiltinBump::OrangePeel => {
+            include_bytes!("../../../assets/appearance/orange-peel-height-v1.png")
+        }
+        BuiltinBump::Molded => include_bytes!("../../../assets/appearance/molded-height-v1.png"),
+        BuiltinBump::Wood => include_bytes!("../../../assets/appearance/wood-height-v1.png"),
+    };
     height_image(decode(bytes, "png")?)
 }
 

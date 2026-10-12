@@ -393,6 +393,8 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(cad_core::navigation::semantic_fields(&w.view.navigation));
     elements.extend(crate::presentation_resources::semantics(w));
     elements.extend(crate::appearances_ui::semantics(w));
+    elements.extend(crate::materials_ui::semantics(w));
+    elements.extend(crate::finish_library_ui::semantics(w));
     elements.extend(crate::settings_ui::semantics(w));
     elements.extend(crate::operation_preview::semantics(w));
     elements.extend(crate::operation_editor_ui::semantics(w));
@@ -678,6 +680,21 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "material-ui",
+        crate::materials_ui::set_value,
+        crate::materials_ui::current_value,
+    );
+    adapters.register(
+        "finish-library",
+        crate::finish_library_ui::set_value,
+        crate::finish_library_ui::current_value,
+    );
+    adapters.register(
+        "material-editor",
+        crate::materials_ui::set_value,
+        crate::materials_ui::current_value,
+    );
     adapters.register(
         "component-placement",
         crate::components_ui::set_value,

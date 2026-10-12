@@ -578,3 +578,35 @@
   gap: 3px;
   padding: 1px 0px;
 }
+
+[role=material-library-entry], [role=finish-library-entry] {
+  width: 100%;
+  text-align: left;
+  height: 23px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+[role=material-library-entry][state=selected], [role=finish-library-entry][state=selected] {
+  background: var(--active);
+  color: var(--panel);
+}
+[role=material-field], [role=finish-library-field] {
+  display: flex;
+  flex-direction: row;
+  gap: 3px;
+  padding: 1px 0px;
+}
+[role=material-action], [role=finish-library-action] {
+  height: 22px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+[role=material-library-list] { max-height: 220px; }
+[role=finish-library-list] { max-height: 180px; }
+[role=material-heading], [role=finish-library-heading], [role=material-property-section] {
+  font-size: 10px;
+  color: var(--reference);
+}
+[role=configuration-sketch-dimension-field][state=inherited] {
+  color: var(--reference);
+}

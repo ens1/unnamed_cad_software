@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Author TCAD's seamless grayscale brushed-height image (original WTFPL asset).
+"""Author TCAD's seamless grayscale finish-height images (original WTFPL assets).
 
 This is an asset generation utility, not a modeling or acceptance exercise.
 The renderer samples the resulting height pixels; it does not synthesize grain
@@ -15,7 +15,7 @@ import zlib
 
 
 SIZE = 1024
-DESTINATION = Path(__file__).resolve().parents[1] / "assets/appearance/brushed-height-v1.png"
+DESTINATION = Path(__file__).resolve().parents[1] / "assets/appearance"
 
 
 def field(columns, rows, seed):
@@ -48,6 +48,22 @@ def chunk(kind, data):
     return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
 
 
+def write(name, layers):
+    scanlines = bytearray()
+    for y in range(SIZE):
+        scanlines.append(0)  # PNG filter None, unsigned grayscale, big endian.
+        for x in range(SIZE):
+            height = 0.5 + sum(weight * sample(layer, x, y) for weight, layer in layers)
+            scanlines.extend(struct.pack(">H", round(max(0.0, min(1.0, height)) * 65535)))
+    header = struct.pack(">IIBBBBB", SIZE, SIZE, 16, 0, 0, 0, 0)
+    encoded = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+    encoded += chunk(b"IDAT", zlib.compress(scanlines, level=9)) + chunk(b"IEND", b"")
+    DESTINATION.mkdir(parents=True, exist_ok=True)
+    path = DESTINATION / f"{name}-height-v1.png"
+    path.write_bytes(encoded)
+    print(f"Authored {path} ({len(encoded)} bytes, 16-bit grayscale)")
+
+
 def main():
     # Grain orientation is encoded in the image. Fine mottling interrupts the
     # streaks; longer, lower-amplitude marks keep close views from looking tiled.
@@ -57,18 +73,18 @@ def main():
         (0.04, field(4, 64, 17209)),
         (0.025, field(512, 512, 43313)),
     ]
-    scanlines = bytearray()
-    for y in range(SIZE):
-        scanlines.append(0)  # PNG filter None, unsigned grayscale, big endian.
-        for x in range(SIZE):
-            height = 0.5 + sum(weight * sample(layer, x, y) for weight, layer in layers)
-            scanlines.extend(struct.pack(">H", round(height * 65535)))
-    header = struct.pack(">IIBBBBB", SIZE, SIZE, 16, 0, 0, 0, 0)
-    encoded = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
-    encoded += chunk(b"IDAT", zlib.compress(scanlines, level=9)) + chunk(b"IEND", b"")
-    DESTINATION.parent.mkdir(parents=True, exist_ok=True)
-    DESTINATION.write_bytes(encoded)
-    print(f"Authored {DESTINATION} ({len(encoded)} bytes, 16-bit grayscale)")
+    write("brushed", layers)
+    # These are height images, not color images. Their grayscale gradients
+    # supply the physical grain direction and relief used by the renderer.
+    profiles = {
+        "blasted": [(0.19, 128, 128, 31243), (0.09, 512, 512, 17771), (0.04, 32, 32, 73979)],
+        "machined": [(0.22, 4, 512, 26237), (0.08, 16, 128, 54539), (0.025, 256, 256, 71087)],
+        "orange-peel": [(0.23, 48, 48, 32309), (0.08, 128, 128, 89261), (0.025, 256, 256, 54377)],
+        "molded": [(0.18, 64, 64, 76103), (0.10, 256, 256, 40927), (0.035, 512, 512, 58043)],
+        "wood": [(0.19, 4, 64, 93281), (0.12, 16, 256, 58363), (0.06, 2, 32, 25931), (0.02, 256, 256, 73363)],
+    }
+    for name, definition in profiles.items():
+        write(name, [(weight, field(columns, rows, seed)) for weight, columns, rows, seed in definition])
 
 
 if __name__ == "__main__":

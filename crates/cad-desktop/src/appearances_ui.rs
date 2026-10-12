@@ -19,12 +19,14 @@ const CLEAR: &str = "appearance.texture.clear/";
 const TARGET_PART: &str = "appearance-target-part";
 const TARGET_SCOPE: &str = "appearance-target-scope";
 const TARGET_INSTANCE: &str = "appearance-target-instance";
+const TARGET_FACE: &str = "appearance-target-face";
 const EDIT_MODE: &str = "appearance-edit-mode";
 const CUSTOM_TARGET: &str = "appearance-custom-target";
 const CUSTOM_FINISH: &str = "appearance-custom-finish";
 const SECTION_TOGGLE: &str = "appearance.section.toggle/";
 const SECTIONS: &[(&str, &str, bool)] = &[
     ("shared-library", "Shared finish library", false),
+    ("library-details", "Library description and tags", false),
     ("color-values", "Color values", false),
     ("surface", "Surface response", true),
     ("textures", "Textures · import images", true),
@@ -91,8 +93,112 @@ fn instance_scope(w: &Workspace) -> bool {
     w.fields.get(TARGET_SCOPE).map(String::as_str) == Some("instance")
         && target_instance(w).is_some()
 }
+fn face_scope(w: &Workspace) -> bool {
+    w.fields.get(TARGET_SCOPE).map(String::as_str) == Some("face") && target_face(w).is_some()
+}
+fn target_face(w: &Workspace) -> Option<cad_core::appearance::FaceFinish> {
+    let face: cad_core::appearance::FaceFinish =
+        serde_json::from_str(w.fields.get(TARGET_FACE)?).ok()?;
+    (target_part(w).as_ref() == Some(&face.body.definition)).then_some(face)
+}
+fn face_assignment(w: &Workspace) -> Option<cad_core::appearance::FaceFinish> {
+    let face = target_face(w)?;
+    let part = w.session.visible().parts.get(&face.body.definition)?;
+    if let Some(assignment) = part.face_finishes.iter().find(|assignment| {
+        assignment.body == face.body
+            && cad_core::selection_sets::same_reference(&assignment.face, &face.face)
+    }) {
+        return Some(assignment.clone());
+    }
+    let evaluation = crate::viewport::display_evaluation(w)?;
+    let placed = crate::viewport::display_instances(w, evaluation)
+        .into_iter()
+        .find(|placed| placed.definition == part.id)?;
+    let meshes = crate::viewport::display_meshes(w, evaluation, placed);
+    let resolved = cad_core::appearance::resolve_face_finishes(part, &meshes);
+    let assignment = resolved.resolved.iter().find(|assignment| {
+        assignment.body == face.body
+            && cad_core::selection_sets::same_reference(&assignment.face, &face.face)
+    })?;
+    part.face_finishes
+        .iter()
+        .find(|source| source.id == assignment.assignment)
+        .cloned()
+}
+fn capture_face(w: &mut Workspace) -> Result<()> {
+    let selected = w
+        .selected
+        .as_ref()
+        .filter(|selection| selection.reference.topology == "face")
+        .ok_or_else(|| {
+            CadError::Invalid("Select a face on the model before choosing face appearance".into())
+        })?;
+    let body = selected.body.clone().ok_or_else(|| {
+        CadError::Invalid("The selected face has no native output body reference".into())
+    })?;
+    let evaluation = crate::viewport::display_evaluation(w)
+        .filter(|evaluation| evaluation.valid && evaluation.identity == w.session.identity())
+        .ok_or_else(|| {
+            CadError::Invalid(
+                "Wait for the current model evaluation before assigning a face finish".into(),
+            )
+        })?;
+    let placed = crate::viewport::display_instances(w, evaluation)
+        .into_iter()
+        .find(|placed| placed.path == selected.path && placed.definition == selected.definition)
+        .ok_or_else(|| {
+            CadError::Invalid("The selected component occurrence no longer exists".into())
+        })?;
+    let meshes = crate::viewport::display_meshes(w, evaluation, placed);
+    let matches = meshes
+        .iter()
+        .flat_map(|mesh| mesh.faces.iter())
+        .filter(|face| {
+            face.body.as_ref() == Some(&body)
+                && cad_core::selection_sets::same_reference(&face.reference, &selected.reference)
+        })
+        .count();
+    if matches != 1 {
+        return Err(CadError::Invalid(
+            "Face appearance needs one unambiguous native face in the current model".into(),
+        ));
+    }
+    let face = cad_core::appearance::FaceFinish {
+        id: cad_core::id(),
+        body,
+        face: selected.reference.clone(),
+        finish: w
+            .session
+            .visible()
+            .parts
+            .get(&selected.definition)
+            .ok_or_else(|| CadError::Invalid("The selected part is missing".into()))?
+            .finish
+            .clone(),
+    };
+    w.fields
+        .insert(TARGET_PART.into(), selected.definition.clone());
+    w.fields
+        .insert(TARGET_FACE.into(), serde_json::to_string(&face)?);
+    w.fields.insert(TARGET_SCOPE.into(), "face".into());
+    Ok(())
+}
+fn scope(w: &Workspace) -> &'static str {
+    if face_scope(w) {
+        "face"
+    } else if instance_scope(w) {
+        "instance"
+    } else {
+        "part"
+    }
+}
 fn assigned_finish(w: &Workspace) -> Option<Id> {
     let document = w.session.visible();
+    if face_scope(w)
+        && let Some(assignment) = face_assignment(w)
+    {
+        return Some(assignment.finish);
+    }
     if instance_scope(w)
         && let Some((assembly, instance)) = target_instance(w)
     {
@@ -120,7 +226,10 @@ fn assigned_finish(w: &Workspace) -> Option<Id> {
         .filter(|id| document.finishes.contains_key(id))
 }
 fn target_key(w: &Workspace) -> Option<String> {
-    if instance_scope(w) {
+    if face_scope(w) {
+        let face = target_face(w)?;
+        Some(format!("face:{}:{}", face.body.definition, face.id))
+    } else if instance_scope(w) {
         let (assembly, instance) = target_instance(w)?;
         Some(format!("instance:{assembly}:{instance}"))
     } else {
@@ -143,6 +252,10 @@ fn reset_target_editor(w: &mut Workspace) {
 }
 fn load(w: &mut Workspace, id: &str) {
     w.fields.insert(EDITOR.into(), id.into());
+    w.fields.insert(
+        "appearance-catalog-selected".into(),
+        format!("project:{id}"),
+    );
     w.fields.remove(INVALID);
     w.fields.remove(SOURCE);
     w.fields.retain(|key, _| {
@@ -162,6 +275,15 @@ pub fn begin(w: &mut Workspace, lighting: bool) {
     if !available(w) {
         w.status = "Apply or cancel the current operation before editing visual finishes".into();
         return;
+    }
+    if !lighting
+        && !w.fields.contains_key(TOOL)
+        && w.selected
+            .as_ref()
+            .is_some_and(|selection| selection.reference.topology == "face")
+        && let Err(error) = capture_face(w)
+    {
+        w.status = error.to_string();
     }
     w.start_tool();
     w.fields.insert(TOOL.into(), "true".into());
@@ -300,7 +422,14 @@ fn customize_target(w: &mut Workspace) -> Result<()> {
     let id = finish.id.clone();
     let mut document = w.session.visible().clone();
     document.finishes.insert(id.clone(), finish);
-    if instance_scope(w) {
+    if face_scope(w) {
+        let mut face = face_assignment(w)
+            .or_else(|| target_face(w))
+            .ok_or_else(|| CadError::Invalid("Choose a native face".into()))?;
+        face.finish = id.clone();
+        let definition = face.body.definition.clone();
+        cad_core::appearance::set_face_finish(&mut document, &definition, face)?;
+    } else if instance_scope(w) {
         let (assembly, instance) = target_instance(w)
             .ok_or_else(|| CadError::Invalid("Choose a component instance".into()))?;
         document
@@ -380,7 +509,26 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
             "appearance.assign-target" => {
                 let finish = finish
                     .ok_or_else(|| CadError::Invalid("Choose a named finish to assign".into()))?;
-                if instance_scope(w) {
+                if face_scope(w) {
+                    let mut assignment = face_assignment(w)
+                        .or_else(|| target_face(w))
+                        .ok_or_else(|| CadError::Invalid("Choose a native face".into()))?;
+                    assignment.finish = finish.clone();
+                    let definition = assignment.body.definition.clone();
+                    let expected = assignment.clone();
+                    w.dispatch(Command::SetFaceFinish {
+                        definition: definition.clone(),
+                        assignment: Box::new(assignment),
+                    });
+                    if w.session
+                        .visible()
+                        .parts
+                        .get(&definition)
+                        .is_none_or(|part| !part.face_finishes.contains(&expected))
+                    {
+                        return Err(CadError::Invalid(w.status.clone()));
+                    }
+                } else if instance_scope(w) {
                     let (assembly, instance) = target_instance(w)
                         .ok_or_else(|| CadError::Invalid("Choose a component instance".into()))?;
                     w.dispatch(Command::SetInstanceFinish {
@@ -522,6 +670,96 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                     reset_target_editor(w);
                 }
             }
+            "appearance.assign-face" => {
+                capture_face(w)?;
+                action(w, "appearance.assign-target", arguments);
+            }
+            "appearance.repair-face" => {
+                let previous = arguments
+                    .and_then(|arguments| arguments.get("assignment"))
+                    .and_then(|value| {
+                        serde_json::from_value::<cad_core::appearance::FaceFinish>(value.clone())
+                            .ok()
+                    })
+                    .ok_or_else(|| {
+                        CadError::Invalid("Choose the face finish assignment to reattach".into())
+                    })?;
+                capture_face(w)?;
+                let mut replacement = target_face(w).ok_or_else(|| {
+                    CadError::Invalid("Select the replacement native face".into())
+                })?;
+                if replacement.body.definition != previous.body.definition {
+                    return Err(CadError::Invalid(
+                        "The replacement face must belong to the same part definition".into(),
+                    ));
+                }
+                replacement.id = previous.id;
+                replacement.finish = previous.finish;
+                let definition = replacement.body.definition.clone();
+                w.dispatch(Command::SetFaceFinish {
+                    definition,
+                    assignment: Box::new(replacement),
+                });
+                reset_target_editor(w);
+            }
+            "appearance.remove-face-override" => {
+                let definition = arguments
+                    .and_then(|arguments| arguments.get("definition"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        CadError::Invalid("The face assignment part is missing".into())
+                    })?;
+                let assignment = arguments
+                    .and_then(|arguments| arguments.get("assignment_id"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        CadError::Invalid("The face assignment identity is missing".into())
+                    })?;
+                w.dispatch(Command::DeleteFaceFinish {
+                    definition: definition.into(),
+                    assignment: assignment.into(),
+                });
+                if w.session
+                    .visible()
+                    .parts
+                    .get(definition)
+                    .is_some_and(|part| {
+                        part.face_finishes
+                            .iter()
+                            .any(|source| source.id == assignment)
+                    })
+                {
+                    return Err(CadError::Invalid(w.status.clone()));
+                }
+                reset_target_editor(w);
+            }
+            "appearance.capture-face" => {
+                capture_face(w)?;
+                reset_target_editor(w);
+            }
+            "appearance.inherit-face" => {
+                let assignment = face_assignment(w).ok_or_else(|| {
+                    CadError::Invalid("The selected face already uses its part finish".into())
+                })?;
+                let definition = assignment.body.definition.clone();
+                w.dispatch(Command::DeleteFaceFinish {
+                    definition: definition.clone(),
+                    assignment: assignment.id.clone(),
+                });
+                if w.session
+                    .visible()
+                    .parts
+                    .get(&definition)
+                    .is_none_or(|part| {
+                        part.face_finishes
+                            .iter()
+                            .any(|source| source.id == assignment.id)
+                    })
+                {
+                    return Err(CadError::Invalid(w.status.clone()));
+                }
+                reset_target_editor(w);
+            }
             "appearance.texture.import" | "appearance.texture.clear" => {
                 let id =
                     finish.ok_or_else(|| CadError::Invalid("Choose a visual finish".into()))?;
@@ -628,6 +866,9 @@ fn texture_label(slot: &str) -> &str {
 
 fn finish_source(finish: &Finish) -> Value {
     let mut source = serde_json::to_value(finish).unwrap_or_default();
+    let metadata = finish.metadata.clone().unwrap_or_default();
+    source["metadata"] = serde_json::to_value(&metadata).unwrap_or_default();
+    source["metadata"]["tags"] = json!(metadata.tags);
     for slot in [
         "base_color",
         "normal",
@@ -647,11 +888,7 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
         "appearance-ui" => match element.data.get("field")?.as_str()? {
             "library" => Some(json!(selected(w).or_else(|| initial(w)))),
             "target-part" => Some(json!(target_part(w))),
-            "target-scope" => Some(json!(if instance_scope(w) {
-                "instance"
-            } else {
-                "part"
-            })),
+            "target-scope" => Some(json!(scope(w))),
             "target-instance" => {
                 Some(json!(target_instance(w).map(|(assembly, instance)| {
                     instance_key(&assembly, &instance)
@@ -672,14 +909,25 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
             )),
             _ => None,
         },
-        "appearance-finish" => finish_source(
-            w.session
+        "appearance-finish" => {
+            let finish = w
+                .session
                 .visible()
                 .finishes
-                .get(element.data.get("finish")?.as_str()?)?,
-        )
-        .pointer(element.data.get("field")?.as_str()?)
-        .cloned(),
+                .get(element.data.get("finish")?.as_str()?)?;
+            let field = element.data.get("field")?.as_str()?;
+            if field == "/metadata/tags" {
+                Some(json!(
+                    finish
+                        .metadata
+                        .as_ref()
+                        .map(|metadata| metadata.tags.join(", "))
+                        .unwrap_or_default()
+                ))
+            } else {
+                finish_source(finish).pointer(field).cloned()
+            }
+        }
         "appearance-lighting" => serde_json::to_value(&w.session.visible().lighting)
             .ok()?
             .pointer(element.data.get("field")?.as_str()?)
@@ -736,6 +984,7 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                     .ok_or_else(|| CadError::Invalid("Choose a part".into()))?;
                 w.fields.insert(TARGET_PART.into(), id.into());
                 w.fields.remove(TARGET_INSTANCE);
+                w.fields.remove(TARGET_FACE);
                 w.fields.insert(TARGET_SCOPE.into(), "part".into());
                 reset_target_editor(w);
                 return Ok(());
@@ -743,10 +992,15 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
             Some("target-scope") => {
                 let scope = value
                     .as_str()
-                    .filter(|scope| matches!(*scope, "part" | "instance"))
+                    .filter(|scope| matches!(*scope, "part" | "instance" | "face"))
                     .ok_or_else(|| {
-                        CadError::Invalid("Choose part or component instance scope".into())
+                        CadError::Invalid(
+                            "Choose part, component instance or selected face scope".into(),
+                        )
                     })?;
+                if scope == "face" && target_face(w).is_none() {
+                    capture_face(w)?;
+                }
                 if scope == "instance" && target_instance(w).is_none() {
                     let (assembly, instance, _) =
                         instance_choices(w).into_iter().next().ok_or_else(|| {
@@ -846,6 +1100,20 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                 .get("field")
                 .and_then(Value::as_str)
                 .ok_or_else(|| CadError::Invalid("Missing finish field".into()))?;
+            let value = if pointer == "/metadata/tags" {
+                json!(
+                    value
+                        .as_str()
+                        .unwrap_or_default()
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|tag| !tag.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                )
+            } else {
+                value
+            };
             *source
                 .pointer_mut(pointer)
                 .ok_or_else(|| CadError::Invalid("The finish field no longer exists".into()))? =
@@ -989,18 +1257,26 @@ impl Fields {
         } else {
             "appearance-finish"
         };
-        let elements = cad_core::appearance::semantic(
-            w.session.visible(),
-            w.view.active_part.as_deref(),
-            "draft",
-        )
-        .into_iter()
-        .filter(|element| {
-            element.data.get("setter").and_then(Value::as_str) == Some(setter)
-                && (lighting || element.data.get("finish").and_then(Value::as_str) == Some(id))
-        })
-        .filter_map(|element| Some((element.data.get("field")?.as_str()?.to_owned(), element)))
-        .collect();
+        let mut elements: std::collections::BTreeMap<String, SemanticElement> =
+            cad_core::appearance::semantic(
+                w.session.visible(),
+                w.view.active_part.as_deref(),
+                "draft",
+            )
+            .into_iter()
+            .filter(|element| {
+                element.data.get("setter").and_then(Value::as_str) == Some(setter)
+                    && (lighting || element.data.get("finish").and_then(Value::as_str) == Some(id))
+            })
+            .filter_map(|element| Some((element.data.get("field")?.as_str()?.to_owned(), element)))
+            .collect();
+        if !lighting {
+            for element in metadata_elements(w, id) {
+                if let Some(field) = element.data.get("field").and_then(Value::as_str) {
+                    elements.insert(field.into(), element);
+                }
+            }
+        }
         Self { elements }
     }
 }
@@ -1084,6 +1360,13 @@ fn section(
 fn target_elements(w: &Workspace) -> Vec<SemanticElement> {
     let instances = instance_choices(w);
     let mut scopes = vec![json!({"value":"part","label":"Part definition · base finish"})];
+    if target_face(w).is_some()
+        || w.selected
+            .as_ref()
+            .is_some_and(|selection| selection.reference.topology == "face")
+    {
+        scopes.push(json!({"value":"face","label":"Selected face · part override"}));
+    }
     if !instances.is_empty() {
         scopes.push(json!({"value":"instance","label":"Component instance · override"}));
     }
@@ -1097,7 +1380,7 @@ fn target_elements(w: &Workspace) -> Vec<SemanticElement> {
         (
             "target-scope",
             "Apply to",
-            json!(if instance_scope(w) { "instance" } else { "part" }),
+            json!(scope(w)),
             json!(scopes),
         ),
         (
@@ -1142,7 +1425,7 @@ fn assignment_element(w: &Workspace) -> SemanticElement {
             .into_iter()
             .chain(finish.into_iter().map(|id| format!("finish:{id}")))
             .collect(),
-        data: json!({"definition":target_part(w),"instance":target_instance(w),"scope":if instance_scope(w){"instance"}else{"part"},"editing_mode":w.fields.get(EDIT_MODE),"custom_finish":custom_is_current(w),"engineering_material_independent":true}),
+        data: json!({"definition":target_part(w),"instance":target_instance(w),"scope":scope(w),"editing_mode":w.fields.get(EDIT_MODE),"custom_finish":custom_is_current(w),"engineering_material_independent":true}),
     }
 }
 fn target_warning(w: &Workspace) -> Option<String> {
@@ -1263,6 +1546,7 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
     }
     target_controls(ui, w);
     let selected_id = selected(w);
+    crate::finish_library_ui::show(ui, w);
     crate::ui::semantic_field(ui, w, &library_element(w));
     ui.horizontal_wrapped(|ui| {
         button(
@@ -1270,13 +1554,17 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
             w,
             "appearance.assign-target",
             "Assign finish",
-            target_key(w).is_some() && selected_id.is_some(),
+            target_key(w).is_some()
+                && selected_id.is_some()
+                && !crate::finish_library_ui::catalog_selected(w),
         );
         button(
             ui,
             w,
             "appearance.customize-target",
-            if instance_scope(w) {
+            if face_scope(w) {
+                "Customize this face"
+            } else if instance_scope(w) {
                 "Customize this instance"
             } else {
                 "Customize this part"
@@ -1284,6 +1572,15 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
             target_key(w).is_some(),
         );
     });
+    if face_scope(w) {
+        button(
+            ui,
+            w,
+            "appearance.inherit-face",
+            "Use part finish",
+            face_assignment(w).is_some(),
+        );
+    }
     if instance_scope(w) {
         button(
             ui,
@@ -1346,6 +1643,8 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
         &[],
         if shared {
             "Editing shared finish · all assignments"
+        } else if face_scope(w) {
+            "Editing this face's finish"
         } else if instance_scope(w) {
             "Editing this component instance's finish"
         } else {
@@ -1358,6 +1657,11 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
     };
     let fields = Fields::new(w, &id, false);
     field(ui, w, &fields, "/name", "Finish name", json!([]));
+    section(ui, w, "library-details", |ui, w| {
+        for element in metadata_elements(w, &id) {
+            crate::ui::semantic_field(ui, w, &element);
+        }
+    });
     if let Some(finish) = w.session.visible().finishes.get(&id) {
         let mut color = finish.base_color.map(|value| value as f32);
         ui.horizontal(|ui| {
@@ -1499,7 +1803,7 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
                     &fields,
                     "/builtin_bump",
                     "Built-in bump",
-                    json!([{"value":"none","label":"None"},{"value":"brushed","label":"Brushed grain"}]),
+                    json!([{"value":"none","label":"None"},{"value":"brushed","label":"Brushed grain"},{"value":"blasted","label":"Bead blasted"},{"value":"machined","label":"Machined tool marks"},{"value":"orange_peel","label":"Paint / powder coat"},{"value":"molded","label":"Molded polymer"},{"value":"wood","label":"Wood grain"}]),
                 );
                 field(ui, w, &fields, "/height_mm", "Bump depth (mm)", json!([]));
                 description(
@@ -1624,7 +1928,7 @@ pub fn lighting_view(ui: &mut egui::Ui, w: &mut Workspace) {
     }
     lighting_controls(ui, w);
 }
-fn diagnostics(ui: &mut egui::Ui, w: &Workspace) {
+fn diagnostics(ui: &mut egui::Ui, w: &mut Workspace) {
     for (key, error) in w
         .fields
         .iter()
@@ -1636,10 +1940,53 @@ fn diagnostics(ui: &mut egui::Ui, w: &Workspace) {
     for error in &w.appearance_diagnostics {
         ui.colored_label(ui.visuals().error_fg_color, error);
     }
+    for element in face_diagnostics(w) {
+        controls::label(
+            ui,
+            &element.id,
+            &element.role,
+            &[],
+            &element.label,
+            &element.state,
+        );
+        if controls::button(
+            ui,
+            &format!("{}:remove", element.id),
+            "appearance-action",
+            &["semantic-control"],
+            "Remove face override",
+            available(w),
+            false,
+        )
+        .clicked()
+        {
+            action(w, "appearance.remove-face-override", Some(&element.data));
+        }
+        if controls::button(
+            ui,
+            &format!("{}:repair", element.id),
+            "appearance-action",
+            &["semantic-control"],
+            "Reattach to selected face",
+            available(w)
+                && w.selected
+                    .as_ref()
+                    .is_some_and(|selection| selection.reference.topology == "face"),
+            false,
+        )
+        .clicked()
+        {
+            action(w, "appearance.repair-face", Some(&element.data));
+        }
+    }
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = vec![library_element(w), source_element(w), assignment_element(w)];
     elements.extend(target_elements(w));
+    if let Some(id) = selected(w) {
+        elements.extend(metadata_elements(w, &id));
+    }
+    elements.extend(face_diagnostics(w));
     for (section, label, _) in SECTIONS {
         let open = section_open(w, section);
         elements.push(SemanticElement {
@@ -1661,7 +2008,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         state: if panel_open(w) { "open" } else { "closed" }.into(),
         commands: vec!["appearances".into()],
         relationships: vec!["workspace.appearances".into(), "workspace.lighting".into()],
-        data: json!({"renderer":"appearance-panel","definition":target_part(w),"instance":target_instance(w),"scope":if instance_scope(w){"instance"}else{"part"},"transaction":"shared-document-draft","confirmation":"current-validated-evaluation","independent_engineering_material":true}),
+        data: json!({"renderer":"appearance-panel","definition":target_part(w),"instance":target_instance(w),"scope":scope(w),"transaction":"shared-document-draft","confirmation":"current-validated-evaluation","independent_engineering_material":true}),
     });
     for (id, role, label) in [
         ("appearance:heading", "appearance-heading", "Appearance"),
@@ -1717,7 +2064,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             state: "warning".into(),
             commands: vec![],
             relationships: target_part(w).into_iter().collect(),
-            data: json!({"scope":if instance_scope(w){"instance"}else{"part"}}),
+            data: json!({"scope":scope(w)}),
         });
     }
     let shared = w.fields.get(EDIT_MODE).map(String::as_str) == Some("shared");
@@ -1726,6 +2073,8 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         role: "appearance-target".into(),
         label: if shared {
             "Editing shared finish · all assignments"
+        } else if face_scope(w) {
+            "Editing this face's finish"
         } else if instance_scope(w) {
             "Editing this component instance's finish"
         } else {
@@ -1776,6 +2125,19 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "appearance.delete",
             "Delete visual finish",
             available(w) && selected(w).as_ref().is_some_and(|id| can_delete(w, id)),
+        ),
+        (
+            "appearance.capture-face",
+            "Use selected model face",
+            available(w)
+                && w.selected
+                    .as_ref()
+                    .is_some_and(|selection| selection.reference.topology == "face"),
+        ),
+        (
+            "appearance.inherit-face",
+            "Use part finish for selected face",
+            available(w) && face_scope(w) && face_assignment(w).is_some(),
         ),
         (
             "appearance.assign-part",
@@ -1953,4 +2315,115 @@ fn source_element(w: &Workspace) -> SemanticElement {
         relationships: selected(w).into_iter().collect(),
         data: json!({"setter":"appearance-ui","field":"source","json":w.fields.get(SOURCE).cloned().unwrap_or_default(),"editable":available(w)&&selected(w).is_some(),"multiline":true,"accessibility_label":"Advanced visual finish source"}),
     }
+}
+
+/// Catalog/browser actions share the appearance tool checkpoint and assignment path.
+pub fn select_named_finish(w: &mut Workspace, id: &str) -> Result<()> {
+    if !w.session.visible().finishes.contains_key(id) {
+        return Err(CadError::Invalid("The selected finish is missing".into()));
+    }
+    load(w, id);
+    w.fields.insert(EDIT_MODE.into(), "assignment".into());
+    Ok(())
+}
+pub fn add_named_finish(w: &mut Workspace, finish: Finish, assign: bool) -> Result<()> {
+    if !available(w) {
+        return Err(CadError::Invalid(
+            "Finish the active operation before assigning appearances".into(),
+        ));
+    }
+    if !w.fields.contains_key(TOOL) {
+        begin(w, false);
+    }
+    let id = finish.id.clone();
+    let mut document = w.session.visible().clone();
+    document.finishes.insert(id.clone(), finish);
+    if assign {
+        if face_scope(w) {
+            let mut face = face_assignment(w)
+                .or_else(|| target_face(w))
+                .ok_or_else(|| CadError::Invalid("Choose a native face".into()))?;
+            face.finish = id.clone();
+            let definition = face.body.definition.clone();
+            cad_core::appearance::set_face_finish(&mut document, &definition, face)?;
+        } else if instance_scope(w) {
+            let (assembly, instance) = target_instance(w)
+                .ok_or_else(|| CadError::Invalid("Choose a component instance".into()))?;
+            document
+                .assemblies
+                .get_mut(&assembly)
+                .and_then(|assembly| assembly.instances.get_mut(&instance))
+                .ok_or_else(|| CadError::Invalid("The component instance no longer exists".into()))?
+                .finish = Some(id.clone());
+        } else {
+            let definition =
+                target_part(w).ok_or_else(|| CadError::Invalid("Choose a target part".into()))?;
+            document
+                .parts
+                .get_mut(&definition)
+                .ok_or_else(|| CadError::Invalid("The target part no longer exists".into()))?
+                .finish = id.clone();
+        }
+    }
+    document.validate()?;
+    let expected = document.fingerprint();
+    w.dispatch(Command::ReplaceDocument { document });
+    if w.session.visible().fingerprint() != expected {
+        return Err(CadError::Invalid(w.status.clone()));
+    }
+    select_named_finish(w, &id)?;
+    Ok(())
+}
+
+pub fn selected_finish(w: &Workspace) -> Option<Id> {
+    selected(w)
+}
+
+fn metadata_elements(w: &Workspace, id: &str) -> Vec<SemanticElement> {
+    let Some(finish) = w.session.visible().finishes.get(id) else {
+        return vec![];
+    };
+    let metadata = finish.metadata.clone().unwrap_or_default();
+    [
+        ("category", "Finish family", metadata.category),
+        ("description", "Description", metadata.description),
+        ("tags", "Tags · comma separated", metadata.tags.join(", ")),
+        ("source", "Visual preset source", metadata.source),
+    ]
+    .into_iter()
+    .map(|(name, label, value)| {
+        let mut element = field_element(
+            id,
+            &format!("/metadata/{name}"),
+            label,
+            json!(value),
+            false,
+            json!([]),
+            None,
+        );
+        element.data["editable"] = json!(available(w));
+        element
+    })
+    .collect()
+}
+fn face_diagnostics(w: &Workspace) -> Vec<SemanticElement> {
+    let Some(part) = target_part(w).and_then(|id| w.session.visible().parts.get(&id)) else {
+        return vec![];
+    };
+    let Some(evaluation) = crate::viewport::display_evaluation(w)
+        .filter(|evaluation| evaluation.valid && evaluation.identity == w.session.identity())
+    else {
+        return vec![];
+    };
+    let Some(placed) = crate::viewport::display_instances(w, evaluation)
+        .into_iter()
+        .find(|placed| placed.definition == part.id)
+    else {
+        return vec![];
+    };
+    let meshes = crate::viewport::display_meshes(w, evaluation, placed);
+    cad_core::appearance::resolve_face_finishes(part,&meshes).diagnostics.into_iter().map(|diagnostic| {
+        let assignment=part.face_finishes.iter().find(|assignment|assignment.id==diagnostic.assignment);
+        SemanticElement{id:format!("appearance:face-diagnostic:{}",diagnostic.assignment),role:"appearance-face-diagnostic".into(),label:format!("Face finish · {} · {}",diagnostic.state,diagnostic.message),value:Some(diagnostic.assignment.clone()),state:"warning".into(),commands:vec!["appearance.remove-face-override".into(),"appearance.repair-face".into()],relationships:vec![part.id.clone()],data:json!({"definition":part.id,"assignment_id":diagnostic.assignment,"assignment":assignment,"diagnostic":diagnostic,"fallback":"part-finish","blocks_apply":false})}
+    }).collect()
 }

@@ -116,7 +116,7 @@ struct LoadRequest {
 }
 enum Reply {
     Texture(TextureKey, Result<Image, String>),
-    BuiltinHeight(Result<Image, String>),
+    BuiltinHeight(BuiltinBump, Result<Image, String>),
     Studio(Image, Image),
 }
 #[derive(Resource)]
@@ -129,7 +129,7 @@ pub struct Runtime {
     image_bytes: usize,
     white: Handle<Image>,
     flat_normal: Handle<Image>,
-    builtin_height: TextureState,
+    builtin_height: BTreeMap<BuiltinBump, TextureState>,
     pub epoch: u64,
     studio: Option<(Handle<Image>, Handle<Image>)>,
     usage_key: String,
@@ -146,7 +146,10 @@ impl Default for Runtime {
             image_bytes: 0,
             white: Handle::default(),
             flat_normal: Handle::default(),
-            builtin_height: TextureState::Pending,
+            builtin_height: BuiltinBump::MAPS
+                .into_iter()
+                .map(|kind| (kind, TextureState::Pending))
+                .collect(),
             epoch: 0,
             studio: None,
             usage_key: String::new(),
@@ -237,17 +240,22 @@ impl Runtime {
     }
     pub fn diagnostics(&self, doc: &Document, root: &Path, validating: bool) -> Vec<String> {
         let mut messages = vec![];
-        if doc.finishes.values().any(|finish| {
-            finish.textures.height.is_none() && finish.builtin_bump == BuiltinBump::Brushed
-        }) {
-            match &self.builtin_height {
-                TextureState::Pending => {
-                    messages.push("Loading texture built-in brushed grain".into())
+        let builtin = doc
+            .finishes
+            .values()
+            .filter(|finish| finish.textures.height.is_none())
+            .map(|finish| finish.builtin_bump)
+            .filter(|kind| *kind != BuiltinBump::None)
+            .collect::<std::collections::BTreeSet<_>>();
+        for kind in builtin {
+            match self.builtin_height.get(&kind) {
+                Some(TextureState::Pending) | None => {
+                    messages.push(format!("Loading texture built-in {}", kind.label()))
                 }
-                TextureState::Failed(error) => {
-                    messages.push(format!("Built-in brushed bump: {error}"))
+                Some(TextureState::Failed(error)) => {
+                    messages.push(format!("Built-in {}: {error}", kind.label()))
                 }
-                TextureState::Loaded(_) => {}
+                Some(TextureState::Loaded(_)) => {}
             }
         }
         let mut used = std::collections::BTreeSet::new();
@@ -302,8 +310,10 @@ pub fn setup(commands: &mut Commands, images: &mut Assets<Image>, runtime: &mut 
     runtime.flat_normal = images.add(pixel([128, 128, 255, 255]));
     let height_sender = runtime.sender.clone();
     std::thread::spawn(move || {
-        let result = crate::texture_assets::builtin_brushed_height();
-        let _ = height_sender.send(Reply::BuiltinHeight(result));
+        for kind in BuiltinBump::MAPS {
+            let result = crate::texture_assets::builtin_height(kind);
+            let _ = height_sender.send(Reply::BuiltinHeight(kind, result));
+        }
     });
     // A coarse studio is available immediately. Filtering the final resources
     // stays off the main thread, but metal never starts in an unlit void.
@@ -465,14 +475,15 @@ pub fn poll_assets(
                 runtime.textures.insert(key, state);
                 runtime.epoch = runtime.epoch.wrapping_add(1);
             }
-            Reply::BuiltinHeight(result) => {
-                runtime.builtin_height = match result {
+            Reply::BuiltinHeight(kind, result) => {
+                let state = match result {
                     Ok(image) => {
                         runtime.image_bytes += image.data.as_ref().map(Vec::len).unwrap_or(0);
                         TextureState::Loaded(images.add(image))
                     }
                     Err(error) => TextureState::Failed(error),
                 };
+                runtime.builtin_height.insert(kind, state);
                 runtime.epoch = runtime.epoch.wrapping_add(1);
             }
             Reply::Studio(diffuse, specular) => {
@@ -689,8 +700,7 @@ pub fn material(
     // An explicitly assigned image owns the bump slot even while loading or
     // after a decode error. Do not silently layer or substitute built-in grain.
     if finish.textures.height.is_none()
-        && finish.builtin_bump == BuiltinBump::Brushed
-        && let TextureState::Loaded(height) = &runtime.builtin_height
+        && let Some(TextureState::Loaded(height)) = runtime.builtin_height.get(&finish.builtin_bump)
     {
         extension.height = height.clone();
         flags |= 32;

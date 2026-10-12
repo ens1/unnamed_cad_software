@@ -37,6 +37,10 @@ pub struct Preferences {
     pub recovery_enabled: bool,
     pub recovery_interval_seconds: u64,
     pub default_model: ModelSettings,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub library_favorites: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub library_recent: Vec<String>,
 }
 
 impl Default for Preferences {
@@ -52,6 +56,8 @@ impl Default for Preferences {
             recovery_enabled: true,
             recovery_interval_seconds: 2,
             default_model: ModelSettings::default(),
+            library_favorites: vec![],
+            library_recent: vec![],
         }
     }
 }
@@ -77,7 +83,29 @@ impl Preferences {
             ));
         }
         self.navigation.validate()?;
+        for (label, entries, limit) in [
+            ("favorites", &self.library_favorites, 512),
+            ("recent", &self.library_recent, 64),
+        ] {
+            if entries.len() > limit
+                || entries.iter().any(|id| {
+                    id.is_empty()
+                        || id.len() > 256
+                        || !(id.starts_with("material:") || id.starts_with("finish:"))
+                })
+            {
+                return Err(CadError::Invalid(format!(
+                    "Invalid material/finish library {label}"
+                )));
+            }
+        }
         self.default_model.validate_values()?;
+        if !cad_core::Document::blank_part("Part1")
+            .materials
+            .contains_key(&self.default_model.default_new_part_material)
+        {
+            return Err(CadError::Invalid("Application defaults require a built-in engineering material; project materials stay in their document".into()));
+        }
         if !appearance::default_finishes().contains_key(&self.default_model.default_new_part_finish)
         {
             return Err(CadError::Invalid(

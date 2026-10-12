@@ -3,7 +3,7 @@ use crate::{CadError, Document, Id, PlacedPart, Result, presentation::SemanticEl
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const CONTRACT_VERSION: u32 = 2;
+pub const CONTRACT_VERSION: u32 = 3;
 pub const DEFAULT_FINISH: &str = "clear-anodized-aluminum";
 pub const TEXTURE_KINDS: &[&str] = &["png", "jpg", "jpeg", "tif", "tiff", "webp"];
 
@@ -74,12 +74,51 @@ impl TextureMaps {
     }
 }
 /// Built-in grayscale height image used when no imported height resource is assigned.
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinBump {
     None,
     #[default]
     Brushed,
+    Blasted,
+    Machined,
+    OrangePeel,
+    Molded,
+    Wood,
+}
+impl BuiltinBump {
+    pub const MAPS: [Self; 6] = [
+        Self::Brushed,
+        Self::Blasted,
+        Self::Machined,
+        Self::OrangePeel,
+        Self::Molded,
+        Self::Wood,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Brushed => "Brushed grain",
+            Self::Blasted => "Blasted microtexture",
+            Self::Machined => "Machined tool marks",
+            Self::OrangePeel => "Coating orange peel",
+            Self::Molded => "Molded texture",
+            Self::Wood => "Wood grain",
+        }
+    }
+}
+/// Optional human-facing library metadata. Absence preserves legacy serialized
+/// finish identities; these notes never establish engineering material properties.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct FinishMetadata {
+    pub category: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    pub description: String,
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog_id: Option<Id>,
 }
 /// Contract v2 adds a built-in grayscale bump selection and directional reflection controls.
 /// Older serialized finishes use these fields' default values without changing their existing
@@ -103,6 +142,8 @@ pub struct Finish {
     pub anisotropy: f64,
     pub textures: TextureMaps,
     pub mapping: TextureMapping,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<FinishMetadata>,
 }
 impl Default for Finish {
     fn default() -> Self {
@@ -120,6 +161,7 @@ impl Default for Finish {
             anisotropy: 0.45,
             textures: TextureMaps::default(),
             mapping: TextureMapping::default(),
+            metadata: None,
         }
     }
 }
@@ -202,6 +244,25 @@ pub fn validate_finish(doc: &Document, finish: &Finish) -> Result<()> {
     if !valid_id(&finish.id) || finish.name.trim().is_empty() || finish.name.len() > 256 {
         return Err(invalid(
             "Finishes require a portable ID and a name of at most 256 bytes",
+        ));
+    }
+    if let Some(metadata) = &finish.metadata
+        && (metadata.category.len() > 128
+            || metadata.description.len() > 4096
+            || metadata.source.len() > 2048
+            || metadata.tags.len() > 64
+            || metadata.tags.iter().any(|tag| tag.len() > 128)
+            || metadata.catalog_id.as_ref().is_some_and(|id| !valid_id(id))
+            || [&metadata.category, &metadata.description, &metadata.source]
+                .into_iter()
+                .chain(metadata.tags.iter())
+                .any(|text| {
+                    text.chars()
+                        .any(|c| c.is_control() && !matches!(c, '\n' | '\t'))
+                }))
+    {
+        return Err(invalid(
+            "Finish library metadata exceeds its portable text bounds",
         ));
     }
     if finish
@@ -312,6 +373,7 @@ pub fn validate(doc: &Document) -> Result<()> {
                 part.name, part.finish
             )));
         }
+        validate_face_finishes(doc, part)?;
     }
     for assembly in doc.assemblies.values() {
         for instance in assembly.instances.values() {
@@ -407,6 +469,10 @@ pub fn delete_reason(doc: &Document, id: &str) -> Option<&'static str> {
         return Some("Choose another default new-part finish in model settings before deleting it");
     }
     if doc.parts.values().any(|p| p.finish == id)
+        || doc
+            .parts
+            .values()
+            .any(|p| p.face_finishes.iter().any(|face| face.finish == id))
         || doc.assemblies.values().any(|a| {
             a.instances
                 .values()
@@ -419,7 +485,7 @@ pub fn delete_reason(doc: &Document, id: &str) -> Option<&'static str> {
         })
     {
         return Some(
-            "Reassign the finish's parts, components and configurations before deleting it",
+            "Reassign the finish's parts, faces, components and configurations before deleting it",
         );
     }
     None
@@ -432,6 +498,206 @@ pub fn delete_finish(doc: &mut Document, id: &str) -> Result<()> {
         return Err(invalid("The finish no longer exists"));
     }
     Ok(())
+}
+/// A part-owned face finish follows construction provenance. Signatures are
+/// repair hints only: proximity, face order and mesh indices never reattach it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct FaceFinish {
+    pub id: Id,
+    pub body: crate::NodeRef,
+    pub face: crate::TopologyRef,
+    pub finish: Id,
+}
+fn validate_face_finishes(doc: &Document, part: &crate::Part) -> Result<()> {
+    if part.face_finishes.len() > 16_384 {
+        return Err(invalid(
+            "A part may contain at most 16384 face finish assignments",
+        ));
+    }
+    let mut identities = std::collections::BTreeSet::new();
+    let mut targets = std::collections::BTreeSet::new();
+    for assignment in &part.face_finishes {
+        if !valid_id(&assignment.id)
+            || !identities.insert(&assignment.id)
+            || assignment.body.definition != part.id
+            || assignment.face.producer.definition != part.id
+            || assignment.face.topology != "face"
+            || assignment.face.role.is_empty()
+            || assignment.face.role.len() > 1_048_576
+            || !doc.finishes.contains_key(&assignment.finish)
+            || !targets.insert((
+                &assignment.body,
+                &assignment.face.producer,
+                &assignment.face.role,
+            ))
+        {
+            return Err(invalid(format!(
+                "Part {} has an invalid, duplicate or foreign face finish assignment",
+                part.name
+            )));
+        }
+    }
+    Ok(())
+}
+pub fn set_face_finish(doc: &mut Document, definition: &str, assignment: FaceFinish) -> Result<()> {
+    let part = doc
+        .parts
+        .get(definition)
+        .ok_or_else(|| invalid("The face finish part no longer exists"))?;
+    let mut candidate = part.clone();
+    // Reassigning the same source face retains one semantic override, even if
+    // the UI provided a new identity for this intentional edit.
+    candidate.face_finishes.retain(|existing| {
+        existing.id != assignment.id
+            && !(existing.body == assignment.body
+                && crate::selection_sets::same_reference(&existing.face, &assignment.face))
+    });
+    candidate.face_finishes.push(assignment);
+    validate_face_finishes(doc, &candidate)?;
+    doc.parts.insert(definition.into(), candidate);
+    Ok(())
+}
+pub fn delete_face_finish(doc: &mut Document, definition: &str, assignment: &str) -> Result<()> {
+    let part = doc
+        .parts
+        .get_mut(definition)
+        .ok_or_else(|| invalid("The face finish part no longer exists"))?;
+    let length = part.face_finishes.len();
+    part.face_finishes.retain(|face| face.id != assignment);
+    if part.face_finishes.len() == length {
+        return Err(invalid(
+            "The selected face finish assignment no longer exists",
+        ));
+    }
+    Ok(())
+}
+/// Disposable exact resolution against evaluated native face metadata. Multiple
+/// native matches are a split/ambiguous source and intentionally remain unresolved.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResolvedFaceFinish {
+    pub assignment: Id,
+    pub finish: Id,
+    pub body: crate::NodeRef,
+    pub face: crate::TopologyRef,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FaceFinishDiagnostic {
+    pub assignment: Id,
+    pub state: String,
+    pub matches: usize,
+    pub message: String,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct FaceFinishResolution {
+    pub resolved: Vec<ResolvedFaceFinish>,
+    pub diagnostics: Vec<FaceFinishDiagnostic>,
+}
+fn body_ancestors(part: &crate::Part, output: &crate::NodeRef) -> std::collections::BTreeSet<Id> {
+    let mut pending = vec![output.node.clone()];
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(node) = pending.pop() {
+        if !seen.insert(node.clone()) {
+            continue;
+        }
+        if let Some(feature) = part.features.iter().find(|feature| feature.id == node) {
+            pending.extend(
+                feature
+                    .operation
+                    .dependencies()
+                    .into_iter()
+                    .filter(|dependency| dependency.definition == part.id)
+                    .map(|dependency| dependency.node),
+            );
+        }
+    }
+    seen
+}
+pub fn resolve_face_finishes(
+    part: &crate::Part,
+    meshes: &[&crate::protocol::MeshData],
+) -> FaceFinishResolution {
+    let mut resolution = FaceFinishResolution::default();
+    if part.face_finishes.is_empty() {
+        return resolution;
+    }
+    // Index native construction identities once. Large parts must not rescan
+    // every tessellated face for each assignment or repeat body-graph traversal.
+    let mut faces = BTreeMap::<(&crate::NodeRef, &str), Vec<&crate::protocol::FaceRange>>::new();
+    let mut ancestors = BTreeMap::new();
+    for face in meshes.iter().flat_map(|mesh| &mesh.faces) {
+        if face.reference.topology != "face" {
+            continue;
+        }
+        let Some(body) = &face.body else {
+            continue;
+        };
+        if body.definition != part.id {
+            continue;
+        }
+        faces
+            .entry((&face.reference.producer, &face.reference.role))
+            .or_default()
+            .push(face);
+        ancestors
+            .entry(body.clone())
+            .or_insert_with(|| body_ancestors(part, body));
+    }
+    let mut resolved_targets = BTreeMap::new();
+    for assignment in &part.face_finishes {
+        let matches = faces
+            .get(&(&assignment.face.producer, assignment.face.role.as_str()))
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|face| {
+                assignment.body.definition == part.id
+                    && face
+                        .body
+                        .as_ref()
+                        .and_then(|body| ancestors.get(body))
+                        .is_some_and(|ancestors| ancestors.contains(&assignment.body.node))
+            })
+            .collect::<Vec<_>>();
+        if let [face] = matches.as_slice()
+            && let Some(body) = &face.body
+        {
+            let key = (
+                body.clone(),
+                face.reference.producer.clone(),
+                face.reference.role.clone(),
+            );
+            *resolved_targets.entry(key).or_insert(0_usize) += 1;
+            resolution.resolved.push(ResolvedFaceFinish {
+                assignment: assignment.id.clone(),
+                finish: assignment.finish.clone(),
+                body: body.clone(),
+                face: face.reference.clone(),
+            });
+        } else {
+            resolution.diagnostics.push(FaceFinishDiagnostic {
+                assignment: assignment.id.clone(),
+                state: if matches.is_empty() { "missing" } else { "ambiguous" }.into(),
+                matches: matches.len(),
+                message: if matches.is_empty() {
+                    "The assigned face is absent from this body/configuration; the part finish is shown. Reselect a face to repair the assignment."
+                } else {
+                    "The assigned native face has multiple descendants; the part finish is shown. Select the intended current face to repair the assignment."
+                }.into(),
+            });
+        }
+    }
+    // Distinct authored ancestors can converge. Neither assignment wins; each
+    // remains repairable and the neutral part finish owns the shared face.
+    resolution.resolved.retain(|resolved| {
+        let key = (resolved.body.clone(), resolved.face.producer.clone(), resolved.face.role.clone());
+        if resolved_targets[&key] <= 1 { return true; }
+        resolution.diagnostics.push(FaceFinishDiagnostic {
+            assignment: resolved.assignment.clone(), state: "conflict".into(), matches: 1,
+            message: "Multiple source assignments converge on this native face; keep one assignment. The part finish is shown.".into(),
+        });
+        false
+    });
+    resolution
 }
 fn field_element(
     id: String,
@@ -530,7 +796,15 @@ pub fn semantic(doc: &Document, active: Option<&str>, state: &str) -> Vec<Semant
                 None,
                 None,
                 None,
-                vec!["none", "brushed"],
+                vec![
+                    "none",
+                    "brushed",
+                    "blasted",
+                    "machined",
+                    "orange_peel",
+                    "molded",
+                    "wood",
+                ],
             ),
             (
                 "/anisotropy",
@@ -659,6 +933,17 @@ pub fn semantic(doc: &Document, active: Option<&str>, state: &str) -> Vec<Semant
             relationships: vec![part.id.clone(), format!("finish:{}", part.finish)],
             data: serde_json::json!({"contract":"tcad.appearance","version":CONTRACT_VERSION,"setter":"appearance-part","definition":part.id,"finish":part.finish,"json":part.finish,"value_type":"choice","choices":choices,"editable":true,"edit_command":"appearance.assign-part","engineering_material":part.material}),
         });
+        for assignment in &part.face_finishes {
+            out.push(SemanticElement {
+                id: format!("{}::face-finish:{}", part.id, assignment.id),
+                role: "face-appearance-assignment".into(),
+                label: "Face Finish".into(), value: Some(assignment.finish.clone()),
+                state: state.into(),
+                commands: vec!["appearances".into(), "appearance.assign-face".into(), "appearance.inherit-face".into(), "appearance.repair-face".into()],
+                relationships: vec![part.id.clone(), format!("finish:{}", assignment.finish)],
+                data: serde_json::json!({"contract":"tcad.appearance","version":CONTRACT_VERSION,"definition":part.id,"assignment":assignment,"source":assignment,"appearance_only":true,"resolution":"current-native-exact-unique","fallback":"part-finish","signature_is_identity":false}),
+            });
+        }
     }
     for assembly in doc.assemblies.values() {
         for instance in assembly.instances.values() {

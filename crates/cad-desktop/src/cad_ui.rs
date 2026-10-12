@@ -905,6 +905,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::materials_ui::current_source_is_valid(w) {
+        return Some("Correct the current material library fields before applying");
+    }
     if !crate::components_ui::current_source_is_valid(w) {
         return Some("Correct or select the component before applying");
     }
@@ -2101,6 +2104,10 @@ pub fn confirmation_label(w: &Workspace) -> String {
         "Apply Assembly".into()
     } else if crate::drawing_ui::is_workspace(w) {
         "Apply Drawing".into()
+    } else if w.fields.contains_key("material-tool") {
+        "Apply Materials".into()
+    } else if w.fields.contains_key("appearance-tool") {
+        "Apply Appearance".into()
     } else {
         "OK Feature".into()
     }

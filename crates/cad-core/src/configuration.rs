@@ -6,8 +6,9 @@ use std::{
     path::Path,
 };
 pub mod dimensions;
+pub mod sketch_dimensions;
 pub use dimensions::{DimensionField, FIELD_CONTRACT_VERSION};
-pub const CONTRACT_VERSION: u32 = 6;
+pub const CONTRACT_VERSION: u32 = 7;
 fn supported_version(value: u32) -> bool {
     (1..=CONTRACT_VERSION).contains(&value)
 }
@@ -38,6 +39,9 @@ pub struct Overrides {
     /// Feature IDs in the owning part and typed expression paths within their operations.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub feature_dimensions: BTreeMap<Id, BTreeMap<String, Expr>>,
+    /// Stable sketch and driving constraint IDs, resolved before sketch solving.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sketch_dimensions: BTreeMap<Id, BTreeMap<Id, Expr>>,
     #[serde(default)]
     pub features: BTreeMap<Id, bool>,
     #[serde(default)]
@@ -230,6 +234,13 @@ fn merge(target: &mut Overrides, next: &Overrides) {
             .extend(fields.clone());
     }
     target.features.extend(next.features.clone());
+    for (sketch, dimensions) in &next.sketch_dimensions {
+        target
+            .sketch_dimensions
+            .entry(sketch.clone())
+            .or_default()
+            .extend(dimensions.clone());
+    }
     target.sketches.extend(next.sketches.clone());
     target.components.extend(next.components.clone());
     target
@@ -316,7 +327,7 @@ fn require_keys<'a>(
     }
     Ok(())
 }
-/// Discover source fields by native feature identity; only actual `Expr` fields qualify.
+/// Discover actual expression fields and bounded unsigned repetition counts by native feature identity.
 pub fn dimension_fields(doc: &Document, definition: &str) -> Result<Vec<DimensionField>> {
     let Some(part) = doc.parts.get(definition) else {
         if doc.assemblies.contains_key(definition) {
@@ -342,18 +353,17 @@ fn validate_dimensions(
             .ok_or_else(|| invalid(format!("Unknown dimensional feature {id} in {}", part.name)))?;
         let available = dimensions::fields(feature)?
             .into_iter()
-            .map(|field| field.path)
-            .collect::<BTreeSet<_>>();
+            .map(|field| (field.path.clone(), field))
+            .collect::<BTreeMap<_, _>>();
         let operation = serde_json::to_value(&feature.operation)?;
         for (path, expression) in fields {
             dimensions::resolve_pointer(&operation, path)
                 .map_err(|error| invalid(format!("{} {path}: {error}", feature.name)))?;
-            if !available.contains(path) {
-                return Err(invalid(format!(
+            let field=available.get(path).ok_or_else(||invalid(format!(
                     "{} no longer has dimensional field {path}; remove or replace its configuration override",
                     feature.name
-                )));
-            }
+                )))?;
+            dimensions::authored_value(field, expression)?;
             crate::expression::references(&expression.0)
                 .map_err(|error| invalid(format!("{} {path}: {error}", feature.name)))?;
         }
@@ -424,6 +434,7 @@ pub fn validate(doc: &Document) -> Result<()> {
                     "feature",
                 )?;
                 validate_dimensions(p, &o.feature_dimensions)?;
+                sketch_dimensions::validate(p, &o.sketch_dimensions)?;
                 require_keys(
                     o.sketches.keys(),
                     |id| p.sketches.contains_key(id),
@@ -489,6 +500,7 @@ pub fn validate(doc: &Document) -> Result<()> {
                 )?;
                 if !o.features.is_empty()
                     || !o.feature_dimensions.is_empty()
+                    || !o.sketch_dimensions.is_empty()
                     || !o.sketches.is_empty()
                     || o.material.is_some()
                     || o.finish.is_some()
@@ -690,15 +702,25 @@ fn apply_curve_seeds(assembly: &mut Assembly, seeds: &BTreeMap<Id, f64>) -> Resu
 }
 fn apply_part(part: &mut Part, o: &Overrides) -> Result<()> {
     validate_dimensions(part, &o.feature_dimensions)?;
+    sketch_dimensions::apply(part, &o.sketch_dimensions)?;
     for feature in &mut part.features {
         if let Some(fields) = o.feature_dimensions.get(&feature.id) {
+            let available = dimensions::fields(feature)?
+                .into_iter()
+                .map(|field| (field.path.clone(), field))
+                .collect::<BTreeMap<_, _>>();
             let mut operation = serde_json::to_value(&feature.operation)?;
             for (path, expression) in fields {
                 let (pointer, _) = dimensions::resolve_pointer(&operation, path)?;
                 let value = operation.pointer_mut(&pointer).ok_or_else(|| {
                     invalid(format!("{} has no dimensional field {path}", feature.name))
                 })?;
-                *value = serde_json::to_value(expression)?;
+                *value = dimensions::authored_value(
+                    available
+                        .get(path)
+                        .ok_or_else(|| invalid("The configured field no longer exists"))?,
+                    expression,
+                )?;
             }
             feature.operation = serde_json::from_value(operation)?;
         }
@@ -963,6 +985,11 @@ pub fn csv(table: &Table) -> Result<String> {
                 keys.insert(format!("dimension:{feature}:{path}"));
             }
         }
+        for (sketch, dimensions) in &c.overrides.sketch_dimensions {
+            for constraint in dimensions.keys() {
+                keys.insert(format!("sketch-dimension:{sketch}:{constraint}"));
+            }
+        }
         for key in c.overrides.features.keys() {
             keys.insert(format!("feature:{key}"));
         }
@@ -1075,6 +1102,14 @@ fn cell(c: &Definition, h: &str) -> Result<String> {
                         .get(feature)
                         .and_then(|fields| fields.get(path))
                         .map(|e| e.0.clone())
+                        .unwrap_or_default()
+                }
+                "sketch-dimension" => {
+                    let (sketch, constraint) = sketch_dimensions::column(key)?;
+                    o.sketch_dimensions
+                        .get(sketch)
+                        .and_then(|dimensions| dimensions.get(constraint))
+                        .map(|expression| expression.0.clone())
                         .unwrap_or_default()
                 }
                 "feature" => o
@@ -1320,6 +1355,13 @@ fn set_cell(c: &mut Definition, h: &str, value: &str) -> Result<()> {
                         .or_default()
                         .insert(path.into(), value.into());
                 }
+                "sketch-dimension" => {
+                    let (sketch, constraint) = sketch_dimensions::column(key)?;
+                    o.sketch_dimensions
+                        .entry(sketch.into())
+                        .or_default()
+                        .insert(constraint.into(), value.into());
+                }
                 "feature" => {
                     o.features.insert(key.into(), boolean(value)?);
                 }
@@ -1482,6 +1524,15 @@ fn import_into(doc: &mut Document, mut table: Table, replace: bool) -> Result<()
                 "feature dimension owner",
             )?;
             validate_dimensions(p, &o.feature_dimensions)?;
+            normalize_map(
+                &mut o.sketch_dimensions,
+                &p.sketches
+                    .values()
+                    .map(|sketch| (sketch.id.clone(), sketch.name.clone()))
+                    .collect::<Vec<_>>(),
+                "sketch dimension owner",
+            )?;
+            sketch_dimensions::validate(p, &o.sketch_dimensions)?;
             normalize_map(
                 &mut o.features,
                 &p.features
@@ -1960,8 +2011,20 @@ pub fn semantic(
                 commands: vec!["configurations".into(), "equations".into()],
                 relationships: vec![owner.clone(), field.feature.clone()],
                 data: serde_json::json!({"contract":"tcad.configuration.dimension-source","version":FIELD_CONTRACT_VERSION,
-                    "owner":owner,"source":field,"json":field.expression.0,"kind":"expression","editable":false}),
+                    "owner":owner,"source":field,"json":field.expression.0,"kind":field.kind,"maximum":field.maximum,"editable":false}),
             });
+        }
+        if let Some(part) = doc.parts.get(owner) {
+            for field in sketch_dimensions::fields(part) {
+                out.push(crate::presentation::SemanticElement {
+                    id: format!("sketch-dimension:{owner}/{}/{}", field.sketch, field.constraint),
+                    role: "sketch-dimension-source".into(), label: field.label.clone(), value: Some(field.expression.0.clone()),
+                    state: state.into(), commands: vec!["configurations".into(), "equations".into()],
+                    relationships: vec![owner.clone(), field.sketch.clone(), field.constraint.clone()],
+                    data: serde_json::json!({"contract":"tcad.configuration.sketch-dimension-source","version":sketch_dimensions::CONTRACT_VERSION,
+                        "owner":owner,"source":field,"json":field.expression.0,"driving":true,"editable":false}),
+                });
+            }
         }
         for configuration in definitions(doc, owner).values() {
             out.push(crate::presentation::SemanticElement {id:format!("{owner}@{}",configuration.id),role:"configuration".into(),label:configuration.name.clone(),value:Some(configuration.description.clone()),state:if doc.active_configurations.get(owner)==Some(&configuration.id){"selected"}else{state}.into(),commands:vec!["configurations".into()],relationships:configuration.parent.iter().map(|id|format!("{owner}@{id}")).chain(std::iter::once(owner.clone())).collect(),data:serde_json::json!({"version":CONTRACT_VERSION,"owner":owner,"source":configuration,"evaluated":evaluation.and_then(|e|e.definitions.get(owner)).and_then(|d|d.get(&configuration.id)),"controls":{"parameters":"unit-expression","suppression":"inherit-resolved-suppressed","material":"inherit-material","finish":"inherit-surface-finish","component_configurations":"inherit-selected-named","component_placements":"inherit-axis-placement-seeds","mate_curve_seeds":"inherit-free-path-seeds","properties":"text-map","bom":"inherit-exclusion-naming"}})});

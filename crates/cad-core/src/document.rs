@@ -768,6 +768,10 @@ pub struct Part {
         skip_serializing_if = "crate::appearance::is_default_finish"
     )]
     pub finish: Id,
+    /// Native construction references for optical overrides; engineering
+    /// material and authoritative CAD surfaces remain part-wide and unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub face_finishes: Vec<crate::appearance::FaceFinish>,
     #[serde(default)]
     pub properties: BTreeMap<String, String>,
     #[serde(default)]
@@ -801,6 +805,7 @@ impl Part {
             outputs: vec![],
             material: "aluminum".into(),
             finish: crate::appearance::default_finish(),
+            face_finishes: vec![],
             properties: BTreeMap::new(),
             sketches: BTreeMap::new(),
             configurations: BTreeMap::new(),
@@ -1097,6 +1102,14 @@ pub struct Material {
     pub color: [f32; 3],
     pub metallic: f32,
     pub roughness: f32,
+    /// Optional engineering metadata; absent legacy fields retain their old hashes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<crate::materials::MaterialMetadata>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::materials::Properties::is_empty"
+    )]
+    pub properties: crate::materials::Properties,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Resource {
@@ -1510,18 +1523,13 @@ impl Document {
                 }
             }
         }
-        for material in self.materials.values() {
-            if !material.density_kg_m3.is_finite()
-                || material.density_kg_m3 <= 0.
-                || !material
-                    .color
-                    .iter()
-                    .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-                || !(0.0..=1.0).contains(&material.metallic)
-                || !(0.0..=1.0).contains(&material.roughness)
-            {
-                return Err(CadError::Invalid("Invalid physical material values".into()));
+        for (key, material) in &self.materials {
+            if key != &material.id {
+                return Err(CadError::Invalid(
+                    "Material map identity does not match its definition".into(),
+                ));
             }
+            crate::materials::validate(material)?;
         }
         for drawing in &self.drawings {
             crate::drawing::validate_definition(drawing)?;
@@ -1634,6 +1642,8 @@ impl Document {
                     color,
                     metallic,
                     roughness,
+                    metadata: None,
+                    properties: Default::default(),
                 },
             )
         })
@@ -1661,6 +1671,12 @@ impl Document {
     /// Create a part with this model's finish preference, without inserting an occurrence.
     pub fn new_part(&self, name: &str) -> Part {
         let mut part = Part::new(name);
+        if self
+            .materials
+            .contains_key(&self.settings.default_new_part_material)
+        {
+            part.material = self.settings.default_new_part_material.clone();
+        }
         if self
             .finishes
             .contains_key(&self.settings.default_new_part_finish)

@@ -1,0 +1,4255 @@
+{
+  "schema_version": 1,
+  "name": "TCAD Engineering Materials · 2026-10-12",
+  "materials": [
+    {
+      "id": "tcad-material-steel-42crmo4",
+      "name": "Alloy steel 42CrMo4 / EN 1.7225",
+      "density_kg_m3": 7800,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "alloy_steel",
+        "grade": "42CrMo4 / EN 1.7225",
+        "condition": "Condition unspecified; no generalized strength",
+        "tags": [
+          "bar",
+          "quench-and-temper"
+        ],
+        "catalog_id": "tcad-material-steel-42crmo4",
+        "density_provenance": {
+          "source": "ovako-42crmo4",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ovako-42crmo4",
+            "title": "Ovako Steel Navigator 42CrMo4, revised February 2026",
+            "url": "https://steelnavigator.ovako.com/steel-grades/42crmo4/",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 210000000000.0,
+          "provenance": {
+            "source": "ovako-42crmo4",
+            "reference": "Other properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "poisson_ratio": {
+          "value": 0.3,
+          "provenance": {
+            "source": "ovako-42crmo4",
+            "reference": "Other properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "shear_modulus_pa": {
+          "value": 80000000000.0,
+          "provenance": {
+            "source": "ovako-42crmo4",
+            "reference": "Other properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.2e-05,
+          "provenance": {
+            "source": "ovako-42crmo4",
+            "reference": "Physical properties",
+            "conditions": "Mean over 20–300°C.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-steel-sae4140-6115",
+      "name": "Alloy steel SAE 4140 · Ovako variant 6115",
+      "density_kg_m3": 7800,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "alloy_steel",
+        "grade": "SAE 4140 · Ovako variant 6115",
+        "condition": "Condition unspecified; no generalized strength",
+        "tags": [
+          "bar",
+          "quench-and-temper"
+        ],
+        "catalog_id": "tcad-material-steel-sae4140-6115",
+        "density_provenance": {
+          "source": "ovako-42crmo4",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ovako-42crmo4",
+            "title": "Ovako Steel Navigator 42CrMo4, revised February 2026",
+            "url": "https://steelnavigator.ovako.com/steel-grades/42crmo4/",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 210000000000.0,
+          "provenance": {
+            "source": "ovako-42crmo4",
+            "reference": "Other properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "poisson_ratio": {
+          "value": 0.3,
+          "provenance": {
+            "source": "ovako-42crmo4",
+            "reference": "Other properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "shear_modulus_pa": {
+          "value": 80000000000.0,
+          "provenance": {
+            "source": "ovako-42crmo4",
+            "reference": "Other properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.2e-05,
+          "provenance": {
+            "source": "ovako-42crmo4",
+            "reference": "Physical properties",
+            "conditions": "Mean over 20–300°C.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-2024-t351",
+      "name": "Aluminum 2024-T351",
+      "density_kg_m3": 2770,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "2024",
+        "condition": "T351 rod/bar",
+        "tags": [
+          "machining",
+          "rod",
+          "bar"
+        ],
+        "catalog_id": "tcad-material-al-2024-t351",
+        "density_provenance": {
+          "source": "kaiser-2024",
+          "reference": "Density",
+          "conditions": "Published nominal density, g/cm³ converted ×1000 to kg/m³.",
+          "basis": "typical",
+          "temperature_k": 293.15
+        },
+        "sources": [
+          {
+            "id": "kaiser-2024",
+            "title": "Kaiser Aluminum 2024 rod and bar technical data, revision August 2010",
+            "url": "https://online.kaiseraluminum.com/depot/PublicProductInformation/Document/1022/Kaiser_Aluminum_2024_Rod_and_Bar.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only; published typical values and specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 73100000000.0,
+          "provenance": {
+            "source": "kaiser-2024",
+            "reference": "Typical mechanical properties",
+            "conditions": "Typical rod/bar mechanical data, 0.500-in diameter tensile specimen; T4/T351 data row.",
+            "basis": "typical"
+          }
+        },
+        "yield_strength_pa": {
+          "value": 324000000.0,
+          "provenance": {
+            "source": "kaiser-2024",
+            "reference": "Typical mechanical properties",
+            "conditions": "Typical rod/bar mechanical data, 0.500-in diameter tensile specimen; T4/T351 data row.",
+            "basis": "typical"
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 469000000.0,
+          "provenance": {
+            "source": "kaiser-2024",
+            "reference": "Typical mechanical properties",
+            "conditions": "Typical rod/bar mechanical data, 0.500-in diameter tensile specimen; T4/T351 data row.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 875,
+          "provenance": {
+            "source": "kaiser-2024",
+            "reference": "Typical physical properties",
+            "conditions": "At 100°C.",
+            "basis": "typical",
+            "temperature_k": 373.15
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 120,
+          "provenance": {
+            "source": "kaiser-2024",
+            "reference": "Typical physical properties",
+            "conditions": "T4/T351 at 20°C.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.29e-05,
+          "provenance": {
+            "source": "kaiser-2024",
+            "reference": "Typical physical properties",
+            "conditions": "Linear mean over 20–100°C.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-3003-h14",
+      "name": "Aluminum 3003-H14",
+      "density_kg_m3": 2730,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "3003",
+        "condition": "H14 rolled sheet",
+        "tags": [
+          "sheet metal",
+          "sheet",
+          "forming"
+        ],
+        "catalog_id": "tcad-material-al-3003-h14",
+        "density_provenance": {
+          "source": "hulamin-3003",
+          "reference": "Density",
+          "conditions": "Published nominal density, g/cm³ converted ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "hulamin-3003",
+            "title": "Hulamin 3003 rolled-products datasheet",
+            "url": "https://www.hulamin.com/sites/default/files/downloads/3003%20Data%20Sheet_0.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only; published typical values and specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 69000000000.0,
+          "provenance": {
+            "source": "hulamin-3003",
+            "reference": "Physical properties",
+            "conditions": "Published nominal alloy value.",
+            "basis": "typical"
+          }
+        },
+        "shear_modulus_pa": {
+          "value": 26100000000.0,
+          "provenance": {
+            "source": "hulamin-3003",
+            "reference": "Physical properties",
+            "conditions": "Published nominal alloy value.",
+            "basis": "typical"
+          }
+        },
+        "yield_strength_pa": {
+          "value": 115000000.0,
+          "provenance": {
+            "source": "hulamin-3003",
+            "reference": "Mechanical properties",
+            "conditions": "H14 rolled sheet 0.63–6.3 mm thick; proof strength minimum and lower bound of published UTS range.",
+            "basis": "minimum"
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 140000000.0,
+          "provenance": {
+            "source": "hulamin-3003",
+            "reference": "Mechanical properties",
+            "conditions": "H14 rolled sheet 0.63–6.3 mm thick; proof strength minimum and lower bound of published UTS range.",
+            "basis": "minimum"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 159,
+          "provenance": {
+            "source": "hulamin-3003",
+            "reference": "Physical properties",
+            "conditions": "Temperature not stated in source.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.32e-05,
+          "provenance": {
+            "source": "hulamin-3003",
+            "reference": "Physical properties",
+            "conditions": "Temperature interval not stated in source.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-5052-h32",
+      "name": "Aluminum 5052-H32",
+      "density_kg_m3": 2680,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "5052",
+        "condition": "H32 rolled sheet",
+        "tags": [
+          "sheet metal",
+          "sheet",
+          "forming"
+        ],
+        "catalog_id": "tcad-material-al-5052-h32",
+        "density_provenance": {
+          "source": "hulamin-5052",
+          "reference": "Density",
+          "conditions": "Published nominal density, g/cm³ converted ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "hulamin-5052",
+            "title": "Hulamin 5052 rolled-products datasheet",
+            "url": "https://www.hulamin.com/sites/default/files/downloads/5052%20Data%20Sheet.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only; published typical values and specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 70000000000.0,
+          "provenance": {
+            "source": "hulamin-5052",
+            "reference": "Physical properties",
+            "conditions": "Published nominal alloy value.",
+            "basis": "typical"
+          }
+        },
+        "shear_modulus_pa": {
+          "value": 26300000000.0,
+          "provenance": {
+            "source": "hulamin-5052",
+            "reference": "Physical properties",
+            "conditions": "Published nominal alloy value.",
+            "basis": "typical"
+          }
+        },
+        "yield_strength_pa": {
+          "value": 160000000.0,
+          "provenance": {
+            "source": "hulamin-5052",
+            "reference": "Mechanical properties",
+            "conditions": "H32 rolled sheet 0.4–6.3 mm thick; proof strength minimum and lower bound of published UTS range.",
+            "basis": "minimum"
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 215000000.0,
+          "provenance": {
+            "source": "hulamin-5052",
+            "reference": "Mechanical properties",
+            "conditions": "H32 rolled sheet 0.4–6.3 mm thick; proof strength minimum and lower bound of published UTS range.",
+            "basis": "minimum"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 138,
+          "provenance": {
+            "source": "hulamin-5052",
+            "reference": "Physical properties",
+            "conditions": "Temperature not stated in source.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.38e-05,
+          "provenance": {
+            "source": "hulamin-5052",
+            "reference": "Physical properties",
+            "conditions": "Temperature interval not stated in source.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-6061-o",
+      "name": "Aluminum 6061-O",
+      "density_kg_m3": 2712.6306615999065,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "6061",
+        "condition": "O extruded",
+        "tags": [
+          "extrusion",
+          "machining"
+        ],
+        "catalog_id": "tcad-material-al-6061-o",
+        "density_provenance": {
+          "source": "hydro-6061",
+          "reference": "Density",
+          "conditions": "Published 0.098 lb/in³ converted to SI; source density is rounded.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "hydro-6061",
+            "title": "Hydro Alloy 6061, revision 2019/01",
+            "url": "https://www.hydro.com/globalassets/01-products--services/extruded-profiles/americas/ena-resources/alloy-data-sheets/hydro_2019_data_sheet_6061.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "thermal_conductivity_w_per_m_k": {
+          "value": 180,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Physical properties",
+            "conditions": "Typical at 25°C; stated temper.",
+            "basis": "typical",
+            "temperature_k": 298.15
+          }
+        },
+        "yield_strength_pa": {
+          "value": 110000000.0,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Extruded mechanical property limits",
+            "conditions": "Extrusions; strength limits from the source table. Cross-section thickness controls elongation; no elongation was generalized.",
+            "basis": "maximum",
+            "temperature_k": 293.15
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 150000000.0,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Extruded mechanical property limits",
+            "conditions": "Extrusions; strength limits from the source table. Cross-section thickness controls elongation; no elongation was generalized.",
+            "basis": "maximum",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.358e-05,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Physical properties",
+            "conditions": "Mean over 20–100°C; source 13.1×10⁻⁶/°F.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-6061-t4",
+      "name": "Aluminum 6061-T4",
+      "density_kg_m3": 2712.6306615999065,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "6061",
+        "condition": "T4 extruded",
+        "tags": [
+          "extrusion",
+          "machining"
+        ],
+        "catalog_id": "tcad-material-al-6061-t4",
+        "density_provenance": {
+          "source": "hydro-6061",
+          "reference": "Density",
+          "conditions": "Published 0.098 lb/in³ converted to SI; source density is rounded.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "hydro-6061",
+            "title": "Hydro Alloy 6061, revision 2019/01",
+            "url": "https://www.hydro.com/globalassets/01-products--services/extruded-profiles/americas/ena-resources/alloy-data-sheets/hydro_2019_data_sheet_6061.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "thermal_conductivity_w_per_m_k": {
+          "value": 155,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Physical properties",
+            "conditions": "Typical at 25°C; stated temper.",
+            "basis": "typical",
+            "temperature_k": 298.15
+          }
+        },
+        "yield_strength_pa": {
+          "value": 110000000.0,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Extruded mechanical property limits",
+            "conditions": "Extrusions; strength limits from the source table. Cross-section thickness controls elongation; no elongation was generalized.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 180000000.0,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Extruded mechanical property limits",
+            "conditions": "Extrusions; strength limits from the source table. Cross-section thickness controls elongation; no elongation was generalized.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.358e-05,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Physical properties",
+            "conditions": "Mean over 20–100°C; source 13.1×10⁻⁶/°F.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-6061-t6",
+      "name": "Aluminum 6061-T6",
+      "density_kg_m3": 2712.6306615999065,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "6061",
+        "condition": "T6 extruded",
+        "tags": [
+          "extrusion",
+          "machining"
+        ],
+        "catalog_id": "tcad-material-al-6061-t6",
+        "density_provenance": {
+          "source": "hydro-6061",
+          "reference": "Density",
+          "conditions": "Published 0.098 lb/in³ converted to SI; source density is rounded.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "hydro-6061",
+            "title": "Hydro Alloy 6061, revision 2019/01",
+            "url": "https://www.hydro.com/globalassets/01-products--services/extruded-profiles/americas/ena-resources/alloy-data-sheets/hydro_2019_data_sheet_6061.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "thermal_conductivity_w_per_m_k": {
+          "value": 167,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Physical properties",
+            "conditions": "Typical at 25°C; stated temper.",
+            "basis": "typical",
+            "temperature_k": 298.15
+          }
+        },
+        "yield_strength_pa": {
+          "value": 240000000.0,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Extruded mechanical property limits",
+            "conditions": "Extrusions; strength limits from the source table. Cross-section thickness controls elongation; no elongation was generalized.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 260000000.0,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Extruded mechanical property limits",
+            "conditions": "Extrusions; strength limits from the source table. Cross-section thickness controls elongation; no elongation was generalized.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.358e-05,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Physical properties",
+            "conditions": "Mean over 20–100°C; source 13.1×10⁻⁶/°F.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-6061-t6511",
+      "name": "Aluminum 6061-T6511",
+      "density_kg_m3": 2712.6306615999065,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "6061",
+        "condition": "T6511 extruded",
+        "tags": [
+          "extrusion",
+          "machining"
+        ],
+        "catalog_id": "tcad-material-al-6061-t6511",
+        "density_provenance": {
+          "source": "hydro-6061",
+          "reference": "Density",
+          "conditions": "Published 0.098 lb/in³ converted to SI; source density is rounded.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "hydro-6061",
+            "title": "Hydro Alloy 6061, revision 2019/01",
+            "url": "https://www.hydro.com/globalassets/01-products--services/extruded-profiles/americas/ena-resources/alloy-data-sheets/hydro_2019_data_sheet_6061.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "thermal_conductivity_w_per_m_k": {
+          "value": 167,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Physical properties",
+            "conditions": "Typical at 25°C; stated temper.",
+            "basis": "typical",
+            "temperature_k": 298.15
+          }
+        },
+        "yield_strength_pa": {
+          "value": 240000000.0,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Extruded mechanical property limits",
+            "conditions": "Extrusions; strength limits from the source table. Cross-section thickness controls elongation; no elongation was generalized.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 260000000.0,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Extruded mechanical property limits",
+            "conditions": "Extrusions; strength limits from the source table. Cross-section thickness controls elongation; no elongation was generalized.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.358e-05,
+          "provenance": {
+            "source": "hydro-6061",
+            "reference": "Physical properties",
+            "conditions": "Mean over 20–100°C; source 13.1×10⁻⁶/°F.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-6063-t5",
+      "name": "Aluminum 6063-T5",
+      "density_kg_m3": 2684.9507568897034,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "6063",
+        "condition": "T5 extruded",
+        "tags": [
+          "extrusion",
+          "anodizing"
+        ],
+        "catalog_id": "tcad-material-al-6063-t5",
+        "density_provenance": {
+          "source": "hydro-6063",
+          "reference": "Density",
+          "conditions": "Published 0.097 lb/in³ converted to SI; source density is rounded.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "hydro-6063",
+            "title": "Hydro Alloy 6063, revision June 2026",
+            "url": "https://www.hydro.com/globalassets/01-products--services/extruded-profiles/americas/ena-resources/alloy-data-sheets/hydro_2026_data_sheet_6063-rev-062026.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "yield_strength_pa": {
+          "value": 110000000.0,
+          "provenance": {
+            "source": "hydro-6063",
+            "reference": "Physical properties",
+            "conditions": "Extrusions with wall thickness ≤12.5 mm; minimum strength values for this thickness range only.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 150000000.0,
+          "provenance": {
+            "source": "hydro-6063",
+            "reference": "Physical properties",
+            "conditions": "Extrusions with wall thickness ≤12.5 mm; minimum strength values for this thickness range only.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 209,
+          "provenance": {
+            "source": "hydro-6063",
+            "reference": "Physical properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 298.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.34e-05,
+          "provenance": {
+            "source": "hydro-6063",
+            "reference": "Physical properties",
+            "conditions": "Mean over 20–100°C; converted from 13.0×10⁻⁶/°F.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-6063-t6",
+      "name": "Aluminum 6063-T6",
+      "density_kg_m3": 2684.9507568897034,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "6063",
+        "condition": "T6 extruded",
+        "tags": [
+          "extrusion",
+          "anodizing"
+        ],
+        "catalog_id": "tcad-material-al-6063-t6",
+        "density_provenance": {
+          "source": "hydro-6063",
+          "reference": "Density",
+          "conditions": "Published 0.097 lb/in³ converted to SI; source density is rounded.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "hydro-6063",
+            "title": "Hydro Alloy 6063, revision June 2026",
+            "url": "https://www.hydro.com/globalassets/01-products--services/extruded-profiles/americas/ena-resources/alloy-data-sheets/hydro_2026_data_sheet_6063-rev-062026.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "yield_strength_pa": {
+          "value": 170000000.0,
+          "provenance": {
+            "source": "hydro-6063",
+            "reference": "Physical properties",
+            "conditions": "Extrusions with wall thickness ≤12.5 mm; minimum strength values for this thickness range only.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 205000000.0,
+          "provenance": {
+            "source": "hydro-6063",
+            "reference": "Physical properties",
+            "conditions": "Extrusions with wall thickness ≤12.5 mm; minimum strength values for this thickness range only.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 201,
+          "provenance": {
+            "source": "hydro-6063",
+            "reference": "Physical properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 298.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.34e-05,
+          "provenance": {
+            "source": "hydro-6063",
+            "reference": "Physical properties",
+            "conditions": "Mean over 20–100°C; converted from 13.0×10⁻⁶/°F.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-6082-t6",
+      "name": "Aluminum 6082-T6",
+      "density_kg_m3": 2712.6306615999065,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "6082",
+        "condition": "T6 extruded",
+        "tags": [
+          "extrusion"
+        ],
+        "catalog_id": "tcad-material-al-6082-t6",
+        "density_provenance": {
+          "source": "hydro-6082",
+          "reference": "Density",
+          "conditions": "Published 0.098 lb/in³ converted to SI; source density is rounded.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "hydro-6082",
+            "title": "Hydro Alloy 6082, revision 2019/01",
+            "url": "https://www.hydro.com/globalassets/01-products--services/extruded-profiles/americas/ena-resources/alloy-data-sheets/hydro_2019_data_sheet_6082_revise_1.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "yield_strength_pa": {
+          "value": 260000000.0,
+          "provenance": {
+            "source": "hydro-6082",
+            "reference": "Physical properties",
+            "conditions": "T6/T6511 extrusions; cross-section thickness 5–150 mm; published minimum strength.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 310000000.0,
+          "provenance": {
+            "source": "hydro-6082",
+            "reference": "Physical properties",
+            "conditions": "T6/T6511 extrusions; cross-section thickness 5–150 mm; published minimum strength.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 172,
+          "provenance": {
+            "source": "hydro-6082",
+            "reference": "Physical properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 298.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.304e-05,
+          "provenance": {
+            "source": "hydro-6082",
+            "reference": "Physical properties",
+            "conditions": "Mean over 20–100°C; converted from 12.8×10⁻⁶/°F.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-7075-t651",
+      "name": "Aluminum 7075-T651",
+      "density_kg_m3": 2800,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "7075",
+        "condition": "T651 sheet/plate",
+        "tags": [
+          "sheet",
+          "plate",
+          "machining"
+        ],
+        "catalog_id": "tcad-material-al-7075-t651",
+        "density_provenance": {
+          "source": "kaiser-7075-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "kaiser-7075-physical",
+            "title": "Kaiser Aluminum 7075 tube and pipe technical data, revision May 2006",
+            "url": "https://online.kaiseraluminum.com/depot/PublicProductInformation/Document/1042/Kaiser_Aluminum_7075_Tube_and_Pipe.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          },
+          {
+            "id": "kaiser-7075",
+            "title": "Kaiser Aluminum 7075 sheet, coil and plate technical data",
+            "url": "https://online.kaiseraluminum.com/depot/PublicProductInformation/Document/1017/Kaiser_Aluminum_7075_Sheet_Coil_and_Plate.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 71000000000.0,
+          "provenance": {
+            "source": "kaiser-7075",
+            "reference": "Physical properties",
+            "conditions": "Typical sheet/coil/plate data; 0.500-in diameter tensile specimen.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "yield_strength_pa": {
+          "value": 503000000.0,
+          "provenance": {
+            "source": "kaiser-7075",
+            "reference": "Physical properties",
+            "conditions": "Typical sheet/coil/plate data; 0.500-in diameter tensile specimen.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 572000000.0,
+          "provenance": {
+            "source": "kaiser-7075",
+            "reference": "Physical properties",
+            "conditions": "Typical sheet/coil/plate data; 0.500-in diameter tensile specimen.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 960,
+          "provenance": {
+            "source": "kaiser-7075-physical",
+            "reference": "Physical properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 373.15
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 130,
+          "provenance": {
+            "source": "kaiser-7075-physical",
+            "reference": "Physical properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.34e-05,
+          "provenance": {
+            "source": "kaiser-7075-physical",
+            "reference": "Physical properties",
+            "conditions": "Linear mean over 20–100°C.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-al-7075-t7351",
+      "name": "Aluminum 7075-T7351",
+      "density_kg_m3": 2800,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "aluminum",
+        "grade": "7075",
+        "condition": "T7351 sheet/plate",
+        "tags": [
+          "sheet",
+          "plate",
+          "machining"
+        ],
+        "catalog_id": "tcad-material-al-7075-t7351",
+        "density_provenance": {
+          "source": "kaiser-7075-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "kaiser-7075-physical",
+            "title": "Kaiser Aluminum 7075 tube and pipe technical data, revision May 2006",
+            "url": "https://online.kaiseraluminum.com/depot/PublicProductInformation/Document/1042/Kaiser_Aluminum_7075_Tube_and_Pipe.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          },
+          {
+            "id": "kaiser-7075",
+            "title": "Kaiser Aluminum 7075 sheet, coil and plate technical data",
+            "url": "https://online.kaiseraluminum.com/depot/PublicProductInformation/Document/1017/Kaiser_Aluminum_7075_Sheet_Coil_and_Plate.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 71000000000.0,
+          "provenance": {
+            "source": "kaiser-7075",
+            "reference": "Physical properties",
+            "conditions": "Typical sheet/coil/plate data; 0.500-in diameter tensile specimen.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "yield_strength_pa": {
+          "value": 434000000.0,
+          "provenance": {
+            "source": "kaiser-7075",
+            "reference": "Physical properties",
+            "conditions": "Typical sheet/coil/plate data; 0.500-in diameter tensile specimen.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 503000000.0,
+          "provenance": {
+            "source": "kaiser-7075",
+            "reference": "Physical properties",
+            "conditions": "Typical sheet/coil/plate data; 0.500-in diameter tensile specimen.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 960,
+          "provenance": {
+            "source": "kaiser-7075-physical",
+            "reference": "Physical properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 373.15
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 155,
+          "provenance": {
+            "source": "kaiser-7075-physical",
+            "reference": "Physical properties",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 2.34e-05,
+          "provenance": {
+            "source": "kaiser-7075-physical",
+            "reference": "Physical properties",
+            "conditions": "Linear mean over 20–100°C.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-cu-c26000",
+      "name": "Cartridge brass C26000",
+      "density_kg_m3": 8530,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "brass",
+        "grade": "C26000",
+        "condition": "Physical reference; temper unspecified",
+        "tags": [
+          "copper alloy"
+        ],
+        "catalog_id": "tcad-material-cu-c26000",
+        "density_provenance": {
+          "source": "cda-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "cda-physical",
+            "title": "Copper Development Association copper alloy design guide, Table 4",
+            "url": "https://live.copper.org/publications/pub_list/pdf/a1360.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "thermal_conductivity_w_per_m_k": {
+          "value": 121,
+          "provenance": {
+            "source": "cda-physical",
+            "reference": "Table 4",
+            "conditions": "Converted W/(cm·K) ×100 to W/(m·K).",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.99e-05,
+          "provenance": {
+            "source": "cda-physical",
+            "reference": "Table 4",
+            "conditions": "Published linear coefficient; table does not state a temperature interval.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-cu-c51000",
+      "name": "Phosphor bronze C51000",
+      "density_kg_m3": 8860,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "bronze",
+        "grade": "C51000",
+        "condition": "Physical reference; temper unspecified",
+        "tags": [
+          "copper alloy"
+        ],
+        "catalog_id": "tcad-material-cu-c51000",
+        "density_provenance": {
+          "source": "cda-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "cda-physical",
+            "title": "Copper Development Association copper alloy design guide, Table 4",
+            "url": "https://live.copper.org/publications/pub_list/pdf/a1360.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "thermal_conductivity_w_per_m_k": {
+          "value": 71,
+          "provenance": {
+            "source": "cda-physical",
+            "reference": "Table 4",
+            "conditions": "Converted W/(cm·K) ×100 to W/(m·K).",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.78e-05,
+          "provenance": {
+            "source": "cda-physical",
+            "reference": "Table 4",
+            "conditions": "Published linear coefficient; table does not state a temperature interval.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-steel-c45",
+      "name": "Carbon steel C45 · similar SAE 1045",
+      "density_kg_m3": 7800,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "carbon_steel",
+        "grade": "C45 / EN 1.0503",
+        "condition": "Condition unspecified; strength depends on stock and heat treatment",
+        "tags": [
+          "bar",
+          "1045 similar designation",
+          "medium carbon"
+        ],
+        "catalog_id": "tcad-material-steel-c45",
+        "density_provenance": {
+          "source": "ovako-c45",
+          "reference": "Density",
+          "conditions": "Published nominal density 7800 kg/m³; no unit conversion.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ovako-c45",
+            "title": "Ovako Steel Navigator C45, revised January 2025",
+            "url": "https://steelnavigator.ovako.com/steel-grades/c45/",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only; published typical values and specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 210000000000.0,
+          "provenance": {
+            "source": "ovako-c45",
+            "reference": "Other properties",
+            "conditions": "Typical material data.",
+            "basis": "typical"
+          }
+        },
+        "poisson_ratio": {
+          "value": 0.3,
+          "provenance": {
+            "source": "ovako-c45",
+            "reference": "Other properties",
+            "conditions": "Typical material data.",
+            "basis": "typical"
+          }
+        },
+        "shear_modulus_pa": {
+          "value": 80000000000.0,
+          "provenance": {
+            "source": "ovako-c45",
+            "reference": "Other properties",
+            "conditions": "Typical material data.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.2e-05,
+          "provenance": {
+            "source": "ovako-c45",
+            "reference": "Other properties",
+            "conditions": "Mean over 20–300°C.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-steel-s355j2h",
+      "name": "Structural steel S355J2H",
+      "density_kg_m3": 7850,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "carbon_steel",
+        "grade": "S355J2H",
+        "condition": "SSAB structural hollow section",
+        "tags": [
+          "structural",
+          "hollow section"
+        ],
+        "catalog_id": "tcad-material-steel-s355j2h",
+        "density_provenance": {
+          "source": "ssab-hollow-sections",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ssab-hollow-sections",
+            "title": "SSAB structural hollow sections environmental product declaration",
+            "url": "https://websitecdn.ssab.com/-/media/Files/EN/Support/Certificates/Hollow-Sections/Environmental-product-declaration---EN-EPD-SSAB-tubes-sections-piles.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {}
+    },
+    {
+      "id": "tcad-material-steel-s420mh",
+      "name": "Structural steel S420MH",
+      "density_kg_m3": 7850,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "carbon_steel",
+        "grade": "S420MH",
+        "condition": "SSAB structural hollow section",
+        "tags": [
+          "structural",
+          "hollow section"
+        ],
+        "catalog_id": "tcad-material-steel-s420mh",
+        "density_provenance": {
+          "source": "ssab-hollow-sections",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ssab-hollow-sections",
+            "title": "SSAB structural hollow sections environmental product declaration",
+            "url": "https://websitecdn.ssab.com/-/media/Files/EN/Support/Certificates/Hollow-Sections/Environmental-product-declaration---EN-EPD-SSAB-tubes-sections-piles.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {}
+    },
+    {
+      "id": "tcad-material-cu-c70600",
+      "name": "90/10 copper-nickel C70600",
+      "density_kg_m3": 8940,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "copper",
+        "grade": "C70600",
+        "condition": "Physical reference; temper unspecified",
+        "tags": [
+          "copper alloy"
+        ],
+        "catalog_id": "tcad-material-cu-c70600",
+        "density_provenance": {
+          "source": "cda-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "cda-physical",
+            "title": "Copper Development Association copper alloy design guide, Table 4",
+            "url": "https://live.copper.org/publications/pub_list/pdf/a1360.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "thermal_conductivity_w_per_m_k": {
+          "value": 46,
+          "provenance": {
+            "source": "cda-physical",
+            "reference": "Table 4",
+            "conditions": "Converted W/(cm·K) ×100 to W/(m·K).",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.7100000000000002e-05,
+          "provenance": {
+            "source": "cda-physical",
+            "reference": "Table 4",
+            "conditions": "Published linear coefficient; table does not state a temperature interval.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-cu-c11000",
+      "name": "ETP copper C11000",
+      "density_kg_m3": 8920,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "copper",
+        "grade": "C11000",
+        "condition": "Physical reference; temper unspecified",
+        "tags": [
+          "copper alloy"
+        ],
+        "catalog_id": "tcad-material-cu-c11000",
+        "density_provenance": {
+          "source": "cda-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "cda-physical",
+            "title": "Copper Development Association copper alloy design guide, Table 4",
+            "url": "https://live.copper.org/publications/pub_list/pdf/a1360.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "thermal_conductivity_w_per_m_k": {
+          "value": 394,
+          "provenance": {
+            "source": "cda-physical",
+            "reference": "Table 4",
+            "conditions": "Converted W/(cm·K) ×100 to W/(m·K).",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.68e-05,
+          "provenance": {
+            "source": "cda-physical",
+            "reference": "Table 4",
+            "conditions": "Published linear coefficient; table does not state a temperature interval.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-cu-c75200",
+      "name": "Nickel silver C75200",
+      "density_kg_m3": 8730,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "copper",
+        "grade": "C75200",
+        "condition": "Physical reference; temper unspecified",
+        "tags": [
+          "copper alloy"
+        ],
+        "catalog_id": "tcad-material-cu-c75200",
+        "density_provenance": {
+          "source": "cda-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "cda-physical",
+            "title": "Copper Development Association copper alloy design guide, Table 4",
+            "url": "https://live.copper.org/publications/pub_list/pdf/a1360.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "thermal_conductivity_w_per_m_k": {
+          "value": 33,
+          "provenance": {
+            "source": "cda-physical",
+            "reference": "Table 4",
+            "conditions": "Converted W/(cm·K) ×100 to W/(m·K).",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.6199999999999997e-05,
+          "provenance": {
+            "source": "cda-physical",
+            "reference": "Table 4",
+            "conditions": "Published linear coefficient; table does not state a temperature interval.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ni-625-annealed",
+      "name": "Nickel alloy 625 · annealed",
+      "density_kg_m3": 8440,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "nickel",
+        "grade": "UNS N06625 / INCONEL 625",
+        "condition": "Annealed",
+        "tags": [
+          "nickel alloy"
+        ],
+        "catalog_id": "tcad-material-ni-625-annealed",
+        "density_provenance": {
+          "source": "smc-625",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "smc-625",
+            "title": "Special Metals INCONEL alloy 625 bulletin SMC-063, August 2013",
+            "url": "https://www.specialmetals.com/documents/technical-bulletins/inconel/inconel-alloy-625.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 207500000000.0,
+          "provenance": {
+            "source": "smc-625",
+            "reference": "Table 4",
+            "conditions": "Dynamically measured, 3/4-in hot-rolled rod; stated condition at 21°C.",
+            "basis": "typical",
+            "temperature_k": 294.15
+          }
+        },
+        "shear_modulus_pa": {
+          "value": 81400000000.0,
+          "provenance": {
+            "source": "smc-625",
+            "reference": "Table 4",
+            "conditions": "Dynamically measured, 3/4-in hot-rolled rod; stated condition at 21°C.",
+            "basis": "typical",
+            "temperature_k": 294.15
+          }
+        },
+        "poisson_ratio": {
+          "value": 0.278,
+          "provenance": {
+            "source": "smc-625",
+            "reference": "Table 4",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 294.15
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 410,
+          "provenance": {
+            "source": "smc-625",
+            "reference": "Table 2, calculated",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 294.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ni-718-annealed",
+      "name": "Nickel alloy 718 · annealed",
+      "density_kg_m3": 8193.251794220125,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "nickel",
+        "grade": "UNS N07718 / INCONEL 718",
+        "condition": "Annealed",
+        "tags": [
+          "nickel alloy"
+        ],
+        "catalog_id": "tcad-material-ni-718-annealed",
+        "density_provenance": {
+          "source": "smc-718",
+          "reference": "Density",
+          "conditions": "Published room-temperature density 0.296 lb/in³ converted to SI; source value is rounded.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "smc-718",
+            "title": "Special Metals INCONEL alloy 718 bulletin SMC-045, September 2007",
+            "url": "https://www.specialmetals.com/documents/technical-bulletins/inconel/inconel-alloy-718.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "specific_heat_j_per_kg_k": {
+          "value": 435,
+          "provenance": {
+            "source": "smc-718",
+            "reference": "Table 2",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 294.15
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-abs",
+      "name": "ABS · TECARAN ABS grey",
+      "density_kg_m3": 1040,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "ABS",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-abs",
+        "density_provenance": {
+          "source": "ensinger-food",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-food",
+            "title": "Ensinger stock shapes for food technology, material standard values pp26-27",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/food-technology-shapes-en.ashx?rev=-1",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 32000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 1700000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pmma-gs",
+      "name": "Acrylic PMMA · PLEXIGLAS GS 0F00",
+      "density_kg_m3": 1190,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PMMA / PLEXIGLAS GS 0F00",
+        "condition": "Cast stock shape",
+        "tags": [
+          "acrylic",
+          "cast",
+          "stock shape"
+        ],
+        "catalog_id": "tcad-material-poly-pmma-gs",
+        "density_provenance": {
+          "source": "roehm-pmma",
+          "reference": "Density",
+          "conditions": "Published nominal density, g/cm³ converted ×1000 to kg/m³.",
+          "basis": "typical",
+          "temperature_k": 296.15
+        },
+        "sources": [
+          {
+            "id": "roehm-pmma",
+            "title": "Röhm PLEXIGLAS GS and XT technical information 211-1",
+            "url": "https://www.plexiglas.de/files/plexiglas-content/pdf/technische-informationen/211-1-PLEXIGLAS-GS-XT-EN.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only; published typical values and specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 3300000000.0,
+          "provenance": {
+            "source": "roehm-pmma",
+            "reference": "Typical mechanical properties p4",
+            "conditions": "Short-term tensile modulus, ISO 527-2/1B/1; 23°C and 50%RH.",
+            "basis": "typical",
+            "temperature_k": 296.15
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 80000000.0,
+          "provenance": {
+            "source": "roehm-pmma",
+            "reference": "Typical mechanical properties p4",
+            "conditions": "ISO 527-2/1B/5; 23°C and 50%RH.",
+            "basis": "typical",
+            "temperature_k": 296.15
+          }
+        },
+        "poisson_ratio": {
+          "value": 0.37,
+          "provenance": {
+            "source": "roehm-pmma",
+            "reference": "Typical mechanical properties p4",
+            "conditions": "ISO 527-1; dilation 5%/min up to 2%; 23°C.",
+            "basis": "typical",
+            "temperature_k": 296.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 7e-05,
+          "provenance": {
+            "source": "roehm-pmma",
+            "reference": "Thermal properties p5",
+            "conditions": "DIN 53752-A; mean over 0–50°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 0.19,
+          "provenance": {
+            "source": "roehm-pmma",
+            "reference": "Thermal properties p5",
+            "conditions": "DIN 52612; temperature not stated.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 1470,
+          "provenance": {
+            "source": "roehm-pmma",
+            "reference": "Thermal properties p5",
+            "conditions": "Source 1.47 J/(g·K); temperature not stated.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pa6-cast",
+      "name": "Cast nylon PA6 · TECAST T natural",
+      "density_kg_m3": 1150,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PA 6 C",
+        "condition": "Unfilled cast stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-pa6-cast",
+        "density_provenance": {
+          "source": "ensinger-food",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-food",
+            "title": "Ensinger stock shapes for food technology, material standard values pp26-27",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/food-technology-shapes-en.ashx?rev=-1",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 83000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 3500000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-hdpe",
+      "name": "HDPE · Polystone G natural",
+      "density_kg_m3": 950,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PE-HD / PE 300",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "polyolefin",
+          "stock shape"
+        ],
+        "catalog_id": "tcad-material-poly-hdpe",
+        "density_provenance": {
+          "source": "roechling-hdpe",
+          "reference": "Density",
+          "conditions": "Published nominal density, g/cm³ converted ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "roechling-hdpe",
+            "title": "Röchling Polystone G natural technical datasheet, release July 2024",
+            "url": "https://www.roechling.com/fileadmin/assets/Technical%20Data%20Sheet%20Polystone%C2%AE%20G%20natural%20591262%20EN.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only; published typical values and specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 1000000000.0,
+          "provenance": {
+            "source": "roechling-hdpe",
+            "reference": "Mechanical properties",
+            "conditions": "Tensile modulus, DIN EN ISO 527.",
+            "basis": "typical"
+          }
+        },
+        "yield_strength_pa": {
+          "value": 25000000.0,
+          "provenance": {
+            "source": "roechling-hdpe",
+            "reference": "Mechanical properties",
+            "conditions": "Yield stress, DIN EN ISO 527.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 0.4,
+          "provenance": {
+            "source": "roechling-hdpe",
+            "reference": "Thermal properties",
+            "conditions": "DIN 52612-1; temperature not stated.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 1900,
+          "provenance": {
+            "source": "roechling-hdpe",
+            "reference": "Thermal properties",
+            "conditions": "DIN 52612; source 1.90 kJ/(kg·K).",
+            "basis": "typical"
+          }
+        },
+        "melting_temperature_k": {
+          "value": 404.15,
+          "provenance": {
+            "source": "roechling-hdpe",
+            "reference": "Thermal properties",
+            "conditions": "ISO 11357-3; source 131°C.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pa6",
+      "name": "Nylon PA6 · TECAMID 6 natural",
+      "density_kg_m3": 1140,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PA 6",
+        "condition": "Unfilled extruded stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-pa6",
+        "density_provenance": {
+          "source": "ensinger-food",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-food",
+            "title": "Ensinger stock shapes for food technology, material standard values pp26-27",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/food-technology-shapes-en.ashx?rev=-1",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 79000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 3300000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pa66",
+      "name": "Nylon PA66 · TECAMID 66 natural",
+      "density_kg_m3": 1150,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PA 66",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-pa66",
+        "density_provenance": {
+          "source": "ensinger-food",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-food",
+            "title": "Ensinger stock shapes for food technology, material standard values pp26-27",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/food-technology-shapes-en.ashx?rev=-1",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 85000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 3500000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pa66-gf35",
+      "name": "PA66 GF35 · TECAMID 66 GF35 natural",
+      "density_kg_m3": 1410,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PA 66 GF35",
+        "condition": "Glass-fiber reinforced stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-pa66-gf35",
+        "density_provenance": {
+          "source": "ensinger-aerospace",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-aerospace",
+            "title": "Ensinger stock shapes for aerospace, material standard values pp22-23",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/aerospace-shapes-en.pdf?rev=fd35958705674dd0bca0a8906d37baa9",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 98000000.0,
+          "provenance": {
+            "source": "ensinger-aerospace",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 5600000000.0,
+          "provenance": {
+            "source": "ensinger-aerospace",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-peek",
+      "name": "PEEK · TECAPEEK natural",
+      "density_kg_m3": 1310,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PEEK",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-peek",
+        "density_provenance": {
+          "source": "ensinger-peek",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-peek",
+            "title": "Ensinger TECAPEEK natural product technical details",
+            "url": "https://www.ensingerplastics.com/en/shapes/peek-tecapeek-natural",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 116000000.0,
+          "provenance": {
+            "source": "ensinger-peek",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 4200000000.0,
+          "provenance": {
+            "source": "ensinger-peek",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pei",
+      "name": "PEI · TECAPEI natural",
+      "density_kg_m3": 1280,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PEI",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-pei",
+        "density_provenance": {
+          "source": "ensinger-aerospace",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-aerospace",
+            "title": "Ensinger stock shapes for aerospace, material standard values pp22-23",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/aerospace-shapes-en.pdf?rev=fd35958705674dd0bca0a8906d37baa9",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 127000000.0,
+          "provenance": {
+            "source": "ensinger-aerospace",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 3200000000.0,
+          "provenance": {
+            "source": "ensinger-aerospace",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pet",
+      "name": "PET polyester · TECAPET white",
+      "density_kg_m3": 1360,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PET",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-pet",
+        "density_provenance": {
+          "source": "ensinger-food",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-food",
+            "title": "Ensinger stock shapes for food technology, material standard values pp26-27",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/food-technology-shapes-en.ashx?rev=-1",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 79000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 3100000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pom-c",
+      "name": "POM-C · TECAFORM AH natural",
+      "density_kg_m3": 1410,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "POM-C",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-pom-c",
+        "density_provenance": {
+          "source": "ensinger-food",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-food",
+            "title": "Ensinger stock shapes for food technology, material standard values pp26-27",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/food-technology-shapes-en.ashx?rev=-1",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 67000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 2800000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pom-h",
+      "name": "POM-H · TECAFORM AD natural",
+      "density_kg_m3": 1430,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "POM-H",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-pom-h",
+        "density_provenance": {
+          "source": "ensinger-food",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-food",
+            "title": "Ensinger stock shapes for food technology, material standard values pp26-27",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/food-technology-shapes-en.ashx?rev=-1",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 79000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 3400000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-ppsu",
+      "name": "PPSU · TECASON P white",
+      "density_kg_m3": 1310,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PPSU",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-ppsu",
+        "density_provenance": {
+          "source": "ensinger-aerospace",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-aerospace",
+            "title": "Ensinger stock shapes for aerospace, material standard values pp22-23",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/aerospace-shapes-en.pdf?rev=fd35958705674dd0bca0a8906d37baa9",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 81000000.0,
+          "provenance": {
+            "source": "ensinger-aerospace",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 2300000000.0,
+          "provenance": {
+            "source": "ensinger-aerospace",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-ptfe",
+      "name": "PTFE · TECAFLON PTFE natural",
+      "density_kg_m3": 2150,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PTFE",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-ptfe",
+        "density_provenance": {
+          "source": "ensinger-aerospace",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-aerospace",
+            "title": "Ensinger stock shapes for aerospace, material standard values pp22-23",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/aerospace-shapes-en.pdf?rev=fd35958705674dd0bca0a8906d37baa9",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 22000000.0,
+          "provenance": {
+            "source": "ensinger-aerospace",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile strength per ASTM D4894, source footnote g; not DIN EN ISO 527-2. Verify actual stock and processing.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pvdf",
+      "name": "PVDF · TECAFLON PVDF natural",
+      "density_kg_m3": 1780,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PVDF",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-pvdf",
+        "density_provenance": {
+          "source": "ensinger-food",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-food",
+            "title": "Ensinger stock shapes for food technology, material standard values pp26-27",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/food-technology-shapes-en.ashx?rev=-1",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 62000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 2200000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pc",
+      "name": "Polycarbonate · TECANAT natural",
+      "density_kg_m3": 1190,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PC",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "stock shape",
+          "polymer"
+        ],
+        "catalog_id": "tcad-material-poly-pc",
+        "density_provenance": {
+          "source": "ensinger-food",
+          "reference": "Density",
+          "conditions": "Manufacturer stock-shape density per DIN EN ISO 1183; converted g/cm³ ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-food",
+            "title": "Ensinger stock shapes for food technology, material standard values pp26-27",
+            "url": "https://www.ensingerplastics.com/-/media/ensinger/files/document-teaser-files/brochures/shapes/food-technology-shapes-en.ashx?rev=-1",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "tensile_strength_pa": {
+          "value": 69000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile strength",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        },
+        "youngs_modulus_pa": {
+          "value": 2200000000.0,
+          "provenance": {
+            "source": "ensinger-food",
+            "reference": "Material standard values; tensile modulus",
+            "conditions": "Published stock-shape typical tensile data, DIN EN ISO 527-2; dimensional/orientation and moisture effects are not generalized. Reinforced grades are directional.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-poly-pp",
+      "name": "Polypropylene · TECAFINE PP",
+      "density_kg_m3": 910,
+      "color": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "metallic": 0,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "polymer",
+        "grade": "PP",
+        "condition": "Unfilled stock shape",
+        "tags": [
+          "polyolefin",
+          "stock shape"
+        ],
+        "catalog_id": "tcad-material-poly-pp",
+        "density_provenance": {
+          "source": "ensinger-pp",
+          "reference": "Density",
+          "conditions": "Published nominal density, g/cm³ converted ×1000 to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "ensinger-pp",
+            "title": "Ensinger engineering plastics manual, polypropylene table p16",
+            "url": "https://www.ensingerplastics.com/en-us/-/media/ensinger/files/document-teaser-files/brochures/shapes/engineering-plastics-manual-english.ashx",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only; published typical values and specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 1600000000.0,
+          "provenance": {
+            "source": "ensinger-pp",
+            "reference": "Polypropylene values p16",
+            "conditions": "Published stock-shape tensile modulus; temperature not stated.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-17-4-ph",
+      "name": "Stainless 17-4 PH · EN 1.4542",
+      "density_kg_m3": 7800,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "17-4 PH / EN 1.4542",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-17-4-ph",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.09e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 16,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-2205",
+      "name": "Stainless 2205 · EN 1.4462",
+      "density_kg_m3": 7800,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "2205 / EN 1.4462",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-2205",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.3e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 15,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-2507",
+      "name": "Stainless 2507 · EN 1.4410",
+      "density_kg_m3": 7800,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "2507 / EN 1.4410",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-2507",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.3e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 15,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-301",
+      "name": "Stainless 301 · EN 1.4310",
+      "density_kg_m3": 7900,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "301 / EN 1.4310",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-301",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.6e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 15,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-303",
+      "name": "Stainless 303 · EN 1.4305",
+      "density_kg_m3": 7900,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "303 / EN 1.4305",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-303",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.6e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 15,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-304",
+      "name": "Stainless 304 · EN 1.4301",
+      "density_kg_m3": 7900,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "304 / EN 1.4301",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-304",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.6e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 15,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-304l",
+      "name": "Stainless 304L · EN 1.4307",
+      "density_kg_m3": 7900,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "304L / EN 1.4307",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-304l",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.6e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 15,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-316",
+      "name": "Stainless 316 · EN 1.4401",
+      "density_kg_m3": 8000,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "316 / EN 1.4401",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-316",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.6e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 15,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-316l",
+      "name": "Stainless 316L · EN 1.4404",
+      "density_kg_m3": 8000,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "316L / EN 1.4404",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-316l",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.6e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 15,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-316ti",
+      "name": "Stainless 316Ti · EN 1.4571",
+      "density_kg_m3": 8000,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "316Ti / EN 1.4571",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-316ti",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.6499999999999998e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 15,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-321",
+      "name": "Stainless 321 · EN 1.4541",
+      "density_kg_m3": 7900,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "321 / EN 1.4541",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-321",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.6e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 15,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-347",
+      "name": "Stainless 347 · EN 1.4550",
+      "density_kg_m3": 7900,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "347 / EN 1.4550",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-347",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 200000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.6e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 15,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 500,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-409",
+      "name": "Stainless 409 · EN 1.4512",
+      "density_kg_m3": 7700,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "409 / EN 1.4512",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-409",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 220000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.05e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 25,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 460,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-410",
+      "name": "Stainless 410 · EN 1.4006",
+      "density_kg_m3": 7700,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "410 / EN 1.4006",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-410",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 215000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.05e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 30,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 460,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-416",
+      "name": "Stainless 416 · EN 1.4005",
+      "density_kg_m3": 7700,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "416 / EN 1.4005",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-416",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 215000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.05e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 30,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 460,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-420",
+      "name": "Stainless 420 · EN 1.4021",
+      "density_kg_m3": 7700,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "420 / EN 1.4021",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-420",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 215000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 1.05e-05,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 30,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 460,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ss-430",
+      "name": "Stainless 430 · EN 1.4016",
+      "density_kg_m3": 7700,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "stainless_steel",
+        "grade": "430 / EN 1.4016",
+        "condition": "Physical reference; product/heat treatment unspecified",
+        "tags": [
+          "stainless",
+          "physical reference"
+        ],
+        "catalog_id": "tcad-material-ss-430",
+        "density_provenance": {
+          "source": "outokumpu-physical",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "outokumpu-physical",
+            "title": "Outokumpu Steel Grades, Properties and Global Standards, physical Tables 12-13",
+            "url": "https://www.outokumpu.com/-/media/from-sharepoint/documents/product/outokumpu-steel-grades-properties-global-standards.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "youngs_modulus_pa": {
+          "value": 220000000000.0,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 9.999999999999999e-06,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical"
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 25,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 460,
+          "provenance": {
+            "source": "outokumpu-physical",
+            "reference": "Physical properties Tables 12–13",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ti-grade2",
+      "name": "Titanium Grade 2 · TIMETAL 50A",
+      "density_kg_m3": 4510,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "titanium",
+        "grade": "ASTM Grade 2 / TIMETAL 50A",
+        "condition": "Commercially pure; physical/typical data",
+        "tags": [
+          "commercially pure"
+        ],
+        "catalog_id": "tcad-material-ti-grade2",
+        "density_provenance": {
+          "source": "timet-50a",
+          "reference": "Density",
+          "conditions": "Published nominal density converted to kg/m³.",
+          "basis": "typical"
+        },
+        "sources": [
+          {
+            "id": "timet-50a",
+            "title": "TIMET TIMETAL 50A datasheet, Tables 2 and 4",
+            "url": "https://www.timet.com/documents/datasheets/cp-grades/timetal-50a.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "thermal_conductivity_w_per_m_k": {
+          "value": 21.79,
+          "provenance": {
+            "source": "timet-50a",
+            "reference": "Table 2",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "electrical_resistivity_ohm_m": {
+          "value": 5.3e-07,
+          "provenance": {
+            "source": "timet-50a",
+            "reference": "Table 2",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 8.6e-06,
+          "provenance": {
+            "source": "timet-50a",
+            "reference": "Table 2",
+            "conditions": "Mean over 20–100°C.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "yield_strength_pa": {
+          "value": 345000000.0,
+          "provenance": {
+            "source": "timet-50a",
+            "reference": "Table 4",
+            "conditions": "Typical mechanical data, room temperature 20–25°C.",
+            "basis": "typical"
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 485000000.0,
+          "provenance": {
+            "source": "timet-50a",
+            "reference": "Table 4",
+            "conditions": "Typical mechanical data, room temperature 20–25°C.",
+            "basis": "typical"
+          }
+        }
+      }
+    },
+    {
+      "id": "tcad-material-ti-grade5-annealed",
+      "name": "Titanium Ti-6Al-4V · annealed",
+      "density_kg_m3": 4420,
+      "color": [
+        0.52,
+        0.54,
+        0.57
+      ],
+      "metallic": 1,
+      "roughness": 0.4,
+      "metadata": {
+        "family": "titanium",
+        "grade": "ASTM Grade 5 / TIMETAL 6-4",
+        "condition": "Annealed sheet/plate",
+        "tags": [
+          "sheet",
+          "plate"
+        ],
+        "catalog_id": "tcad-material-ti-grade5-annealed",
+        "density_provenance": {
+          "source": "timet-6-4",
+          "reference": "Density",
+          "conditions": "Published 4.42 g/cm³ at 22°C, converted to kg/m³.",
+          "basis": "typical",
+          "temperature_k": 295.15
+        },
+        "sources": [
+          {
+            "id": "timet-6-4",
+            "title": "TIMET TIMETAL 6-4 datasheet, Tables 2 and 3",
+            "url": "https://www.timet.com/documents/datasheets/alpha-and-beta-alloys/timetal-6-4.pdf",
+            "retrieved": "2026-10-12",
+            "notes": "Factual numeric selection only. Typical values and published specification limits are not design allowables."
+          }
+        ]
+      },
+      "properties": {
+        "poisson_ratio": {
+          "value": 0.31,
+          "provenance": {
+            "source": "timet-6-4",
+            "reference": "Table 2",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_conductivity_w_per_m_k": {
+          "value": 6.6,
+          "provenance": {
+            "source": "timet-6-4",
+            "reference": "Table 2",
+            "conditions": "Mill annealed at 20°C.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "specific_heat_j_per_kg_k": {
+          "value": 580,
+          "provenance": {
+            "source": "timet-6-4",
+            "reference": "Table 2",
+            "conditions": "Published room-temperature nominal value; verify actual stock and condition.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "thermal_expansion_per_k": {
+          "value": 9e-06,
+          "provenance": {
+            "source": "timet-6-4",
+            "reference": "Table 2",
+            "conditions": "Mean over 0–100°C.",
+            "basis": "typical",
+            "temperature_k": 293.15
+          }
+        },
+        "yield_strength_pa": {
+          "value": 828000000.0,
+          "provenance": {
+            "source": "timet-6-4",
+            "reference": "Table 3",
+            "conditions": "Annealed sheet/plate, ASTM B265; thickness 0.025–1.000 in; longitudinal/long-transverse minimums.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        },
+        "tensile_strength_pa": {
+          "value": 895000000.0,
+          "provenance": {
+            "source": "timet-6-4",
+            "reference": "Table 3",
+            "conditions": "Annealed sheet/plate, ASTM B265; thickness 0.025–1.000 in; longitudinal/long-transverse minimums.",
+            "basis": "minimum",
+            "temperature_k": 293.15
+          }
+        }
+      }
+    }
+  ]
+}
