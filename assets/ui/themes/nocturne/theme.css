@@ -74,6 +74,57 @@
   border-color: #41304F;
 }
 
+/* Compact sketch actions retain an obvious surface within the taller theme. */
+[role=sketch-reference-action], [role=sketch-relation-action] {
+  height: 28px;
+  min-target-size: 28px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  border: 1px solid #8065A6;
+  background: #382A4D;
+  color: var(--ink);
+  font-size: 11px;
+  text-align: center;
+}
+
+[role=sketch-reference-action]:hover, [role=sketch-relation-action]:hover {
+  background: #4C3868;
+  border-color: var(--active);
+}
+
+[role=sketch-reference-action][state=active], [role=sketch-relation-action][state=active],
+[role=sketch-reference-action][state=pressed], [role=sketch-relation-action][state=pressed] {
+  background: #594079;
+  border-color: #B7FFF0;
+}
+
+[role=sketch-reference-action][state=selected], [role=sketch-relation-action][state=selected] {
+  background: var(--active);
+  border-color: #B7FFF0;
+  color: #162322;
+}
+
+[role=sketch-reference-action][state=selected]:hover, [role=sketch-relation-action][state=selected]:hover {
+  background: #ABFFEB;
+  border-color: #E0FFF7;
+}
+
+[role=sketch-reference-action][state=selected][state=active], [role=sketch-relation-action][state=selected][state=active],
+[role=sketch-reference-action][state=selected][state=pressed], [role=sketch-relation-action][state=selected][state=pressed] {
+  background: #48D5B7;
+  border-color: #75F9DD;
+}
+
+[role=sketch-reference-action]:focus, [role=sketch-relation-action]:focus {
+  border: 2px solid var(--valid);
+}
+
+[role=sketch-reference-action][state=disabled], [role=sketch-relation-action][state=disabled] {
+  background: #261D32;
+  color: #93859E;
+  border: 1px solid #514163;
+}
+
 .nocturne-workspace {
   background: #0D0B16;
   padding: 8px 10px;

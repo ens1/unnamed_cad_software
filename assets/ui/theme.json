@@ -16,6 +16,70 @@
   },
   "rules": [
     {
+      "selector": "[role=sketch-reference-action], [role=sketch-relation-action]",
+      "properties": {
+        "height": "24px",
+        "min-target-size": "24px",
+        "padding": "3px 7px",
+        "border-radius": "3px",
+        "border": "1px solid #9D978A",
+        "background": "#E7E3DA",
+        "color": "var(--ink)",
+        "font-size": "11px",
+        "text-align": "center"
+      }
+    },
+    {
+      "selector": "[role=sketch-reference-action]:hover, [role=sketch-relation-action]:hover",
+      "properties": {
+        "background": "#FFE3D2",
+        "border-color": "var(--active)"
+      }
+    },
+    {
+      "selector": "[role=sketch-reference-action][state=active], [role=sketch-relation-action][state=active], [role=sketch-reference-action][state=pressed], [role=sketch-relation-action][state=pressed]",
+      "properties": {
+        "background": "#FFD2B8",
+        "border-color": "#B94100"
+      }
+    },
+    {
+      "selector": "[role=sketch-reference-action][state=selected], [role=sketch-relation-action][state=selected]",
+      "properties": {
+        "background": "var(--active)",
+        "border-color": "#B94100",
+        "color": "var(--ink)"
+      }
+    },
+    {
+      "selector": "[role=sketch-reference-action][state=selected]:hover, [role=sketch-relation-action][state=selected]:hover",
+      "properties": {
+        "background": "#FF7C33",
+        "border-color": "#B94100"
+      }
+    },
+    {
+      "selector": "[role=sketch-reference-action][state=selected][state=active], [role=sketch-relation-action][state=selected][state=active], [role=sketch-reference-action][state=selected][state=pressed], [role=sketch-relation-action][state=selected][state=pressed]",
+      "properties": {
+        "background": "#E64F00",
+        "border-color": "#7D2C00"
+      }
+    },
+    {
+      "selector": "[role=sketch-reference-action]:focus, [role=sketch-relation-action]:focus",
+      "properties": {
+        "border": "2px solid var(--reference)"
+      }
+    },
+    {
+      "selector": "[role=sketch-reference-action][state=disabled], [role=sketch-relation-action][state=disabled]",
+      "properties": {
+        "background": "#EDE9E1",
+        "color": "#888175",
+        "border": "1px solid #C8C1B4"
+      }
+    },
+    {
       "selector": "[role=selection-actions]",
       "properties": {
         "background": "var(--panel)",

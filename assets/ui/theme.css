@@ -32,6 +32,58 @@
 [role=sketch3d-point-handle][state=selected] { color: var(--active); stroke-width: 3px; }
 [role=sketch3d-tool][state=selected] { background: var(--active); color: #FFFFFF; }
 
+/* Sketch commands are controls, distinct from descriptive text in the inspector.
+   Target their semantic roles to resize or restyle them independently. */
+[role=sketch-reference-action], [role=sketch-relation-action] {
+  height: 24px;
+  min-target-size: 24px;
+  padding: 3px 7px;
+  border-radius: 3px;
+  border: 1px solid #9D978A;
+  background: #E7E3DA;
+  color: var(--ink);
+  font-size: 11px;
+  text-align: center;
+}
+
+[role=sketch-reference-action]:hover, [role=sketch-relation-action]:hover {
+  background: #FFE3D2;
+  border-color: var(--active);
+}
+
+[role=sketch-reference-action][state=active], [role=sketch-relation-action][state=active],
+[role=sketch-reference-action][state=pressed], [role=sketch-relation-action][state=pressed] {
+  background: #FFD2B8;
+  border-color: #B94100;
+}
+
+[role=sketch-reference-action][state=selected], [role=sketch-relation-action][state=selected] {
+  background: var(--active);
+  border-color: #B94100;
+  color: var(--ink);
+}
+
+[role=sketch-reference-action][state=selected]:hover, [role=sketch-relation-action][state=selected]:hover {
+  background: #FF7C33;
+  border-color: #B94100;
+}
+
+[role=sketch-reference-action][state=selected][state=active], [role=sketch-relation-action][state=selected][state=active],
+[role=sketch-reference-action][state=selected][state=pressed], [role=sketch-relation-action][state=selected][state=pressed] {
+  background: #E64F00;
+  border-color: #7D2C00;
+}
+
+[role=sketch-reference-action]:focus, [role=sketch-relation-action]:focus {
+  border: 2px solid var(--reference);
+}
+
+[role=sketch-reference-action][state=disabled], [role=sketch-relation-action][state=disabled] {
+  background: #EDE9E1;
+  color: #888175;
+  border: 1px solid #C8C1B4;
+}
+
 [role=selection-actions] {
   background: var(--panel);
   padding: 8px;

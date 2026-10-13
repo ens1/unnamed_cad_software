@@ -102,6 +102,21 @@ reasons; inherited circle radius fields expose their actual reference and
 driving dimension through read-only field metadata. These contracts remain
 independent of control placement or theme rules.
 
+Planar sketch reference and relation controls use the shared button adapter,
+with roles `sketch-reference-action` and `sketch-relation-action`. Their stable
+IDs are `<sketch>::reference-action.<reference>` and
+`<sketch>::relation-action.<kind>`. The editor publishes their actions, selection
+state, descriptions and `modeling-action` / `compact` classes for custom layouts.
+Both bundled themes give these buttons filled surfaces and visible borders;
+height, pointer targets, padding, colors and shape remain theme properties.
+Reference buttons also show their selected state. Shared buttons publish
+transient `hover`, `active` / `pressed`, and `focus` states for pointer and
+keyboard feedback. Reference rows wrap with the available panel width.
+
+Saved complete theme packages retain their authored styling. Selecting the
+bundled Classic or Nocturne entry in Settings loads the current bundled rules;
+user resources are not overwritten to apply a visual update.
+
 For example, add a dedicated parameter component and place it independently:
 
 ```json

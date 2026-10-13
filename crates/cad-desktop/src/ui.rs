@@ -1091,6 +1091,7 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
                 | "sketch-dimension-group"
                 | "sketch-equation"
                 | "sketch-equation-field"
+                | "sketch-relation-action"
         ))
     {
         crate::sketch_ui::semantic_action(w, element, command);

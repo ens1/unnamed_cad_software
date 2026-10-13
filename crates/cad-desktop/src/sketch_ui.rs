@@ -130,7 +130,7 @@ pub fn selected_inspector_open(ui: &egui::Ui, id: &str, selected: Option<&str>) 
 pub fn semantic_action(w: &mut Workspace, element: &presentation::SemanticElement, command: &str) {
     if matches!(
         element.role.as_str(),
-        "sketch-dimension-editor" | "sketch-operation-prompt"
+        "sketch-dimension-editor" | "sketch-operation-prompt" | "sketch-relation-action"
     ) && element
         .data
         .get("sketch")
@@ -421,7 +421,7 @@ fn entity_for(source: &Sketch, element: &presentation::SemanticElement) -> Optio
                 constraint: element.id.clone(),
             }
         }
-        "sketch-reference"
+        "sketch-reference" | "sketch-reference-action"
             if element
                 .data
                 .get("sketch")
@@ -746,6 +746,37 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
         relationships: vec![s.sketch_id.clone()],
         data: serde_json::json!({"sketch":s.sketch_id,"presentation_only":true,"default_collapsed":suffix != "member-list","layout_order":"active-tool-before-secondary-editors"}),
     }).collect::<Vec<_>>();
+    let source = sketch::sketch_definition(s);
+    for (label, entity) in [
+        ("Origin", SketchEntity::Origin),
+        ("X Axis", SketchEntity::XAxis),
+        ("Y Axis", SketchEntity::YAxis),
+    ] {
+        elements.push(presentation::SemanticElement {
+            id: format!("{}::reference-action.{}", s.sketch_id, entity.key()),
+            role: "sketch-reference-action".into(),
+            label: label.into(),
+            value: None,
+            state: if s.selection.contains(&entity) { "selected" } else { "ready" }.into(),
+            commands: vec!["sketch.select-entity".into()],
+            relationships: vec![s.sketch_id.clone()],
+            data: serde_json::json!({"sketch":s.sketch_id,"reference":entity.key(),"classes":["modeling-action","compact"],"accessibility_label":format!("Select sketch {label}")}),
+        });
+    }
+    for (kind, label) in a::RELATIONS {
+        if a::relation(&source, &s.selection, kind).is_ok() {
+            elements.push(presentation::SemanticElement {
+                id: format!("{}::relation-action.{kind}", s.sketch_id),
+                role: "sketch-relation-action".into(),
+                label: (*label).into(),
+                value: None,
+                state: "ready".into(),
+                commands: vec![format!("sketch.relation.{kind}")],
+                relationships: vec![s.sketch_id.clone()],
+                data: serde_json::json!({"sketch":s.sketch_id,"selection_count":s.selection.len(),"description":a::relation_description(kind),"classes":["modeling-action","compact"],"accessibility_label":label}),
+            });
+        }
+    }
     if let Some(member) = &s.selected_member {
         for ((key, field), value) in evaluated_member_values(w)
             .into_iter()
@@ -1695,13 +1726,21 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         }
         if dimension_mode || !s.selection.is_empty() || s.tool == sketch::Tool::Select {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for (label, entity) in [
                     ("Origin", SketchEntity::Origin),
                     ("X Axis", SketchEntity::XAxis),
                     ("Y Axis", SketchEntity::YAxis),
                 ] {
-                    let response = ui.selectable_label(s.selection.contains(&entity), label);
+                    let response = controls::button(
+                        ui,
+                        &format!("{}::reference-action.{}", s.sketch_id, entity.key()),
+                        "sketch-reference-action",
+                        &["modeling-action", "compact"],
+                        label,
+                        true,
+                        s.selection.contains(&entity),
+                    );
                     if response.clicked() {
                         clicked_reference = Some(entity);
                     }
@@ -1710,10 +1749,17 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             ui.horizontal_wrapped(|ui| {
                 for (kind, label) in a::RELATIONS {
                     if a::relation(&before, &s.selection, kind).is_ok()
-                        && ui
-                            .small_button(*label)
-                            .on_hover_text(a::relation_description(kind))
-                            .clicked()
+                        && controls::button(
+                            ui,
+                            &format!("{}::relation-action.{kind}", s.sketch_id),
+                            "sketch-relation-action",
+                            &["modeling-action", "compact"],
+                            label,
+                            true,
+                            false,
+                        )
+                        .on_hover_text(a::relation_description(kind))
+                        .clicked()
                     {
                         relation_command = Some(format!("sketch.relation.{kind}"));
                     }

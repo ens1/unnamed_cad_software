@@ -415,9 +415,16 @@ pub fn icon_button(
         },
     );
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    let pressed = enabled
+        && (response.is_pointer_button_down_on()
+            || (response.has_focus()
+                && ui.input(|input| {
+                    input.key_down(egui::Key::Enter) || input.key_down(egui::Key::Space)
+                })));
     let interaction = format!(
-        "{state}{}{}",
+        "{state}{}{}{}",
         if response.hovered() { " hover" } else { "" },
+        if pressed { " active pressed" } else { "" },
         if response.has_focus() {
             " focus focused"
         } else {
