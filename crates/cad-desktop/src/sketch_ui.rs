@@ -1787,9 +1787,19 @@ pub fn secondary_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     );
     crate::sketch_edit_ui::modifiers(ui, w);
     let open_parameters = w.fields.remove("graph-parameters").is_some();
-    egui::CollapsingHeader::new("Named Parameters")
-        .open(open_parameters.then_some(true))
-        .show(ui, |ui| crate::ui::parameters(ui, w));
+    controls::inspector_section(
+        ui,
+        controls::InspectorSection {
+            id: "sketch:named-parameters",
+            role: "sketch-secondary-section",
+            classes: &["secondary", "parameters"],
+            label: "Named parameters",
+            state: "ready",
+            collapse: Some(false),
+            open: open_parameters.then_some(true),
+        },
+        |ui| crate::ui::parameters(ui, w),
+    );
 }
 
 fn anchor(source: &Sketch, c: &SketchConstraint) -> Option<[f64; 2]> {

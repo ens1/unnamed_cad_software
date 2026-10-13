@@ -83,7 +83,7 @@ impl<'a> Fields<'a> {
     fn group(&mut self, group: &'static str, label: &str) {
         self.group = group;
         let mut data = self.metadata();
-        data["classes"] = json!(["modeling-group", group]);
+        data["classes"] = json!(["modeling-group", "inspector-section", group]);
         self.out.push(SemanticElement {
             id: self.identity(&format!("group/{group}")),
             role: "operation-editor-group".into(),
@@ -2095,95 +2095,82 @@ pub(crate) fn render_elements(
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
         let props = controls::properties(&group.id, &group.role, &classes, "draft");
-        if props.get("display").is_some_and(|v| v == "none")
-            || props.get("visibility").is_some_and(|v| v == "hidden")
-        {
-            continue;
-        }
-        let parent = controls::current_target();
-        let target = parent.map(|p| {
-            p.child(
-                &group.id,
-                &group.role,
-                &classes.iter().map(|c| (*c).into()).collect::<Vec<_>>(),
-                "draft",
-            )
-        });
-        let mut content = |ui: &mut egui::Ui| {
-            ui.scope(|ui| {
-                controls::apply_properties(ui, &props);
-                controls::frame_from_properties(ui, &props).show(ui, |ui| {
-                    controls::label(ui, &group.id, &group.role, &classes, &group.label, "draft");
-                    let mut render = |ui: &mut egui::Ui| {
-                        let mut index = 0;
-                        while index < children.len() {
-                            let element = &children[index];
-                            if element.data.get("inline_parent").is_some() {
-                                index += 1;
-                                continue;
-                            }
-                            if element.role.ends_with("-action") {
-                                let end = children[index..]
-                                    .iter()
-                                    .position(|e| !e.role.ends_with("-action"))
-                                    .map_or(children.len(), |n| index + n);
-                                ui.horizontal_wrapped(|ui| {
-                                    for element in &children[index..end] {
-                                        if element.data.get("inline_parent").is_none() {
-                                            render_action(ui, w, element);
-                                        }
-                                    }
-                                });
-                                index = end;
-                                continue;
-                            }
-                            if crate::selection_ui::render_edge_row(ui, w, element) {
-                                index += 1;
-                                continue;
-                            }
-                            if element.data.get("setter").is_some() {
-                                crate::ui::semantic_field(ui, w, element);
-                            } else {
-                                controls::label(
-                                    ui,
-                                    &element.id,
-                                    &element.role,
-                                    &["modeling-help"],
-                                    &element
-                                        .value
-                                        .as_ref()
-                                        .map(|v| format!("{} · {v}", element.label))
-                                        .unwrap_or_else(|| element.label.clone()),
-                                    &element.state,
-                                );
-                            }
+        controls::inspector_section(
+            ui,
+            controls::InspectorSection {
+                id: &group.id,
+                role: &group.role,
+                classes: &classes,
+                label: &group.label,
+                state: "draft",
+                collapse: None,
+                open: None,
+            },
+            |ui| {
+                let mut render = |ui: &mut egui::Ui| {
+                    let mut index = 0;
+                    while index < children.len() {
+                        let element = &children[index];
+                        if element.data.get("inline_parent").is_some() {
                             index += 1;
+                            continue;
                         }
-                    };
-                    if props
-                        .get("overflow")
-                        .is_some_and(|v| matches!(v.as_str(), "auto" | "scroll"))
-                    {
-                        egui::ScrollArea::vertical()
-                            .id_salt(&group.id)
-                            .max_height(controls::number(
-                                &props,
-                                "max-height",
-                                ui.available_height().max(60.),
-                            ))
-                            .auto_shrink([false, true])
-                            .show(ui, render);
-                    } else {
-                        render(ui);
+                        if element.role.ends_with("-action") {
+                            let end = children[index..]
+                                .iter()
+                                .position(|e| !e.role.ends_with("-action"))
+                                .map_or(children.len(), |n| index + n);
+                            ui.horizontal_wrapped(|ui| {
+                                for element in &children[index..end] {
+                                    if element.data.get("inline_parent").is_none() {
+                                        render_action(ui, w, element);
+                                    }
+                                }
+                            });
+                            index = end;
+                            continue;
+                        }
+                        if crate::selection_ui::render_edge_row(ui, w, element) {
+                            index += 1;
+                            continue;
+                        }
+                        if element.data.get("setter").is_some() {
+                            crate::ui::semantic_field(ui, w, element);
+                        } else {
+                            controls::label(
+                                ui,
+                                &element.id,
+                                &element.role,
+                                &["modeling-help"],
+                                &element
+                                    .value
+                                    .as_ref()
+                                    .map(|v| format!("{} · {v}", element.label))
+                                    .unwrap_or_else(|| element.label.clone()),
+                                &element.state,
+                            );
+                        }
+                        index += 1;
                     }
-                });
-            });
-        };
-        if let Some(target) = target {
-            controls::with_target(target, ui, content);
-        } else {
-            content(ui);
-        }
+                };
+                if props
+                    .get("overflow")
+                    .is_some_and(|v| matches!(v.as_str(), "auto" | "scroll"))
+                {
+                    egui::ScrollArea::vertical()
+                        .id_salt(&group.id)
+                        .max_height(controls::number(
+                            &props,
+                            "max-height",
+                            ui.available_height().max(60.),
+                        ))
+                        .auto_shrink([false, true])
+                        .show(ui, render);
+                } else {
+                    render(ui);
+                }
+            },
+        );
     }
 }
 

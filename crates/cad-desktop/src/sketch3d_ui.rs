@@ -2650,7 +2650,15 @@ fn element(
     }
 }
 fn group(w: &Workspace, key: &str, label: &str) -> SemanticElement {
-    element(w, &format!("group/{key}"), "sketch3d-group", label, None)
+    let mut element = element(w, &format!("group/{key}"), "sketch3d-group", label, None);
+    element.data["classes"] = json!([
+        "spatial-sketch",
+        "modeling-field",
+        "modeling-group",
+        "inspector-section",
+        key
+    ]);
+    element
 }
 fn choice(label: &str, value: impl Serialize) -> Value {
     json!({"label":label,"value":value})
@@ -4369,54 +4377,52 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
         }
     }
     for (group, children) in groups {
-        let props = controls::properties(&group.id, &group.role, &["modeling-group"], "draft");
-        if !shown(&props) {
-            continue;
-        }
+        let classes = group
+            .data
+            .get("classes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
         let open = group.id.ends_with("/tools")
             || group.id.ends_with("/selection")
             || group.id.ends_with("/dimension");
-        let target = controls::current_target().map(|parent| {
-            parent.child(&group.id, &group.role, &["modeling-group".into()], "draft")
-        });
-        let content = |ui: &mut egui::Ui| {
-            ui.scope(|ui| {
-                controls::apply_properties(ui, &props);
-                controls::frame_from_properties(ui, &props).show(ui, |ui| {
-                    egui::CollapsingHeader::new(&group.label)
-                        .id_salt(&group.id)
-                        .default_open(open)
-                        .show(ui, |ui| {
-                            let mut children = children.into_iter().peekable();
-                            while let Some(element) = children.next() {
-                                if element.role.ends_with("-action") {
-                                    let mut row = vec![element];
-                                    while children
-                                        .peek()
-                                        .is_some_and(|next| next.role.ends_with("-action"))
-                                    {
-                                        if let Some(next) = children.next() {
-                                            row.push(next);
-                                        }
-                                    }
-                                    ui.horizontal_wrapped(|ui| {
-                                        for element in row {
-                                            render_control(ui, w, &element);
-                                        }
-                                    });
-                                } else {
-                                    render_control(ui, w, &element);
-                                }
+        controls::inspector_section(
+            ui,
+            controls::InspectorSection {
+                id: &group.id,
+                role: &group.role,
+                classes: &classes,
+                label: &group.label,
+                state: "draft",
+                collapse: Some(open),
+                open: None,
+            },
+            |ui| {
+                let mut children = children.into_iter().peekable();
+                while let Some(element) = children.next() {
+                    if element.role.ends_with("-action") {
+                        let mut row = vec![element];
+                        while children
+                            .peek()
+                            .is_some_and(|next| next.role.ends_with("-action"))
+                        {
+                            if let Some(next) = children.next() {
+                                row.push(next);
+                            }
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            for element in row {
+                                render_control(ui, w, &element);
                             }
                         });
-                });
-            });
-        };
-        if let Some(target) = target {
-            controls::with_target(target, ui, content);
-        } else {
-            content(ui);
-        }
+                    } else {
+                        render_control(ui, w, &element);
+                    }
+                }
+            },
+        );
     }
     true
 }

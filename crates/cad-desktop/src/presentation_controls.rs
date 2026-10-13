@@ -496,9 +496,329 @@ pub fn selectable(
     button(ui, id, role, &["selectable"], label, true, selected)
 }
 
-/// Secondary native groups retain a stable semantic/style identity. Folding
-/// affects presentation only, and child controls keep their normal command and
-/// draft identities when the group is reopened.
+/// Compact inspector grouping keeps the authored group identity, while exposing
+/// independent heading and divider targets to the presentation resource.
+pub struct InspectorSection<'a> {
+    pub id: &'a str,
+    pub role: &'a str,
+    pub classes: &'a [&'a str],
+    pub label: &'a str,
+    pub state: &'a str,
+    /// `None` keeps the content open; `Some` supplies the initial fold state.
+    pub collapse: Option<bool>,
+    /// A view may temporarily reveal a selected entity without replacing its ID.
+    pub open: Option<bool>,
+}
+
+pub fn inspector_section(
+    ui: &mut egui::Ui,
+    section: InspectorSection<'_>,
+    content: impl FnOnce(&mut egui::Ui),
+) {
+    let mut classes = section.classes.to_vec();
+    if !classes.contains(&"inspector-section") {
+        classes.push("inspector-section");
+    }
+    let props = properties(section.id, section.role, &classes, section.state);
+    if !visible(&props) {
+        return;
+    }
+    let target = STYLES.with(|snapshot| {
+        let snapshot = snapshot.borrow();
+        let parent = snapshot.target.clone().unwrap_or_else(|| {
+            cad_core::presentation::Region {
+                id: "workspace".into(),
+                role: "workspace".into(),
+                component: None,
+                rect: [0.; 4],
+                classes: vec![],
+                resizable: false,
+            }
+            .style_target(&snapshot.layout, "ready")
+        });
+        if parent.node.id == section.id {
+            let mut target = parent;
+            target.node.role = section.role.into();
+            for class in &classes {
+                if !target.node.classes.iter().any(|existing| existing == class) {
+                    target.node.classes.push((*class).into());
+                }
+            }
+            target.node.states = section
+                .state
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect();
+            target
+        } else {
+            parent.child(
+                section.id,
+                section.role,
+                &classes
+                    .iter()
+                    .map(|class| (*class).into())
+                    .collect::<Vec<_>>(),
+                section.state,
+            )
+        }
+    });
+    with_target(target, ui, |ui| {
+        ui.push_id(section.id, |ui| {
+            ui.scope(|ui| {
+                // Container paint belongs to this frame alone. In particular its
+                // background, border and padding must not recolor every input field.
+                apply_container_properties(ui, &props);
+                frame_from_properties(ui, &props).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let mut folding = section.collapse.map(|default_open| {
+                        let mut folding =
+                            egui::collapsing_header::CollapsingState::load_with_default_open(
+                                ui.ctx(),
+                                ui.make_persistent_id(section.id),
+                                default_open,
+                            );
+                        if let Some(open) = section.open {
+                            folding.set_open(open);
+                        }
+                        folding
+                    });
+                    let heading = inspector_heading(ui, &section, folding.as_mut());
+                    if let Some(folding) = folding.as_mut() {
+                        folding.show_body_unindented(ui, content);
+                    } else {
+                        content(ui);
+                    }
+                    inspector_divider(ui, &section);
+                    if let Some(heading) = heading
+                        && heading.hovered()
+                        && folding.is_some()
+                    {
+                        heading.on_hover_text("Click to expand or collapse this section");
+                    }
+                });
+            });
+        });
+    });
+}
+
+fn visible(props: &BTreeMap<String, String>) -> bool {
+    !props.get("display").is_some_and(|value| value == "none")
+        && !props
+            .get("visibility")
+            .is_some_and(|value| value == "hidden")
+}
+
+fn inspector_heading(
+    ui: &mut egui::Ui,
+    section: &InspectorSection<'_>,
+    mut folding: Option<&mut egui::collapsing_header::CollapsingState>,
+) -> Option<Response> {
+    let id = format!("{}/heading", section.id);
+    let role = "inspector-section-heading";
+    let expanded = folding.as_ref().is_none_or(|folding| folding.is_open());
+    let state = format!(
+        "{} {}",
+        section.state,
+        if expanded {
+            "open expanded"
+        } else {
+            "closed collapsed"
+        }
+    );
+    let props = properties(&id, role, &["inspector-heading"], &state);
+    if !visible(&props) {
+        return None;
+    }
+    let pad = padding(&props, egui::vec2(6., 3.));
+    let font = font(ui, &props);
+    let icon_size = if folding.is_some() {
+        number(&props, "icon-size", font.size * 0.7).max(0.)
+    } else {
+        0.
+    };
+    let icon_gap = if folding.is_some() {
+        number(&props, "gap", 5.).max(0.)
+    } else {
+        0.
+    };
+    let available = ui.available_width().max(0.);
+    let width = length(&props, "width", available, available)
+        .max(length(&props, "min-width", available, 0.))
+        .min(length(&props, "max-width", available, available))
+        .clamp(0., available);
+    let mut text = egui::RichText::new(section.label).font(font);
+    if props.get("font-weight").is_none_or(|value| {
+        value == "bold" || value.parse::<u16>().is_ok_and(|weight| weight >= 600)
+    }) {
+        text = text.strong();
+    }
+    let text_width = (width - pad[1] - pad[3] - icon_size - icon_gap).max(0.);
+    let wrap = if props
+        .get("text-overflow")
+        .is_some_and(|value| value == "ellipsis")
+    {
+        egui::TextWrapMode::Truncate
+    } else {
+        egui::TextWrapMode::Wrap
+    };
+    let galley = egui::WidgetText::from(text).into_galley(
+        ui,
+        Some(wrap),
+        text_width,
+        egui::TextStyle::Button,
+    );
+    let elided = galley.elided;
+    let natural_height = galley.size().y.max(icon_size) + pad[0] + pad[2];
+    let height = number(&props, "height", natural_height)
+        .max(number(&props, "min-height", 0.))
+        .max(number(&props, "min-target-size", 0.))
+        .min(number(&props, "max-height", f32::INFINITY))
+        .max(0.);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let mut response = ui.interact(
+        rect,
+        ui.make_persistent_id(&id),
+        if folding.is_some() {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        },
+    );
+    let keyboard_activation = response.has_focus()
+        && folding.is_some()
+        && ui.input_mut(|input| {
+            input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)
+                || input.consume_key(egui::Modifiers::NONE, egui::Key::Space)
+        });
+    if (response.clicked() || keyboard_activation)
+        && let Some(folding) = folding.as_mut()
+    {
+        folding.toggle(ui);
+        response.mark_changed();
+    }
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            if folding.is_some() {
+                egui::WidgetType::CollapsingHeader
+            } else {
+                egui::WidgetType::Label
+            },
+            ui.is_enabled(),
+            section.label,
+        )
+    });
+    let state = format!(
+        "{state}{}{}",
+        if response.hovered() { " hover" } else { "" },
+        if response.has_focus() {
+            " focus focused"
+        } else {
+            ""
+        }
+    );
+    let actual = properties(&id, role, &["inspector-heading"], &state);
+    if visible(&actual) {
+        let color = actual
+            .get("color")
+            .and_then(|value| crate::ui::color(value))
+            .unwrap_or_else(|| ui.visuals().text_color());
+        let opacity = number(&actual, "opacity", 1.).clamp(0., 1.);
+        let fill = actual
+            .get("background")
+            .and_then(|value| crate::ui::color(value))
+            .unwrap_or(Color32::TRANSPARENT)
+            .gamma_multiply(opacity);
+        let mut border = stroke(&actual, Stroke::NONE);
+        border.color = border.color.gamma_multiply(opacity);
+        ui.painter().rect(
+            rect,
+            radius(&actual, rect.size(), 0.),
+            fill,
+            border,
+            egui::StrokeKind::Inside,
+        );
+        let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
+        if let Some(folding) = folding.as_ref() {
+            let center = egui::pos2(rect.left() + pad[3] + icon_size * 0.5, rect.center().y);
+            let openness = folding.openness(ui.ctx());
+            let right = [
+                egui::vec2(-0.25, -0.4),
+                egui::vec2(0.3, 0.),
+                egui::vec2(-0.25, 0.4),
+            ];
+            let down = [
+                egui::vec2(-0.4, -0.25),
+                egui::vec2(0., 0.3),
+                egui::vec2(0.4, -0.25),
+            ];
+            let points = right
+                .into_iter()
+                .zip(down)
+                .map(|(right, down)| {
+                    center + (right * (1. - openness) + down * openness) * icon_size
+                })
+                .collect();
+            painter.add(egui::Shape::line(
+                points,
+                Stroke::new(
+                    number(&actual, "stroke-width", 1.4),
+                    color.gamma_multiply(opacity),
+                ),
+            ));
+        }
+        let text_start = rect.left() + pad[3] + icon_size + icon_gap;
+        let text_x = match actual.get("text-align").map(String::as_str) {
+            Some("center") => text_start + (text_width - galley.size().x) * 0.5,
+            Some("right" | "end") => rect.right() - pad[1] - galley.size().x,
+            _ => text_start,
+        };
+        painter.galley_with_override_text_color(
+            egui::pos2(text_x, rect.center().y - galley.size().y * 0.5),
+            galley,
+            color.gamma_multiply(opacity),
+        );
+    }
+    Some(if elided {
+        response.on_hover_text(section.label)
+    } else {
+        response
+    })
+}
+
+fn inspector_divider(ui: &mut egui::Ui, section: &InspectorSection<'_>) {
+    let props = properties(
+        &format!("{}/divider", section.id),
+        "inspector-section-divider",
+        &["inspector-divider"],
+        section.state,
+    );
+    if !visible(&props) {
+        return;
+    }
+    let available = ui.available_width().max(0.);
+    let width = length(&props, "width", available, available)
+        .max(length(&props, "min-width", available, 0.))
+        .min(length(&props, "max-width", available, available))
+        .clamp(0., available);
+    let thickness = number(&props, "stroke-width", 1.).max(0.);
+    let height = number(&props, "height", 5.).max(thickness);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let color = props
+        .get("color")
+        .and_then(|value| crate::ui::color(value))
+        .unwrap_or_else(|| ui.visuals().widgets.noninteractive.bg_stroke.color)
+        .gamma_multiply(number(&props, "opacity", 1.).clamp(0., 1.));
+    if thickness > 0. {
+        ui.painter().hline(
+            rect.x_range(),
+            rect.center().y,
+            Stroke::new(thickness, color),
+        );
+    }
+}
+
+/// Secondary native groups share the inspector hierarchy and retain their stable
+/// semantic/style identity. Folding never changes child commands or drafts.
 pub fn collapsing(
     ui: &mut egui::Ui,
     id: &str,
@@ -507,25 +827,19 @@ pub fn collapsing(
     default_open: bool,
     content: impl FnOnce(&mut egui::Ui),
 ) {
-    let props = properties(id, role, &["secondary"], "ready");
-    if props.get("display").is_some_and(|value| value == "none") {
-        return;
-    }
-    let target =
-        current_target().map(|parent| parent.child(id, role, &["secondary".into()], "ready"));
-    ui.scope(|ui| {
-        apply_properties(ui, &props);
-        egui::CollapsingHeader::new(egui::RichText::new(label).font(font(ui, &props)))
-            .id_salt(id)
-            .default_open(default_open)
-            .show(ui, |ui| {
-                if let Some(target) = target {
-                    with_target(target, ui, content);
-                } else {
-                    content(ui);
-                }
-            });
-    });
+    inspector_section(
+        ui,
+        InspectorSection {
+            id,
+            role,
+            classes: &["secondary"],
+            label,
+            state: "ready",
+            collapse: Some(default_open),
+            open: None,
+        },
+        content,
+    );
 }
 
 pub fn label(
@@ -788,6 +1102,19 @@ pub fn frame_from_properties(ui: &mut egui::Ui, props: &BTreeMap<String, String>
     frame.corner_radius =
         egui::CornerRadius::same(radius(props, ui.available_size(), 0.).min(255.) as u8);
     frame
+}
+
+/// CSS container spacing and inherited typography do not change widget paint.
+fn apply_container_properties(ui: &mut egui::Ui, props: &BTreeMap<String, String>) {
+    ui.style_mut().override_font_id = Some(font(ui, props));
+    if let Some(color) = props.get("color").and_then(|value| crate::ui::color(value)) {
+        ui.visuals_mut().override_text_color = Some(color);
+    }
+    let gap = number(props, "gap", ui.spacing().item_spacing.x).max(0.);
+    ui.spacing_mut().item_spacing = egui::vec2(
+        number(props, "column-gap", gap).max(0.),
+        number(props, "row-gap", gap).max(0.),
+    );
 }
 
 /// Apply a resolved style to an adapter scope, including ordinary native fields.

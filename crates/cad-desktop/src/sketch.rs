@@ -1529,8 +1529,37 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     if crate::sketch_edit_ui::controls(ui, w) {
         return;
     }
-    crate::sketch_ui::controls(ui, w);
-    crate::sketch_overlay::snap_controls(ui, w);
+    let section_id = w
+        .sketch
+        .as_ref()
+        .map(|sketch| sketch.sketch_id.clone())
+        .unwrap_or_default();
+    crate::presentation_controls::inspector_section(
+        ui,
+        crate::presentation_controls::InspectorSection {
+            id: &format!("sketch:{section_id}:selection"),
+            role: "sketch-inspector-group",
+            classes: &["selection-dimensions"],
+            label: "Selection and dimensions",
+            state: "draft",
+            collapse: Some(true),
+            open: None,
+        },
+        |ui| crate::sketch_ui::controls(ui, w),
+    );
+    crate::presentation_controls::inspector_section(
+        ui,
+        crate::presentation_controls::InspectorSection {
+            id: &format!("sketch:{section_id}:precision"),
+            role: "sketch-inspector-group",
+            classes: &["precision"],
+            label: "Precision and snapping",
+            state: "draft",
+            collapse: Some(false),
+            open: None,
+        },
+        |ui| crate::sketch_overlay::snap_controls(ui, w),
+    );
     let evaluated_sizes = crate::sketch_ui::evaluated_member_values(w);
     let settings = w.session.visible().settings.clone();
     let mut changed = false;
@@ -1539,41 +1568,53 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     let mut delete_selected = false;
     let mut finish_curve = false;
     if let Some(s) = &mut w.sketch {
-        ui.strong(&s.name);
-        ui.small(format!(
-            "{} members · {}",
-            s.members.len(),
-            s.degrees_of_freedom
-                .map(|dof| format!("{dof} DOF"))
-                .unwrap_or_else(|| "DOF unavailable".into())
-        ));
-        ui.checkbox(&mut s.construction, "Construction for new geometry");
-        if s.tool == Tool::Polygon {
-            ui.add(
-                egui::DragValue::new(&mut s.polygon_sides)
-                    .range(3..=32)
-                    .prefix("Sides "),
-            );
-        }
-        if matches!(s.tool, Tool::CenterArc | Tool::ArcSlot) {
-            ui.checkbox(&mut s.clockwise, "Clockwise arc");
-        }
-        if s.tool == Tool::Conic {
-            crate::presentation_controls::expression(
-                ui,
-                &format!("{}::conic-rho", s.sketch_id),
-                "Rho (0–1; 0.5 is parabolic)",
-                &mut s.conic_rho,
-            );
-        }
-        crate::presentation_controls::collapsing(
+        crate::presentation_controls::inspector_section(
             ui,
-            &format!("{}::tool-help", s.sketch_id),
-            "sketch-secondary-section",
-            "Tool help",
-            false,
+            crate::presentation_controls::InspectorSection {
+                id: &format!("sketch:{}:drawing", s.sketch_id),
+                role: "sketch-inspector-group",
+                classes: &["drawing-options"],
+                label: "Drawing options",
+                state: "draft",
+                collapse: Some(true),
+                open: None,
+            },
             |ui| {
-                ui.small(match s.tool {
+                ui.strong(&s.name);
+                ui.small(format!(
+                    "{} members · {}",
+                    s.members.len(),
+                    s.degrees_of_freedom
+                        .map(|dof| format!("{dof} DOF"))
+                        .unwrap_or_else(|| "DOF unavailable".into())
+                ));
+                ui.checkbox(&mut s.construction, "Construction for new geometry");
+                if s.tool == Tool::Polygon {
+                    ui.add(
+                        egui::DragValue::new(&mut s.polygon_sides)
+                            .range(3..=32)
+                            .prefix("Sides "),
+                    );
+                }
+                if matches!(s.tool, Tool::CenterArc | Tool::ArcSlot) {
+                    ui.checkbox(&mut s.clockwise, "Clockwise arc");
+                }
+                if s.tool == Tool::Conic {
+                    crate::presentation_controls::expression(
+                        ui,
+                        &format!("{}::conic-rho", s.sketch_id),
+                        "Rho (0–1; 0.5 is parabolic)",
+                        &mut s.conic_rho,
+                    );
+                }
+                crate::presentation_controls::collapsing(
+                    ui,
+                    &format!("{}::tool-help", s.sketch_id),
+                    "sketch-secondary-section",
+                    "Tool help",
+                    false,
+                    |ui| {
+                        ui.small(match s.tool {
             Tool::Arc => "Arc: start, end, then a point on the arc.",
             Tool::ThreePointRectangle => "Rectangle: first corner, next corner along an edge, then height.",
             Tool::ThreePointCenterRectangle => "Rectangle: center, half-width axis point, then half-height.",
@@ -1601,30 +1642,31 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             }
             _ => "Click to draw. Snap to existing points joins members. Esc stops the tool.",
         });
+                    },
+                );
+                if matches!(s.tool, Tool::InterpolatingSpline | Tool::Nurbs) {
+                    ui.add(
+                        egui::DragValue::new(&mut s.spline_degree)
+                            .range(1..=cad_core::sketch_spline::MAX_DEGREE)
+                            .prefix("Degree "),
+                    );
+                    ui.small("Degree is limited to one less than the number of placed points.");
+                    if s.tool == Tool::InterpolatingSpline {
+                        crate::sketch_edit_ui::parameterization(ui, &mut s.spline_parameterization);
+                    }
+                }
+                if s.tool.is_spline()
+                    && ui
+                        .add_enabled(s.chain.len() >= 2, egui::Button::new("Finish Spline"))
+                        .clicked()
+                {
+                    finish_curve = true;
+                }
+                if !s.selection.is_empty() && ui.button("Delete Selection").clicked() {
+                    delete_selected = true;
+                }
             },
         );
-        if matches!(s.tool, Tool::InterpolatingSpline | Tool::Nurbs) {
-            ui.add(
-                egui::DragValue::new(&mut s.spline_degree)
-                    .range(1..=cad_core::sketch_spline::MAX_DEGREE)
-                    .prefix("Degree "),
-            );
-            ui.small("Degree is limited to one less than the number of placed points.");
-            if s.tool == Tool::InterpolatingSpline {
-                crate::sketch_edit_ui::parameterization(ui, &mut s.spline_parameterization);
-            }
-        }
-        if s.tool.is_spline()
-            && ui
-                .add_enabled(s.chain.len() >= 2, egui::Button::new("Finish Spline"))
-                .clicked()
-        {
-            finish_curve = true;
-        }
-        if !s.selection.is_empty() && ui.button("Delete Selection").clicked() {
-            delete_selected = true;
-        }
-        ui.separator();
         let mut remove = None;
         let member_checkpoint = sketch_definition(s);
         let driven_points = cad_core::sketch_edit::driven_points(&member_checkpoint);
@@ -1640,13 +1682,29 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             "sketch-member-inspector",
             s.selected_member.as_deref(),
         );
-        egui::CollapsingHeader::new("Sketch Members")
-            .open(member_inspector)
-            .default_open(true)
-            .show(ui, |ui| {
-                let props = crate::presentation_controls::properties(&format!("{}::member-list", s.sketch_id), "sketch-member-list", &["compact"], "ready");
-                if props.get("display").is_some_and(|value| value == "none") { return; }
-                let height = crate::presentation_controls::number(&props, "max-height", 180.).max(24.);
+        crate::presentation_controls::inspector_section(
+            ui,
+            crate::presentation_controls::InspectorSection {
+                id: &format!("sketch:{}:members", s.sketch_id),
+                role: "sketch-inspector-group",
+                classes: &["member-list"],
+                label: "Sketch members",
+                state: "draft",
+                collapse: Some(true),
+                open: member_inspector,
+            },
+            |ui| {
+                let props = crate::presentation_controls::properties(
+                    &format!("{}::member-list", s.sketch_id),
+                    "sketch-member-list",
+                    &["compact"],
+                    "ready",
+                );
+                if props.get("display").is_some_and(|value| value == "none") {
+                    return;
+                }
+                let height =
+                    crate::presentation_controls::number(&props, "max-height", 180.).max(24.);
                 egui::ScrollArea::vertical().id_salt(("sketch-member-list", &s.sketch_id)).max_height(height).show(ui, |ui| {
                 crate::presentation_controls::apply_properties(ui, &props);
                 for (index, member_key) in member_order {
@@ -1713,7 +1771,8 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     });
                 }
                 });
-            });
+            },
+        );
         if let Some(key) = remove {
             s.history.push(sketch_definition(s));
             let mut source = sketch_definition(s);

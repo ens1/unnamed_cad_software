@@ -22,6 +22,18 @@
   --font-size: 12px;
   --control-height: 36px;
   --target-size: 32px;
+  --section-background: transparent;
+  --section-heading-background: #2D2340;
+  --section-heading-color: #D0C6EF;
+  --section-border: #66547F;
+  --section-padding: 0px;
+  --section-gap: 5px;
+  --section-heading-height: 28px;
+  --section-heading-padding: 4px 8px;
+  --section-heading-radius: 8px;
+  --section-radius: 0px;
+  --section-divider-width: 1px;
+  --section-divider-spacing: 7px;
 }
 
 * {
@@ -615,4 +627,54 @@
   width: 30px;
   border: 1px solid var(--stroke);
   border-radius: 15px;
+}
+
+/* Group boundaries use the same semantic roles as the compact orange theme. */
+.inspector-section, .modeling-group, [role=inspector-section],
+[role=feature-tree-group], [role=operation-editor-group],
+[role=structural-member-group], [role=sketch3d-group],
+[role=drawing-editor-group] {
+  background: var(--section-background);
+  border: none;
+  border-radius: var(--section-radius);
+  padding: var(--section-padding);
+  gap: var(--section-gap);
+}
+
+[role=inspector-section-heading] {
+  width: 100%;
+  height: var(--section-heading-height);
+  min-target-size: var(--section-heading-height);
+  padding: var(--section-heading-padding);
+  background: var(--section-heading-background);
+  color: var(--section-heading-color);
+  border: 1px solid var(--section-border);
+  border-radius: var(--section-heading-radius);
+  font-size: 11px;
+  font-weight: bold;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+[role=inspector-section-heading]:hover {
+  background: #3B2B50;
+  border-color: var(--active);
+}
+
+[role=inspector-section-heading][state=open] {
+  color: var(--section-heading-color);
+}
+
+[role=inspector-section-divider] {
+  color: var(--section-border);
+  stroke-width: var(--section-divider-width);
+  height: var(--section-divider-spacing);
+  padding: 0px;
+}
+
+[role=inspector-title] { font-size: 12px; font-weight: bold; }
+[role=inspector-context] { font-size: 10px; color: var(--muted); }
+
+[role=feature-tree-group].reference-geometry [role=inspector-section-heading] {
+  color: var(--reference);
 }

@@ -949,6 +949,56 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             }
         }
     }
+    if let Some(part) = w
+        .view
+        .active_part
+        .as_ref()
+        .and_then(|id| w.session.visible().parts.get(id))
+    {
+        for (key, label, items) in [
+            ("bodies", "Body outputs", part.outputs.clone()),
+            (
+                "appearance",
+                "Material and finish",
+                vec![part.material.clone(), part.finish.clone()],
+            ),
+            (
+                "references",
+                "Reference geometry",
+                vec![
+                    "Front Plane".into(),
+                    "Top Plane".into(),
+                    "Right Plane".into(),
+                    "Origin".into(),
+                ],
+            ),
+            (
+                "features",
+                "Features",
+                part.features
+                    .iter()
+                    .map(|feature| feature.id.clone())
+                    .collect(),
+            ),
+        ] {
+            let id = format!("feature-tree:{}:{key}", part.id);
+            for (id, role, section_label) in [
+                (id.clone(), "feature-tree-group", label),
+                (format!("{id}/heading"), "inspector-section-heading", label),
+                (
+                    format!("{id}/divider"),
+                    "inspector-section-divider",
+                    "Section divider",
+                ),
+            ] {
+                out.push(cad_core::presentation::SemanticElement {
+                    id, role: role.into(), label: section_label.into(), value: None,
+                    state: "ready".into(), commands: vec![], relationships: vec![part.id.clone()],
+                    data: serde_json::json!({"presentation_only":true,"classes":["inspector-section",key,match key { "bodies" => "body-outputs", "appearance" => "material-finish", "references" => "reference-geometry", _ => "model-features" }],"section":key,"items":items}),
+                });
+            }
+        }
+    }
     out.extend(crate::contours_ui::semantics(w));
     out
 }
@@ -1733,40 +1783,72 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                     },
                 );
             }
-            for placed in doc.placed_parts().unwrap_or_default() {
-                let response = controls::button(
-                    ui,
-                    &format!("component:{}", placed.path.join("/")),
-                    "component-instance",
-                    &["feature-tree-row"],
-                    &placed.name,
-                    true,
-                    w.view.active_instance.as_ref() == placed.path.last(),
-                );
-                if response.clicked() {
-                    if w.tool_checkpoint.is_none() {
-                        w.activate_context(
-                            Some(placed.definition.clone()),
-                            Some(placed.path.clone()),
+            controls::inspector_section(
+                ui,
+                controls::InspectorSection {
+                    id: &format!("feature-tree:{}:components", doc.root),
+                    role: "feature-tree-group",
+                    classes: &["components"],
+                    label: "Components",
+                    state: "ready",
+                    collapse: Some(true),
+                    open: None,
+                },
+                |ui| {
+                    for placed in doc.placed_parts().unwrap_or_default() {
+                        let response = controls::button(
+                            ui,
+                            &format!("component:{}", placed.path.join("/")),
+                            "component-instance",
+                            &["feature-tree-row"],
+                            &placed.name,
+                            true,
+                            w.view.active_instance.as_ref() == placed.path.last(),
                         );
+                        if response.clicked() {
+                            if w.tool_checkpoint.is_none() {
+                                w.activate_context(
+                                    Some(placed.definition.clone()),
+                                    Some(placed.path.clone()),
+                                );
+                            }
+                            crate::selection_ui::object_selected(
+                                w,
+                                cad_core::selection_actions::SelectionTarget::Object {
+                                    definition: placed.definition.clone(),
+                                    object: placed.path.last().cloned().unwrap_or_default(),
+                                    role: "component-instance".into(),
+                                },
+                            );
+                            if w.tool_checkpoint.is_none() {
+                                w.edge_selection_path = Some(placed.path.clone());
+                            }
+                        }
                     }
-                    crate::selection_ui::object_selected(
-                        w,
-                        cad_core::selection_actions::SelectionTarget::Object {
-                            definition: placed.definition.clone(),
-                            object: placed.path.last().cloned().unwrap_or_default(),
-                            role: "component-instance".into(),
-                        },
-                    );
-                    if w.tool_checkpoint.is_none() {
-                        w.edge_selection_path = Some(placed.path.clone());
+                    if ui.button("Insert Component").clicked() {
+                        ui::action(w, "assembly.insert-existing");
                     }
-                }
-            }
-            crate::assembly_groups_ui::tree(ui, w);
-            crate::assembly_welds_ui::tree(ui, w);
-            if ui.button("Insert Component").clicked() {
-                ui::action(w, "assembly.insert-existing");
+                },
+            );
+            if doc.assemblies.values().any(|assembly| {
+                !assembly.rigid_groups.is_empty() || !assembly.weld_beads.is_empty()
+            }) {
+                controls::inspector_section(
+                    ui,
+                    controls::InspectorSection {
+                        id: &format!("feature-tree:{}:connections", doc.root),
+                        role: "feature-tree-group",
+                        classes: &["assembly-connections"],
+                        label: "Groups and welds",
+                        state: "ready",
+                        collapse: Some(true),
+                        open: None,
+                    },
+                    |ui| {
+                        crate::assembly_groups_ui::tree(ui, w);
+                        crate::assembly_welds_ui::tree(ui, w);
+                    },
+                );
             }
         });
         return;
@@ -1819,179 +1901,254 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                 )
                 .unwrap_or_else(|_| part.clone());
                 let body_counts = crate::body_inventory::counts(w, &part.id);
-                for (label, is_surface) in [("Solid Bodies", false), ("Surface Bodies", true)] {
-                    let outputs = effective
-                        .outputs
-                        .iter()
-                        .filter_map(|id| part.features.iter().find(|f| &f.id == id))
-                        .filter(|f| {
-                            if is_surface {
-                                f.operation.is_surface()
-                            } else {
-                                f.operation.produces_solid()
-                            }
+                let has_bodies = body_counts
+                    .is_some_and(|counts| counts.solids + counts.surfaces > 0)
+                    || effective.outputs.iter().any(|id| {
+                        part.features.iter().any(|feature| {
+                            &feature.id == id
+                                && (feature.operation.produces_solid()
+                                    || feature.operation.is_surface())
                         })
-                        .collect::<Vec<_>>();
-                    let count = body_counts.map(|counts| {
-                        if is_surface {
-                            counts.surfaces
-                        } else {
-                            counts.solids
-                        }
                     });
-                    let heading = count
-                        .map(|count| format!("{label} ({count})"))
-                        .unwrap_or_else(|| {
-                            format!(
-                                "{} outputs ({})",
-                                if is_surface { "Surface" } else { "Solid" },
-                                outputs.len()
-                            )
-                        });
-                    if !is_surface || count.is_some_and(|count| count > 0) || !outputs.is_empty() {
-                        egui::CollapsingHeader::new(heading)
-                            .id_salt(label)
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                ui.small("Grouped by output feature");
-                                for feature in outputs {
-                                    feature_row(ui, w, part, feature);
+                if has_bodies {
+                    controls::inspector_section(
+                        ui,
+                        controls::InspectorSection {
+                            id: &format!("feature-tree:{}:bodies", part.id),
+                            role: "feature-tree-group",
+                            classes: &["body-outputs"],
+                            label: "Body outputs",
+                            state: "ready",
+                            collapse: Some(true),
+                            open: None,
+                        },
+                        |ui| {
+                            for (label, is_surface) in
+                                [("Solid Bodies", false), ("Surface Bodies", true)]
+                            {
+                                let outputs = effective
+                                    .outputs
+                                    .iter()
+                                    .filter_map(|id| part.features.iter().find(|f| &f.id == id))
+                                    .filter(|f| {
+                                        if is_surface {
+                                            f.operation.is_surface()
+                                        } else {
+                                            f.operation.produces_solid()
+                                        }
+                                    })
+                                    .collect::<Vec<_>>();
+                                let count = body_counts.map(|counts| {
+                                    if is_surface {
+                                        counts.surfaces
+                                    } else {
+                                        counts.solids
+                                    }
+                                });
+                                let heading = count
+                                    .map(|count| format!("{label} ({count})"))
+                                    .unwrap_or_else(|| {
+                                        format!(
+                                            "{} outputs ({})",
+                                            if is_surface { "Surface" } else { "Solid" },
+                                            outputs.len()
+                                        )
+                                    });
+                                if !is_surface
+                                    || count.is_some_and(|count| count > 0)
+                                    || !outputs.is_empty()
+                                {
+                                    egui::CollapsingHeader::new(heading)
+                                        .id_salt(label)
+                                        .default_open(false)
+                                        .show(ui, |ui| {
+                                            ui.small("Grouped by output feature");
+                                            for feature in outputs {
+                                                feature_row(ui, w, part, feature);
+                                            }
+                                        });
                                 }
-                            });
-                    }
-                }
-                let material = doc
-                    .materials
-                    .get(&effective.material)
-                    .map(|m| m.name.as_str())
-                    .unwrap_or("Unassigned");
-                let response = ui.small_button(format!("Material: {material}"));
-                if response.clicked() {
-                    crate::selection_ui::object_selected(
-                        w,
-                        cad_core::selection_actions::SelectionTarget::Object {
-                            definition: part.id.clone(),
-                            object: effective.material.clone(),
-                            role: "material".into(),
+                            }
                         },
                     );
                 }
-                let finish = doc
-                    .finishes
-                    .get(&effective.finish)
-                    .map(|finish| finish.name.as_str())
-                    .unwrap_or("Missing finish");
-                if controls::button(
+                controls::inspector_section(
                     ui,
-                    &format!("{}::finish", part.id),
-                    "appearance-assignment",
-                    &["feature-tree-row"],
-                    &format!("Finish: {finish}"),
-                    w.tool_checkpoint.is_none(),
-                    false,
-                )
-                .clicked()
-                {
-                    w.view.active_part = Some(part.id.clone());
-                    crate::appearances_ui::begin(w, false);
-                }
-                ui.separator();
-                for name in ["Front Plane", "Top Plane", "Right Plane"] {
-                    let response = controls::button(
-                        ui,
-                        &format!("reference:{}::{name}", part.id),
-                        "reference-plane",
-                        &["feature-tree-row"],
-                        &format!("▱  {name}"),
-                        true,
-                        w.active_plane.as_deref() == Some(name),
-                    );
-                    if response.clicked() {
-                        w.selected = None;
-                        w.view.active_node = None;
-                        sketch::choose_origin(w, name);
-                        w.status = format!("{name} selected. Choose a sketch or viewing action.");
-                        if !response.double_clicked() {
+                    controls::InspectorSection {
+                        id: &format!("feature-tree:{}:appearance", part.id),
+                        role: "feature-tree-group",
+                        classes: &["material-finish"],
+                        label: "Material and finish",
+                        state: "ready",
+                        collapse: Some(false),
+                        open: None,
+                    },
+                    |ui| {
+                        let material = doc
+                            .materials
+                            .get(&effective.material)
+                            .map(|m| m.name.as_str())
+                            .unwrap_or("Unassigned");
+                        let response = ui.small_button(format!("Material: {material}"));
+                        if response.clicked() {
+                            crate::selection_ui::object_selected(
+                                w,
+                                cad_core::selection_actions::SelectionTarget::Object {
+                                    definition: part.id.clone(),
+                                    object: effective.material.clone(),
+                                    role: "material".into(),
+                                },
+                            );
+                        }
+                        let finish = doc
+                            .finishes
+                            .get(&effective.finish)
+                            .map(|finish| finish.name.as_str())
+                            .unwrap_or("Missing finish");
+                        if controls::button(
+                            ui,
+                            &format!("{}::finish", part.id),
+                            "appearance-assignment",
+                            &["feature-tree-row"],
+                            &format!("Finish: {finish}"),
+                            w.tool_checkpoint.is_none(),
+                            false,
+                        )
+                        .clicked()
+                        {
+                            w.view.active_part = Some(part.id.clone());
+                            crate::appearances_ui::begin(w, false);
+                        }
+                    },
+                );
+                controls::inspector_section(
+                    ui,
+                    controls::InspectorSection {
+                        id: &format!("feature-tree:{}:references", part.id),
+                        role: "feature-tree-group",
+                        classes: &["reference-geometry"],
+                        label: "Reference geometry",
+                        state: "ready",
+                        collapse: Some(true),
+                        open: None,
+                    },
+                    |ui| {
+                        for name in ["Front Plane", "Top Plane", "Right Plane"] {
+                            let response = controls::button(
+                                ui,
+                                &format!("reference:{}::{name}", part.id),
+                                "reference-plane",
+                                &["feature-tree-row"],
+                                &format!("▱  {name}"),
+                                true,
+                                w.active_plane.as_deref() == Some(name),
+                            );
+                            if response.clicked() {
+                                w.selected = None;
+                                w.view.active_node = None;
+                                sketch::choose_origin(w, name);
+                                w.status =
+                                    format!("{name} selected. Choose a sketch or viewing action.");
+                                if !response.double_clicked() {
+                                    crate::selection_ui::object_selected(
+                                        w,
+                                        cad_core::selection_actions::SelectionTarget::Reference {
+                                            definition: part.id.clone(),
+                                            reference: name.into(),
+                                        },
+                                    );
+                                }
+                            }
+                            if response.double_clicked() && w.sketch.is_none() {
+                                ui::action(w, "sketch.new");
+                            }
+                            response.context_menu(|ui| {
+                                if ui.button("Sketch on this plane").clicked() {
+                                    sketch::choose_origin(w, name);
+                                    if w.sketch.is_none() {
+                                        ui::action(w, "sketch.new");
+                                    }
+                                    ui.close();
+                                }
+                            });
+                        }
+                        let response = controls::button(
+                            ui,
+                            &format!("reference:{}::Origin", part.id),
+                            "reference-origin",
+                            &["feature-tree-row"],
+                            "+  Origin",
+                            true,
+                            false,
+                        );
+                        if response.clicked() {
+                            w.active_plane = None;
                             crate::selection_ui::object_selected(
                                 w,
                                 cad_core::selection_actions::SelectionTarget::Reference {
                                     definition: part.id.clone(),
-                                    reference: name.into(),
+                                    reference: "Origin".into(),
                                 },
                             );
                         }
-                    }
-                    if response.double_clicked() && w.sketch.is_none() {
-                        ui::action(w, "sketch.new");
-                    }
-                    response.context_menu(|ui| {
-                        if ui.button("Sketch on this plane").clicked() {
-                            sketch::choose_origin(w, name);
-                            if w.sketch.is_none() {
-                                ui::action(w, "sketch.new");
-                            }
-                            ui.close();
-                        }
-                    });
-                }
-                let response = controls::button(
-                    ui,
-                    &format!("reference:{}::Origin", part.id),
-                    "reference-origin",
-                    &["feature-tree-row"],
-                    "+  Origin",
-                    true,
-                    false,
+                    },
                 );
-                if response.clicked() {
-                    w.active_plane = None;
-                    crate::selection_ui::object_selected(
-                        w,
-                        cad_core::selection_actions::SelectionTarget::Reference {
-                            definition: part.id.clone(),
-                            reference: "Origin".into(),
-                        },
-                    );
-                }
-                ui.separator();
-                for feature in &part.features {
-                    let consumed = matches!(
-                        feature.operation,
-                        Operation::Profile { .. } | Operation::Sketch3d { .. }
-                    ) && part.features.iter().any(|f| {
-                        part.feature_dependencies(f)
-                            .iter()
-                            .any(|n| n.definition == part.id && n.node == feature.id)
-                    });
-                    if consumed {
-                        continue;
-                    }
-                    feature_row(ui, w, part, feature);
-                    if !matches!(
-                        feature.operation,
-                        Operation::Profile { .. } | Operation::Sketch3d { .. }
-                    ) {
-                        for input in part.feature_dependencies(feature) {
-                            if let Some(sketch) = part.features.iter().find(|f| {
-                                f.id == input.node
-                                    && matches!(
-                                        f.operation,
-                                        Operation::Profile { .. } | Operation::Sketch3d { .. }
-                                    )
-                            }) {
-                                ui.indent((&feature.id, &sketch.id), |ui| {
-                                    feature_row(ui, w, part, sketch);
-                                });
+                controls::inspector_section(
+                    ui,
+                    controls::InspectorSection {
+                        id: &format!("feature-tree:{}:features", part.id),
+                        role: "feature-tree-group",
+                        classes: &["model-features"],
+                        label: "Features",
+                        state: "ready",
+                        collapse: Some(true),
+                        open: None,
+                    },
+                    |ui| {
+                        if part.features.is_empty() {
+                            ui.small("No features yet");
+                        }
+                        for feature in &part.features {
+                            let consumed = matches!(
+                                feature.operation,
+                                Operation::Profile { .. } | Operation::Sketch3d { .. }
+                            ) && part.features.iter().any(|f| {
+                                part.feature_dependencies(f)
+                                    .iter()
+                                    .any(|n| n.definition == part.id && n.node == feature.id)
+                            });
+                            if consumed {
+                                continue;
+                            }
+                            feature_row(ui, w, part, feature);
+                            if !matches!(
+                                feature.operation,
+                                Operation::Profile { .. } | Operation::Sketch3d { .. }
+                            ) {
+                                for input in part.feature_dependencies(feature) {
+                                    if let Some(sketch) = part.features.iter().find(|f| {
+                                        f.id == input.node
+                                            && matches!(
+                                                f.operation,
+                                                Operation::Profile { .. }
+                                                    | Operation::Sketch3d { .. }
+                                            )
+                                    }) {
+                                        ui.indent((&feature.id, &sketch.id), |ui| {
+                                            feature_row(ui, w, part, sketch);
+                                        });
+                                    }
+                                }
                             }
                         }
-                    }
-                }
-                if let Some(s) = &w.sketch {
-                    ui.colored_label(
-                        ui.visuals().selection.stroke.color,
-                        format!("{} (Editing)", s.name),
-                    );
-                }
+                        if let Some(s) = &w.sketch {
+                            ui.colored_label(
+                                ui.visuals().selection.stroke.color,
+                                format!("{} (Editing)", s.name),
+                            );
+                        }
+                    },
+                );
             });
         });
 }
@@ -2049,131 +2206,148 @@ pub fn operation_summary(operation: &Operation) -> String {
     }
 }
 fn history(ui: &mut egui::Ui, w: &mut Workspace, part: &Part) {
-    if controls::selectable(
+    controls::inspector_section(
         ui,
-        "history-view",
-        "history-view",
-        "Latest model",
-        w.view.history_cursor.is_none(),
-    )
-    .on_hover_text("Show the current model without rebuilding geometry")
-    .clicked()
-    {
-        crate::history::latest(w);
-    }
-    if w.view.history_cursor.is_some() {
-        ui.small("History inspection · Esc returns to Latest");
-    }
-    egui::ScrollArea::vertical()
-        .id_salt("feature-history")
-        .show(ui, |ui| {
-            if part.features.is_empty() {
-                ui.small("Sketches and features appear here.");
+        controls::InspectorSection {
+            id: &format!("feature-tree:{}:history", part.id),
+            role: "feature-tree-group",
+            classes: &["feature-history"],
+            label: "Feature history",
+            state: "ready",
+            collapse: None,
+            open: None,
+        },
+        |ui| {
+            if controls::selectable(
+                ui,
+                "history-view",
+                "history-view",
+                "Latest model",
+                w.view.history_cursor.is_none(),
+            )
+            .on_hover_text("Show the current model without rebuilding geometry")
+            .clicked()
+            {
+                crate::history::latest(w);
             }
-            let mut last = None;
-            for (index, feature) in part.features.iter().enumerate() {
-                let active = w
-                    .view
-                    .history_cursor
-                    .as_ref()
-                    .map(|cursor| cursor.definition == part.id && cursor.node == feature.id)
-                    .unwrap_or_else(|| w.view.active_node.as_ref() == Some(&feature.id));
-                let future = w
-                    .view
-                    .history_cursor
-                    .as_ref()
-                    .filter(|cursor| cursor.definition == part.id)
-                    .and_then(|cursor| {
-                        part.features
-                            .iter()
-                            .position(|feature| feature.id == cursor.node)
-                    })
-                    .is_some_and(|cursor| index > cursor);
-                let id = format!("history:{}::{}", part.id, feature.id);
-                let classes = if future {
-                    vec!["history-row", "future"]
-                } else {
-                    vec!["history-row"]
-                };
-                let props = controls::properties(
-                    &id,
-                    "history-station",
-                    &classes,
-                    if active { "selected" } else { "ready" },
-                );
-                let marker = std::cell::Cell::new(None);
-                let draw = |painter: &egui::Painter, center: egui::Pos2, size: f32, color| {
-                    marker.set(Some(center));
-                    painter.circle_filled(center, size * 0.23, color);
-                    if active {
-                        painter.circle_stroke(
-                            center,
-                            size * 0.42,
-                            Stroke::new(controls::number(&props, "stroke-width", 1.2), color),
-                        );
+            if w.view.history_cursor.is_some() {
+                ui.small("History inspection · Esc returns to Latest");
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("feature-history")
+                .show(ui, |ui| {
+                    if part.features.is_empty() {
+                        ui.small("Sketches and features appear here.");
                     }
-                };
-                let label = format!("{:02}  {}", index + 1, feature.name);
-                let response = controls::icon_button(
-                    ui,
-                    &id,
-                    "history-station",
-                    &classes,
-                    &label,
-                    true,
-                    active,
-                    Some(&draw),
-                )
-                .on_hover_text(format!(
-                    "{}\n{}",
-                    feature.name,
-                    operation_summary(&feature.operation)
-                ));
-                if let Some(marker) = marker.get() {
-                    let path = controls::properties(
-                        &format!("history-path:{}", part.id),
-                        "history-path",
-                        &[],
-                        "ready",
-                    );
-                    if let Some(last) = last {
-                        let color = path
-                            .get("color")
-                            .and_then(|color| crate::ui::color(color))
-                            .unwrap_or_else(|| ui.visuals().weak_text_color());
-                        ui.painter().line_segment(
-                            [last, marker],
-                            Stroke::new(controls::number(&path, "stroke-width", 1.), color),
+                    let mut last = None;
+                    for (index, feature) in part.features.iter().enumerate() {
+                        let active = w
+                            .view
+                            .history_cursor
+                            .as_ref()
+                            .map(|cursor| cursor.definition == part.id && cursor.node == feature.id)
+                            .unwrap_or_else(|| w.view.active_node.as_ref() == Some(&feature.id));
+                        let future = w
+                            .view
+                            .history_cursor
+                            .as_ref()
+                            .filter(|cursor| cursor.definition == part.id)
+                            .and_then(|cursor| {
+                                part.features
+                                    .iter()
+                                    .position(|feature| feature.id == cursor.node)
+                            })
+                            .is_some_and(|cursor| index > cursor);
+                        let id = format!("history:{}::{}", part.id, feature.id);
+                        let classes = if future {
+                            vec!["history-row", "future"]
+                        } else {
+                            vec!["history-row"]
+                        };
+                        let props = controls::properties(
+                            &id,
+                            "history-station",
+                            &classes,
+                            if active { "selected" } else { "ready" },
                         );
+                        let marker = std::cell::Cell::new(None);
+                        let draw =
+                            |painter: &egui::Painter, center: egui::Pos2, size: f32, color| {
+                                marker.set(Some(center));
+                                painter.circle_filled(center, size * 0.23, color);
+                                if active {
+                                    painter.circle_stroke(
+                                        center,
+                                        size * 0.42,
+                                        Stroke::new(
+                                            controls::number(&props, "stroke-width", 1.2),
+                                            color,
+                                        ),
+                                    );
+                                }
+                            };
+                        let label = format!("{:02}  {}", index + 1, feature.name);
+                        let response = controls::icon_button(
+                            ui,
+                            &id,
+                            "history-station",
+                            &classes,
+                            &label,
+                            true,
+                            active,
+                            Some(&draw),
+                        )
+                        .on_hover_text(format!(
+                            "{}\n{}",
+                            feature.name,
+                            operation_summary(&feature.operation)
+                        ));
+                        if let Some(marker) = marker.get() {
+                            let path = controls::properties(
+                                &format!("history-path:{}", part.id),
+                                "history-path",
+                                &[],
+                                "ready",
+                            );
+                            if let Some(last) = last {
+                                let color = path
+                                    .get("color")
+                                    .and_then(|color| crate::ui::color(color))
+                                    .unwrap_or_else(|| ui.visuals().weak_text_color());
+                                ui.painter().line_segment(
+                                    [last, marker],
+                                    Stroke::new(controls::number(&path, "stroke-width", 1.), color),
+                                );
+                            }
+                            last = Some(marker);
+                        }
+                        if active
+                            && w.fields
+                                .get("history-focus")
+                                .is_none_or(|id| id != &feature.id)
+                        {
+                            ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
+                            w.fields.insert("history-focus".into(), feature.id.clone());
+                        }
+                        if response.clicked()
+                            && (w.tool_checkpoint.is_some()
+                                || response.double_clicked()
+                                || crate::history::inspect(w, part.reference(&feature.id)))
+                        {
+                            crate::selection_ui::feature_selected(w, &part.id, feature, &response);
+                        }
+                        response.context_menu(|ui| {
+                            let target = cad_core::selection_actions::SelectionTarget::Feature {
+                                definition: part.id.clone(),
+                                feature: feature.id.clone(),
+                            };
+                            crate::selection_ui::contents(ui, w, &target);
+                        });
                     }
-                    last = Some(marker);
-                }
-                if active
-                    && w.fields
-                        .get("history-focus")
-                        .is_none_or(|id| id != &feature.id)
-                {
-                    ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
-                    w.fields.insert("history-focus".into(), feature.id.clone());
-                }
-                if response.clicked()
-                    && (w.tool_checkpoint.is_some()
-                        || response.double_clicked()
-                        || crate::history::inspect(w, part.reference(&feature.id)))
-                {
-                    crate::selection_ui::feature_selected(w, &part.id, feature, &response);
-                }
-                response.context_menu(|ui| {
-                    let target = cad_core::selection_actions::SelectionTarget::Feature {
-                        definition: part.id.clone(),
-                        feature: feature.id.clone(),
-                    };
-                    crate::selection_ui::contents(ui, w, &target);
                 });
-            }
-        });
+        },
+    );
 }
-
 fn feature_row(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, feature: &Feature) {
     let response = controls::button(
         ui,
@@ -2215,43 +2389,67 @@ pub fn properties(ui: &mut egui::Ui, w: &mut Workspace) {
     let part = w.view.active_part.as_ref().and_then(|id| doc.parts.get(id));
     ui.strong(part.map(|p| p.name.as_str()).unwrap_or(&doc.name));
     ui.separator();
-    if let Some(feature) = part.and_then(|p| {
-        w.view
-            .active_node
-            .as_ref()
-            .and_then(|id| p.features.iter().find(|f| &f.id == id))
-    }) {
-        ui.label(&feature.name);
-        ui.small(feature.operation.name());
-        if ui
-            .add_enabled(
-                !w.fields.contains_key("appearance-tool"),
-                egui::Button::new(
-                    if matches!(
-                        feature.operation,
-                        Operation::Profile { .. } | Operation::Sketch3d { .. }
-                    ) {
-                        "Edit Sketch"
-                    } else {
-                        "Edit Feature"
-                    },
-                ),
-            )
-            .on_disabled_hover_text("Apply or cancel appearance changes before editing a feature")
-            .clicked()
-        {
-            ui::feature_dialog(w, Some(feature.clone()));
-        }
-    } else {
-        ui.label("Select a plane or model feature.");
-        ui.small("Double-click a sketch or feature in the tree to edit it.");
-    }
+    controls::inspector_section(
+        ui,
+        controls::InspectorSection {
+            id: "inspector/selection",
+            role: "inspector-section",
+            classes: &["selection-summary"],
+            label: "Selected item",
+            state: "ready",
+            collapse: None,
+            open: None,
+        },
+        |ui| {
+            if let Some(feature) = part.and_then(|p| {
+                w.view
+                    .active_node
+                    .as_ref()
+                    .and_then(|id| p.features.iter().find(|f| &f.id == id))
+            }) {
+                ui.label(&feature.name);
+                ui.small(feature.operation.name());
+                if ui
+                    .add_enabled(
+                        !w.fields.contains_key("appearance-tool"),
+                        egui::Button::new(
+                            if matches!(
+                                feature.operation,
+                                Operation::Profile { .. } | Operation::Sketch3d { .. }
+                            ) {
+                                "Edit Sketch"
+                            } else {
+                                "Edit Feature"
+                            },
+                        ),
+                    )
+                    .on_disabled_hover_text(
+                        "Apply or cancel appearance changes before editing a feature",
+                    )
+                    .clicked()
+                {
+                    ui::feature_dialog(w, Some(feature.clone()));
+                }
+            } else {
+                ui.label("Select a plane or model feature.");
+                ui.small("Double-click a sketch or feature in the tree to edit it.");
+            }
+        },
+    );
     let open_parameters = w.fields.remove("graph-parameters").is_some();
-    egui::CollapsingHeader::new("Named Parameters")
-        .open(open_parameters.then_some(true))
-        .show(ui, |ui| {
-            crate::ui::parameters(ui, w);
-        });
+    controls::inspector_section(
+        ui,
+        controls::InspectorSection {
+            id: "inspector/parameters",
+            role: "inspector-section",
+            classes: &["parameters", "secondary"],
+            label: "Named parameters",
+            state: "ready",
+            collapse: Some(false),
+            open: open_parameters.then_some(true),
+        },
+        |ui| crate::ui::parameters(ui, w),
+    );
 }
 pub fn confirmation_label(w: &Workspace) -> String {
     if crate::document_identity_ui::active(w) {

@@ -482,3 +482,45 @@ The `tcad.presentation.structural-member` v1 descriptors expose layout sketch, e
 ## Spatial sketch presentation
 
 The `tcad.presentation.sketch3d` v1 descriptors publish groups, fields, notes and actions with document/owner/feature/editor/source identity. Roles beginning `sketch3d-` are individually styleable; the `sketch3d` value adapter and `sketch3d.action` dispatch edit the same native draft as the docked `sketch3d-editor` view. Drawing plane, grid, input coordinates, entity selection, dimensions, relations and diagnostics remain distinct semantic information. Viewport point/member/axis handles use disposable projection of f64 source and worker evaluation; camera or renderer objects are not source authority. See [3D sketch editing](sketch3d.md).
+
+## Inspector group hierarchy
+
+The default tree and property manager separate related controls with full-width
+section headings and a thin divider. The compact orange theme uses flat, shaded
+headers; Nocturne gives the same sections rounded purple headers. Section bodies
+remain unboxed, so the grouping does not introduce repeated cards or larger
+modeling controls. Sections can collapse independently; this is disposable
+presentation state and never changes the model or its draft.
+
+Existing groups retain their semantic IDs, roles and commands. The shared native
+renderer adds the `inspector-section` class, a child
+`inspector-section-heading` at `<group-id>/heading`, and a child
+`inspector-section-divider` at `<group-id>/divider`. The header and divider are
+independent style targets. Existing `.modeling-group`,
+`operation-editor-group`, `structural-member-group`, `sketch3d-group`,
+`drawing-editor-group` and the tree's `feature-tree-group` consume the same
+hierarchy styles. User layouts can continue to move or duplicate the original
+groups and their bound controls.
+
+Both bundled themes expose reusable `--section-*` variables for body and header
+backgrounds, border color, padding, gap, header height, corner radius, and divider
+width/spacing. These are ordinary theme variables, not reserved engine options.
+Individual selectors can override the variables or hide either decoration:
+
+```css
+:root {
+  --section-heading-background: #E5E2DA;
+  --section-border: #B5B3AE;
+  --section-heading-height: 24px;
+  --section-gap: 4px;
+  --section-divider-spacing: 6px;
+}
+[role=inspector-section-heading] { border-radius: 0px; }
+[role=inspector-section-divider] { stroke-width: 1px; }
+[role=sketch3d-group] [role=inspector-section-heading] { color: #0087BE; }
+```
+
+Heading styles control its background, text, padding, size, border and shape.
+Divider styles use `color`, `stroke-width` and `height`; `display: none` or
+`visibility: hidden` suppresses a decoration. Container paint stays on the
+section frame and does not recolor the input fields or buttons it contains.

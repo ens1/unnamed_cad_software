@@ -438,6 +438,8 @@ fn metadata(w: &Workspace, owner: &NodeRef, group: &str) -> Value {
         "editor":w.fields.get("feature-editor-generation"),"group":group,"classes":["modeling-field",group]})
 }
 fn group(w: &Workspace, owner: &NodeRef, key: &str, label: &str) -> SemanticElement {
+    let mut data = metadata(w, owner, key);
+    data["classes"] = json!(["modeling-field", "modeling-group", "inspector-section", key]);
     SemanticElement {
         id: format!("structural-member:{}/group/{key}", owner.node),
         role: "structural-member-group".into(),
@@ -446,7 +448,7 @@ fn group(w: &Workspace, owner: &NodeRef, key: &str, label: &str) -> SemanticElem
         state: "draft".into(),
         commands: vec![],
         relationships: vec![owner.node.clone()],
-        data: metadata(w, owner, key),
+        data,
     }
 }
 fn choice(label: impl Into<String>, value: impl Serialize) -> Value {
@@ -1610,54 +1612,50 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
         }
     }
     for (group, children) in groups {
-        let props = controls::properties(&group.id, &group.role, &["modeling-group"], "draft");
-        if props.get("display").is_some_and(|v| v == "none")
-            || props.get("visibility").is_some_and(|v| v == "hidden")
-        {
-            continue;
-        }
+        let classes = group
+            .data
+            .get("classes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
         let open = group.data["group"] != "joints";
-        let target = controls::current_target().map(|parent| {
-            parent.child(&group.id, &group.role, &["modeling-group".into()], "draft")
-        });
-        let content = |ui: &mut egui::Ui| {
-            ui.scope(|ui| {
-                controls::apply_properties(ui, &props);
-                controls::frame_from_properties(ui, &props).show(ui, |ui| {
-                    egui::CollapsingHeader::new(&group.label)
-                        .id_salt(&group.id)
-                        .default_open(open)
-                        .show(ui, |ui| {
-                            let mut children = children.into_iter().peekable();
-                            while let Some(element) = children.next() {
-                                if element.role.ends_with("-action") {
-                                    let mut row = vec![element];
-                                    while children
-                                        .peek()
-                                        .is_some_and(|next| next.role.ends_with("-action"))
-                                    {
-                                        if let Some(next) = children.next() {
-                                            row.push(next);
-                                        }
-                                    }
-                                    ui.horizontal_wrapped(|ui| {
-                                        for element in row {
-                                            render_control(ui, w, &element);
-                                        }
-                                    });
-                                } else {
-                                    render_control(ui, w, &element);
-                                }
+        controls::inspector_section(
+            ui,
+            controls::InspectorSection {
+                id: &group.id,
+                role: &group.role,
+                classes: &classes,
+                label: &group.label,
+                state: "draft",
+                collapse: Some(open),
+                open: None,
+            },
+            |ui| {
+                let mut children = children.into_iter().peekable();
+                while let Some(element) = children.next() {
+                    if element.role.ends_with("-action") {
+                        let mut row = vec![element];
+                        while children
+                            .peek()
+                            .is_some_and(|next| next.role.ends_with("-action"))
+                        {
+                            if let Some(next) = children.next() {
+                                row.push(next);
+                            }
+                        }
+                        ui.horizontal_wrapped(|ui| {
+                            for element in row {
+                                render_control(ui, w, &element);
                             }
                         });
-                });
-            });
-        };
-        if let Some(target) = target {
-            controls::with_target(target, ui, content);
-        } else {
-            content(ui);
-        }
+                    } else {
+                        render_control(ui, w, &element);
+                    }
+                }
+            },
+        );
     }
     true
 }

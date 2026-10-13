@@ -3379,7 +3379,19 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "drawings" | "materials" | "standard-parts" | "camera-views" | "commands"
         )
     {
-        crate::cad_ui::confirmation(ui, w);
+        crate::presentation_controls::inspector_section(
+            ui,
+            crate::presentation_controls::InspectorSection {
+                id: "inspector/confirmation",
+                role: "confirmation-group",
+                classes: &["pending-changes"],
+                label: "Pending changes",
+                state: "draft",
+                collapse: None,
+                open: None,
+            },
+            |ui| crate::cad_ui::confirmation(ui, w),
+        );
         if w.dialog.is_none() {
             return;
         }
@@ -3390,13 +3402,13 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         ui.separator();
     }
     ui.horizontal(|ui| {
-        ui.strong(match dialog.as_str() {
+        let title = match dialog.as_str() {
+            "feature" => w.dialog_title.as_str(),
             "reference-repair" => "Repair References",
             "feature-order" => "Feature Order",
             "assembly-motion" => "Move / Rotate Component",
             "component-insert" => "Insert Existing Component",
             "selection" => "Selection Actions",
-            "feature" => "Feature",
             "sketch" => "Sketch on model",
             "source" => "Source definitions",
             "presentation" => "Layout and theme",
@@ -3420,7 +3432,15 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "tolerance-stacks" => "Tolerance Stacks",
             "properties" => "Model Properties",
             _ => "Command search",
-        });
+        };
+        crate::presentation_controls::label(
+            ui,
+            "inspector/title",
+            "inspector-title",
+            &[],
+            title,
+            "ready",
+        );
         if !matches!(
             dialog.as_str(),
             "feature"
@@ -3450,6 +3470,21 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         }
     });
+    if let Some(part) = w
+        .view
+        .active_part
+        .as_ref()
+        .and_then(|id| w.session.visible().parts.get(id))
+    {
+        crate::presentation_controls::label(
+            ui,
+            "inspector/context",
+            "inspector-context",
+            &[],
+            &part.name,
+            "ready",
+        );
+    }
     ui.separator();
     egui::ScrollArea::vertical()
         .id_salt("workspace-editor")
