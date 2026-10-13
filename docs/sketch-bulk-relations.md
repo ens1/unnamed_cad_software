@@ -62,6 +62,29 @@ contact or reflection would otherwise be ambiguous. Smart Dimension retains its
 deliberate one/two-reference workflow; selecting a larger group does not create
 an inferred dimension family.
 
+## Tangent selection
+
+Planar **Tangent** stays visible in the property manager and sketch selection
+menu. It is disabled with an actionable reason until exactly two compatible
+references are selected. Cmd-click the two curves, or use their endpoints or
+circle/ellipse centers when curve ownership is unambiguous.
+
+A selected endpoint fixes the native tangent contact to that end of its curve;
+the other curve can retain a free bounded contact parameter. Center picks select
+their owning circular/elliptical curve without making the center a contact point.
+Shared points with several possible curve pairs, standalone points, arc
+through-points and interior spline controls require the actual curves to be
+selected. Picking two references owned only by one curve also receives a clear
+diagnostic.
+
+Whole-member generic tangency permits free contact locations. An unambiguous
+authored endpoint join fixes contact there; coordinate proximity alone does not
+create a join. Construction curves participate normally. Universe-axis tangency
+remains limited to supporting circle/arc carriers; fixed endpoint contact needs
+two actual sketch curves, so a construction line supplies an explicit axis-like
+carrier. Internal Tangent and Curvature Continuous retain two direct member
+selections. The existing native tangent equations and validation remain in use.
+
 ## Presentation and validation
 
 The existing planar `sketch.relation.*` and spatial `sketch3d.action` commands

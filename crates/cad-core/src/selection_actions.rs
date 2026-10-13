@@ -894,13 +894,15 @@ pub fn sketch_project(
         out.push(descriptor(target,"sketch.toggle-dimension-mode","Toggle Driving / Reference","Dimensions",None));
     }
     for (kind, label) in a::RELATIONS {
-        if a::relation(sketch, entities, kind).is_ok() {
+        let availability = a::relation(sketch, entities, kind);
+        if availability.is_ok() || *kind == "tangent" {
+            let reason = availability.as_ref().err().map(ToString::to_string);
             let mut action = descriptor(
                 target,
                 &format!("sketch.relation.{kind}"),
                 label,
                 "Relations",
-                None,
+                reason.as_deref(),
             );
             action.data["description"] = serde_json::json!(a::relation_description(kind));
             action.data["selection_count"] = serde_json::json!(entities.len());

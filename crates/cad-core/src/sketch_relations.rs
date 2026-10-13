@@ -789,11 +789,10 @@ pub fn initial_contact(sketch: &Sketch, keys: &[Id], curvature: bool) -> Result<
         return Err(invalid("Contact requires two curve members"));
     }
     let ends = |key: &str| -> Result<Option<[Id; 2]>> {
-        let curve = &sketch
-            .members
-            .get(key)
-            .ok_or_else(|| invalid("Contact member missing"))?
-            .curve;
+        // Planning can receive raw source or an already derived sketch. The
+        // modifier-owned endpoint identities must be the same in either case;
+        // seed_contact and solver residuals evaluate the derived member curve.
+        let curve = sketch_edit::effective_curve(sketch, key)?;
         if matches!(
             curve,
             SketchCurve::Circle { .. } | SketchCurve::Ellipse { .. }
@@ -810,12 +809,104 @@ pub fn initial_contact(sketch: &Sketch, keys: &[Id], curvature: bool) -> Result<
     let b = ends(&keys[1])?;
     let mut contact = Contact {
         parameters: [0., 0.],
-        free: [a.is_none(), b.is_none()],
+        // Whole-curve tangency does not imply an endpoint pick. In particular,
+        // an open curve paired with a closed curve must be free to meet it
+        // within its bounded domain. Curvature keeps its endpoint intent.
+        free: if curvature {
+            [a.is_none(), b.is_none()]
+        } else {
+            [true; 2]
+        },
     };
     if let (Some(a), Some(b)) = (&a, &b) {
+        let inactive = crate::sketch_transform::inactive_entities(sketch);
+        let point_key = |key: &str| -> Option<Id> {
+            if sketch.points.contains_key(key) || key == sketch_actions::ORIGIN {
+                Some(key.into())
+            } else {
+                match sketch.members.get(key).map(|member| &member.curve) {
+                    Some(
+                        SketchCurve::Circle { center, .. } | SketchCurve::Ellipse { center, .. },
+                    ) => Some(center.clone()),
+                    _ => None,
+                }
+            }
+        };
+        // Coincidence is source intent even while an edited draft is not yet
+        // solved. Avoid the geometry-validating topology helper here: a near
+        // endpoint is only a starting estimate, never an authored connection.
+        let mut joins = BTreeMap::<Id, Vec<Id>>::new();
+        for relation in sketch.constraints.iter().filter(|relation| {
+            !relation.driven
+                && relation.entities.len() == 2
+                && !relation.entities.iter().any(|key| inactive.contains(key))
+        }) {
+            let endpoint = |key: &str, parameter: f64, free: bool| -> Option<Id> {
+                if free || (parameter != 0. && parameter != 1.) {
+                    return None;
+                }
+                ends(key)
+                    .ok()
+                    .flatten()
+                    .map(|ends| ends[parameter as usize].clone())
+            };
+            let pair = if relation.kind == "coincident" {
+                Some((
+                    point_key(&relation.entities[0]),
+                    point_key(&relation.entities[1]),
+                ))
+            } else if let Some(contact) = &relation.contact {
+                match relation.kind.as_str() {
+                    "point_on_curve" => Some((
+                        point_key(&relation.entities[0]),
+                        endpoint(
+                            &relation.entities[1],
+                            contact.parameters[1],
+                            contact.free[1],
+                        ),
+                    )),
+                    "tangent" | "curvature" => Some((
+                        endpoint(
+                            &relation.entities[0],
+                            contact.parameters[0],
+                            contact.free[0],
+                        ),
+                        endpoint(
+                            &relation.entities[1],
+                            contact.parameters[1],
+                            contact.free[1],
+                        ),
+                    )),
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            if let Some((Some(first), Some(second))) = pair {
+                joins.entry(first.clone()).or_default().push(second.clone());
+                joins.entry(second).or_default().push(first);
+            }
+        }
+        let joined = |first: &str, second: &str| {
+            let mut seen = BTreeSet::new();
+            let mut pending = vec![first.to_string()];
+            while let Some(key) = pending.pop() {
+                if key == second {
+                    return true;
+                }
+                if seen.insert(key.clone()) {
+                    pending.extend(joins.get(&key).into_iter().flatten().cloned());
+                }
+            }
+            false
+        };
         let mut best = None;
+        let mut authored = Vec::new();
         for (i, a) in a.iter().enumerate() {
             for (j, b) in b.iter().enumerate() {
+                if joined(a, b) {
+                    authored.push((i, j));
+                }
                 let p = point(sketch, a)?;
                 let q = point(sketch, b)?;
                 let distance = (p[0] - q[0]).hypot(p[1] - q[1]);
@@ -824,9 +915,18 @@ pub fn initial_contact(sketch: &Sketch, keys: &[Id], curvature: bool) -> Result<
                 }
             }
         }
-        let (distance, i, j) = best.unwrap();
+        let (_, i, j) = best.unwrap();
         contact.parameters = [i as f64, j as f64];
-        contact.free = [!curvature && distance > 1e-7; 2];
+        if curvature {
+            contact.free = [false; 2];
+        } else if let [(i, j)] = authored.as_slice() {
+            contact.parameters = [*i as f64, *j as f64];
+            contact.free = [false; 2];
+        } else if !authored.is_empty() {
+            return Err(invalid(
+                "Tangent contact is ambiguous because the curves share several joined endpoints; select their contact endpoints directly",
+            ));
+        }
     }
     Ok(contact)
 }

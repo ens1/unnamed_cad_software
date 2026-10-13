@@ -113,6 +113,12 @@ Reference buttons also show their selected state. Shared buttons publish
 transient `hover`, `active` / `pressed`, and `focus` states for pointer and
 keyboard feedback. Reference rows wrap with the available panel width.
 
+The planar Tangent action remains published and visible when its selection is
+incomplete or incompatible. Its disabled value/metadata explains the required
+selection, including ambiguous point ownership. Endpoint/center promotion and
+contact intent belong to the shared sketch planner rather than a widget-specific
+selection rule. See [Tangent selection](sketch-bulk-relations.md#tangent-selection).
+
 Saved complete theme packages retain their authored styling. Selecting the
 bundled Classic or Nocturne entry in Settings loads the current bundled rules;
 user resources are not overwritten to apply a visual update.

@@ -62,6 +62,12 @@ size groups retain their reference and parameter ownership. Explicit contact and
 reflection relations still require their applicable pairs/triples. The coverage
 labels below remain partial pending broader geometry and interactive acceptance.
 
+Planar Tangent discovery also retains the action for incompatible/incomplete
+selections with a disabled reason. Unambiguous endpoint/center picks resolve to
+their native curve owners, and explicit endpoints pin contact there. Generic
+whole-curve contacts remain free unless an authored endpoint join fixes them.
+See [Tangent selection](sketch-bulk-relations.md#tangent-selection).
+
 TCAD evidence: [solver](../crates/cad-core/src/solver.rs), [expression evaluator](../crates/cad-core/src/expression.rs), [sketch actions](../crates/cad-core/src/sketch_actions.rs), and [implementation limits](../README.md#implementation-limits). The detailed relation/dimension comparison remains an audit item; include curve-specific relation variants rather than treating one tangent implementation as the whole family.
 
 | ID | Required capability | Current coverage and gaps |

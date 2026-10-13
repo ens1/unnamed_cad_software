@@ -764,16 +764,18 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
         });
     }
     for (kind, label) in a::RELATIONS {
-        if a::relation(&source, &s.selection, kind).is_ok() {
+        let availability = a::relation(&source, &s.selection, kind);
+        if availability.is_ok() || *kind == "tangent" {
+            let reason = availability.as_ref().err().map(ToString::to_string);
             elements.push(presentation::SemanticElement {
                 id: format!("{}::relation-action.{kind}", s.sketch_id),
                 role: "sketch-relation-action".into(),
                 label: (*label).into(),
-                value: None,
-                state: "ready".into(),
+                value: reason.clone(),
+                state: if availability.is_ok() { "ready" } else { "disabled" }.into(),
                 commands: vec![format!("sketch.relation.{kind}")],
                 relationships: vec![s.sketch_id.clone()],
-                data: serde_json::json!({"sketch":s.sketch_id,"selection_count":s.selection.len(),"description":a::relation_description(kind),"classes":["modeling-action","compact"],"accessibility_label":label}),
+                data: serde_json::json!({"sketch":s.sketch_id,"selection_count":s.selection.len(),"description":a::relation_description(kind),"disabled_reason":reason,"classes":["modeling-action","compact"],"accessibility_label":label}),
             });
         }
     }
@@ -1746,26 +1748,30 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     }
                 }
             });
-            ui.horizontal_wrapped(|ui| {
-                for (kind, label) in a::RELATIONS {
-                    if a::relation(&before, &s.selection, kind).is_ok()
-                        && controls::button(
-                            ui,
-                            &format!("{}::relation-action.{kind}", s.sketch_id),
-                            "sketch-relation-action",
-                            &["modeling-action", "compact"],
-                            label,
-                            true,
-                            false,
-                        )
-                        .on_hover_text(a::relation_description(kind))
-                        .clicked()
+        }
+        ui.horizontal_wrapped(|ui| {
+            for (kind, label) in a::RELATIONS {
+                let availability = a::relation(&before, &s.selection, kind);
+                if availability.is_ok() || *kind == "tangent" {
+                    let reason = availability.as_ref().err().map(ToString::to_string);
+                    if controls::button(
+                        ui,
+                        &format!("{}::relation-action.{kind}", s.sketch_id),
+                        "sketch-relation-action",
+                        &["modeling-action", "compact"],
+                        label,
+                        availability.is_ok(),
+                        false,
+                    )
+                    .on_hover_text(a::relation_description(kind))
+                    .on_disabled_hover_text(reason.as_deref().unwrap_or_default())
+                    .clicked()
                     {
                         relation_command = Some(format!("sketch.relation.{kind}"));
                     }
                 }
-            });
-        }
+            }
+        });
         if text_edit_started {
             s.history.push(before);
         }

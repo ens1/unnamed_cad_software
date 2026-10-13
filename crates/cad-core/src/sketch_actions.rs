@@ -454,8 +454,14 @@ pub fn relation_description(kind: &str) -> &'static str {
             "Place every selected point or member anchor on the Y axis; straight members also become vertical."
         }
         "fix" => "Fix the current position of every point in the selected points and members.",
-        "tangent" | "tangent_internal" | "curvature" => {
-            "Select exactly two members so the curve contact is unambiguous."
+        "tangent" => {
+            "Cmd-click two curves, unambiguous endpoints, or circular/elliptical centers. Selected endpoints remain the tangent contact; ambiguous shared points need the curves selected directly."
+        }
+        "tangent_internal" => {
+            "Select exactly two circle or arc members for internal tangency. Select the curves directly rather than their endpoints or centers."
+        }
+        "curvature" => {
+            "Select exactly two curve members for curvature-continuous contact. Select the curves directly rather than their control points."
         }
         "symmetric_origin" => "Select exactly two points to reflect them through the origin.",
         "symmetric_axis" => {
@@ -601,7 +607,8 @@ pub fn relation(
             }
             Ok(batch)
         }
-        "tangent" | "tangent_internal" | "curvature" if selection.len() != 2 => {
+        "tangent" => tangent_relation(sketch, selection),
+        "tangent_internal" | "curvature" if selection.len() != 2 => {
             Err(CadError::Invalid(format!(
                 "{} needs exactly two selected members so the contact is unambiguous",
                 label(kind)
@@ -609,6 +616,149 @@ pub fn relation(
         }
         _ => relation_single_or_pair(sketch, selection, kind),
     }
+}
+
+#[derive(Clone)]
+struct TangentPick {
+    entity: SketchEntity,
+    endpoint: Option<u8>,
+}
+
+/// Promote a picked point using authored curve ownership, never proximity to a
+/// displayed polyline. Interior controls are not a curve's contact endpoints.
+fn tangent_picks(sketch: &Sketch, entity: &SketchEntity) -> Result<Vec<TangentPick>> {
+    let SketchEntity::Point { point } = entity else {
+        return match entity {
+            SketchEntity::Member { member } if sketch.members.contains_key(member) => {
+                Ok(vec![TangentPick {
+                    entity: entity.clone(),
+                    endpoint: None,
+                }])
+            }
+            SketchEntity::XAxis | SketchEntity::YAxis => Ok(vec![TangentPick {
+                entity: entity.clone(),
+                endpoint: None,
+            }]),
+            _ => Err(CadError::Invalid(
+                "Tangent needs two sketch curves, endpoints, or curve centers; select curves directly and Cmd-click to add the second curve".into(),
+            )),
+        };
+    };
+    let inactive = crate::sketch_transform::inactive_entities(sketch);
+    let mut picks = Vec::new();
+    for member in sketch
+        .members
+        .keys()
+        .filter(|member| !inactive.contains(*member))
+    {
+        let curve = crate::sketch_edit::effective_curve(sketch, member)?;
+        let owner = SketchEntity::Member {
+            member: member.clone(),
+        };
+        match curve {
+            SketchCurve::Circle { center, .. } | SketchCurve::Ellipse { center, .. }
+                if &center == point =>
+            {
+                picks.push(TangentPick {
+                    entity: owner,
+                    endpoint: None,
+                });
+            }
+            SketchCurve::Circle { .. } | SketchCurve::Ellipse { .. } => {}
+            _ => {
+                let controls = curve.points();
+                if controls.len() >= 2 {
+                    for (endpoint, control) in [controls[0], *controls.last().unwrap()]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        if control == point {
+                            picks.push(TangentPick {
+                                entity: owner.clone(),
+                                endpoint: Some(endpoint as u8),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if picks.is_empty() {
+        Err(CadError::Invalid(
+            "Tangent needs a curve endpoint or circle/ellipse center; interior controls and standalone points do not identify a contact. Select curves directly and Cmd-click to add the second curve".into(),
+        ))
+    } else {
+        Ok(picks)
+    }
+}
+
+fn tangent_relation(sketch: &Sketch, selection: &[SketchEntity]) -> Result<Vec<SketchConstraint>> {
+    if selection.len() != 2 {
+        return Err(CadError::Invalid(
+            "Tangent needs exactly two selected curves, endpoints, or curve centers; Cmd-click to add or remove selections".into(),
+        ));
+    }
+    let first = tangent_picks(sketch, &selection[0])?;
+    let second = tangent_picks(sketch, &selection[1])?;
+    let mut pair: Option<[TangentPick; 2]> = None;
+    for first in &first {
+        for second in &second {
+            if first.entity.key() == second.entity.key() {
+                continue;
+            }
+            let same =
+                |a: &TangentPick, b: &TangentPick| a.entity == b.entity && a.endpoint == b.endpoint;
+            if pair.as_ref().is_some_and(|pair| {
+                (same(&pair[0], first) && same(&pair[1], second))
+                    || (same(&pair[0], second) && same(&pair[1], first))
+            }) {
+                continue;
+            }
+            if pair.is_some() {
+                return Err(CadError::Invalid(
+                    "Tangent contact is ambiguous because a selected point belongs to several curves. Select curves directly and Cmd-click to add the second curve".into(),
+                ));
+            }
+            pair = Some([first.clone(), second.clone()]);
+        }
+    }
+    let Some(pair) = pair else {
+        return Err(CadError::Invalid(
+            "Tangent needs two distinct curves; both selections belong to the same curve. Select curves directly and Cmd-click to add the second curve".into(),
+        ));
+    };
+    let entities = [pair[0].entity.clone(), pair[1].entity.clone()];
+    if pair.iter().any(|pick| pick.endpoint.is_some()) {
+        if entities
+            .iter()
+            .any(|entity| !matches!(entity, SketchEntity::Member { .. }))
+        {
+            return Err(CadError::Invalid(
+                "Endpoint tangency needs two sketch curves. Use a construction line instead of a universe axis, or select curves directly for whole-curve tangency".into(),
+            ));
+        }
+        let keys = entities
+            .iter()
+            .map(|entity| entity.key().into())
+            .collect::<Vec<_>>();
+        // Explicit endpoint picks define contact independently of the planner's
+        // whole-member nearest/joined endpoint estimate. The other curve remains
+        // free unless its endpoint was explicitly picked as well.
+        let mut contact = crate::sketch_relations::Contact {
+            parameters: [0.; 2],
+            free: [true; 2],
+        };
+        for (index, pick) in pair.iter().enumerate() {
+            if let Some(endpoint) = pick.endpoint {
+                contact.parameters[index] = endpoint as f64;
+                contact.free[index] = false;
+            }
+        }
+        let mut relation = constraint("tangent", keys, 1.0.into());
+        relation.contact = Some(contact);
+        return Ok(vec![relation]);
+    }
+    relation_single_or_pair(sketch, &entities, "tangent")
 }
 
 fn reference_fan(
@@ -1066,8 +1216,21 @@ fn relation_single_or_pair(
                     out.push(c);
                     return Ok(out);
                 }
+                if kind == "tangent"
+                    && selection
+                        .iter()
+                        .any(|entity| matches!(entity, SketchEntity::XAxis | SketchEntity::YAxis))
+                {
+                    return Err(CadError::Invalid(
+                        "Tangent with a universe axis needs a circle or arc. Use a straight construction member for tangency with another curve type".into(),
+                    ));
+                }
                 return Err(CadError::Invalid(
-                    "Select two sketch curves for tangent contact".into(),
+                    if kind == "tangent_internal" {
+                        "Internal Tangent needs two circle or arc members; select curves directly rather than endpoints or centers"
+                    } else {
+                        "Tangent needs two sketch curves; select curves directly and Cmd-click to add the second curve"
+                    }.into(),
                 ));
             }
             if kind == "tangent_internal" && !(circle(first) && circle(&keys[1])) {
@@ -1110,7 +1273,9 @@ fn relation_single_or_pair(
         }
         "curvature" => {
             if keys.len() != 2 || !keys.iter().all(|key| sketch.members.contains_key(key)) {
-                return Err(invalid());
+                return Err(CadError::Invalid(
+                    "Curvature Continuous needs two curve members; select curves directly rather than endpoints or control points".into(),
+                ));
             }
             let contact = crate::sketch_relations::initial_contact(sketch, &keys, true)?;
             let mut c = constraint(kind, keys, 1.0.into());
