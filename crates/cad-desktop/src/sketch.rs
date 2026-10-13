@@ -75,6 +75,7 @@ pub struct EditingSketch {
     pub feedback: crate::sketch_relations_ui::Feedback,
     pub members: BTreeMap<Id, SketchMember>,
     pub chain: Vec<Id>,
+    pending_chain: Option<ChainPlacement>,
     pub clicks: Vec<[f64; 2]>,
     /// A multi-click tool only merges the endpoints explicitly snapped on that click.
     pub click_join: Vec<bool>,
@@ -105,6 +106,14 @@ pub struct EditingSketch {
     pub dimension_model: Option<viewport::Selection>,
     pub last_valid: Option<Sketch>,
     pub drag: Option<crate::sketch_handles::DragGesture>,
+}
+/// A chain owns only the point seeds created before its first completed
+/// member. These are transient authoring inputs, not standalone sketch points.
+struct ChainPlacement {
+    source: Sketch,
+    history_len: usize,
+    closed: bool,
+    circle: Option<Expr>,
 }
 fn identity() -> [[f64; 4]; 4] {
     std::array::from_fn(|i| std::array::from_fn(|j| if i == j { 1. } else { 0. }))
@@ -459,6 +468,7 @@ pub fn begin(w: &mut Workspace, existing: Option<Feature>) {
         feedback: crate::sketch_relations_ui::Feedback::default(),
         members: BTreeMap::new(),
         chain: vec![],
+        pending_chain: None,
         clicks: vec![],
         click_join: vec![],
         construction: false,
@@ -757,6 +767,7 @@ pub fn set_tool(w: &mut Workspace, tool: Tool) {
         return;
     }
     crate::sketch_handles::end(w);
+    cancel_pending_chain(w);
     w.context_selection = None;
     w.fields.remove("smart-dimension-mode");
     if let Some(s) = &mut w.sketch {
@@ -815,6 +826,7 @@ pub(crate) fn restore(s: &mut EditingSketch, source: Sketch) {
     s.constraints = source.constraints;
     s.closed = !s.members.is_empty();
     s.chain.clear();
+    s.pending_chain = None;
     s.clicks.clear();
     s.click_join.clear();
     s.error = None;
@@ -836,6 +848,9 @@ pub fn undo_point(w: &mut Workspace) {
         crate::sketch_edit_ui::cancel(w);
         return;
     }
+    if cancel_pending_chain(w) {
+        return;
+    }
     if let Some(s) = &mut w.sketch
         && let Some(previous) = s.history.pop()
     {
@@ -845,6 +860,9 @@ pub fn undo_point(w: &mut Workspace) {
 }
 pub fn escape(w: &mut Workspace) -> bool {
     if crate::sketch_handles::cancel(w) {
+        return true;
+    }
+    if cancel_pending_chain(w) {
         return true;
     }
     if w.sketch.as_ref().is_some_and(|s| s.edit.is_some()) {
@@ -874,6 +892,43 @@ pub fn escape(w: &mut Workspace) -> bool {
         return true;
     }
     false
+}
+pub(crate) fn cancel_pending_chain(w: &mut Workspace) -> bool {
+    let Some(checkpoint) = w.sketch.as_mut().and_then(|s| s.pending_chain.take()) else {
+        return false;
+    };
+    if let Some(s) = &mut w.sketch {
+        let selection = s.selection.clone();
+        restore(s, checkpoint.source);
+        s.history.truncate(checkpoint.history_len);
+        s.closed = checkpoint.closed;
+        s.circle = checkpoint.circle;
+        s.tool = Tool::Select;
+        s.anchor = None;
+        s.selected = None;
+        s.selected_member = None;
+        s.selection = selection
+            .into_iter()
+            .filter(|entity| selection_is_current(s, entity))
+            .collect();
+    }
+    solve(w);
+    w.status = "Unfinished chain canceled; completed sketch geometry retained".into();
+    true
+}
+fn selection_is_current(
+    s: &EditingSketch,
+    entity: &cad_core::sketch_actions::SketchEntity,
+) -> bool {
+    use cad_core::sketch_actions::SketchEntity;
+    match entity {
+        SketchEntity::Point { point } => s.keys.contains(point),
+        SketchEntity::Member { member } => s.members.contains_key(member),
+        SketchEntity::Constraint { constraint } => {
+            s.constraints.iter().any(|item| &item.id == constraint)
+        }
+        SketchEntity::Origin | SketchEntity::XAxis | SketchEntity::YAxis => true,
+    }
 }
 pub fn plane(name: &str) -> Plane {
     match name {
@@ -1031,9 +1086,17 @@ fn line(s: &mut EditingSketch, a: Id, b: Id) {
 }
 fn finish_spline(w: &mut Workspace) {
     let Some(s) = &w.sketch else { return };
+    if s.chain.len() < 2 {
+        w.status = "A spline needs at least two controls before Finish Spline".into();
+        return;
+    }
     let mut source = sketch_definition(s);
     let owner = s.definition.clone();
-    let before = source.clone();
+    let before = s
+        .pending_chain
+        .as_ref()
+        .map_or_else(|| source.clone(), |pending| pending.source.clone());
+    let history_len = s.pending_chain.as_ref().map(|pending| pending.history_len);
     let selected = if s.tool == Tool::Spline {
         let member = id();
         source.members.insert(
@@ -1063,6 +1126,9 @@ fn finish_spline(w: &mut Workspace) {
     match selected {
         Ok(member) => {
             if let Some(s) = &mut w.sketch {
+                if let Some(history_len) = history_len {
+                    s.history.truncate(history_len);
+                }
                 s.history.push(before);
                 restore(s, source);
                 s.tool = Tool::Select;
@@ -1454,6 +1520,12 @@ pub fn finish(w: &mut Workspace) -> bool {
         return false;
     }
     crate::sketch_handles::end(w);
+    if w.sketch
+        .as_ref()
+        .is_some_and(|s| s.tool == Tool::Polyline && s.pending_chain.is_some())
+    {
+        cancel_pending_chain(w);
+    }
     solve(w);
     let Some(s) = &w.sketch else { return false };
     if !s.closed
@@ -2046,7 +2118,8 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         crate::sketch_ui::select(
             w,
             Some(entity),
-            continue_dimension || ui.input(|i| i.modifiers.shift || i.modifiers.command),
+            continue_dimension
+                || ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl),
         );
         if w.fields.contains_key("smart-dimension-mode") {
             crate::sketch_ui::selection_changed(w);
@@ -2118,6 +2191,33 @@ fn polyline_distance(
             Some(pointer.distance(a + edge * t))
         })
         .fold(f32::INFINITY, f32::min)
+}
+fn universe_pick(
+    w: &Workspace,
+    rect: egui::Rect,
+    pointer: egui::Pos2,
+    frame: (&Plane, &[[f64; 4]; 4]),
+    extent: f64,
+) -> Option<cad_core::sketch_actions::SketchEntity> {
+    use cad_core::sketch_actions::SketchEntity;
+    let project = |point| viewport::project(w, rect, world(frame.0, frame.1, point));
+    if project([0.; 2]).is_some_and(|position| position.distance(pointer) < 9.) {
+        return Some(SketchEntity::Origin);
+    }
+    let distance = |a, b| -> Option<f32> {
+        let a = project(a)?;
+        let b = project(b)?;
+        let edge = b - a;
+        let t = ((pointer - a).dot(edge) / edge.length_sq().max(1e-8)).clamp(0., 1.);
+        Some(pointer.distance(a + edge * t))
+    };
+    if distance([-extent, 0.], [extent, 0.]).is_some_and(|distance| distance < 5.) {
+        Some(SketchEntity::XAxis)
+    } else if distance([0., -extent], [0., extent]).is_some_and(|distance| distance < 5.) {
+        Some(SketchEntity::YAxis)
+    } else {
+        None
+    }
 }
 fn circle_points(center: [f64; 2], radius: f64) -> Vec<[f64; 2]> {
     (0..=96)
@@ -3008,6 +3108,71 @@ pub fn overlay(
                 .line_segment([a, b], Stroke::new(3., accent));
         }
     }
+    let command_pick = response.clicked()
+        && pointer.is_some_and(|pointer| !toolbar.contains(pointer))
+        && ui.input(|input| input.modifiers.command || input.modifiers.ctrl)
+        && !w.fields.contains_key("smart-dimension-mode")
+        && w.sketch
+            .as_ref()
+            .is_some_and(|sketch| sketch.tool != Tool::Select && sketch.edit.is_none());
+    if command_pick {
+        let picked_point = w.sketch.as_ref().and_then(|sketch| {
+            let displayed = display_definition(sketch);
+            let inactive =
+                cad_core::sketch_transform::suppressed_points(&sketch_definition(sketch));
+            displayed
+                .points
+                .iter()
+                .filter(|(id, _)| !inactive.contains(*id))
+                .filter_map(|(id, point)| {
+                    let distance =
+                        viewport::project(w, r, world(&plane, &matrix, *point))?.distance(pointer?);
+                    (distance <= 8.).then_some((distance, id.clone()))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, point)| cad_core::sketch_actions::SketchEntity::Point { point })
+        });
+        let mut entity = picked_point.or_else(|| {
+            picked_member
+                .clone()
+                .map(|member| cad_core::sketch_actions::SketchEntity::Member { member })
+        });
+        let model_edge = if entity.is_none() {
+            pointer.and_then(|pointer| {
+                viewport::pick(w, r, pointer).into_iter().find(|hit| {
+                    w.sketch
+                        .as_ref()
+                        .is_some_and(|sketch| hit.definition == sketch.definition)
+                        && hit.reference.topology == "edge"
+                })
+            })
+        } else {
+            None
+        };
+        if entity.is_none() && model_edge.is_none() {
+            entity =
+                pointer.and_then(|pointer| universe_pick(w, r, pointer, (&plane, &matrix), extent));
+        }
+        if let Some(entity) = entity {
+            escape(w);
+            if w.sketch
+                .as_ref()
+                .is_some_and(|sketch| selection_is_current(sketch, &entity))
+            {
+                crate::sketch_ui::select(w, Some(entity), true);
+                w.status = "Cmd-click adds or removes sketch entities. Choose a relation for the selection in the left panel.".into();
+            }
+        } else if let Some(model_edge) = model_edge {
+            escape(w);
+            if let Some(sketch) = &mut w.sketch {
+                sketch.dimension_model = Some(model_edge);
+            }
+            w.selection_popup = None;
+            w.context_selection = None;
+            w.status = "Model edge selected. Command-click a sketch center / member, then Smart Dimension to enter its value.".into();
+        }
+        return;
+    }
     let mut handle_clicked = crate::sketch_ui::annotations(w, ui, r);
     handle_clicked |= crate::sketch_handles::overlay(w, ui, r);
     let mut selection_click = None;
@@ -3052,7 +3217,19 @@ pub fn overlay(
         let selecting = s.tool == Tool::Select;
         if !selecting {
             s.placement_error = None;
-            s.history.push(sketch_definition(s));
+            let before = sketch_definition(s);
+            if (s.tool.is_spline() || s.tool == Tool::Polyline)
+                && s.chain.is_empty()
+                && s.pending_chain.is_none()
+            {
+                s.pending_chain = Some(ChainPlacement {
+                    source: before.clone(),
+                    history_len: s.history.len(),
+                    closed: s.closed,
+                    circle: s.circle.clone(),
+                });
+            }
+            s.history.push(before);
         }
         let cursor = snapped.map(|i| s.points[i]).unwrap_or(cursor);
         match s.tool {
@@ -3075,7 +3252,16 @@ pub fn overlay(
                     .map(|i| s.keys[i].clone())
                     .unwrap_or_else(|| add_point(s, cursor, false));
                 if let Some(last) = s.chain.last().cloned() {
+                    let previous = s.members.len();
                     line(s, last, key.clone());
+                    if s.members.len() > previous {
+                        // Completed segments are authored even while the
+                        // polyline tool remains ready for its next endpoint.
+                        if let Some(checkpoint) = s.pending_chain.take() {
+                            s.history.truncate(checkpoint.history_len);
+                            s.history.push(checkpoint.source);
+                        }
+                    }
                 }
                 if s.chain.first() == Some(&key) && s.chain.len() >= 3 {
                     s.chain.clear();
@@ -3580,7 +3766,8 @@ pub fn overlay(
         ));
     }
     if let Some((mut entity, hit)) = selection_click {
-        let multiselect = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+        let multiselect =
+            ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
         let dimension_mode = w.fields.contains_key("smart-dimension-mode");
         let mut converted_model = false;
         if entity.is_none()
@@ -3618,23 +3805,7 @@ pub fn overlay(
         if entity.is_none()
             && let Some(pointer) = hit.interact_pointer_pos()
         {
-            let project = |p| viewport::project(w, r, world(&plane, &matrix, p));
-            if project([0., 0.]).is_some_and(|p| p.distance(pointer) < 9.) {
-                entity = Some(cad_core::sketch_actions::SketchEntity::Origin);
-            } else {
-                let distance = |a: [f64; 2], b: [f64; 2]| -> Option<f32> {
-                    let a = project(a)?;
-                    let b = project(b)?;
-                    let edge = b - a;
-                    let t = ((pointer - a).dot(edge) / edge.length_sq().max(1e-8)).clamp(0., 1.);
-                    Some(pointer.distance(a + edge * t))
-                };
-                if distance([-extent, 0.], [extent, 0.]).is_some_and(|d| d < 5.) {
-                    entity = Some(cad_core::sketch_actions::SketchEntity::XAxis);
-                } else if distance([0., -extent], [0., extent]).is_some_and(|d| d < 5.) {
-                    entity = Some(cad_core::sketch_actions::SketchEntity::YAxis);
-                }
-            }
+            entity = universe_pick(w, r, pointer, (&plane, &matrix), extent);
         }
         if entity.is_none()
             && !w.fields.contains_key("smart-dimension-mode")

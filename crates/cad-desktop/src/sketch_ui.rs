@@ -559,6 +559,7 @@ fn open_dimension(w: &mut Workspace, driven: bool, extend_pick: bool) {
         editor.focus_nearby = true;
         return;
     }
+    sketch::cancel_pending_chain(w);
     ensure_dimension_checkpoint(w);
     if let Some(selected) = w.sketch.as_mut().and_then(|s| s.dimension_model.take()) {
         match model_edge_dimension_pick(w, &selected) {
@@ -1175,6 +1176,7 @@ pub fn action(w: &mut Workspace, command: &str) {
         "sketch.accept-edit" => crate::sketch_edit_ui::accept_operation(w),
         "sketch.cancel-edit" => crate::sketch_edit_ui::cancel(w),
         "sketch.handles" => {
+            sketch::cancel_pending_chain(w);
             if let Some(s) = &mut w.sketch {
                 s.tool = sketch::Tool::Select;
                 s.dimension = None;
@@ -1261,11 +1263,14 @@ pub fn action(w: &mut Workspace, command: &str) {
             sketch::solve(w);
         }
         "sketch.relations" => {
+            sketch::cancel_pending_chain(w);
             if let Some(s) = &mut w.sketch {
                 s.tool = sketch::Tool::Select;
             }
             w.manager_tree = false;
-            w.status = "Select members or points; Shift-click to add another entity, then choose a relation".into();
+            w.status =
+                "Cmd-click members or points to add or remove selections, then choose a relation"
+                    .into();
         }
         "sketch.finish" => w.confirm_tool(),
         "sketch.cancel" => w.cancel_tool(),
@@ -1479,6 +1484,7 @@ pub fn action(w: &mut Workspace, command: &str) {
             sketch::solve(w);
         }
         _ if command.starts_with("sketch.relation.") => {
+            sketch::cancel_pending_chain(w);
             let result = w.sketch.as_ref().map(|s| {
                 a::relation_with_geometry(
                     w.session.visible(),
@@ -1491,20 +1497,37 @@ pub fn action(w: &mut Workspace, command: &str) {
             if let Some(result) = result {
                 match result {
                     Ok(relations) => {
+                        let mut added = 0;
                         if let Some(s) = &mut w.sketch {
-                            s.history.push(sketch::sketch_definition(s));
+                            let before = sketch::sketch_definition(s);
+                            let mut pending = Vec::new();
                             for relation in relations {
-                                if !s.constraints.iter().any(|c| {
-                                    c.kind == relation.kind
-                                        && c.entities == relation.entities
-                                        && c.value == relation.value
-                                        && c.contact == relation.contact
-                                }) {
-                                    s.constraints.push(relation);
+                                if !a::relation_already_present(&before, &relation)
+                                    && !pending
+                                        .iter()
+                                        .any(|existing| a::relation_equivalent(existing, &relation))
+                                {
+                                    pending.push(relation);
                                 }
                             }
+                            if pending.is_empty() {
+                                w.status = "The selected entities already have this relation; existing references retained".into();
+                                return;
+                            }
+                            added = pending.len();
+                            s.history.push(before);
+                            s.constraints.extend(pending);
                         }
                         sketch::solve(w);
+                        if w.sketch
+                            .as_ref()
+                            .is_some_and(|sketch| sketch.error.is_none())
+                        {
+                            w.status = format!(
+                                "Added {added} relation{} in one sketch edit · Finish Sketch applies the validated result",
+                                if added == 1 { "" } else { "s" }
+                            );
+                        }
                     }
                     Err(e) => w.status = e.to_string(),
                 }
@@ -1687,7 +1710,10 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             ui.horizontal_wrapped(|ui| {
                 for (kind, label) in a::RELATIONS {
                     if a::relation(&before, &s.selection, kind).is_ok()
-                        && ui.small_button(*label).clicked()
+                        && ui
+                            .small_button(*label)
+                            .on_hover_text(a::relation_description(kind))
+                            .clicked()
                     {
                         relation_command = Some(format!("sketch.relation.{kind}"));
                     }
@@ -1733,7 +1759,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         select(
             w,
             Some(entity),
-            ui.input(|i| i.modifiers.shift || i.modifiers.command),
+            ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl),
         );
         if w.fields.contains_key("smart-dimension-mode") {
             selection_changed(w);

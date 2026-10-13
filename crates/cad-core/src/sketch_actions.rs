@@ -359,7 +359,441 @@ fn constraint(kind: &str, entities: Vec<Id>, value: Expr) -> SketchConstraint {
         value,
     }
 }
+
+/// Exact source equivalence for suppressing duplicate authored relations.
+///
+/// Only ordinary symmetric two-entity equations may reorder their entities.
+/// Radius equality retains its reference direction: `apply_curve_dimensions`
+/// uses that direction to choose the source expression for an undimensioned
+/// equality group. Contact parameters, oriented distances, dimensions, and
+/// unknown relation kinds retain their exact saved order. This does not infer
+/// transitive equality, compare evaluated values, or alter solver rank.
+pub fn relation_equivalent(existing: &SketchConstraint, candidate: &SketchConstraint) -> bool {
+    if existing.kind != candidate.kind
+        || existing.driven != candidate.driven
+        || existing.value != candidate.value
+        || existing.contact != candidate.contact
+        || existing.distance_side != candidate.distance_side
+    {
+        return false;
+    }
+    if existing.entities == candidate.entities {
+        return true;
+    }
+    existing.contact.is_none()
+        && existing.distance_side.is_none()
+        && existing.entities.len() == 2
+        && candidate.entities.len() == 2
+        && matches!(
+            existing.kind.as_str(),
+            "parallel"
+                | "perpendicular"
+                | "equal"
+                | "concentric"
+                | "coincident"
+                | "horizontal"
+                | "vertical"
+        )
+        && existing.entities[0] == candidate.entities[1]
+        && existing.entities[1] == candidate.entities[0]
+}
+
+/// Whether an authored relation would repeat existing source intent.
+///
+/// Ordinary relations use exact source equivalence, including symmetric pair
+/// order. Circular equality additionally recognizes an existing shared-size
+/// group. Re-selecting that group never reverses its radius-expression ancestry.
+pub fn relation_already_present(sketch: &Sketch, candidate: &SketchConstraint) -> bool {
+    if sketch
+        .constraints
+        .iter()
+        .any(|existing| relation_equivalent(existing, candidate))
+    {
+        return true;
+    }
+    candidate.kind == "equal_radius"
+        && !candidate.driven
+        && candidate.contact.is_none()
+        && candidate.distance_side.is_none()
+        && candidate.entities.len() == 2
+        && circular_equality_group(sketch, &candidate.entities[0])
+            .is_ok_and(|group| group.members.contains(&candidate.entities[1]))
+}
+
+/// Describes the selection semantics independently of a widget or menu layout.
+pub fn relation_description(kind: &str) -> &'static str {
+    match kind {
+        "horizontal" => {
+            "Make every selected straight member horizontal, or give all selected points the same Y coordinate."
+        }
+        "vertical" => {
+            "Make every selected straight member vertical, or give all selected points the same X coordinate."
+        }
+        "parallel" => "Make every other selected line parallel to the first selected line or axis.",
+        "perpendicular" => {
+            "Make every other selected line perpendicular to the first selected line or axis. The other lines need not be perpendicular to one another."
+        }
+        "equal" => "Give every selected straight member the length of the first selected member.",
+        "equal_radius" => {
+            "Join selected circle or arc size groups using the first selection's existing reference. Already-equal members retain their size owner; driving dimensions remain authoritative. Conflicting driving dimensions leave the pending sketch unsatisfied."
+        }
+        "concentric" => {
+            "Give every selected circle or arc the center of the first selected member."
+        }
+        "coincident" => {
+            "Join all selected points, or place multiple points on one selected line, axis, or curve. A pair keeps its existing point or center relation."
+        }
+        "point_on_arc" => "Place every selected point on one selected bounded circular arc.",
+        "midpoint" => "Place every selected point at the midpoint of one selected straight member.",
+        "arc_center" => "Place every selected point at the center of one selected circular arc.",
+        "origin" => "Place every selected point or member anchor at the sketch origin.",
+        "on_x_axis" => {
+            "Place every selected point or member anchor on the X axis; straight members also become horizontal."
+        }
+        "on_y_axis" => {
+            "Place every selected point or member anchor on the Y axis; straight members also become vertical."
+        }
+        "fix" => "Fix the current position of every point in the selected points and members.",
+        "tangent" | "tangent_internal" | "curvature" => {
+            "Select exactly two members so the curve contact is unambiguous."
+        }
+        "symmetric_origin" => "Select exactly two points to reflect them through the origin.",
+        "symmetric_axis" => {
+            "Select two points or compatible members and one straight member or axis for reflection."
+        }
+        _ => "Apply the relation to compatible selected sketch geometry.",
+    }
+}
+
+/// Expand one selection action into a complete relation batch.
+///
+/// The first selected entity is the reference for equality and direction groups.
+/// Independent line orientations and universe anchors create one relation per
+/// member; point groups and equality groups create a reference fan with `n - 1`
+/// relations. No all-pairs equations are introduced. Failure rejects the entire
+/// batch before callers mutate their source sketch.
 pub fn relation(
+    sketch: &Sketch,
+    selection: &[SketchEntity],
+    kind: &str,
+) -> Result<Vec<SketchConstraint>> {
+    let mut seen = BTreeSet::new();
+    let inactive = crate::sketch_transform::inactive_entities(sketch);
+    for entity in selection {
+        if !seen.insert(entity.key()) {
+            return Err(CadError::Invalid(
+                "Select distinct sketch entities for a relation".into(),
+            ));
+        }
+        if matches!(entity, SketchEntity::Constraint { .. }) || inactive.contains(entity.key()) {
+            return Err(CadError::Invalid(
+                "Select active sketch points or members; Cmd-click to add to the selection".into(),
+            ));
+        }
+        if matches!(entity, SketchEntity::XAxis | SketchEntity::YAxis) {
+            if kind == "equal" {
+                return Err(CadError::Invalid(
+                    "Equal Length needs straight sketch members; a universe axis defines direction, not a physical length".into(),
+                ));
+            }
+            if matches!(kind, "horizontal" | "vertical") {
+                return Err(CadError::Invalid(
+                    "Horizontal and Vertical constrain sketch members or points; use Parallel or Perpendicular to reference a universe axis".into(),
+                ));
+            }
+        }
+    }
+    let points = || {
+        selection
+            .iter()
+            .all(|entity| entity_point(sketch, entity.key()).is_ok())
+    };
+    let members = || {
+        selection.iter().all(|entity| {
+            matches!(entity, SketchEntity::Member { .. })
+                && entity_line(sketch, entity.key()).is_ok()
+        })
+    };
+    match kind {
+        "horizontal" | "vertical" if !selection.is_empty() && members() => selection
+            .iter()
+            .map(|entity| relation_single_or_pair(sketch, std::slice::from_ref(entity), kind))
+            .collect::<Result<Vec<_>>>()
+            .map(|batches| batches.into_iter().flatten().collect()),
+        "horizontal" | "vertical" if selection.len() >= 2 && points() => {
+            reference_fan(sketch, selection, kind)
+        }
+        "equal_radius" if selection.len() >= 2 => circular_equality_fan(sketch, selection),
+        "parallel" | "perpendicular" | "equal" | "concentric" if selection.len() >= 2 => {
+            reference_fan(sketch, selection, kind)
+        }
+        "origin" | "on_x_axis" | "on_y_axis" if selection.len() >= 2 => selection
+            .iter()
+            .map(|entity| relation_single_or_pair(sketch, std::slice::from_ref(entity), kind))
+            .collect::<Result<Vec<_>>>()
+            .map(|batches| batches.into_iter().flatten().collect()),
+        "coincident" if selection.len() > 2 => {
+            // Explicit points plus one circular member mean points on its
+            // circumference. Two-entity legacy center relations stay unchanged.
+            let carriers = selection
+                .iter()
+                .filter(|entity| {
+                    matches!(
+                        entity,
+                        SketchEntity::Member { .. } | SketchEntity::XAxis | SketchEntity::YAxis
+                    )
+                })
+                .collect::<Vec<_>>();
+            if carriers.len() == 1
+                && selection.iter().all(|entity| {
+                    entity == carriers[0]
+                        || matches!(entity, SketchEntity::Point { .. } | SketchEntity::Origin)
+                })
+            {
+                return point_carrier_batch(sketch, selection, carriers[0]);
+            }
+            if points() {
+                reference_fan(sketch, selection, kind)
+            } else {
+                let carriers = selection
+                    .iter()
+                    .filter(|entity| entity_point(sketch, entity.key()).is_err())
+                    .collect::<Vec<_>>();
+                if carriers.len() != 1 {
+                    return Err(CadError::Invalid(
+                        "Select points and one carrier, or only points; Cmd-click to add entities"
+                            .into(),
+                    ));
+                }
+                point_carrier_batch(sketch, selection, carriers[0])
+            }
+        }
+        "midpoint" | "point_on_arc" | "arc_center" if selection.len() > 2 => {
+            let carriers = selection
+                .iter()
+                .filter(|entity| match kind {
+                    "midpoint" => entity_line(sketch, entity.key()).is_ok(),
+                    _ => matches!(
+                        sketch.members.get(entity.key()).map(|member| &member.curve),
+                        Some(SketchCurve::Arc { .. })
+                    ),
+                })
+                .collect::<Vec<_>>();
+            if carriers.len() != 1 {
+                return Err(CadError::Invalid(format!(
+                    "{} needs selected points and exactly one {}",
+                    label(kind),
+                    if kind == "midpoint" {
+                        "straight member"
+                    } else {
+                        "circular arc"
+                    }
+                )));
+            }
+            let carrier = carriers[0];
+            let mut batch = Vec::new();
+            for point in selection.iter().filter(|entity| *entity != carrier) {
+                batch.extend(relation_single_or_pair(
+                    sketch,
+                    &[point.clone(), carrier.clone()],
+                    kind,
+                )?);
+            }
+            Ok(batch)
+        }
+        "tangent" | "tangent_internal" | "curvature" if selection.len() != 2 => {
+            Err(CadError::Invalid(format!(
+                "{} needs exactly two selected members so the contact is unambiguous",
+                label(kind)
+            )))
+        }
+        _ => relation_single_or_pair(sketch, selection, kind),
+    }
+}
+
+fn reference_fan(
+    sketch: &Sketch,
+    selection: &[SketchEntity],
+    kind: &str,
+) -> Result<Vec<SketchConstraint>> {
+    let mut batch = Vec::new();
+    let reference = &selection[0];
+    for entity in &selection[1..] {
+        batch.extend(relation_single_or_pair(
+            sketch,
+            &[reference.clone(), entity.clone()],
+            kind,
+        )?);
+    }
+    Ok(batch)
+}
+
+struct CircularEqualityGroup {
+    members: BTreeSet<Id>,
+    reference: Id,
+    roots: usize,
+    dimension: Option<SketchConstraint>,
+}
+
+fn circular_equality_group(sketch: &Sketch, key: &str) -> Result<CircularEqualityGroup> {
+    let circular = |key: &str| {
+        matches!(
+            sketch.members.get(key).map(|member| &member.curve),
+            Some(SketchCurve::Circle { .. } | SketchCurve::Arc { .. })
+        )
+    };
+    if !circular(key) {
+        return Err(CadError::Invalid(
+            "Equal Radius needs circles or circular arcs".into(),
+        ));
+    }
+    let inactive = crate::sketch_transform::inactive_entities(sketch);
+    let links = sketch
+        .constraints
+        .iter()
+        .filter(|constraint| {
+            ((constraint.kind == "equal_radius" && constraint.entities.len() == 2)
+                || (constraint.kind == "symmetric_member" && constraint.entities.len() == 3))
+                && !constraint
+                    .entities
+                    .iter()
+                    .any(|entity| inactive.contains(entity))
+                && circular(&constraint.entities[0])
+                && circular(&constraint.entities[1])
+        })
+        .collect::<Vec<_>>();
+    let mut members = BTreeSet::from([key.to_string()]);
+    let mut pending = vec![key.to_string()];
+    while let Some(key) = pending.pop() {
+        for constraint in &links {
+            let (first, second) = (&constraint.entities[0], &constraint.entities[1]);
+            let peer = if first == &key {
+                second
+            } else if second == &key {
+                first
+            } else {
+                continue;
+            };
+            if members.insert(peer.clone()) {
+                pending.push(peer.clone());
+            }
+        }
+    }
+    let roots = members
+        .iter()
+        .filter(|member| {
+            !links.iter().any(|constraint| {
+                members.contains(&constraint.entities[0]) && constraint.entities[1] == **member
+            })
+        })
+        .collect::<Vec<_>>();
+    let reference = roots
+        .first()
+        .copied()
+        .unwrap_or_else(|| members.first().unwrap())
+        .clone();
+    let dimension = sketch
+        .constraints
+        .iter()
+        .find(|constraint| {
+            !constraint.driven
+                && matches!(constraint.kind.as_str(), "radius" | "diameter")
+                && !constraint
+                    .entities
+                    .iter()
+                    .any(|entity| inactive.contains(entity))
+                && constraint
+                    .entities
+                    .first()
+                    .is_some_and(|entity| members.contains(entity))
+        })
+        .cloned();
+    Ok(CircularEqualityGroup {
+        reference,
+        roots: roots.len(),
+        members,
+        dimension,
+    })
+}
+
+fn circular_equality_fan(
+    sketch: &Sketch,
+    selection: &[SketchEntity],
+) -> Result<Vec<SketchConstraint>> {
+    // Preserve the existing dimension precedence rule: the first stored
+    // driving Radius/Diameter governs derived circular sizes, and residuals
+    // validate every other dimension. The planner never deletes or converts a
+    // driving dimension; conflicting existing dimensions may leave this draft
+    // unsatisfied until the user edits them or makes a dimension driven.
+    let reference = circular_equality_group(sketch, selection[0].key())?;
+    let mut visited = reference.members.clone();
+    let mut batch = Vec::new();
+    for entity in &selection[1..] {
+        let target = circular_equality_group(sketch, entity.key())?;
+        if visited.contains(entity.key()) {
+            continue;
+        }
+        // Old files can contain circular equality cycles or multiple directed
+        // roots with a lexical source fallback. Adding one edge cannot preserve
+        // that fallback reliably, so keep the source intact and report it.
+        if reference.roots != 1 || target.roots != 1 {
+            return Err(CadError::Invalid(
+                "Equal Radius cannot merge a group with cyclic or competing size references; keep one reference member in each existing group".into(),
+            ));
+        }
+        batch.push(constraint(
+            "equal_radius",
+            vec![reference.reference.clone(), target.reference.clone()],
+            Expr("0 mm".into()),
+        ));
+        visited.extend(target.members);
+    }
+    Ok(batch)
+}
+
+fn point_carrier_batch(
+    sketch: &Sketch,
+    selection: &[SketchEntity],
+    carrier: &SketchEntity,
+) -> Result<Vec<SketchConstraint>> {
+    let curve = sketch
+        .members
+        .get(carrier.key())
+        .map(|member| &member.curve);
+    let kind = if entity_line(sketch, carrier.key()).is_ok() {
+        "point_on_line"
+    } else {
+        match curve {
+            Some(SketchCurve::Circle { .. }) => "point_on_circle",
+            Some(SketchCurve::Arc { .. }) => "point_on_arc",
+            Some(_) => "point_on_curve",
+            None => {
+                return Err(CadError::Invalid(
+                    "Coincident needs one selected line, axis, or curve".into(),
+                ));
+            }
+        }
+    };
+    let mut batch = Vec::new();
+    for point in selection.iter().filter(|entity| *entity != carrier) {
+        entity_point(sketch, point.key())?;
+        let mut relation = constraint(
+            kind,
+            vec![point.key().into(), carrier.key().into()],
+            0.0.into(),
+        );
+        if kind == "point_on_curve" {
+            relation.contact = Some(crate::sketch_relations::Contact {
+                parameters: [0., 0.5],
+                free: [false, true],
+            });
+        }
+        batch.push(relation);
+    }
+    Ok(batch)
+}
+
+fn relation_single_or_pair(
     sketch: &Sketch,
     selection: &[SketchEntity],
     kind: &str,
@@ -378,7 +812,7 @@ pub fn relation(
         .collect::<Vec<_>>();
     let invalid = || {
         CadError::Invalid(
-            "Select the appropriate members or points; Shift-click to select more".into(),
+            "Select compatible members or points; Cmd-click to add to the selection".into(),
         )
     };
     let first = keys.first().ok_or_else(invalid)?;
@@ -940,60 +1374,17 @@ pub fn dimensions(
 /// Resolve driven curve sizes in the derived sketch, retaining expressions and relation intent.
 pub fn apply_curve_dimensions(_doc: &Document, _owner: &str, sketch: &mut Sketch) -> Result<()> {
     fn radius(source: &Sketch, key: &str) -> Result<Expr> {
-        let is_circle = |key: &str| {
-            matches!(
-                source.members.get(key).map(|m| &m.curve),
-                Some(SketchCurve::Circle { .. } | SketchCurve::Arc { .. })
-            )
-        };
-        let mut group = BTreeSet::from([key.to_string()]);
-        let mut pending = vec![key.to_string()];
-        while let Some(key) = pending.pop() {
-            for constraint in source.constraints.iter().filter(|c| {
-                (c.kind == "equal_radius" && c.entities.len() == 2)
-                    || (c.kind == "symmetric_member" && c.entities.len() == 3)
-            }) {
-                let (a, b) = (&constraint.entities[0], &constraint.entities[1]);
-                if !is_circle(a) || !is_circle(b) {
-                    continue;
-                }
-                let peer = if a == &key {
-                    b
-                } else if b == &key {
-                    a
-                } else {
-                    continue;
-                };
-                if group.insert(peer.clone()) {
-                    pending.push(peer.clone());
-                }
-            }
-        }
+        let group = circular_equality_group(source, key)?;
         // A dimension on any circle drives its whole equality group. Redundant
         // cycles are valid; all remaining dimensions are checked by residuals.
-        if let Some(c) = source.constraints.iter().find(|c| {
-            !c.driven
-                && matches!(c.kind.as_str(), "radius" | "diameter")
-                && c.entities.first().is_some_and(|e| group.contains(e))
-        }) {
+        if let Some(c) = group.dimension {
             return Ok(if c.kind == "diameter" {
                 Expr(format!("({}) / 2", c.value.0))
             } else {
                 c.value.clone()
             });
         }
-        let driver = group
-            .iter()
-            .find(|key| {
-                !source.constraints.iter().any(|c| {
-                    ((c.kind == "equal_radius" && c.entities.len() == 2)
-                        || (c.kind == "symmetric_member" && c.entities.len() == 3))
-                        && group.contains(&c.entities[0])
-                        && c.entities[1] == **key
-                })
-            })
-            .unwrap_or_else(|| group.first().unwrap());
-        match &source.members[driver].curve {
+        match &source.members[&group.reference].curve {
             SketchCurve::Circle { radius, .. } => Ok(radius.clone()),
             SketchCurve::Arc {
                 start,

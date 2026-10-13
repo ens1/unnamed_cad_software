@@ -1494,7 +1494,69 @@ pub fn constraint_residuals(
         })
         .collect()
 }
+/// Expression ownership of a full circle's effective size. A follower seed is
+/// not an independent size input while its Equal Radius relation is active.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CircleSizeOwner {
+    pub reference: Id,
+    pub driving_constraint: Option<Id>,
+    pub circumference: bool,
+    pub effective_radius: Expr,
+}
+/// Resolve the same circle-size ownership used by native preparation without
+/// evaluating expressions or modifying authored source. Presentation adapters
+/// can expose the actual driving field instead of accepting dormant seed edits.
+pub fn circle_size_owner(d: &Definition, member_id: &str) -> Result<CircleSizeOwner> {
+    d.validate()?;
+    if !matches!(member(d, member_id)?, Curve::Circle { .. }) {
+        return Err(invalid("Circle size ownership requires a full circle"));
+    }
+    resolve_circle_size_owners(d)?
+        .remove(member_id)
+        .ok_or_else(|| invalid("Circle size ownership requires a full circle"))
+}
+/// Resolve all full-circle size fields in one source-validation and graph pass.
+/// Presentation adapters should reuse this result while projecting multiple
+/// selected circles rather than preparing the same source for each field.
+pub fn circle_size_owners(d: &Definition) -> Result<BTreeMap<Id, CircleSizeOwner>> {
+    d.validate()?;
+    resolve_circle_size_owners(d)
+}
+fn resolve_circle_size_owners(d: &Definition) -> Result<BTreeMap<Id, CircleSizeOwner>> {
+    let (prepared, owners) = prepare_circle_sizes(d)?;
+    let drivers = d
+        .constraints
+        .iter()
+        .filter(|c| !c.driven)
+        .filter_map(|c| match &c.relation {
+            Relation::Radius { member, .. } => Some((member.clone(), (c.id.clone(), false))),
+            Relation::Length { member, .. } => Some((member.clone(), (c.id.clone(), true))),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
+    owners
+        .into_iter()
+        .map(|(member_id, reference)| {
+            let driver = drivers.get(&reference);
+            let Curve::Circle { radius, .. } = member(&prepared, &member_id)? else {
+                unreachable!()
+            };
+            Ok((
+                member_id,
+                CircleSizeOwner {
+                    reference,
+                    driving_constraint: driver.map(|(id, _)| id.clone()),
+                    circumference: driver.is_some_and(|(_, circumference)| *circumference),
+                    effective_radius: radius.clone(),
+                },
+            ))
+        })
+        .collect()
+}
 fn prepare(d: &Definition) -> Result<Definition> {
+    prepare_circle_sizes(d).map(|(definition, _)| definition)
+}
+fn prepare_circle_sizes(d: &Definition) -> Result<(Definition, BTreeMap<Id, Id>)> {
     let mut result = d.clone();
     let mut sizes = BTreeSet::new();
     for c in d.constraints.iter().filter(|c| !c.driven) {
@@ -1520,7 +1582,130 @@ fn prepare(d: &Definition) -> Result<Definition> {
             };
         }
     }
-    Ok(result)
+    let owners = prepare_equal_circles(d, &mut result, &sizes)?;
+    Ok((result, owners))
+}
+/// Full-circle radius is expression intent, not a point-coordinate variable.
+/// Reduce directed equalities before solving the positional equations so an
+/// undriven circle follows the first selected circle's authored expression.
+fn prepare_equal_circles(
+    source: &Definition,
+    result: &mut Definition,
+    sizes: &BTreeSet<&Id>,
+) -> Result<BTreeMap<Id, Id>> {
+    let circle = |id: &Id| matches!(member(source, id), Ok(Curve::Circle { .. }));
+    let mut owners = source
+        .members
+        .keys()
+        .filter(|id| circle(id))
+        .map(|id| (id.clone(), id.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut links = BTreeMap::<Id, BTreeSet<Id>>::new();
+    let mut outgoing = BTreeMap::<Id, BTreeSet<Id>>::new();
+    let mut incoming = BTreeMap::<Id, usize>::new();
+    for constraint in source.constraints.iter().filter(|c| !c.driven) {
+        let Relation::EqualLength { first, second } = &constraint.relation else {
+            continue;
+        };
+        if first == second {
+            return Err(invalid("Equal requires two different members"));
+        }
+        // Lines and three-point arcs have real positional size freedom and
+        // continue through the native residual. Unsupported spline length
+        // equations are diagnosed by member_length rather than approximated.
+        if !circle(first) || !circle(second) {
+            continue;
+        }
+        links
+            .entry(first.clone())
+            .or_default()
+            .insert(second.clone());
+        links
+            .entry(second.clone())
+            .or_default()
+            .insert(first.clone());
+        incoming.entry(first.clone()).or_default();
+        if outgoing
+            .entry(first.clone())
+            .or_default()
+            .insert(second.clone())
+        {
+            *incoming.entry(second.clone()).or_default() += 1;
+        }
+    }
+    let mut visited = BTreeSet::<Id>::new();
+    for start in links.keys() {
+        if visited.contains(start) {
+            continue;
+        }
+        let mut group = BTreeSet::<Id>::new();
+        let mut pending = vec![start.clone()];
+        while let Some(id) = pending.pop() {
+            if !group.insert(id.clone()) {
+                continue;
+            }
+            pending.extend(links[&id].iter().cloned());
+        }
+        visited.extend(group.iter().cloned());
+        let roots = group
+            .iter()
+            .filter(|id| incoming[*id] == 0)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut counts = incoming.clone();
+        let mut ready = roots.clone();
+        let mut processed = 0;
+        while let Some(id) = ready.pop() {
+            processed += 1;
+            if let Some(targets) = outgoing.get(&id) {
+                for target in targets {
+                    let count = counts.get_mut(target).unwrap();
+                    *count -= 1;
+                    if *count == 0 {
+                        ready.push(target.clone());
+                    }
+                }
+            }
+        }
+        if processed != group.len() {
+            return Err(invalid(
+                "Equal Radius has a circular reference; choose one reference circle and make the others equal to it",
+            ));
+        }
+        let drivers = group
+            .iter()
+            .filter(|id| sizes.contains(*id))
+            .collect::<Vec<_>>();
+        if drivers.len() > 1 {
+            return Err(invalid(
+                "An Equal Radius group can have one driving size dimension; remove additional radius/circumference dimensions or make them driven",
+            ));
+        }
+        let reference = if let Some(driver) = drivers.first() {
+            *driver
+        } else if roots.len() == 1 {
+            &roots[0]
+        } else {
+            return Err(invalid(
+                "Equal Radius has competing reference circles; choose one reference circle or add one driving size dimension to the group",
+            ));
+        };
+        let reference = reference.clone();
+        let Curve::Circle { radius, .. } = member(result, &reference)? else {
+            unreachable!()
+        };
+        let radius = radius.clone();
+        for id in group {
+            owners.insert(id.clone(), reference.clone());
+            let Curve::Circle { radius: target, .. } =
+                &mut result.members.get_mut(&id).unwrap().curve
+            else {
+                unreachable!()
+            };
+            *target = radius.clone();
+        }
+    }
+    Ok(owners)
 }
 struct System<'a> {
     doc: &'a Document,

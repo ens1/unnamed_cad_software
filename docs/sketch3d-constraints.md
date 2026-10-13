@@ -35,6 +35,35 @@ orientation and radius are not phantom point-coordinate freedoms. A full circle
 may have one driving size dimension, either radius or circumference; additional
 driving size dimensions are rejected. Driven size measurements may coexist.
 
+Equal Radius between full circles is stored by the existing `EqualLength`
+relation: equal circumferences imply equal radii. The native preparation stage
+resolves the connected circle group into one associative radius expression
+before positional solving. Without a driving size dimension, the first selected
+reference circle supplies that expression; relation direction is `first` to
+`second`, so the reference does not depend on sorted source identities. A single
+driving radius or circumference anywhere in the group takes precedence and
+drives every circle while preserving its parameter expression. Authored radius
+fields remain source inputs; prepared effective radii belong to evaluated output.
+The editor does not bake those effective expressions into the original members.
+Multiple driving size dimensions, circular reference chains and competing
+undriven reference roots receive explicit diagnostics. Duplicate directed links
+and directed transitive links do not create additional reference ownership.
+Driven equalities measure the current size difference without propagating radii.
+The application-owned `circle_size_owner` query exposes the chosen reference,
+optional driving constraint, radius-versus-circumference mode and effective
+radius expression. Its batch counterpart `circle_size_owners` resolves every
+full circle in one validation and graph pass; presentation adapters reuse that
+map while projecting several selected fields. Editors use that ownership to
+disable dormant follower seed fields and identify the editable reference or
+size dimension. Joining existing
+undriven equality groups attaches their reference circles; selecting an already
+connected group again preserves its existing size ownership.
+
+Equal Length between straight members and three-point arcs retains genuine
+positional equations. An arc's length depends on its radius and sweep, so this
+relation does not mean Equal Radius for arcs. Spline-length equalities remain
+unsupported rather than introducing approximate arc-length freedoms.
+
 Driven relations report current measurements and residuals without constraining
 the solve. Length measurements use millimetres and angle measurements use
 radians. Spline arc-length constraints and freely solved circle orientation are

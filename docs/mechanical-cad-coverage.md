@@ -52,6 +52,16 @@ Reference: [SolidWorks 2026 Sketch toolbar](https://help.solidworks.com/2026/eng
 
 ## Sketch constraints and dimensions
 
+The October 12 [multiple-entity relation update](sketch-bulk-relations.md) adds
+Cmd-click geometry selection from drawing tools and complete-selection planar
+Horizontal/Vertical, equal size, direction, coincidence and anchoring batches.
+Spatial relations include batch world-axis alignment, line/arc equal length,
+full-circle Equal Radius, point/carrier coincidence, workplane and Fix XYZ.
+Each batch shares one history checkpoint and pending preview; existing circular
+size groups retain their reference and parameter ownership. Explicit contact and
+reflection relations still require their applicable pairs/triples. The coverage
+labels below remain partial pending broader geometry and interactive acceptance.
+
 TCAD evidence: [solver](../crates/cad-core/src/solver.rs), [expression evaluator](../crates/cad-core/src/expression.rs), [sketch actions](../crates/cad-core/src/sketch_actions.rs), and [implementation limits](../README.md#implementation-limits). The detailed relation/dimension comparison remains an audit item; include curve-specific relation variants rather than treating one tangent implementation as the whole family.
 
 | ID | Required capability | Current coverage and gaps |

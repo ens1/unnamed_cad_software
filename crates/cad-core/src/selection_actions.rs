@@ -895,13 +895,16 @@ pub fn sketch_project(
     }
     for (kind, label) in a::RELATIONS {
         if a::relation(sketch, entities, kind).is_ok() {
-            out.push(descriptor(
+            let mut action = descriptor(
                 target,
                 &format!("sketch.relation.{kind}"),
                 label,
                 "Relations",
                 None,
-            ));
+            );
+            action.data["description"] = serde_json::json!(a::relation_description(kind));
+            action.data["selection_count"] = serde_json::json!(entities.len());
+            out.push(action);
         }
     }
     let members = entities

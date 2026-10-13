@@ -552,7 +552,8 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
         }
         if hit.clicked() || hit.secondary_clicked() {
             consumed = true;
-            let multiselect = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+            let multiselect =
+                ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl);
             let additive = multiselect
                 || (w.fields.contains_key("smart-dimension-mode")
                     && w.sketch.as_ref().is_some_and(|s| s.selection.len() == 1));

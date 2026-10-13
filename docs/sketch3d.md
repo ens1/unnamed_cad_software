@@ -20,7 +20,10 @@ inference. Alt bypasses those placement inferences. Input planes are transient
 editor state. The saved reference frame is an explicit source setting used by
 downstream structural-section clocking; moving an input plane does not alter it.
 
-Select points or members, using Command/Ctrl to retain multiple selections.
+Cmd-click points or members to retain multiple selections, including from a
+drawing tool. Choose one applicable relation for the complete selection in the
+property manager, or right-click a selected entity for its menu. See
+[multiple-entity relations](sketch-bulk-relations.md).
 Spatial point handles move in the current plane or along XYZ axes. The persistent
 solver worker evaluates drag goals with the existing dimensions and relations.
 Release retains the solved edit pending confirmation; Escape restores that
@@ -33,7 +36,8 @@ line-to-line or line-to-axis angles, and shortest distance to a supporting line.
 Driving expressions use the shared unit/parameter evaluator; reference
 dimensions measure the current solution without adding equations. The editor
 also exposes fixed XYZ, coincidence, world-axis alignment, parallel,
-perpendicular, equal length, point-on-line/curve, workplane and tangent relations.
+perpendicular, equal length, full-circle equal radius, point-on-line/curve,
+workplane and tangent relations.
 Solver diagnostics report residual and local degrees of freedom.
 
 ## Modeling use and limits

@@ -93,6 +93,15 @@ Part/component rows, named parameter labels, material labels, planes, Origin, an
 
 Selection capabilities are published by `cad-core::selection_actions` as `selection-action` semantic elements, with command identities, target references, groups, availability, and disabled reasons. Bind a custom component to `selection:feature.chamfer` or another published selection action to present the same command elsewhere. The descriptors appear in the binding catalog when an entity is selected. A `selection-actions` layout role displays the current selection's actions in a dock of your choosing. The default floating presentation has ID `selection-popup`; style its width, height (scroll limit), padding, gap, font size, colors, border, radius, and position through theme rules. `#selection-popup { display: none; }` disables the floating menu if you prefer a docked action list.
 
+[Multiple-entity sketch relations](sketch-bulk-relations.md) publish their complete
+selection count and selection-semantics description in the existing action
+descriptors. Cmd-click picks keep the floating menu closed, while right-clicking
+a selected entity retains the complete group for contextual actions. Spatial
+relation actions use the same descriptive metadata and explicit disabled
+reasons; inherited circle radius fields expose their actual reference and
+driving dimension through read-only field metadata. These contracts remain
+independent of control placement or theme rules.
+
 For example, add a dedicated parameter component and place it independently:
 
 ```json

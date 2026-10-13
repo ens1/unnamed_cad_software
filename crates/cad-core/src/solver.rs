@@ -411,7 +411,7 @@ fn axis_residual(a: Vector3<f64>, b: Vector3<f64>) -> Vector3<f64> {
 }
 impl ConstraintSolver for NativeSolver {
     fn fingerprint(&self) -> &str {
-        "tcad-native-lm/17"
+        "tcad-native-lm/18"
     }
     fn solve_sketch3d(
         &self,

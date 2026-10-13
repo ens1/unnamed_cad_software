@@ -238,6 +238,7 @@ fn begin_with_operation(
     dimension_mode: Option<(cad_core::sketch_dimensions::Kind, Option<Id>)>,
 ) {
     crate::sketch_handles::end(w);
+    sketch::cancel_pending_chain(w);
     let conversion_source = w.selected.clone();
     let text_resources_before = w.session.visible().resources.clone();
     let Some(s) = &mut w.sketch else { return };

@@ -1798,7 +1798,13 @@ fn menu_action(
         element.state != "disabled",
         element.state == "selected",
     )
-    .on_hover_text(element.value.as_deref().unwrap_or(&element.label))
+    .on_hover_text(
+        element
+            .value
+            .as_deref()
+            .or_else(|| element.data["description"].as_str())
+            .unwrap_or(&element.label),
+    )
     .on_disabled_hover_text(element.value.as_deref().unwrap_or(&element.label))
     .clicked()
         && let Some(command) = element.commands.first()

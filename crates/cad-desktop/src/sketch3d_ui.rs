@@ -1077,9 +1077,17 @@ fn measured_point(definition: &Definition, id: &str) -> Option<[f64; 3]> {
         .points
         .get(id)
         .copied()
-        .or_else(|| id.starts_with("origin-").then_some([0.; 3]))
+        .or_else(|| (id == format!("origin-{}", definition.id)).then_some([0.; 3]))
 }
 fn circle_radius(w: &Workspace, definition: &Definition, member: &str) -> Result<f64> {
+    circle_radius_with_size(w, definition, member, None)
+}
+fn circle_radius_with_size(
+    w: &Workspace,
+    definition: &Definition,
+    member: &str,
+    radius: Option<&Expr>,
+) -> Result<f64> {
     if let Some(evaluation) = current_evaluation(w)
         && let Some(Member {
             curve: Curve::Circle { center, .. },
@@ -1104,30 +1112,17 @@ fn circle_radius(w: &Workspace, definition: &Definition, member: &str) -> Result
             "Wait for the current configured circle before measuring its radius",
         ));
     }
-    let radius = definition
-        .constraints
-        .iter()
-        .filter(|constraint| !constraint.driven)
-        .find_map(|constraint| match &constraint.relation {
-            Relation::Radius {
-                member: target,
-                value,
-            } if target == member => Some(value),
-            _ => None,
-        });
-    let radius = radius
-        .or_else(|| match &definition.members.get(member)?.curve {
-            Curve::Circle { radius, .. } => Some(radius),
-            _ => None,
-        })
-        .ok_or_else(|| invalid("Select a circular member"))?;
+    let radius = match radius {
+        Some(radius) => radius.clone(),
+        None => spatial::circle_size_owner(definition, member)?.effective_radius,
+    };
     cad_core::expression::value(
         w.session.visible(),
         &w.sketch3d
             .as_ref()
             .ok_or_else(|| invalid("The editor has closed"))?
             .owner,
-        radius,
+        &radius,
         Dimension::Length,
     )
 }
@@ -1458,99 +1453,375 @@ fn cancel_placement(w: &mut Workspace) -> bool {
     w.status = "Unfinished member canceled; completed sketch geometry retained".into();
     true
 }
-fn relation_for(w: &Workspace, kind: &str) -> Result<Relation> {
+fn relation_for(w: &Workspace, kind: &str) -> Result<Vec<Relation>> {
     let points = points_selected(w);
     let members = members_selected(w);
     let definition = displayed(w).ok_or_else(|| invalid("The sketch is unavailable"))?;
+    if points
+        .iter()
+        .any(|point| measured_point(&definition, point).is_none())
+        || members
+            .iter()
+            .any(|member| !definition.members.contains_key(member))
+    {
+        return Err(invalid("The selection contains removed geometry"));
+    }
     match kind {
-        "fixed" if points.len() == 1 => {
-            let point =
-                measured_point(&definition, &points[0]).ok_or_else(|| invalid("Select a point"))?;
-            Ok(Relation::Fixed {
-                point: points[0].clone(),
-                position: point.map(coordinate),
-            })
+        "fixed" if !points.is_empty() || !members.is_empty() => {
+            let mut controls = points;
+            for member in &members {
+                for point in definition.members[member].curve.points() {
+                    if !controls.contains(point) {
+                        controls.push(point.clone());
+                    }
+                }
+            }
+            controls
+                .into_iter()
+                .filter(|point| definition.points.contains_key(point))
+                .map(|point| {
+                    Ok(Relation::Fixed {
+                        position: measured_point(&definition, &point)
+                            .ok_or_else(|| invalid("A selected control point is missing"))?
+                            .map(coordinate),
+                        point,
+                    })
+                })
+                .collect()
         }
-        "coincident" if points.len() == 2 => Ok(Relation::Coincident {
-            first: points[0].clone(),
-            second: points[1].clone(),
-        }),
+        "coincident" if points.len() >= 2 && members.is_empty() => Ok(points[1..]
+            .iter()
+            .map(|point| Relation::Coincident {
+                first: points[0].clone(),
+                second: point.clone(),
+            })
+            .collect()),
         "along-x" | "along-y" | "along-z"
-            if members.len() == 1 && line_direction(&definition, &members[0]).is_ok() =>
-        {
-            Ok(Relation::AlignAxis {
-                member: members[0].clone(),
-                axis: match kind {
-                    "along-x" => Axis::X,
-                    "along-y" => Axis::Y,
-                    _ => Axis::Z,
-                },
-            })
-        }
-        "parallel" | "perpendicular"
-            if members.len() == 2
+            if points.is_empty()
+                && !members.is_empty()
                 && members
                     .iter()
                     .all(|member| line_direction(&definition, member).is_ok()) =>
         {
-            Ok(if kind == "parallel" {
-                Relation::Parallel {
-                    first: members[0].clone(),
-                    second: members[1].clone(),
-                }
-            } else {
-                Relation::Perpendicular {
-                    first: members[0].clone(),
-                    second: members[1].clone(),
-                }
-            })
+            Ok(members
+                .into_iter()
+                .map(|member| Relation::AlignAxis {
+                    member,
+                    axis: match kind {
+                        "along-x" => Axis::X,
+                        "along-y" => Axis::Y,
+                        _ => Axis::Z,
+                    },
+                })
+                .collect())
         }
-        "equal-length"
-            if members.len() == 2
+        "parallel" | "perpendicular"
+            if points.is_empty()
+                && members.len() >= 2
                 && members
                     .iter()
-                    .all(|member| member_length(w, &definition, member).is_ok()) =>
+                    .all(|member| line_direction(&definition, member).is_ok()) =>
         {
-            Ok(Relation::EqualLength {
-                first: members[0].clone(),
-                second: members[1].clone(),
-            })
+            Ok(members[1..]
+                .iter()
+                .map(|member| {
+                    if kind == "parallel" {
+                        Relation::Parallel {
+                            first: members[0].clone(),
+                            second: member.clone(),
+                        }
+                    } else {
+                        Relation::Perpendicular {
+                            first: members[0].clone(),
+                            second: member.clone(),
+                        }
+                    }
+                })
+                .collect())
         }
-        "on-plane" if !points.is_empty() => Ok(Relation::Coplanar {
-            points,
-            plane: w
+        "equal-length"
+            if points.is_empty()
+                && members.len() >= 2
+                && members.iter().all(|member| {
+                    matches!(
+                        definition.members[member].curve,
+                        Curve::Line { .. } | Curve::Arc { .. }
+                    ) && member_length(w, &definition, member).is_ok()
+                }) =>
+        {
+            // Circle radius expressions are fixed engineering inputs, rather
+            // than point solve variables. Do not offer an equality that would
+            // merely move their centers while leaving the radii unchanged.
+            Ok(members[1..]
+                .iter()
+                .map(|member| Relation::EqualLength {
+                    first: members[0].clone(),
+                    second: member.clone(),
+                })
+                .collect())
+        }
+        "equal-radius"
+            if points.is_empty()
+                && members.len() >= 2
+                && members.iter().all(|member| {
+                    matches!(definition.members[member].curve, Curve::Circle { .. })
+                }) =>
+        {
+            // Existing groups retain their authored reference. Join roots so
+            // a dependent selection does not create competing size ancestry.
+            let owners = spatial::circle_size_owners(&definition)?;
+            for member in &members {
+                circle_radius_with_size(
+                    w,
+                    &definition,
+                    member,
+                    Some(&owners[member].effective_radius),
+                )?;
+            }
+            let reference = owners[&members[0]].reference.clone();
+            let mut seen = std::collections::BTreeSet::from([reference.clone()]);
+            let mut relations = Vec::new();
+            for member in &members[1..] {
+                let target = owners[member].reference.clone();
+                if seen.insert(target.clone()) {
+                    relations.push(Relation::EqualLength {
+                        first: reference.clone(),
+                        second: target,
+                    });
+                }
+            }
+            Ok(relations)
+        }
+        "on-plane" if !points.is_empty() && members.is_empty() => {
+            let plane = w
                 .sketch3d
                 .as_ref()
                 .map(|state| state.plane.frame(state.plane_origin))
-                .unwrap_or_default(),
-        }),
-        "on-line"
-            if points.len() == 1
+                .unwrap_or_default();
+            Ok(points
+                .into_iter()
+                .map(|point| Relation::OnPlane {
+                    point,
+                    plane: plane.clone(),
+                })
+                .collect())
+        }
+        "on-line" | "coincident"
+            if !points.is_empty()
                 && members.len() == 1
                 && line_direction(&definition, &members[0]).is_ok() =>
         {
-            Ok(Relation::OnLine {
-                point: points[0].clone(),
-                line: members[0].clone(),
-                bounded: false,
-            })
+            Ok(points
+                .into_iter()
+                .map(|point| Relation::OnLine {
+                    point,
+                    line: members[0].clone(),
+                    bounded: false,
+                })
+                .collect())
         }
-        "on-curve" if points.len() == 1 && members.len() == 1 => Ok(Relation::PointOnCurve {
-            point: points[0].clone(),
-            member: members[0].clone(),
-            parameter: "0.5".into(),
-            free: true,
-        }),
-        "tangent" if points.is_empty() && members.len() == 2 => Ok(Relation::Tangent {
+        "on-curve" | "coincident" if !points.is_empty() && members.len() == 1 => Ok(points
+            .into_iter()
+            .map(|point| Relation::PointOnCurve {
+                point,
+                member: members[0].clone(),
+                parameter: "0.5".into(),
+                free: true,
+            })
+            .collect()),
+        "tangent" if points.is_empty() && members.len() == 2 => Ok(vec![Relation::Tangent {
             first: members[0].clone(),
             second: members[1].clone(),
             first_parameter: "1".into(),
             second_parameter: "0".into(),
-        }),
+        }]),
         _ => Err(invalid(
-            "Select compatible spatial geometry for this relation",
+            "All selected spatial geometry must be compatible with this relation",
         )),
     }
+}
+fn equivalent_relation(first: &Relation, second: &Relation) -> bool {
+    if first == second {
+        return true;
+    }
+    match (first, second) {
+        (Relation::Fixed { point: a, .. }, Relation::Fixed { point: b, .. }) => a == b,
+        (
+            Relation::Coincident {
+                first: a,
+                second: b,
+            },
+            Relation::Coincident {
+                first: c,
+                second: d,
+            },
+        )
+        | (
+            Relation::Parallel {
+                first: a,
+                second: b,
+            },
+            Relation::Parallel {
+                first: c,
+                second: d,
+            },
+        )
+        | (
+            Relation::Perpendicular {
+                first: a,
+                second: b,
+            },
+            Relation::Perpendicular {
+                first: c,
+                second: d,
+            },
+        )
+        | (
+            Relation::EqualLength {
+                first: a,
+                second: b,
+            },
+            Relation::EqualLength {
+                first: c,
+                second: d,
+            },
+        ) => a == d && b == c,
+        (
+            Relation::PointOnCurve {
+                point: a,
+                member: b,
+                free: true,
+                ..
+            },
+            Relation::PointOnCurve {
+                point: c,
+                member: d,
+                free: true,
+                ..
+            },
+        ) => a == c && b == d,
+        (
+            Relation::Tangent {
+                first: a,
+                second: b,
+                first_parameter: at,
+                second_parameter: bt,
+            },
+            Relation::Tangent {
+                first: c,
+                second: d,
+                first_parameter: ct,
+                second_parameter: dt,
+            },
+        ) => a == d && b == c && at == dt && bt == ct,
+        _ => false,
+    }
+}
+fn equivalence_pair(relation: &Relation) -> Option<(u8, &Id, &Id)> {
+    match relation {
+        Relation::Coincident { first, second } => Some((0, first, second)),
+        Relation::Parallel { first, second } => Some((1, first, second)),
+        Relation::EqualLength { first, second } => Some((2, first, second)),
+        _ => None,
+    }
+}
+fn has_relation(definition: &Definition, relation: &Relation) -> bool {
+    if definition.constraints.iter().any(|constraint| {
+        !constraint.driven
+            && (equivalent_relation(&constraint.relation, relation)
+                || matches!(
+                    (&constraint.relation, relation),
+                    (
+                        Relation::Coplanar { points, plane: a },
+                        Relation::OnPlane { point, plane: b },
+                    ) if a == b && points.contains(point)
+                ))
+    }) {
+        return true;
+    }
+    // Equivalence relations already imply their transitive closure. Keeping a
+    // connected set avoids redundant solver rows when a batch joins groups.
+    let Some((kind, first, second)) = equivalence_pair(relation) else {
+        return false;
+    };
+    let mut connected = std::collections::BTreeSet::from([first]);
+    loop {
+        let previous = connected.len();
+        for constraint in definition
+            .constraints
+            .iter()
+            .filter(|constraint| !constraint.driven)
+        {
+            if let Some((other_kind, a, b)) = equivalence_pair(&constraint.relation)
+                && other_kind == kind
+            {
+                if connected.contains(a) {
+                    connected.insert(b);
+                }
+                if connected.contains(b) {
+                    connected.insert(a);
+                }
+            }
+        }
+        if connected.contains(second) {
+            return true;
+        }
+        if previous == connected.len() {
+            return false;
+        }
+    }
+}
+fn add_relations(w: &mut Workspace, kind: &str) -> Result<()> {
+    if !current_source_is_valid(w) {
+        return Err(invalid(
+            "Resolve the current field error before adding relations",
+        ));
+    }
+    let relations = relation_for(w, kind)?;
+    let original = source(w).ok_or_else(|| invalid("The sketch is missing"))?;
+    let mut definition = original.clone();
+    if relations
+        .iter()
+        .all(|relation| has_relation(&definition, relation))
+    {
+        w.status = if kind == "equal-radius" {
+            "The selected circles are already equal; their existing size reference is retained"
+        } else {
+            "The selected geometry already has these relations"
+        }
+        .into();
+        return Ok(());
+    }
+    ensure_origin(&mut definition, w);
+    let mut added = 0;
+    for relation in relations {
+        if !has_relation(&definition, &relation) {
+            definition.constraints.push(Constraint {
+                id: cad_core::id(),
+                relation,
+                driven: false,
+            });
+            added += 1;
+        }
+    }
+    definition.validate()?;
+    // A batch is one sketch history entry and one shared draft publication.
+    // Take the checkpoint only after source validation, and leave no no-op.
+    if definition != original {
+        publish(w, definition)?;
+        if let Some(state) = &mut w.sketch3d {
+            state.redo.clear();
+            state.history.push(original);
+            if state.history.len() > HISTORY_LIMIT {
+                state.history.remove(0);
+            }
+        }
+        w.status = format!(
+            "Added {added} spatial relation{}; preview updating",
+            if added == 1 { "" } else { "s" }
+        );
+    }
+    Ok(())
 }
 fn error_key(element: &SemanticElement) -> String {
     format!("{INVALID}{}:{}", element.id, element.data["editor"])
@@ -1642,6 +1913,9 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
                 }
                 ["member", member, "radius"] if element.data["measured_radius"] == true => {
                     json!(coordinate(circle_radius(w, definition, member).ok()?))
+                }
+                ["member", _, "radius"] if element.data["inherited_radius"] == true => {
+                    element.data["json"].clone()
                 }
                 ["member", member, "radius"] => json!(radius_expression(definition, member)?),
                 ["member", member, "weight", index] => {
@@ -2576,16 +2850,7 @@ pub fn action(w: &mut Workspace, command: &str, payload: Option<&Value>) -> bool
                 )
             }
             _ if kind.starts_with("relation/") => {
-                let relation = relation_for(w, kind.trim_start_matches("relation/"))?;
-                let mut definition = source(w).ok_or_else(|| invalid("The sketch is missing"))?;
-                history(w);
-                ensure_origin(&mut definition, w);
-                definition.constraints.push(Constraint {
-                    id: cad_core::id(),
-                    relation,
-                    driven: false,
-                });
-                publish(w, definition)
+                add_relations(w, kind.trim_start_matches("relation/"))
             }
             _ if kind.starts_with("delete-constraint/") => {
                 let id = kind.trim_start_matches("delete-constraint/");
@@ -2818,7 +3083,7 @@ fn constraint_value(relation: &Relation) -> Option<(&Expr, &'static str)> {
         _ => None,
     }
 }
-fn relation_label(relation: &Relation) -> &'static str {
+fn relation_label(definition: &Definition, relation: &Relation) -> &'static str {
     match relation {
         Relation::Fixed { .. } => "Fixed XYZ",
         Relation::Coordinate { axis: Axis::X, .. } => "X coordinate",
@@ -2839,6 +3104,16 @@ fn relation_label(relation: &Relation) -> &'static str {
         Relation::AlignAxis { axis: Axis::Z, .. } => "Along Z",
         Relation::Parallel { .. } => "Parallel",
         Relation::Perpendicular { .. } => "Perpendicular",
+        Relation::EqualLength { first, second }
+            if [first, second].iter().all(|member| {
+                matches!(
+                    definition.members.get(*member).map(|member| &member.curve),
+                    Some(Curve::Circle { .. })
+                )
+            }) =>
+        {
+            "Equal radius"
+        }
         Relation::EqualLength { .. } => "Equal length",
         Relation::OnLine { .. } => "Point on line",
         Relation::OnPlane { .. } => "On workplane",
@@ -3038,7 +3313,17 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         state.tool != Tool::Select && state.tool != Tool::Dimension,
     ));
     if !state.selection.is_empty() {
-        out.push(group(w, "selection", "Selected geometry"));
+        out.push(group(
+            w,
+            "selection",
+            &format!("Selected geometry · {}", state.selection.len()),
+        ));
+        out.push(note(
+            w,
+            "selection-hint",
+            "Cmd-click adds or removes geometry · Equality and direction relations use the first selected reference; equal circle groups retain their size reference",
+            "ready",
+        ));
         let displayed = displayed(w).unwrap_or_else(|| definition.clone());
         for entity in &state.selection {
             match entity {
@@ -3120,17 +3405,57 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             ("parallel", "Parallel"),
             ("perpendicular", "Perpendicular"),
             ("equal-length", "Equal Length"),
+            ("equal-radius", "Equal Radius"),
             ("on-plane", "On Workplane"),
             ("on-line", "Point On Line"),
             ("on-curve", "Point On Curve"),
             ("tangent", "Tangent"),
         ] {
-            out.push(action_element(
-                w,
-                &format!("relation/{kind}"),
-                label,
-                relation_for(w, kind).is_ok(),
-            ));
+            let plan = relation_for(w, kind);
+            let enabled = current_source_is_valid(w)
+                && plan.as_ref().is_ok_and(|relations| {
+                    !relations.is_empty()
+                        && relations
+                            .iter()
+                            .any(|relation| !has_relation(&definition, relation))
+                });
+            let mut element = action_element(w, &format!("relation/{kind}"), label, enabled);
+            element.data["selection_count"] = json!(state.selection.len());
+            element.data["description"] = json!(match kind {
+                "fixed" => "Fix XYZ for every distinct control in the selected geometry.",
+                "coincident" =>
+                    "Join the selected points, or place every selected point on the one selected line or curve.",
+                "along-x" | "along-y" | "along-z" =>
+                    "Align every selected straight member with this world axis.",
+                "parallel" => "Make every other selected line parallel to the first selected line.",
+                "perpendicular" =>
+                    "Make every other selected line perpendicular to the first selected line; they need not be perpendicular to one another.",
+                "equal-length" =>
+                    "Give every selected line or arc the length of the first selected member.",
+                "equal-radius" =>
+                    "Join selected full-circle size groups, retaining existing size references and driving dimensions.",
+                "on-plane" => "Place every selected point on the current drawing workplane.",
+                "on-line" =>
+                    "Place every selected point on the supporting line of the one selected straight member.",
+                "on-curve" =>
+                    "Place every selected point on the one selected curve with a free bounded contact parameter.",
+                _ =>
+                    "Select two members for tangency at the end of the first and start of the second.",
+            });
+            if !enabled {
+                element.data["disabled_reason"] = json!(if !current_source_is_valid(w) {
+                    "Resolve the current field error before adding relations".into()
+                } else if let Err(error) = plan {
+                    error.to_string()
+                } else {
+                    if kind == "equal-radius" {
+                        "The selected circles are already equal; their existing size reference is retained"
+                    } else {
+                        "The selected geometry already has these relations"
+                    }.into()
+                });
+            }
+            out.push(element);
         }
     }
     if let Some(dimension) = &state.dimension {
@@ -3156,7 +3481,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             out.push(field(
                 w,
                 &format!("constraint/{}/value", constraint.id),
-                relation_label(&constraint.relation),
+                relation_label(&definition, &constraint.relation),
                 json!(value),
                 vec![],
                 Some(unit),
@@ -3183,7 +3508,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             &format!(
                 "{} · {}{}",
                 index + 1,
-                relation_label(&constraint.relation),
+                relation_label(&definition, &constraint.relation),
                 if constraint.driven {
                     " · reference"
                 } else {
@@ -3397,6 +3722,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         true,
     ));
     let overrides = configured_fields(w);
+    let circle_owners = spatial::circle_size_owners(&definition).unwrap_or_default();
     for element in &mut out {
         if let Some(key) = element.data["field"].as_str().map(str::to_string) {
             if let Some(pointer) = source_pointer(&definition, &key)
@@ -3434,10 +3760,46 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 && definition.constraints.iter().any(|constraint| !constraint.driven && matches!(&constraint.relation, Relation::Length { member: target, .. } if target == member)) {
                 element.data["editable"] = json!(false);
                 element.data["readonly_reason"] = json!("The circumference dimension controls this circle; edit that dimension to change its size");
-                if let Ok(radius) = circle_radius(w, &definition, member) {
+                if let Ok(radius) = circle_radius_with_size(
+                    w,
+                    &definition,
+                    member,
+                    circle_owners.get(member).map(|owner| &owner.effective_radius),
+                ) {
                     element.data["json"] = json!(coordinate(radius));
                     element.value = Some(coordinate(radius).0);
                     element.data["measured_radius"] = json!(true);
+                }
+            }
+            if let Some(member) = key
+                .strip_prefix("member/")
+                .and_then(|key| key.strip_suffix("/radius"))
+                && let Some(owner) = circle_owners.get(member)
+                && owner.reference != member
+            {
+                let reference = definition
+                    .members
+                    .keys()
+                    .position(|id| id == &owner.reference)
+                    .map_or_else(
+                        || "the reference circle".into(),
+                        |index| format!("Circle {}", index + 1),
+                    );
+                element.data["editable"] = json!(false);
+                element.data["readonly_reason"] = json!(format!(
+                    "Equal Radius inherits its size from {reference}; edit that circle or its driving dimension, or remove the equality relation"
+                ));
+                element.data["inherited_radius"] = json!(true);
+                element.data["json"] = json!(owner.effective_radius);
+                element.value = Some(owner.effective_radius.0.clone());
+                if let Some(evaluation) = current_evaluation(w)
+                    && let Some(Member {
+                        curve: Curve::Circle { radius, .. },
+                        ..
+                    }) = evaluation.solved.members.get(member)
+                {
+                    element.data["json"] = json!(radius);
+                    element.value = Some(radius.0.clone());
                 }
             }
         }
@@ -3614,6 +3976,30 @@ fn hit(w: &Workspace, rect: egui::Rect, cursor: egui::Pos2, handles: bool) -> Op
     best
 }
 fn select(w: &mut Workspace, entity: Option<Entity>, toggle: bool, dimension: bool) -> Result<()> {
+    if toggle && entity.is_some() && !dimension {
+        // Modified clicks select actual geometry from every drawing tool. End
+        // temporary authoring through its checkpoint instead of leaving an
+        // unfinished point/member behind or creating geometry under the click.
+        cancel_placement(w);
+        let definition = source(w).ok_or_else(|| invalid("The sketch is missing"))?;
+        let valid = |entity: &Entity| match entity {
+            Entity::Point { point } => definition.points.contains_key(point),
+            Entity::Member { member } => definition.members.contains_key(member),
+            Entity::Origin => true,
+        };
+        if entity.as_ref().is_some_and(|entity| !valid(entity)) {
+            return Err(invalid(
+                "The unfinished member was canceled; select existing geometry",
+            ));
+        }
+        if let Some(state) = &mut w.sketch3d {
+            state.selection.retain(valid);
+            state.tool = Tool::Select;
+            state.clicks.clear();
+            state.hover = None;
+            state.snap_target = None;
+        }
+    }
     if let Some(state) = &mut w.sketch3d {
         state.popup = None;
         if let Some(entity) = entity {
@@ -4180,7 +4566,9 @@ pub fn overlay(
                 state.snap_target = target;
             }
         }
+        let extend_selection = modifiers.command || modifiers.ctrl || modifiers.shift;
         if tool == Tool::Select
+            && !extend_selection
             && response.drag_started_by(egui::PointerButton::Primary)
             && let Some(hit) = hit(w, rect, cursor, true)
             && let Entity::Point { point } = hit.entity
@@ -4189,22 +4577,16 @@ pub fn overlay(
                 w.status = error.to_string();
             }
         } else if response.clicked() {
-            let result = if matches!(tool, Tool::Select | Tool::Dimension) {
+            let result = if extend_selection || matches!(tool, Tool::Select | Tool::Dimension) {
                 let hit = hit(w, rect, cursor, false);
                 let entity = hit.map(|hit| hit.entity);
                 let selected = entity.is_some();
-                let result = select(
-                    w,
-                    entity,
-                    modifiers.command || modifiers.ctrl || modifiers.shift,
-                    tool == Tool::Dimension,
-                );
+                let result = select(w, entity, extend_selection, tool == Tool::Dimension);
                 if selected
                     && tool == Tool::Select
-                    && !modifiers.command
-                    && !modifiers.ctrl
-                    && !modifiers.shift
+                    && !extend_selection
                     && let Some(state) = &mut w.sketch3d
+                    && !state.selection.is_empty()
                 {
                     state.popup = Some(cursor);
                 }
@@ -4224,6 +4606,39 @@ pub fn overlay(
             };
             if let Err(error) = result {
                 w.status = error.to_string();
+            }
+        } else if response.secondary_clicked()
+            && let Some(hit) = hit(w, rect, cursor, false)
+        {
+            cancel_placement(w);
+            if w.sketch3d
+                .as_ref()
+                .is_some_and(|state| state.dimension.is_some())
+            {
+                finish_dimension(w);
+            }
+            let definition = source(w);
+            let current = definition
+                .as_ref()
+                .is_some_and(|definition| match &hit.entity {
+                    Entity::Point { point } => definition.points.contains_key(point),
+                    Entity::Member { member } => definition.members.contains_key(member),
+                    Entity::Origin => true,
+                });
+            if current {
+                let already_selected = w
+                    .sketch3d
+                    .as_ref()
+                    .is_some_and(|state| state.selection.contains(&hit.entity));
+                if !already_selected && let Err(error) = select(w, Some(hit.entity), false, false) {
+                    w.status = error.to_string();
+                }
+                if let Some(state) = &mut w.sketch3d {
+                    state.tool = Tool::Select;
+                    state.clicks.clear();
+                    state.hover = None;
+                    state.popup = Some(cursor);
+                }
             }
         }
     } else if let Some(state) = &mut w.sketch3d {
@@ -4334,7 +4749,7 @@ pub(crate) fn render_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
     if element.data.get("setter").is_some() {
         crate::ui::semantic_field(ui, w, element);
     } else if element.role.ends_with("-action") {
-        if controls::button(
+        let response = controls::button(
             ui,
             &element.id,
             &element.role,
@@ -4342,9 +4757,18 @@ pub(crate) fn render_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
             &element.label,
             element.state != "disabled",
             false,
-        )
-        .clicked()
-        {
+        );
+        let response = if let Some(reason) = element.data["disabled_reason"].as_str() {
+            response.on_disabled_hover_text(reason)
+        } else {
+            response
+        };
+        let response = if let Some(description) = element.data["description"].as_str() {
+            response.on_hover_text(description)
+        } else {
+            response
+        };
+        if response.clicked() {
             action(w, ACTION, Some(&element.data));
         }
     } else {
