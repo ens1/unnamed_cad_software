@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "document": {
+    "schema_version": 1,
+    "id": "175b93cf-1c6e-4327-9d56-fa4ae94a0f76",
+    "name": "upper-frame",
+    "revision": 24,
+    "root": "836d5718-8d4f-44ea-bcf0-af2701790016",
+    "parts": {},
+    "assemblies": {},
+    "materials": {
+      "aluminum": {
+        "id": "aluminum",
+        "name": "Aluminum",
+        "density_kg_m3": 2700.0,
+        "color": [
+          0.68,
+          0.72,
+          0.77
+        ],
+        "metallic": 1.0,
+        "roughness": 0.28
+      },
+      "plastic": {
+        "id": "plastic",
+        "name": "Polymer",
+        "density_kg_m3": 1200.0,
+        "color": [
+          0.17,
+          0.2,
+          0.25
+        ],
+        "metallic": 0.0,
+        "roughness": 0.4
+      },
+      "rubber": {
+        "id": "rubber",
+        "name": "Rubber",
+        "density_kg_m3": 1100.0,
+        "color": [
+          0.025,
+          0.028,
+          0.03
+        ],
+        "metallic": 0.0,
+        "roughness": 0.85
+      },
+      "steel": {
+        "id": "steel",
+        "name": "Steel",
+        "density_kg_m3": 7850.0,
+        "color": [
+          0.42,
+          0.46,
+          0.52
+        ],
+        "metallic": 1.0,
+        "roughness": 0.22
+      }
+    },
+    "resources": {},
+    "drawings": [],
+    "comments": [],
+    "properties": {
+      "document_kind": "part"
+    },
+    "libraries": {}
+  },
+  "parts": {
+    "8a7f425c-e823-4794-8463-011f35ad3453": "parts/8a7f425c-e823-4794-8463-011f35ad3453.json",
+    "982d63ef-400c-45c2-9a49-5d1ccd1fcf95": "parts/982d63ef-400c-45c2-9a49-5d1ccd1fcf95.json",
+    "a962e85b-ec1b-42b3-8350-a95dce6e1464": "parts/a962e85b-ec1b-42b3-8350-a95dce6e1464.json",
+    "ab83c17a-918c-4485-9178-9f711fa60759": "parts/ab83c17a-918c-4485-9178-9f711fa60759.json",
+    "b73073a2-93a0-40bb-b65d-327af1178dde": "parts/b73073a2-93a0-40bb-b65d-327af1178dde.json"
+  },
+  "assemblies": {
+    "836d5718-8d4f-44ea-bcf0-af2701790016": "assemblies/836d5718-8d4f-44ea-bcf0-af2701790016.json"
+  }
+}
