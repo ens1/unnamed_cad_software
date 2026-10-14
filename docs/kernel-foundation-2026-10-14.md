@@ -120,6 +120,22 @@ saved modeling residual in millimeters. General implicit-boundary interchange,
 periodic seam-chart preservation and arbitrary parameter-master STEP import
 remain incomplete.
 
+## Remaining kernel work
+
+- Complete native intersection discovery and Boolean inside/outside classification,
+  including undiscovered loops, tangencies and curved contact arrangements. A
+  certificate for a discovered branch does not prove that all branches were found.
+- Persistent per-edge-use trim and periodic seam charts throughout TCAD's Shape,
+  import, transform, edit and export paths. This checkpoint reconstructs available
+  exact trims and retains their metadata; it is not that full representation migration.
+- General mixed-carrier blend junctions, variable-radius rounds, face/full-round
+  modes, arbitrary freeform offsets and wall-transition reconstruction.
+- Faithful exchange of general implicit boundaries and unsupported parameter-master
+  STEP geometry. Search guides and fitted display curves cannot replace them.
+
+These are explicit engineering gaps. The bounded construction families described
+above expand actual supported modeling but do not close the entire kernel baseline.
+
 ## Verification record
 
 Monstertruck is pinned to `6dba41312cccaa67ae146ef869b8380ddf8411d8` on the public
@@ -136,7 +152,12 @@ Completed against the pinned dependency:
   Rust files and whitespace checks.
 
 The existing dependency future-incompatibility notice is `proc-macro-error2`
-2.0.1. Package status is recorded with the final packaging checkpoint.
+2.0.1. `scripts/package-macos.sh` completed its locked workspace build,
+Info.plist validation, nested executable signing and deep strict bundle signature
+verification. The refreshed artifact is `dist/TCAD.app`, containing distinct
+`TCAD`, `tcad-worker` and `tcad-cli` executables. Application implementation
+checkpoint: `dd479eb`; the public dependency comprises nine commits after the
+previous `fc230685` pin.
 No tests, runtime geometry probes, examples or interactive checks were run.
 Compilation and source review do not establish that an authored part now
 succeeds or that a proof admits every valid geometry.

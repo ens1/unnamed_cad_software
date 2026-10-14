@@ -15,7 +15,9 @@ TCAD definitions and implementation remain private. Current backend: `monstertru
 Monstertruck revision `6dba41312cccaa67ae146ef869b8380ddf8411d8`. Native spline cuts
 also retain the requested parameter through exact knot handling and transactional
 failure. Tests and interactive checks were not performed under the user's
-repository instructions.
+repository instructions. The pinned workspace passed formatting, compilation
+and strict locked Clippy; `scripts/package-macos.sh` rebuilt and signature-verified
+`dist/TCAD.app` with separate desktop, worker and CLI executables on 2026-10-14.
 
 
 The user resumed work after enabling Ultra; the earlier stop request is revoked. The latest target is the mainstream mechanical CAD capability set shared by SolidWorks, NX, Onshape and Creo, replacing full vendor parity. Completion is unclaimed. This handoff records saved source capabilities and their actual geometry/solver bounds. The continuation adds ribs, direct face edits, body filtering, reference curves, curve/sketch/table patterns, grouped dimensions, equation curves, tangent/bisector planes and supported STEP surface import. This continuation also adds exact tap-drill holes with explicit cosmetic thread intent/callouts, directed ruled and bounded matching mid-surfaces, drawing sheet formats/templates/linked title cells, saved paper view layout, and root-assembly exploded views shared by viewport and drawings. No code tests, assertion probes, manual smoke tests, export exercises or new interactive acceptance have been performed.
