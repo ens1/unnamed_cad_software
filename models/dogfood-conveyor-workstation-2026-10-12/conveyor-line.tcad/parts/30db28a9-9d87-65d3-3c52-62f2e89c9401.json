@@ -1,0 +1,234 @@
+{
+  "id": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+  "name": "Part5",
+  "parameters": {},
+  "features": [
+    {
+      "id": "13d22346-f21b-af5c-3d93-20caec05d432",
+      "name": "Sketch1",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "1d68fe8a-a376-83fd-65fc-64300af59fa2"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "e4493880-5a03-5cf3-31c3-f8681606bc0b",
+      "name": "Boss-Extrude1",
+      "operation": {
+        "kind": "extrude",
+        "profile": {
+          "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+          "node": "13d22346-f21b-af5c-3d93-20caec05d432"
+        },
+        "distance": "20 mm",
+        "direction": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "body": null,
+        "mode": "new",
+        "options": {
+          "profile_normal": true,
+          "reverse_direction": false,
+          "end": "blind",
+          "start_offset": "0 mm",
+          "reverse_distance": null,
+          "target": null,
+          "target_body": null,
+          "end_offset": "0 mm"
+        }
+      },
+      "suppressed": false
+    }
+  ],
+  "outputs": [
+    "e4493880-5a03-5cf3-31c3-f8681606bc0b"
+  ],
+  "material": "739ae8d8-8e34-a3dd-323f-5e69bc897b39",
+  "finish": "56c9eeef-d0f4-9d2f-e7e1-a41410fa86e0",
+  "properties": {},
+  "sketches": {
+    "1d68fe8a-a376-83fd-65fc-64300af59fa2": {
+      "id": "1d68fe8a-a376-83fd-65fc-64300af59fa2",
+      "name": "Sketch1",
+      "points": {
+        "03d61479-9b33-7d60-f36e-6106df7741d9": [
+          40.0,
+          -30.0
+        ],
+        "103b6e06-ad88-5f8d-d0d6-56a2e2bdaaf1": [
+          -40.0,
+          -30.0
+        ],
+        "1b8eb347-b979-2894-4430-236d91783547": [
+          -30.0,
+          20.0
+        ],
+        "44f2f7d2-f287-370b-bfe5-4c965d032ac8": [
+          -30.0,
+          -20.0
+        ],
+        "51584aca-0eb8-1f29-ce2d-b20097385b85": [
+          40.0,
+          30.0
+        ],
+        "708e70bf-fc76-d457-d23a-ce4d79420cdb": [
+          30.0,
+          20.0
+        ],
+        "873b94b4-8b8c-fcbd-cdf2-7a109a8405f8": [
+          -40.0,
+          30.0
+        ],
+        "ba610777-09cd-a872-fb2b-202f7b3b36b5": [
+          30.0,
+          -20.0
+        ],
+        "f2435c3c-0d30-2076-03c5-f912e9f40790": [
+          -0.0,
+          0.0
+        ]
+      },
+      "segments": [],
+      "constraints": [
+        {
+          "id": "8668e85b-6b25-38a3-5e58-4f50b86c4c11",
+          "kind": "horizontal",
+          "entities": [
+            "103b6e06-ad88-5f8d-d0d6-56a2e2bdaaf1",
+            "03d61479-9b33-7d60-f36e-6106df7741d9"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "5441b27c-5c07-cac0-34d5-2b004df4a009",
+          "kind": "vertical",
+          "entities": [
+            "03d61479-9b33-7d60-f36e-6106df7741d9",
+            "51584aca-0eb8-1f29-ce2d-b20097385b85"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "7392f888-5d37-46d3-c857-cb54e3b8925f",
+          "kind": "horizontal",
+          "entities": [
+            "51584aca-0eb8-1f29-ce2d-b20097385b85",
+            "873b94b4-8b8c-fcbd-cdf2-7a109a8405f8"
+          ],
+          "value": "0 mm"
+        },
+        {
+          "id": "da115c08-9b0d-21b2-6860-6700f087ce16",
+          "kind": "vertical",
+          "entities": [
+            "873b94b4-8b8c-fcbd-cdf2-7a109a8405f8",
+            "103b6e06-ad88-5f8d-d0d6-56a2e2bdaaf1"
+          ],
+          "value": "0 mm"
+        }
+      ],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "004fe1dd-2b86-d67b-1cf7-327b75305736": {
+          "construction": false,
+          "curve": {
+            "kind": "circle",
+            "center": "1b8eb347-b979-2894-4430-236d91783547",
+            "radius": "3 mm"
+          }
+        },
+        "4fcc46a3-34eb-a054-fa5c-ab68e1b380ff": {
+          "construction": false,
+          "curve": {
+            "kind": "circle",
+            "center": "f2435c3c-0d30-2076-03c5-f912e9f40790",
+            "radius": "10 mm"
+          }
+        },
+        "69f185cb-965a-56c4-8c5e-fb706b82153b": {
+          "construction": false,
+          "curve": {
+            "kind": "circle",
+            "center": "ba610777-09cd-a872-fb2b-202f7b3b36b5",
+            "radius": "3 mm"
+          }
+        },
+        "7933d2a1-f00a-a666-a545-5b697248e807": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "51584aca-0eb8-1f29-ce2d-b20097385b85",
+            "end": "873b94b4-8b8c-fcbd-cdf2-7a109a8405f8"
+          }
+        },
+        "9bd34513-fead-bdf4-cce7-1cddfc71f7ae": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "03d61479-9b33-7d60-f36e-6106df7741d9",
+            "end": "51584aca-0eb8-1f29-ce2d-b20097385b85"
+          }
+        },
+        "bd6a5909-ccf5-7fef-71d2-a516018b8e13": {
+          "construction": false,
+          "curve": {
+            "kind": "circle",
+            "center": "44f2f7d2-f287-370b-bfe5-4c965d032ac8",
+            "radius": "3 mm"
+          }
+        },
+        "d89c1f0e-1b0e-7648-7ede-a7fe134e5d4b": {
+          "construction": false,
+          "curve": {
+            "kind": "circle",
+            "center": "708e70bf-fc76-d457-d23a-ce4d79420cdb",
+            "radius": "3 mm"
+          }
+        },
+        "e1e46a43-2fd0-c929-0323-fc752c25e10d": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "873b94b4-8b8c-fcbd-cdf2-7a109a8405f8",
+            "end": "103b6e06-ad88-5f8d-d0d6-56a2e2bdaaf1"
+          }
+        },
+        "efce1ce6-8fdd-1bc3-29f1-fdba6e38fa9c": {
+          "construction": false,
+          "curve": {
+            "kind": "line",
+            "start": "103b6e06-ad88-5f8d-d0d6-56a2e2bdaaf1",
+            "end": "03d61479-9b33-7d60-f36e-6106df7741d9"
+          }
+        }
+      }
+    }
+  },
+  "configurations": {}
+}

@@ -1,0 +1,102 @@
+{
+  "id": "2a56a416-44f4-4160-9c23-c5091986ad23",
+  "name": "Assembly1",
+  "instances": {
+    "0d8eea8e-2ea4-44e9-9b04-a26c6426133d": {
+      "id": "0d8eea8e-2ea4-44e9-9b04-a26c6426133d",
+      "name": "Part1",
+      "definition": "42945c88-d36b-ddbc-c6e6-d82a9ac39bc7",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_deg": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": true,
+      "translation_expressions": null
+    },
+    "87bf3178-f728-4138-9d35-435c0f3948a7": {
+      "id": "87bf3178-f728-4138-9d35-435c0f3948a7",
+      "name": "Part1 · 3",
+      "definition": "42945c88-d36b-ddbc-c6e6-d82a9ac39bc7",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_deg": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": true,
+      "translation_expressions": null
+    },
+    "fecdd7db-71d7-4568-a7f2-e14b571c9ca7": {
+      "id": "fecdd7db-71d7-4568-a7f2-e14b571c9ca7",
+      "name": "Part1 · 2",
+      "definition": "42945c88-d36b-ddbc-c6e6-d82a9ac39bc7",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_deg": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": true,
+      "translation_expressions": null
+    }
+  },
+  "mates": [],
+  "promoted_parameters": {},
+  "parameters": {},
+  "component_patterns": {
+    "c92e0f05-ad0f-4e00-876e-5ce591de1f91": {
+      "version": 1,
+      "id": "c92e0f05-ad0f-4e00-876e-5ce591de1f91",
+      "name": "Component Pattern1",
+      "seeds": [
+        "0d8eea8e-2ea4-44e9-9b04-a26c6426133d"
+      ],
+      "count": "3",
+      "mode": {
+        "kind": "linear",
+        "step": [
+          "2150 mm",
+          "0 mm",
+          "0 mm"
+        ]
+      },
+      "copy_internal_mates": false,
+      "occurrences": [
+        {
+          "index": 1,
+          "seed": "0d8eea8e-2ea4-44e9-9b04-a26c6426133d",
+          "instance": "fecdd7db-71d7-4568-a7f2-e14b571c9ca7"
+        },
+        {
+          "index": 2,
+          "seed": "0d8eea8e-2ea4-44e9-9b04-a26c6426133d",
+          "instance": "87bf3178-f728-4138-9d35-435c0f3948a7"
+        }
+      ],
+      "mates": []
+    }
+  }
+}

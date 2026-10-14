@@ -1,0 +1,963 @@
+{
+  "id": "42945c88-d36b-ddbc-c6e6-d82a9ac39bc7",
+  "name": "Part1",
+  "instances": {
+    "0bc5c043-4712-16b5-b732-8d4a38d9f773": {
+      "id": "0bc5c043-4712-16b5-b732-8d4a38d9f773",
+      "name": "Part1",
+      "definition": "9b613802-3795-f099-60c8-adc7967460e6",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_deg": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": true,
+      "translation_expressions": null
+    },
+    "149276be-d187-38c9-fb71-e7c24ebf5426": {
+      "id": "149276be-d187-38c9-fb71-e7c24ebf5426",
+      "name": "Part2 · 3",
+      "definition": "d503d2f7-4eaf-8768-b019-d6b01f4dff1f",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          -25.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "17b47aab-7c12-4f4f-1c56-006a90729504": {
+      "id": "17b47aab-7c12-4f4f-1c56-006a90729504",
+      "name": "Part2 · 2",
+      "definition": "d503d2f7-4eaf-8768-b019-d6b01f4dff1f",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          -25.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "1baeb090-cb11-3d53-1778-870153b42257": {
+      "id": "1baeb090-cb11-3d53-1778-870153b42257",
+      "name": "Part5 · 3",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "24f9738d-71ec-0be2-1b91-d5291a4c5455": {
+      "id": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+      "name": "Part3",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "341f7b24-e6a0-54a0-1875-3406604c296a": {
+      "id": "341f7b24-e6a0-54a0-1875-3406604c296a",
+      "name": "Part2 · 2",
+      "definition": "d503d2f7-4eaf-8768-b019-d6b01f4dff1f",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          -25.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "401ded2b-846f-79ae-e096-63959298af5c": {
+      "id": "401ded2b-846f-79ae-e096-63959298af5c",
+      "name": "Part2 · 3",
+      "definition": "d503d2f7-4eaf-8768-b019-d6b01f4dff1f",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          -25.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "4e8aa837-8dee-1b99-86e6-6e547094b6d9": {
+      "id": "4e8aa837-8dee-1b99-86e6-6e547094b6d9",
+      "name": "Part5 · 4",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "570e4d74-0a7e-2293-bc51-c6ce7bbe3c94": {
+      "id": "570e4d74-0a7e-2293-bc51-c6ce7bbe3c94",
+      "name": "Part3 · 11",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "5795e3c1-80b2-3284-9092-2319409819f8": {
+      "id": "5795e3c1-80b2-3284-9092-2319409819f8",
+      "name": "Part5 · 10",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "5affaa0f-ce26-8642-c0f8-45b5de811677": {
+      "id": "5affaa0f-ce26-8642-c0f8-45b5de811677",
+      "name": "Part3 · 2",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "6adf8656-e5b3-e57b-08a9-a520a9f041dc": {
+      "id": "6adf8656-e5b3-e57b-08a9-a520a9f041dc",
+      "name": "Part3 · 12",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "6edf5933-dc8b-66a7-58b4-d8fb760cae0e": {
+      "id": "6edf5933-dc8b-66a7-58b4-d8fb760cae0e",
+      "name": "Part5 · 9",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "6f931033-7b71-3f61-b8ec-7f5e784032c2": {
+      "id": "6f931033-7b71-3f61-b8ec-7f5e784032c2",
+      "name": "Part3 · 3",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "71165b35-d521-d8ce-79e6-b8f655f3ba44": {
+      "id": "71165b35-d521-d8ce-79e6-b8f655f3ba44",
+      "name": "Part3 · 9",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "71499d76-97b0-e5a4-6369-a673b8264c02": {
+      "id": "71499d76-97b0-e5a4-6369-a673b8264c02",
+      "name": "Part3 · 10",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "7bbf2cf2-7cf5-1edc-2438-c8c61585300f": {
+      "id": "7bbf2cf2-7cf5-1edc-2438-c8c61585300f",
+      "name": "Part6",
+      "definition": "c37d3ee5-3460-c279-5421-d837abb560e1",
+      "placement": {
+        "translation": [
+          150.0,
+          -15.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "7d802c88-e634-e2da-8a9b-afc3dfb61a6b": {
+      "id": "7d802c88-e634-e2da-8a9b-afc3dfb61a6b",
+      "name": "Part2 · 3 · 2",
+      "definition": "d503d2f7-4eaf-8768-b019-d6b01f4dff1f",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          -25.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "7f57e337-58e8-fde1-a395-3af00f71b262": {
+      "id": "7f57e337-58e8-fde1-a395-3af00f71b262",
+      "name": "Part3 · 6",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "81b33141-7b37-32b1-2c2a-48e5ac68ba81": {
+      "id": "81b33141-7b37-32b1-2c2a-48e5ac68ba81",
+      "name": "Part3 · 8",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "870de5ad-fd4d-676d-5d59-798dd27e097b": {
+      "id": "870de5ad-fd4d-676d-5d59-798dd27e097b",
+      "name": "Part5 · 11",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "8ae6ae45-86d4-011a-3bee-2f841346a48a": {
+      "id": "8ae6ae45-86d4-011a-3bee-2f841346a48a",
+      "name": "Part3 · 7",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "9c90d58f-d710-3486-3e26-849c5bfa1840": {
+      "id": "9c90d58f-d710-3486-3e26-849c5bfa1840",
+      "name": "Part5 · 6",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "a4ce46d3-7243-5928-2a80-d561114efbfe": {
+      "id": "a4ce46d3-7243-5928-2a80-d561114efbfe",
+      "name": "Part2",
+      "definition": "d503d2f7-4eaf-8768-b019-d6b01f4dff1f",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          -25.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "a74dbd1b-1619-0cc3-2376-f5eb24b55f8d": {
+      "id": "a74dbd1b-1619-0cc3-2376-f5eb24b55f8d",
+      "name": "Part3 · 4",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "ad40ea92-af06-3bf5-1024-93292eec27f9": {
+      "id": "ad40ea92-af06-3bf5-1024-93292eec27f9",
+      "name": "Part2 · 2 · 2",
+      "definition": "d503d2f7-4eaf-8768-b019-d6b01f4dff1f",
+      "placement": {
+        "translation": [
+          0.0,
+          0.0,
+          -25.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "b39c436a-d716-420d-17d1-09610b1f2683": {
+      "id": "b39c436a-d716-420d-17d1-09610b1f2683",
+      "name": "Part4",
+      "definition": "1fa7ca36-e6f7-d862-8171-4133738f85e4",
+      "placement": {
+        "translation": [
+          0.0,
+          -28.0,
+          25.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "b64f33ec-6461-1388-c123-916d4b2f8eda": {
+      "id": "b64f33ec-6461-1388-c123-916d4b2f8eda",
+      "name": "Part5 · 8",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "bfd1a104-9ba1-fc4b-fe60-76739be76c5c": {
+      "id": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+      "name": "Part5",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "c630ed9a-7f10-7dd8-2103-5363023727c1": {
+      "id": "c630ed9a-7f10-7dd8-2103-5363023727c1",
+      "name": "Part5 · 12",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "d54b287f-d104-f670-60ea-9c6861afe1a3": {
+      "id": "d54b287f-d104-f670-60ea-9c6861afe1a3",
+      "name": "Part5 · 2",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "d68a6b0d-39aa-bf16-82b5-86400df9dd84": {
+      "id": "d68a6b0d-39aa-bf16-82b5-86400df9dd84",
+      "name": "Part4 · 2",
+      "definition": "1fa7ca36-e6f7-d862-8171-4133738f85e4",
+      "placement": {
+        "translation": [
+          0.0,
+          -28.0,
+          25.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "dcc284b0-8df7-6d91-e2c4-147c84c0681f": {
+      "id": "dcc284b0-8df7-6d91-e2c4-147c84c0681f",
+      "name": "Part5 · 7",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "f1a88c90-1abb-867d-accc-ddd8806cc86c": {
+      "id": "f1a88c90-1abb-867d-accc-ddd8806cc86c",
+      "name": "Part3 · 5",
+      "definition": "78fdd562-b2e7-ae8d-1625-7de0f00c6056",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    },
+    "fca40b74-259b-5f07-718a-3a8c60f6164a": {
+      "id": "fca40b74-259b-5f07-718a-3a8c60f6164a",
+      "name": "Part5 · 5",
+      "definition": "30db28a9-9d87-65d3-3c52-62f2e89c9401",
+      "placement": {
+        "translation": [
+          150.0,
+          25.0,
+          55.0
+        ],
+        "rotation_deg": [
+          0.0,
+          -0.0,
+          0.0
+        ]
+      },
+      "configuration": null,
+      "fixed": false,
+      "translation_expressions": null
+    }
+  },
+  "mates": [],
+  "promoted_parameters": {},
+  "parameters": {},
+  "component_patterns": {
+    "61e6c5e0-b8bf-7e28-3885-cf070530f327": {
+      "version": 1,
+      "id": "61e6c5e0-b8bf-7e28-3885-cf070530f327",
+      "name": "Component Pattern4",
+      "seeds": [
+        "b39c436a-d716-420d-17d1-09610b1f2683"
+      ],
+      "count": "2",
+      "mode": {
+        "kind": "linear",
+        "step": [
+          "0 mm",
+          "756 mm",
+          "0 mm"
+        ]
+      },
+      "copy_internal_mates": false,
+      "occurrences": [
+        {
+          "index": 1,
+          "seed": "b39c436a-d716-420d-17d1-09610b1f2683",
+          "instance": "d68a6b0d-39aa-bf16-82b5-86400df9dd84"
+        }
+      ],
+      "mates": []
+    },
+    "9007e814-e70f-5e4e-fda8-d9f3455b1b98": {
+      "version": 1,
+      "id": "9007e814-e70f-5e4e-fda8-d9f3455b1b98",
+      "name": "Component Pattern3",
+      "seeds": [
+        "24f9738d-71ec-0be2-1b91-d5291a4c5455"
+      ],
+      "count": "12",
+      "mode": {
+        "kind": "linear",
+        "step": [
+          "150 mm",
+          "0 mm",
+          "0 mm"
+        ]
+      },
+      "copy_internal_mates": false,
+      "occurrences": [
+        {
+          "index": 1,
+          "seed": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+          "instance": "5affaa0f-ce26-8642-c0f8-45b5de811677"
+        },
+        {
+          "index": 2,
+          "seed": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+          "instance": "6f931033-7b71-3f61-b8ec-7f5e784032c2"
+        },
+        {
+          "index": 3,
+          "seed": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+          "instance": "a74dbd1b-1619-0cc3-2376-f5eb24b55f8d"
+        },
+        {
+          "index": 4,
+          "seed": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+          "instance": "f1a88c90-1abb-867d-accc-ddd8806cc86c"
+        },
+        {
+          "index": 5,
+          "seed": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+          "instance": "7f57e337-58e8-fde1-a395-3af00f71b262"
+        },
+        {
+          "index": 6,
+          "seed": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+          "instance": "8ae6ae45-86d4-011a-3bee-2f841346a48a"
+        },
+        {
+          "index": 7,
+          "seed": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+          "instance": "81b33141-7b37-32b1-2c2a-48e5ac68ba81"
+        },
+        {
+          "index": 8,
+          "seed": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+          "instance": "71165b35-d521-d8ce-79e6-b8f655f3ba44"
+        },
+        {
+          "index": 9,
+          "seed": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+          "instance": "71499d76-97b0-e5a4-6369-a673b8264c02"
+        },
+        {
+          "index": 10,
+          "seed": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+          "instance": "570e4d74-0a7e-2293-bc51-c6ce7bbe3c94"
+        },
+        {
+          "index": 11,
+          "seed": "24f9738d-71ec-0be2-1b91-d5291a4c5455",
+          "instance": "6adf8656-e5b3-e57b-08a9-a520a9f041dc"
+        }
+      ],
+      "mates": []
+    },
+    "9f57c433-4b9a-4ec9-5233-596dbade07e9": {
+      "version": 1,
+      "id": "9f57c433-4b9a-4ec9-5233-596dbade07e9",
+      "name": "Component Pattern2",
+      "seeds": [
+        "a4ce46d3-7243-5928-2a80-d561114efbfe",
+        "341f7b24-e6a0-54a0-1875-3406604c296a",
+        "401ded2b-846f-79ae-e096-63959298af5c"
+      ],
+      "count": "2",
+      "mode": {
+        "kind": "linear",
+        "step": [
+          "0 mm",
+          "700 mm",
+          "0 mm"
+        ]
+      },
+      "copy_internal_mates": false,
+      "occurrences": [
+        {
+          "index": 1,
+          "seed": "a4ce46d3-7243-5928-2a80-d561114efbfe",
+          "instance": "17b47aab-7c12-4f4f-1c56-006a90729504"
+        },
+        {
+          "index": 2,
+          "seed": "a4ce46d3-7243-5928-2a80-d561114efbfe",
+          "instance": "149276be-d187-38c9-fb71-e7c24ebf5426"
+        },
+        {
+          "index": 1,
+          "seed": "341f7b24-e6a0-54a0-1875-3406604c296a",
+          "instance": "ad40ea92-af06-3bf5-1024-93292eec27f9"
+        },
+        {
+          "index": 1,
+          "seed": "401ded2b-846f-79ae-e096-63959298af5c",
+          "instance": "7d802c88-e634-e2da-8a9b-afc3dfb61a6b"
+        }
+      ],
+      "mates": []
+    },
+    "c44adaf1-4ea2-216d-49e0-2621c381e31d": {
+      "version": 1,
+      "id": "c44adaf1-4ea2-216d-49e0-2621c381e31d",
+      "name": "Component Pattern1",
+      "seeds": [
+        "a4ce46d3-7243-5928-2a80-d561114efbfe"
+      ],
+      "count": "3",
+      "mode": {
+        "kind": "linear",
+        "step": [
+          "1000 mm",
+          "0 mm",
+          "0 mm"
+        ]
+      },
+      "copy_internal_mates": false,
+      "occurrences": [
+        {
+          "index": 1,
+          "seed": "a4ce46d3-7243-5928-2a80-d561114efbfe",
+          "instance": "341f7b24-e6a0-54a0-1875-3406604c296a"
+        },
+        {
+          "index": 2,
+          "seed": "a4ce46d3-7243-5928-2a80-d561114efbfe",
+          "instance": "401ded2b-846f-79ae-e096-63959298af5c"
+        }
+      ],
+      "mates": []
+    },
+    "ccda4d6c-5e3c-5835-1010-8f4ba8079271": {
+      "version": 1,
+      "id": "ccda4d6c-5e3c-5835-1010-8f4ba8079271",
+      "name": "Component Pattern5",
+      "seeds": [
+        "bfd1a104-9ba1-fc4b-fe60-76739be76c5c"
+      ],
+      "count": "12",
+      "mode": {
+        "kind": "linear",
+        "step": [
+          "150 mm",
+          "0 mm",
+          "0 mm"
+        ]
+      },
+      "copy_internal_mates": false,
+      "occurrences": [
+        {
+          "index": 1,
+          "seed": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+          "instance": "d54b287f-d104-f670-60ea-9c6861afe1a3"
+        },
+        {
+          "index": 2,
+          "seed": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+          "instance": "1baeb090-cb11-3d53-1778-870153b42257"
+        },
+        {
+          "index": 3,
+          "seed": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+          "instance": "4e8aa837-8dee-1b99-86e6-6e547094b6d9"
+        },
+        {
+          "index": 4,
+          "seed": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+          "instance": "fca40b74-259b-5f07-718a-3a8c60f6164a"
+        },
+        {
+          "index": 5,
+          "seed": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+          "instance": "9c90d58f-d710-3486-3e26-849c5bfa1840"
+        },
+        {
+          "index": 6,
+          "seed": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+          "instance": "dcc284b0-8df7-6d91-e2c4-147c84c0681f"
+        },
+        {
+          "index": 7,
+          "seed": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+          "instance": "b64f33ec-6461-1388-c123-916d4b2f8eda"
+        },
+        {
+          "index": 8,
+          "seed": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+          "instance": "6edf5933-dc8b-66a7-58b4-d8fb760cae0e"
+        },
+        {
+          "index": 9,
+          "seed": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+          "instance": "5795e3c1-80b2-3284-9092-2319409819f8"
+        },
+        {
+          "index": 10,
+          "seed": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+          "instance": "870de5ad-fd4d-676d-5d59-798dd27e097b"
+        },
+        {
+          "index": 11,
+          "seed": "bfd1a104-9ba1-fc4b-fe60-76739be76c5c",
+          "instance": "c630ed9a-7f10-7dd8-2103-5363023727c1"
+        }
+      ],
+      "mates": []
+    }
+  }
+}

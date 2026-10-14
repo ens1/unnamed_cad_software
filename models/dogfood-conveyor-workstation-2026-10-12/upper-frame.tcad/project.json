@@ -4,7 +4,7 @@
     "schema_version": 1,
     "id": "175b93cf-1c6e-4327-9d56-fa4ae94a0f76",
     "name": "upper-frame",
-    "revision": 24,
+    "revision": 29,
     "root": "836d5718-8d4f-44ea-bcf0-af2701790016",
     "parts": {},
     "assemblies": {},
@@ -67,6 +67,7 @@
     "libraries": {}
   },
   "parts": {
+    "82c5e01b-8d2d-401c-aa6d-669c627198e9": "parts/82c5e01b-8d2d-401c-aa6d-669c627198e9.json",
     "8a7f425c-e823-4794-8463-011f35ad3453": "parts/8a7f425c-e823-4794-8463-011f35ad3453.json",
     "982d63ef-400c-45c2-9a49-5d1ccd1fcf95": "parts/982d63ef-400c-45c2-9a49-5d1ccd1fcf95.json",
     "a962e85b-ec1b-42b3-8350-a95dce6e1464": "parts/a962e85b-ec1b-42b3-8350-a95dce6e1464.json",

@@ -1,0 +1,2913 @@
+{
+  "schema_version": 1,
+  "id": "175b93cf-1c6e-4327-9d56-fa4ae94a0f76",
+  "name": "upper-frame",
+  "revision": 29,
+  "root": "836d5718-8d4f-44ea-bcf0-af2701790016",
+  "parts": {
+    "82c5e01b-8d2d-401c-aa6d-669c627198e9": {
+      "id": "82c5e01b-8d2d-401c-aa6d-669c627198e9",
+      "name": "Part6",
+      "parameters": {},
+      "features": [
+        {
+          "id": "27621ac7-5e39-436c-b066-29157ea99622",
+          "name": "Sketch1",
+          "operation": {
+            "kind": "profile",
+            "profile": {
+              "kind": "sketch",
+              "sketch": "0b3a3d06-bcae-455d-b6d7-b2f7a5003704"
+            },
+            "plane": {
+              "origin": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "u": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "v": [
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "plane_reference": null,
+            "reference_body": null
+          },
+          "suppressed": false
+        },
+        {
+          "id": "05f5cf4a-ea60-4c83-bab1-c7b2d3eafdeb",
+          "name": "Boss-Extrude1",
+          "operation": {
+            "kind": "extrude",
+            "profile": {
+              "definition": "82c5e01b-8d2d-401c-aa6d-669c627198e9",
+              "node": "27621ac7-5e39-436c-b066-29157ea99622"
+            },
+            "distance": "730 mm",
+            "direction": [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            "body": null,
+            "mode": "new",
+            "options": {
+              "profile_normal": true,
+              "reverse_direction": true,
+              "end": "blind",
+              "start_offset": "0 mm",
+              "reverse_distance": null,
+              "target": null,
+              "target_body": null,
+              "end_offset": "0 mm"
+            }
+          },
+          "suppressed": false
+        }
+      ],
+      "outputs": [
+        "05f5cf4a-ea60-4c83-bab1-c7b2d3eafdeb"
+      ],
+      "material": "aluminum",
+      "properties": {},
+      "sketches": {
+        "0b3a3d06-bcae-455d-b6d7-b2f7a5003704": {
+          "id": "0b3a3d06-bcae-455d-b6d7-b2f7a5003704",
+          "name": "Sketch1",
+          "points": {
+            "c055b79d-8f3a-4278-a705-75da35636641": [
+              -0.0,
+              0.0
+            ]
+          },
+          "segments": [],
+          "constraints": [],
+          "profile_order": [],
+          "circles": {},
+          "members": {
+            "33279eee-3216-4a8a-9c5f-8cec8488b9bc": {
+              "construction": false,
+              "curve": {
+                "kind": "circle",
+                "center": "c055b79d-8f3a-4278-a705-75da35636641",
+                "radius": "10 mm"
+              }
+            }
+          }
+        }
+      },
+      "configurations": {}
+    },
+    "8a7f425c-e823-4794-8463-011f35ad3453": {
+      "id": "8a7f425c-e823-4794-8463-011f35ad3453",
+      "name": "Part5",
+      "parameters": {},
+      "features": [
+        {
+          "id": "06c97760-5bfa-4d09-8836-d4de861337aa",
+          "name": "Sketch1",
+          "operation": {
+            "kind": "profile",
+            "profile": {
+              "kind": "sketch",
+              "sketch": "ddcc2787-e67d-4d7c-9d79-0cb26ddf0b7f"
+            },
+            "plane": {
+              "origin": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "u": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "v": [
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "plane_reference": null,
+            "reference_body": null
+          },
+          "suppressed": false
+        },
+        {
+          "id": "edd0f6df-4fbe-4c75-88ad-7df4382a40e9",
+          "name": "Boss-Extrude1",
+          "operation": {
+            "kind": "extrude",
+            "profile": {
+              "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+              "node": "06c97760-5bfa-4d09-8836-d4de861337aa"
+            },
+            "distance": "20 mm",
+            "direction": [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            "body": null,
+            "mode": "new",
+            "options": {
+              "profile_normal": true,
+              "reverse_direction": false,
+              "end": "blind",
+              "start_offset": "0 mm",
+              "reverse_distance": null,
+              "target": null,
+              "target_body": null,
+              "end_offset": "0 mm"
+            }
+          },
+          "suppressed": false
+        }
+      ],
+      "outputs": [
+        "edd0f6df-4fbe-4c75-88ad-7df4382a40e9"
+      ],
+      "material": "aluminum",
+      "properties": {},
+      "sketches": {
+        "ddcc2787-e67d-4d7c-9d79-0cb26ddf0b7f": {
+          "id": "ddcc2787-e67d-4d7c-9d79-0cb26ddf0b7f",
+          "name": "Sketch1",
+          "points": {
+            "133de29c-2a38-46d6-a1af-5cfda58e2b58": [
+              -40.0,
+              30.0
+            ],
+            "342db78a-48d9-469e-a27a-4ecfa7526b9c": [
+              -30.0,
+              20.0
+            ],
+            "61d8f772-3c1a-46b6-8fe8-a224ecc2e8ad": [
+              30.0,
+              20.0
+            ],
+            "7557d352-f284-4a74-ac91-8e06db09e348": [
+              40.0,
+              30.0
+            ],
+            "777a69ae-9c69-4574-bd91-bea08191a3fb": [
+              -0.0,
+              0.0
+            ],
+            "90bfae68-a2a4-489b-aa9a-8a922bc591cd": [
+              -40.0,
+              -30.0
+            ],
+            "9d2cde40-cfea-4fce-8408-2abe7487c164": [
+              40.0,
+              -30.0
+            ],
+            "a8a1b9bc-e5eb-4467-806e-1e08384f7d0a": [
+              30.0,
+              -20.0
+            ],
+            "ad6cca57-7b00-45d5-ba81-8886a0806e03": [
+              -30.0,
+              -20.0
+            ]
+          },
+          "segments": [],
+          "constraints": [
+            {
+              "id": "1deb1dc3-8a16-4c06-8e53-58bfdc1c34ab",
+              "kind": "horizontal",
+              "entities": [
+                "90bfae68-a2a4-489b-aa9a-8a922bc591cd",
+                "9d2cde40-cfea-4fce-8408-2abe7487c164"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "26905031-dfe8-45ea-8072-1582884f4578",
+              "kind": "vertical",
+              "entities": [
+                "9d2cde40-cfea-4fce-8408-2abe7487c164",
+                "7557d352-f284-4a74-ac91-8e06db09e348"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "63793de5-1c42-4697-97ca-d48a4e483890",
+              "kind": "horizontal",
+              "entities": [
+                "7557d352-f284-4a74-ac91-8e06db09e348",
+                "133de29c-2a38-46d6-a1af-5cfda58e2b58"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "dd8e45cf-fd3a-46d8-9a0e-32bef9d880c0",
+              "kind": "vertical",
+              "entities": [
+                "133de29c-2a38-46d6-a1af-5cfda58e2b58",
+                "90bfae68-a2a4-489b-aa9a-8a922bc591cd"
+              ],
+              "value": "0 mm"
+            }
+          ],
+          "profile_order": [],
+          "circles": {},
+          "members": {
+            "1566bcec-b517-4d6a-8058-81de91fabaa9": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "90bfae68-a2a4-489b-aa9a-8a922bc591cd",
+                "end": "9d2cde40-cfea-4fce-8408-2abe7487c164"
+              }
+            },
+            "2d3d25d0-6e0a-47eb-b799-10e259a200ad": {
+              "construction": false,
+              "curve": {
+                "kind": "circle",
+                "center": "a8a1b9bc-e5eb-4467-806e-1e08384f7d0a",
+                "radius": "3 mm"
+              }
+            },
+            "462636ff-3681-43ee-bb41-b34e177ed370": {
+              "construction": false,
+              "curve": {
+                "kind": "circle",
+                "center": "ad6cca57-7b00-45d5-ba81-8886a0806e03",
+                "radius": "3 mm"
+              }
+            },
+            "57704f45-f62a-4409-92b4-ce058021d9d0": {
+              "construction": false,
+              "curve": {
+                "kind": "circle",
+                "center": "342db78a-48d9-469e-a27a-4ecfa7526b9c",
+                "radius": "3 mm"
+              }
+            },
+            "5f963e51-ba32-4091-b8c1-4ee686f55882": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "133de29c-2a38-46d6-a1af-5cfda58e2b58",
+                "end": "90bfae68-a2a4-489b-aa9a-8a922bc591cd"
+              }
+            },
+            "7d3845f7-f8de-4552-9863-dd2bae1bd937": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "7557d352-f284-4a74-ac91-8e06db09e348",
+                "end": "133de29c-2a38-46d6-a1af-5cfda58e2b58"
+              }
+            },
+            "b75759b6-57cb-47aa-a79b-94f216ce8bb8": {
+              "construction": false,
+              "curve": {
+                "kind": "circle",
+                "center": "61d8f772-3c1a-46b6-8fe8-a224ecc2e8ad",
+                "radius": "3 mm"
+              }
+            },
+            "d5b2edd4-0ec8-40a7-acdc-297b7d683bf3": {
+              "construction": false,
+              "curve": {
+                "kind": "circle",
+                "center": "777a69ae-9c69-4574-bd91-bea08191a3fb",
+                "radius": "10 mm"
+              }
+            },
+            "fc69e197-77fc-4e40-8ae2-613b3200ea91": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "9d2cde40-cfea-4fce-8408-2abe7487c164",
+                "end": "7557d352-f284-4a74-ac91-8e06db09e348"
+              }
+            }
+          }
+        }
+      },
+      "configurations": {}
+    },
+    "982d63ef-400c-45c2-9a49-5d1ccd1fcf95": {
+      "id": "982d63ef-400c-45c2-9a49-5d1ccd1fcf95",
+      "name": "Part4",
+      "parameters": {},
+      "features": [
+        {
+          "id": "9751fc7a-8ec3-4744-9cde-718050832cea",
+          "name": "Sketch1",
+          "operation": {
+            "kind": "profile",
+            "profile": {
+              "kind": "sketch",
+              "sketch": "cbfd19a1-f8f0-4935-8f50-b8601cac7660"
+            },
+            "plane": {
+              "origin": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "u": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "v": [
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "plane_reference": null,
+            "reference_body": null
+          },
+          "suppressed": false
+        },
+        {
+          "id": "3e09bce6-7abf-4719-bf5b-6eaf90467a3a",
+          "name": "Base Flange / Tab1",
+          "operation": {
+            "kind": "sheet",
+            "operation": {
+              "kind": "base",
+              "profile": {
+                "definition": "982d63ef-400c-45c2-9a49-5d1ccd1fcf95",
+                "node": "9751fc7a-8ec3-4744-9cde-718050832cea"
+              },
+              "thickness": "2 mm",
+              "inside_radius": "3 mm",
+              "k_factor": "0.4",
+              "side": "positive"
+            }
+          },
+          "suppressed": false
+        },
+        {
+          "id": "61cb75df-805c-45a3-87e5-debfa59da8bb",
+          "name": "Edge Flange1",
+          "operation": {
+            "kind": "sheet",
+            "operation": {
+              "kind": "edge_flange",
+              "body": {
+                "definition": "982d63ef-400c-45c2-9a49-5d1ccd1fcf95",
+                "node": "3e09bce6-7abf-4719-bf5b-6eaf90467a3a"
+              },
+              "member": "2ef9b646-66aa-4803-bbd2-04193acca882",
+              "length": "25 mm",
+              "angle": "90 deg",
+              "inside_radius": null,
+              "k_factor": null
+            }
+          },
+          "suppressed": false
+        },
+        {
+          "id": "ffd1bbe6-b7bb-442b-903b-19f75bd0b343",
+          "name": "Edge Flange2",
+          "operation": {
+            "kind": "sheet",
+            "operation": {
+              "kind": "edge_flange",
+              "body": {
+                "definition": "982d63ef-400c-45c2-9a49-5d1ccd1fcf95",
+                "node": "61cb75df-805c-45a3-87e5-debfa59da8bb"
+              },
+              "member": "58ce4e86-86c3-446f-ad23-e7739e2761b2",
+              "length": "25 mm",
+              "angle": "90 deg",
+              "inside_radius": null,
+              "k_factor": null
+            }
+          },
+          "suppressed": false
+        },
+        {
+          "id": "d24c9364-aba6-44d6-ac50-dbae937a9883",
+          "name": "Flat Pattern1",
+          "operation": {
+            "kind": "sheet",
+            "operation": {
+              "kind": "flatten",
+              "body": {
+                "definition": "982d63ef-400c-45c2-9a49-5d1ccd1fcf95",
+                "node": "ffd1bbe6-b7bb-442b-903b-19f75bd0b343"
+              },
+              "state": "flat"
+            }
+          },
+          "suppressed": false
+        },
+        {
+          "id": "67aa8e19-d434-4e43-8d93-0a679a437af6",
+          "name": "Formed Sheet1",
+          "operation": {
+            "kind": "sheet",
+            "operation": {
+              "kind": "flatten",
+              "body": {
+                "definition": "982d63ef-400c-45c2-9a49-5d1ccd1fcf95",
+                "node": "d24c9364-aba6-44d6-ac50-dbae937a9883"
+              },
+              "state": "formed"
+            }
+          },
+          "suppressed": false
+        }
+      ],
+      "outputs": [
+        "67aa8e19-d434-4e43-8d93-0a679a437af6"
+      ],
+      "material": "aluminum",
+      "properties": {},
+      "sketches": {
+        "cbfd19a1-f8f0-4935-8f50-b8601cac7660": {
+          "id": "cbfd19a1-f8f0-4935-8f50-b8601cac7660",
+          "name": "Sketch1",
+          "points": {
+            "0ef18033-a411-41b6-9978-f74d2c6019dc": [
+              1.1211579389151119e-11,
+              99.99999999999996
+            ],
+            "2cd90298-c0b5-481e-88dc-f52cffff780d": [
+              1999.9999999999823,
+              -3.190894295083529e-14
+            ],
+            "825c4ea8-36a8-439d-b9f0-c2cd75d4a589": [
+              1999.9999999999673,
+              99.99999999999994
+            ],
+            "c0457fe8-3154-44ef-9370-8ab0b424af57": [
+              -2.435429420229062e-12,
+              -2.8335369013828015e-14
+            ]
+          },
+          "segments": [],
+          "constraints": [
+            {
+              "id": "0ac8f0af-e088-4b48-9aed-f7373aae684c",
+              "kind": "horizontal",
+              "entities": [
+                "c0457fe8-3154-44ef-9370-8ab0b424af57",
+                "2cd90298-c0b5-481e-88dc-f52cffff780d"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "8bf72930-24c1-434d-bcdb-51ecc07f4403",
+              "kind": "vertical",
+              "entities": [
+                "2cd90298-c0b5-481e-88dc-f52cffff780d",
+                "825c4ea8-36a8-439d-b9f0-c2cd75d4a589"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "1c8fbffa-1554-4d02-9230-a5c056058c73",
+              "kind": "horizontal",
+              "entities": [
+                "825c4ea8-36a8-439d-b9f0-c2cd75d4a589",
+                "0ef18033-a411-41b6-9978-f74d2c6019dc"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "953c590d-9a85-4caa-8326-801aecf55a45",
+              "kind": "vertical",
+              "entities": [
+                "0ef18033-a411-41b6-9978-f74d2c6019dc",
+                "c0457fe8-3154-44ef-9370-8ab0b424af57"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "a8b7bcb6-897e-483c-8885-21d8e6489647",
+              "kind": "distance_x",
+              "entities": [
+                "c0457fe8-3154-44ef-9370-8ab0b424af57",
+                "2cd90298-c0b5-481e-88dc-f52cffff780d"
+              ],
+              "value": "2000 mm"
+            },
+            {
+              "id": "e31af55a-219c-4451-bbb2-bcce9cbb38ee",
+              "kind": "distance_x",
+              "entities": [
+                "0ef18033-a411-41b6-9978-f74d2c6019dc",
+                "825c4ea8-36a8-439d-b9f0-c2cd75d4a589"
+              ],
+              "value": "1999.9999999999418 mm"
+            },
+            {
+              "id": "b3130e5e-af15-4f6f-bb69-9564b4308f32",
+              "kind": "distance_y",
+              "entities": [
+                "c0457fe8-3154-44ef-9370-8ab0b424af57",
+                "0ef18033-a411-41b6-9978-f74d2c6019dc"
+              ],
+              "value": "100 mm"
+            },
+            {
+              "id": "52d37f8d-56f4-4d2b-bdeb-dbdfcc6f3c88",
+              "kind": "coincident",
+              "entities": [
+                "c0457fe8-3154-44ef-9370-8ab0b424af57",
+                "@origin"
+              ],
+              "value": "0 mm"
+            }
+          ],
+          "profile_order": [],
+          "circles": {},
+          "members": {
+            "2ef9b646-66aa-4803-bbd2-04193acca882": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "825c4ea8-36a8-439d-b9f0-c2cd75d4a589",
+                "end": "0ef18033-a411-41b6-9978-f74d2c6019dc"
+              }
+            },
+            "58ce4e86-86c3-446f-ad23-e7739e2761b2": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "c0457fe8-3154-44ef-9370-8ab0b424af57",
+                "end": "2cd90298-c0b5-481e-88dc-f52cffff780d"
+              }
+            },
+            "a1d02822-51ce-481e-8065-551555ead813": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "0ef18033-a411-41b6-9978-f74d2c6019dc",
+                "end": "c0457fe8-3154-44ef-9370-8ab0b424af57"
+              }
+            },
+            "dbd388ac-1135-4a3c-ba22-b36f46ee89e5": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "2cd90298-c0b5-481e-88dc-f52cffff780d",
+                "end": "825c4ea8-36a8-439d-b9f0-c2cd75d4a589"
+              }
+            }
+          }
+        }
+      },
+      "configurations": {}
+    },
+    "a962e85b-ec1b-42b3-8350-a95dce6e1464": {
+      "id": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+      "name": "Part3",
+      "parameters": {},
+      "features": [
+        {
+          "id": "e73c74a9-4bd1-47fa-95bc-340810214017",
+          "name": "Sketch1",
+          "operation": {
+            "kind": "profile",
+            "profile": {
+              "kind": "sketch",
+              "sketch": "1bfb298b-a015-4997-83e4-60bae2098449"
+            },
+            "plane": {
+              "origin": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "u": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "v": [
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "plane_reference": null,
+            "reference_body": null
+          },
+          "suppressed": false
+        },
+        {
+          "id": "feca765f-49bd-442f-b542-352103930edf",
+          "name": "Boss-Extrude1",
+          "operation": {
+            "kind": "extrude",
+            "profile": {
+              "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+              "node": "e73c74a9-4bd1-47fa-95bc-340810214017"
+            },
+            "distance": "650 mm",
+            "direction": [
+              0.0,
+              -1.0,
+              0.0
+            ],
+            "body": null,
+            "mode": "new",
+            "options": {
+              "profile_normal": true,
+              "reverse_direction": true,
+              "end": "blind",
+              "start_offset": "0 mm",
+              "reverse_distance": null,
+              "target": null,
+              "target_body": null,
+              "end_offset": "0 mm"
+            }
+          },
+          "suppressed": false
+        }
+      ],
+      "outputs": [
+        "feca765f-49bd-442f-b542-352103930edf"
+      ],
+      "material": "aluminum",
+      "properties": {},
+      "sketches": {
+        "1bfb298b-a015-4997-83e4-60bae2098449": {
+          "id": "1bfb298b-a015-4997-83e4-60bae2098449",
+          "name": "Sketch1",
+          "points": {
+            "a0f7bfb7-4329-4472-bf44-f4c02545c7b7": [
+              -0.0,
+              0.0
+            ]
+          },
+          "segments": [],
+          "constraints": [],
+          "profile_order": [],
+          "circles": {},
+          "members": {
+            "1b2e9a24-e509-474d-ad9b-c60b7a016c10": {
+              "construction": false,
+              "curve": {
+                "kind": "circle",
+                "center": "a0f7bfb7-4329-4472-bf44-f4c02545c7b7",
+                "radius": "30 mm"
+              }
+            },
+            "d7f7ae29-94c3-4343-90a2-42fc521c4892": {
+              "construction": false,
+              "curve": {
+                "kind": "circle",
+                "center": "a0f7bfb7-4329-4472-bf44-f4c02545c7b7",
+                "radius": "27 mm"
+              }
+            }
+          }
+        }
+      },
+      "configurations": {}
+    },
+    "ab83c17a-918c-4485-9178-9f711fa60759": {
+      "id": "ab83c17a-918c-4485-9178-9f711fa60759",
+      "name": "upper-frame",
+      "parameters": {},
+      "features": [
+        {
+          "id": "daae6a12-ed70-480b-80c7-9deea70eb750",
+          "name": "Sketch1",
+          "operation": {
+            "kind": "profile",
+            "profile": {
+              "kind": "sketch",
+              "sketch": "ef712020-706b-4b39-a8b1-5fc677d36267"
+            },
+            "plane": {
+              "origin": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "u": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "v": [
+                0.0,
+                1.0,
+                0.0
+              ]
+            },
+            "plane_reference": null,
+            "reference_body": null
+          },
+          "suppressed": false
+        },
+        {
+          "id": "b2334dd3-66ec-48b6-8a0b-64e0abe4e852",
+          "name": "Square tube 50 × 50 × 3 mm profile",
+          "operation": {
+            "kind": "profile",
+            "profile": {
+              "kind": "sketch",
+              "sketch": "9e3b212d-2282-468c-8a3e-d0ac52dda2f5"
+            },
+            "plane": {
+              "origin": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "u": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "v": [
+                0.0,
+                1.0,
+                0.0
+              ]
+            },
+            "plane_reference": null,
+            "reference_body": null
+          },
+          "suppressed": false
+        },
+        {
+          "id": "7498bc65-35ce-48d0-b28d-f14df80b827e",
+          "name": "Structural Member1",
+          "operation": {
+            "kind": "weldment",
+            "operation": {
+              "kind": "members",
+              "body": null,
+              "section": {
+                "definition": "ab83c17a-918c-4485-9178-9f711fa60759",
+                "node": "b2334dd3-66ec-48b6-8a0b-64e0abe4e852"
+              },
+              "path": {
+                "definition": "ab83c17a-918c-4485-9178-9f711fa60759",
+                "node": "daae6a12-ed70-480b-80c7-9deea70eb750"
+              },
+              "members": [
+                "2da6a254-71c0-467f-877b-35026c98f551",
+                "4d5046c3-dfbf-4071-928b-94b35b39270d",
+                "a4f80484-3687-4d0a-b189-0fe296c8c5d5",
+                "c7652728-c78e-4d6a-87b9-28fce5239cdd"
+              ],
+              "member_mode": "explicit",
+              "roll": "0 deg",
+              "anchor": null,
+              "library_profile": {
+                "version": 1,
+                "catalog_id": "tcad-nominal-structural-sections",
+                "catalog_revision": "2026-10-12.1",
+                "catalog_name": "TCAD nominal structural sections",
+                "profile": {
+                  "id": "nominal-metric-square-tube-50-50-3",
+                  "revision": "1",
+                  "collection": "nominal-metric",
+                  "family": "square_tube",
+                  "label": "Square tube 50 × 50 × 3 mm",
+                  "size": "50 × 50 × 3 mm",
+                  "notes": "Nominal sharp-corner section; no rolled corner radius, taper, mill tolerance or supplier certification is implied.",
+                  "contours": [
+                    {
+                      "kind": "polygon",
+                      "points": [
+                        [
+                          -25.0,
+                          -25.0
+                        ],
+                        [
+                          25.0,
+                          -25.0
+                        ],
+                        [
+                          25.0,
+                          25.0
+                        ],
+                        [
+                          -25.0,
+                          25.0
+                        ]
+                      ]
+                    },
+                    {
+                      "kind": "polygon",
+                      "points": [
+                        [
+                          -22.0,
+                          -22.0
+                        ],
+                        [
+                          22.0,
+                          -22.0
+                        ],
+                        [
+                          22.0,
+                          22.0
+                        ],
+                        [
+                          -22.0,
+                          22.0
+                        ]
+                      ]
+                    }
+                  ],
+                  "locators": [
+                    {
+                      "id": "center",
+                      "name": "Envelope center",
+                      "point": [
+                        0.0,
+                        0.0
+                      ]
+                    },
+                    {
+                      "id": "top-center",
+                      "name": "Top center",
+                      "point": [
+                        0.0,
+                        25.0
+                      ]
+                    },
+                    {
+                      "id": "right-center",
+                      "name": "Right center",
+                      "point": [
+                        25.0,
+                        0.0
+                      ]
+                    },
+                    {
+                      "id": "bottom-center",
+                      "name": "Bottom center",
+                      "point": [
+                        0.0,
+                        -25.0
+                      ]
+                    },
+                    {
+                      "id": "left-center",
+                      "name": "Left center",
+                      "point": [
+                        -25.0,
+                        0.0
+                      ]
+                    },
+                    {
+                      "id": "top-left",
+                      "name": "Top left corner",
+                      "point": [
+                        -25.0,
+                        25.0
+                      ]
+                    },
+                    {
+                      "id": "top-right",
+                      "name": "Top right corner",
+                      "point": [
+                        25.0,
+                        25.0
+                      ]
+                    },
+                    {
+                      "id": "bottom-right",
+                      "name": "Bottom right corner",
+                      "point": [
+                        25.0,
+                        -25.0
+                      ]
+                    },
+                    {
+                      "id": "bottom-left",
+                      "name": "Bottom left corner",
+                      "point": [
+                        -25.0,
+                        -25.0
+                      ]
+                    },
+                    {
+                      "id": "inner-corner-0",
+                      "name": "Inner corner 1",
+                      "point": [
+                        -22.0,
+                        -22.0
+                      ]
+                    },
+                    {
+                      "id": "inner-corner-1",
+                      "name": "Inner corner 2",
+                      "point": [
+                        22.0,
+                        -22.0
+                      ]
+                    },
+                    {
+                      "id": "inner-corner-2",
+                      "name": "Inner corner 3",
+                      "point": [
+                        22.0,
+                        22.0
+                      ]
+                    },
+                    {
+                      "id": "inner-corner-3",
+                      "name": "Inner corner 4",
+                      "point": [
+                        -22.0,
+                        22.0
+                      ]
+                    }
+                  ]
+                }
+              },
+              "start_offset": "0 mm",
+              "end_offset": "0 mm",
+              "corner": "miter",
+              "joint_gap": "0 mm"
+            }
+          },
+          "suppressed": false
+        }
+      ],
+      "outputs": [
+        "7498bc65-35ce-48d0-b28d-f14df80b827e"
+      ],
+      "material": "aluminum",
+      "properties": {},
+      "sketches": {
+        "9e3b212d-2282-468c-8a3e-d0ac52dda2f5": {
+          "id": "9e3b212d-2282-468c-8a3e-d0ac52dda2f5",
+          "name": "Square tube 50 × 50 × 3 mm",
+          "points": {
+            "02f39364-2d6c-04e0-89ee-885f26397c88": [
+              22.0,
+              -22.0
+            ],
+            "08741113-ee8e-1fb6-ff45-adb1c2bf27f0": [
+              25.0,
+              -25.0
+            ],
+            "1d6bbe58-3c17-6dc5-27e3-37e03345e2bd": [
+              25.0,
+              25.0
+            ],
+            "3c05653d-c049-533d-42d6-e37941dc820c": [
+              22.0,
+              22.0
+            ],
+            "454688fa-ebdd-4ab0-102d-9f2586f7759c": [
+              -25.0,
+              -25.0
+            ],
+            "596427ed-e0be-8a56-0be0-73f33399d2c3": [
+              -22.0,
+              -22.0
+            ],
+            "615eb761-bc0c-dc6e-8989-e445c9dafff8": [
+              -25.0,
+              0.0
+            ],
+            "7249007e-8c44-8809-1891-81cbc1bd3223": [
+              0.0,
+              25.0
+            ],
+            "7604abe0-8c41-788c-1eae-387c0afb3649": [
+              -22.0,
+              22.0
+            ],
+            "79cb2700-a530-eb0a-f820-24ff9d54c474": [
+              22.0,
+              -22.0
+            ],
+            "941799a6-264a-a316-506b-fcc6d11a0aaf": [
+              25.0,
+              0.0
+            ],
+            "b10e1e27-1d70-a5e3-6236-ea7eb2ace23c": [
+              25.0,
+              -25.0
+            ],
+            "b30df779-6c8e-8ce6-4095-6e97ad688c07": [
+              22.0,
+              22.0
+            ],
+            "ba2b99b8-80da-3fcd-13e3-837442ec5a6c": [
+              0.0,
+              -25.0
+            ],
+            "bf3a8637-4fa7-0940-1c08-b69596080bb0": [
+              -25.0,
+              25.0
+            ],
+            "c1c71f05-22d1-ea61-4b9d-7b061bacdf94": [
+              -25.0,
+              -25.0
+            ],
+            "c86e0d37-4206-3423-f6a0-08c4de3bff0e": [
+              25.0,
+              25.0
+            ],
+            "d1b1c5c9-fae5-662e-ad1a-f11d3466fc09": [
+              -25.0,
+              25.0
+            ],
+            "e1048d1f-b4d7-2aa1-b0b4-780f00027a15": [
+              -22.0,
+              22.0
+            ],
+            "e2dc33b9-9e0f-93f8-ecb1-e6ff5476e885": [
+              0.0,
+              0.0
+            ],
+            "f2638bb4-9b63-2661-073b-f6a78c04bf09": [
+              -22.0,
+              -22.0
+            ]
+          },
+          "segments": [],
+          "constraints": [
+            {
+              "id": "c0e36faa-2893-cebf-75a1-40207dc80036",
+              "kind": "fix_x",
+              "entities": [
+                "c1c71f05-22d1-ea61-4b9d-7b061bacdf94"
+              ],
+              "value": "-25 mm"
+            },
+            {
+              "id": "188b1cf4-c55a-758a-0b56-1b344d04bbd0",
+              "kind": "fix_y",
+              "entities": [
+                "c1c71f05-22d1-ea61-4b9d-7b061bacdf94"
+              ],
+              "value": "-25 mm"
+            },
+            {
+              "id": "39f4d19c-1425-c214-6d1d-a78597e62353",
+              "kind": "fix_x",
+              "entities": [
+                "b10e1e27-1d70-a5e3-6236-ea7eb2ace23c"
+              ],
+              "value": "25 mm"
+            },
+            {
+              "id": "42d8b832-e4c6-75bf-bdf4-271b2a912cde",
+              "kind": "fix_y",
+              "entities": [
+                "b10e1e27-1d70-a5e3-6236-ea7eb2ace23c"
+              ],
+              "value": "-25 mm"
+            },
+            {
+              "id": "684e38a5-4969-902f-dd47-374be8a5504b",
+              "kind": "fix_x",
+              "entities": [
+                "c86e0d37-4206-3423-f6a0-08c4de3bff0e"
+              ],
+              "value": "25 mm"
+            },
+            {
+              "id": "9f9f6f9d-ccbf-7714-dff9-6666f635825b",
+              "kind": "fix_y",
+              "entities": [
+                "c86e0d37-4206-3423-f6a0-08c4de3bff0e"
+              ],
+              "value": "25 mm"
+            },
+            {
+              "id": "704a0b7e-dade-9abe-b2a5-811c446583b0",
+              "kind": "fix_x",
+              "entities": [
+                "bf3a8637-4fa7-0940-1c08-b69596080bb0"
+              ],
+              "value": "-25 mm"
+            },
+            {
+              "id": "1f54cf37-4009-68cb-b9e7-a1009cd8b82f",
+              "kind": "fix_y",
+              "entities": [
+                "bf3a8637-4fa7-0940-1c08-b69596080bb0"
+              ],
+              "value": "25 mm"
+            },
+            {
+              "id": "42001df1-5b91-b94a-b0c6-9c35fb1a4e35",
+              "kind": "fix_x",
+              "entities": [
+                "f2638bb4-9b63-2661-073b-f6a78c04bf09"
+              ],
+              "value": "-22 mm"
+            },
+            {
+              "id": "d7b102de-4df2-6cbd-13ad-043b8ce63376",
+              "kind": "fix_y",
+              "entities": [
+                "f2638bb4-9b63-2661-073b-f6a78c04bf09"
+              ],
+              "value": "-22 mm"
+            },
+            {
+              "id": "8c6354e7-deb6-34bd-9f91-7b2e7c28ce33",
+              "kind": "fix_x",
+              "entities": [
+                "02f39364-2d6c-04e0-89ee-885f26397c88"
+              ],
+              "value": "22 mm"
+            },
+            {
+              "id": "62362912-db85-e2ca-c32d-7857c694e1ba",
+              "kind": "fix_y",
+              "entities": [
+                "02f39364-2d6c-04e0-89ee-885f26397c88"
+              ],
+              "value": "-22 mm"
+            },
+            {
+              "id": "829612cb-e5bd-e9a0-8965-cc55d48cfc49",
+              "kind": "fix_x",
+              "entities": [
+                "b30df779-6c8e-8ce6-4095-6e97ad688c07"
+              ],
+              "value": "22 mm"
+            },
+            {
+              "id": "512272ff-8ec1-8c92-61eb-a58a8c0b0139",
+              "kind": "fix_y",
+              "entities": [
+                "b30df779-6c8e-8ce6-4095-6e97ad688c07"
+              ],
+              "value": "22 mm"
+            },
+            {
+              "id": "e0c630c2-4c70-ab81-0b0a-d55f09fceab0",
+              "kind": "fix_x",
+              "entities": [
+                "7604abe0-8c41-788c-1eae-387c0afb3649"
+              ],
+              "value": "-22 mm"
+            },
+            {
+              "id": "0a7c1977-e952-782f-2561-916fd6efa176",
+              "kind": "fix_y",
+              "entities": [
+                "7604abe0-8c41-788c-1eae-387c0afb3649"
+              ],
+              "value": "22 mm"
+            },
+            {
+              "id": "03712042-4495-ebf3-c0fb-10ca9136f4af",
+              "kind": "fix_x",
+              "entities": [
+                "e2dc33b9-9e0f-93f8-ecb1-e6ff5476e885"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "7a3c2564-e29d-8ced-f20e-0654c49fb87f",
+              "kind": "fix_y",
+              "entities": [
+                "e2dc33b9-9e0f-93f8-ecb1-e6ff5476e885"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "9026e29a-0a93-1170-1d31-8f35dcad5faa",
+              "kind": "fix_x",
+              "entities": [
+                "7249007e-8c44-8809-1891-81cbc1bd3223"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "9b26095e-e8f2-3d6f-ba22-cea81ad25726",
+              "kind": "fix_y",
+              "entities": [
+                "7249007e-8c44-8809-1891-81cbc1bd3223"
+              ],
+              "value": "25 mm"
+            },
+            {
+              "id": "320e7fb9-38e6-26a1-51c7-0ba2504f9b51",
+              "kind": "fix_x",
+              "entities": [
+                "941799a6-264a-a316-506b-fcc6d11a0aaf"
+              ],
+              "value": "25 mm"
+            },
+            {
+              "id": "f822daea-f809-eb2e-baf7-add3d06893d2",
+              "kind": "fix_y",
+              "entities": [
+                "941799a6-264a-a316-506b-fcc6d11a0aaf"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "0194f85b-ba0e-91d3-f751-299444f1b0b5",
+              "kind": "fix_x",
+              "entities": [
+                "ba2b99b8-80da-3fcd-13e3-837442ec5a6c"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "5d6de7fa-17df-f5f4-5a1e-a0bf56a75892",
+              "kind": "fix_y",
+              "entities": [
+                "ba2b99b8-80da-3fcd-13e3-837442ec5a6c"
+              ],
+              "value": "-25 mm"
+            },
+            {
+              "id": "e62cb05d-febf-854b-a32f-909f2e947cde",
+              "kind": "fix_x",
+              "entities": [
+                "615eb761-bc0c-dc6e-8989-e445c9dafff8"
+              ],
+              "value": "-25 mm"
+            },
+            {
+              "id": "1cfffba3-e95d-16ae-8cb4-2f65844fb3bb",
+              "kind": "fix_y",
+              "entities": [
+                "615eb761-bc0c-dc6e-8989-e445c9dafff8"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "3f30048c-836a-2186-1ca3-9ba60598a9ec",
+              "kind": "fix_x",
+              "entities": [
+                "d1b1c5c9-fae5-662e-ad1a-f11d3466fc09"
+              ],
+              "value": "-25 mm"
+            },
+            {
+              "id": "22a3824c-4c93-0184-1eb5-31fdb6ef41e1",
+              "kind": "fix_y",
+              "entities": [
+                "d1b1c5c9-fae5-662e-ad1a-f11d3466fc09"
+              ],
+              "value": "25 mm"
+            },
+            {
+              "id": "dad13bf3-3f0a-30d1-4687-bc1a1e3f705c",
+              "kind": "fix_x",
+              "entities": [
+                "1d6bbe58-3c17-6dc5-27e3-37e03345e2bd"
+              ],
+              "value": "25 mm"
+            },
+            {
+              "id": "ff6c77d0-7997-bcaf-6c5b-7b438fb18598",
+              "kind": "fix_y",
+              "entities": [
+                "1d6bbe58-3c17-6dc5-27e3-37e03345e2bd"
+              ],
+              "value": "25 mm"
+            },
+            {
+              "id": "ba7bf8ac-5012-9f37-6aac-c785a967dc48",
+              "kind": "fix_x",
+              "entities": [
+                "08741113-ee8e-1fb6-ff45-adb1c2bf27f0"
+              ],
+              "value": "25 mm"
+            },
+            {
+              "id": "7a0ffe77-b5ef-2b3e-97f6-b044b602f8c7",
+              "kind": "fix_y",
+              "entities": [
+                "08741113-ee8e-1fb6-ff45-adb1c2bf27f0"
+              ],
+              "value": "-25 mm"
+            },
+            {
+              "id": "30550b85-69f5-c5b1-a002-3385c84a1cf7",
+              "kind": "fix_x",
+              "entities": [
+                "454688fa-ebdd-4ab0-102d-9f2586f7759c"
+              ],
+              "value": "-25 mm"
+            },
+            {
+              "id": "d4190b4a-779c-279c-3219-d438cacbe4a0",
+              "kind": "fix_y",
+              "entities": [
+                "454688fa-ebdd-4ab0-102d-9f2586f7759c"
+              ],
+              "value": "-25 mm"
+            },
+            {
+              "id": "294d39b2-2ef3-cd26-cea5-237349fbdc1c",
+              "kind": "fix_x",
+              "entities": [
+                "596427ed-e0be-8a56-0be0-73f33399d2c3"
+              ],
+              "value": "-22 mm"
+            },
+            {
+              "id": "6d938ea1-3a68-25dd-4ee1-a19867f8bd55",
+              "kind": "fix_y",
+              "entities": [
+                "596427ed-e0be-8a56-0be0-73f33399d2c3"
+              ],
+              "value": "-22 mm"
+            },
+            {
+              "id": "2e5b1b0d-ac1f-ab02-eb36-1bd570e31de7",
+              "kind": "fix_x",
+              "entities": [
+                "79cb2700-a530-eb0a-f820-24ff9d54c474"
+              ],
+              "value": "22 mm"
+            },
+            {
+              "id": "8330d9da-989c-aa48-a6b1-ad77d63661fd",
+              "kind": "fix_y",
+              "entities": [
+                "79cb2700-a530-eb0a-f820-24ff9d54c474"
+              ],
+              "value": "-22 mm"
+            },
+            {
+              "id": "65e2204e-339d-ee1c-caab-95c8a6b2ac58",
+              "kind": "fix_x",
+              "entities": [
+                "3c05653d-c049-533d-42d6-e37941dc820c"
+              ],
+              "value": "22 mm"
+            },
+            {
+              "id": "86b91a90-b927-e6b0-99d7-3a9d8ee6bb04",
+              "kind": "fix_y",
+              "entities": [
+                "3c05653d-c049-533d-42d6-e37941dc820c"
+              ],
+              "value": "22 mm"
+            },
+            {
+              "id": "3672b1ea-d574-7ad2-4d80-022dab4ec8f5",
+              "kind": "fix_x",
+              "entities": [
+                "e1048d1f-b4d7-2aa1-b0b4-780f00027a15"
+              ],
+              "value": "-22 mm"
+            },
+            {
+              "id": "3ac7b1de-7a1a-61e7-b867-720b73414fd3",
+              "kind": "fix_y",
+              "entities": [
+                "e1048d1f-b4d7-2aa1-b0b4-780f00027a15"
+              ],
+              "value": "22 mm"
+            }
+          ],
+          "profile_order": [],
+          "circles": {},
+          "members": {
+            "0b5e9e94-139a-491c-d132-48773903755e": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "b10e1e27-1d70-a5e3-6236-ea7eb2ace23c",
+                "end": "c86e0d37-4206-3423-f6a0-08c4de3bff0e"
+              }
+            },
+            "24109008-7f62-5e78-665c-80d20545a498": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "7604abe0-8c41-788c-1eae-387c0afb3649",
+                "end": "f2638bb4-9b63-2661-073b-f6a78c04bf09"
+              }
+            },
+            "37134d1f-81ef-0c35-9a2d-0300adfcd42a": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "bf3a8637-4fa7-0940-1c08-b69596080bb0",
+                "end": "c1c71f05-22d1-ea61-4b9d-7b061bacdf94"
+              }
+            },
+            "37fc3a54-ae5e-e0f9-36f7-5b31a21939f4": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "c86e0d37-4206-3423-f6a0-08c4de3bff0e",
+                "end": "bf3a8637-4fa7-0940-1c08-b69596080bb0"
+              }
+            },
+            "9dd388f5-c26f-ebb4-69f3-c6d6a60d4dc5": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "02f39364-2d6c-04e0-89ee-885f26397c88",
+                "end": "b30df779-6c8e-8ce6-4095-6e97ad688c07"
+              }
+            },
+            "c82a10d7-ffe1-48e2-0367-bc7ea2a8e920": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "c1c71f05-22d1-ea61-4b9d-7b061bacdf94",
+                "end": "b10e1e27-1d70-a5e3-6236-ea7eb2ace23c"
+              }
+            },
+            "dbbef331-0b7d-ed4d-c87d-33515941f5f3": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "f2638bb4-9b63-2661-073b-f6a78c04bf09",
+                "end": "02f39364-2d6c-04e0-89ee-885f26397c88"
+              }
+            },
+            "fb9cb9a3-5fc3-dfe0-4c60-272dd5af7d78": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "b30df779-6c8e-8ce6-4095-6e97ad688c07",
+                "end": "7604abe0-8c41-788c-1eae-387c0afb3649"
+              }
+            }
+          }
+        },
+        "ef712020-706b-4b39-a8b1-5fc677d36267": {
+          "id": "ef712020-706b-4b39-a8b1-5fc677d36267",
+          "name": "Sketch1",
+          "points": {
+            "3be166d3-ce3c-42f4-981a-7c333354d777": [
+              2000.0,
+              -1.1842460502780873e-8
+            ],
+            "4306eb3b-f1f3-4435-a1d0-1f4123081d8d": [
+              2000.0,
+              699.9999999845186
+            ],
+            "c2619a28-d77d-49b9-9b40-28d494fddfe4": [
+              3.0389968910048333e-17,
+              699.9999999832445
+            ],
+            "c398a167-6678-43b1-9042-2ce51742f235": [
+              3.094065785087029e-17,
+              -6.409755914082779e-9
+            ]
+          },
+          "segments": [],
+          "constraints": [
+            {
+              "id": "16289e35-75ba-4ca0-9a97-ba8b9f244dff",
+              "kind": "horizontal",
+              "entities": [
+                "c398a167-6678-43b1-9042-2ce51742f235",
+                "3be166d3-ce3c-42f4-981a-7c333354d777"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "e82b7515-a50d-46ed-8909-a9cb87196c60",
+              "kind": "vertical",
+              "entities": [
+                "3be166d3-ce3c-42f4-981a-7c333354d777",
+                "4306eb3b-f1f3-4435-a1d0-1f4123081d8d"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "60a1c47f-b5df-4eb8-a506-998eeb02e5a4",
+              "kind": "horizontal",
+              "entities": [
+                "4306eb3b-f1f3-4435-a1d0-1f4123081d8d",
+                "c2619a28-d77d-49b9-9b40-28d494fddfe4"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "c1508ef6-ecec-4db6-8d05-f4e390b12cd3",
+              "kind": "vertical",
+              "entities": [
+                "c2619a28-d77d-49b9-9b40-28d494fddfe4",
+                "c398a167-6678-43b1-9042-2ce51742f235"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "9f445734-fae5-4efe-a1c4-56c1c2b6018e",
+              "kind": "distance_x",
+              "entities": [
+                "c398a167-6678-43b1-9042-2ce51742f235",
+                "3be166d3-ce3c-42f4-981a-7c333354d777"
+              ],
+              "value": "2000 mm"
+            },
+            {
+              "id": "8c5a3e7b-10c9-4418-b67b-c590d93c71fa",
+              "kind": "fix_x",
+              "entities": [
+                "c398a167-6678-43b1-9042-2ce51742f235"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "935945ef-74db-47ea-8b4f-7084234aef85",
+              "kind": "point_line_distance",
+              "entities": [
+                "c398a167-6678-43b1-9042-2ce51742f235",
+                "4d5046c3-dfbf-4071-928b-94b35b39270d"
+              ],
+              "value": "2000 mm",
+              "distance_side": "left"
+            },
+            {
+              "id": "28f421a6-5504-461d-971f-ff7925f86a48",
+              "kind": "distance_y",
+              "entities": [
+                "3be166d3-ce3c-42f4-981a-7c333354d777",
+                "4306eb3b-f1f3-4435-a1d0-1f4123081d8d"
+              ],
+              "value": "699.9999999999898 mm"
+            },
+            {
+              "id": "7e89988f-53d3-486b-857b-761e5622f623",
+              "kind": "coincident",
+              "entities": [
+                "c398a167-6678-43b1-9042-2ce51742f235",
+                "@origin"
+              ],
+              "value": "0 mm"
+            }
+          ],
+          "profile_order": [],
+          "circles": {},
+          "members": {
+            "2da6a254-71c0-467f-877b-35026c98f551": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "c398a167-6678-43b1-9042-2ce51742f235",
+                "end": "3be166d3-ce3c-42f4-981a-7c333354d777"
+              }
+            },
+            "4d5046c3-dfbf-4071-928b-94b35b39270d": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "3be166d3-ce3c-42f4-981a-7c333354d777",
+                "end": "4306eb3b-f1f3-4435-a1d0-1f4123081d8d"
+              }
+            },
+            "a4f80484-3687-4d0a-b189-0fe296c8c5d5": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "4306eb3b-f1f3-4435-a1d0-1f4123081d8d",
+                "end": "c2619a28-d77d-49b9-9b40-28d494fddfe4"
+              }
+            },
+            "c7652728-c78e-4d6a-87b9-28fce5239cdd": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "c2619a28-d77d-49b9-9b40-28d494fddfe4",
+                "end": "c398a167-6678-43b1-9042-2ce51742f235"
+              }
+            }
+          }
+        }
+      },
+      "configurations": {}
+    },
+    "b73073a2-93a0-40bb-b65d-327af1178dde": {
+      "id": "b73073a2-93a0-40bb-b65d-327af1178dde",
+      "name": "Part2",
+      "parameters": {},
+      "features": [
+        {
+          "id": "23402b5a-d16d-4e16-b77d-b53134ec12b7",
+          "name": "Sketch1",
+          "operation": {
+            "kind": "profile",
+            "profile": {
+              "kind": "sketch",
+              "sketch": "2cc8dc05-fb4b-44c6-8177-99546cf3d596"
+            },
+            "plane": {
+              "origin": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "u": [
+                1.0,
+                0.0,
+                0.0
+              ],
+              "v": [
+                0.0,
+                1.0,
+                0.0
+              ]
+            },
+            "plane_reference": null,
+            "reference_body": null
+          },
+          "suppressed": false
+        },
+        {
+          "id": "261d0e3b-5e02-4b67-a23c-38f2125b91f3",
+          "name": "Boss-Extrude1",
+          "operation": {
+            "kind": "extrude",
+            "profile": {
+              "definition": "b73073a2-93a0-40bb-b65d-327af1178dde",
+              "node": "23402b5a-d16d-4e16-b77d-b53134ec12b7"
+            },
+            "distance": "800 mm",
+            "direction": [
+              0.0,
+              0.0,
+              1.0
+            ],
+            "body": null,
+            "mode": "new",
+            "options": {
+              "profile_normal": true,
+              "reverse_direction": true,
+              "end": "blind",
+              "start_offset": "0 mm",
+              "reverse_distance": null,
+              "target": null,
+              "target_body": null,
+              "end_offset": "0 mm"
+            }
+          },
+          "suppressed": false
+        }
+      ],
+      "outputs": [
+        "261d0e3b-5e02-4b67-a23c-38f2125b91f3"
+      ],
+      "material": "aluminum",
+      "properties": {},
+      "sketches": {
+        "2cc8dc05-fb4b-44c6-8177-99546cf3d596": {
+          "id": "2cc8dc05-fb4b-44c6-8177-99546cf3d596",
+          "name": "Sketch1",
+          "points": {
+            "113f9fac-6966-46fb-ae82-362ee200557c": [
+              -25.0,
+              -25.0
+            ],
+            "13a8b35b-7ebe-4f70-acd8-4e63b2539639": [
+              25.0,
+              25.0
+            ],
+            "1cb08084-b468-4aca-b4c4-a4d001a4f0ab": [
+              -25.0,
+              25.0
+            ],
+            "412a3451-f57e-46cf-9bdc-2d33d5eb9f7a": [
+              22.0,
+              22.0
+            ],
+            "a6ca0328-27b3-4656-a6a2-36400b97dfd8": [
+              -22.0,
+              22.0
+            ],
+            "c7531254-6b02-4c3e-898e-8f666b750c8a": [
+              22.0,
+              -22.0
+            ],
+            "e04f8ea8-0ea6-48fa-8770-3044a4cf6430": [
+              -22.0,
+              -22.0
+            ],
+            "e952b122-cead-42c0-92e1-891751d31240": [
+              25.0,
+              -25.0
+            ]
+          },
+          "segments": [],
+          "constraints": [
+            {
+              "id": "16c7bc39-ccbc-4fa9-a553-9d917078940c",
+              "kind": "horizontal",
+              "entities": [
+                "113f9fac-6966-46fb-ae82-362ee200557c",
+                "e952b122-cead-42c0-92e1-891751d31240"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "221e007b-ed66-403b-92c6-b9f73a3a3a53",
+              "kind": "vertical",
+              "entities": [
+                "e952b122-cead-42c0-92e1-891751d31240",
+                "13a8b35b-7ebe-4f70-acd8-4e63b2539639"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "7f19f796-c35c-4594-93e1-c35e789f8c35",
+              "kind": "horizontal",
+              "entities": [
+                "13a8b35b-7ebe-4f70-acd8-4e63b2539639",
+                "1cb08084-b468-4aca-b4c4-a4d001a4f0ab"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "082df6c2-6a9a-4df6-ac42-c39c308e3cfa",
+              "kind": "vertical",
+              "entities": [
+                "1cb08084-b468-4aca-b4c4-a4d001a4f0ab",
+                "113f9fac-6966-46fb-ae82-362ee200557c"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "7ada8850-c844-4223-b48a-41946eaf53fb",
+              "kind": "horizontal",
+              "entities": [
+                "e04f8ea8-0ea6-48fa-8770-3044a4cf6430",
+                "c7531254-6b02-4c3e-898e-8f666b750c8a"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "a508bd42-02af-4d9d-b1fe-8009f9d700f9",
+              "kind": "vertical",
+              "entities": [
+                "c7531254-6b02-4c3e-898e-8f666b750c8a",
+                "412a3451-f57e-46cf-9bdc-2d33d5eb9f7a"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "14b5f5c1-6466-4348-b17d-278e0cfc7caa",
+              "kind": "horizontal",
+              "entities": [
+                "412a3451-f57e-46cf-9bdc-2d33d5eb9f7a",
+                "a6ca0328-27b3-4656-a6a2-36400b97dfd8"
+              ],
+              "value": "0 mm"
+            },
+            {
+              "id": "de304611-7671-4ab6-b0f9-b37c3a9ebb98",
+              "kind": "vertical",
+              "entities": [
+                "a6ca0328-27b3-4656-a6a2-36400b97dfd8",
+                "e04f8ea8-0ea6-48fa-8770-3044a4cf6430"
+              ],
+              "value": "0 mm"
+            }
+          ],
+          "profile_order": [],
+          "circles": {},
+          "members": {
+            "0b106cf3-eb20-4f23-82f8-373fe12b95c8": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "412a3451-f57e-46cf-9bdc-2d33d5eb9f7a",
+                "end": "a6ca0328-27b3-4656-a6a2-36400b97dfd8"
+              }
+            },
+            "635542cb-f2ec-4d84-b14b-f0172ab855a8": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "c7531254-6b02-4c3e-898e-8f666b750c8a",
+                "end": "412a3451-f57e-46cf-9bdc-2d33d5eb9f7a"
+              }
+            },
+            "749ba928-0c33-4166-9685-c2a1823efdbd": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "13a8b35b-7ebe-4f70-acd8-4e63b2539639",
+                "end": "1cb08084-b468-4aca-b4c4-a4d001a4f0ab"
+              }
+            },
+            "7c1eec63-6403-479b-a547-3db98eb85529": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "113f9fac-6966-46fb-ae82-362ee200557c",
+                "end": "e952b122-cead-42c0-92e1-891751d31240"
+              }
+            },
+            "97fffa24-a52c-40ac-8143-3d398241e6a9": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "1cb08084-b468-4aca-b4c4-a4d001a4f0ab",
+                "end": "113f9fac-6966-46fb-ae82-362ee200557c"
+              }
+            },
+            "befaea34-2d03-4ab0-b4e0-975e7ce112df": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "e952b122-cead-42c0-92e1-891751d31240",
+                "end": "13a8b35b-7ebe-4f70-acd8-4e63b2539639"
+              }
+            },
+            "f1ef4dfd-e917-44ae-bad5-18fac97fc3bb": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "a6ca0328-27b3-4656-a6a2-36400b97dfd8",
+                "end": "e04f8ea8-0ea6-48fa-8770-3044a4cf6430"
+              }
+            },
+            "ff804c16-d644-4298-a678-8261602a6618": {
+              "construction": false,
+              "curve": {
+                "kind": "line",
+                "start": "e04f8ea8-0ea6-48fa-8770-3044a4cf6430",
+                "end": "c7531254-6b02-4c3e-898e-8f666b750c8a"
+              }
+            }
+          }
+        }
+      },
+      "configurations": {}
+    }
+  },
+  "assemblies": {
+    "836d5718-8d4f-44ea-bcf0-af2701790016": {
+      "id": "836d5718-8d4f-44ea-bcf0-af2701790016",
+      "name": "Part1",
+      "instances": {
+        "014d79d5-4492-428c-a24f-df41f66a1e36": {
+          "id": "014d79d5-4492-428c-a24f-df41f66a1e36",
+          "name": "Part3 · 4",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "0a36886e-0773-409f-adc6-b231a0c13563": {
+          "id": "0a36886e-0773-409f-adc6-b231a0c13563",
+          "name": "Part5 · 8",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "1708e00f-ff88-4ef4-a3e9-274b62ff57b6": {
+          "id": "1708e00f-ff88-4ef4-a3e9-274b62ff57b6",
+          "name": "Part5 · 3",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "19eaaee3-7dae-44e2-bebc-1e914a6b86a7": {
+          "id": "19eaaee3-7dae-44e2-bebc-1e914a6b86a7",
+          "name": "Part3 · 2",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "1adb4666-247e-4da4-8948-f788a0eeaf91": {
+          "id": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+          "name": "Part3",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "20c768c6-e6d1-4475-9ea9-c4c282c3fab6": {
+          "id": "20c768c6-e6d1-4475-9ea9-c4c282c3fab6",
+          "name": "Part3 · 12",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "247e1aca-73bf-4954-9804-1e787647519f": {
+          "id": "247e1aca-73bf-4954-9804-1e787647519f",
+          "name": "Part5 · 9",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "28719351-16ec-48ab-979c-1b143af12feb": {
+          "id": "28719351-16ec-48ab-979c-1b143af12feb",
+          "name": "Part2 · 3 · 2",
+          "definition": "b73073a2-93a0-40bb-b65d-327af1178dde",
+          "placement": {
+            "translation": [
+              0.0,
+              0.0,
+              -25.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "48970516-bf8a-48ce-b563-0c518415ab54": {
+          "id": "48970516-bf8a-48ce-b563-0c518415ab54",
+          "name": "Part3 · 7",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "48fe822d-f57d-4bf4-9970-0e89f481e717": {
+          "id": "48fe822d-f57d-4bf4-9970-0e89f481e717",
+          "name": "Part2",
+          "definition": "b73073a2-93a0-40bb-b65d-327af1178dde",
+          "placement": {
+            "translation": [
+              0.0,
+              0.0,
+              -25.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "5066373c-b722-4009-a478-9e791e650c83": {
+          "id": "5066373c-b722-4009-a478-9e791e650c83",
+          "name": "Part3 · 11",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "51ba2670-24b0-415a-b27f-0ab9118f9340": {
+          "id": "51ba2670-24b0-415a-b27f-0ab9118f9340",
+          "name": "Part3 · 3",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "52fabf4b-5615-46ea-9c8b-7f29f8f1e127": {
+          "id": "52fabf4b-5615-46ea-9c8b-7f29f8f1e127",
+          "name": "Part3 · 6",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "59a8e30e-b9ef-496b-a8dd-2d5fabf6973c": {
+          "id": "59a8e30e-b9ef-496b-a8dd-2d5fabf6973c",
+          "name": "Part4",
+          "definition": "982d63ef-400c-45c2-9a49-5d1ccd1fcf95",
+          "placement": {
+            "translation": [
+              0.0,
+              -28.0,
+              25.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "60ab1ac9-c1c2-481f-9ac8-24743e35b273": {
+          "id": "60ab1ac9-c1c2-481f-9ac8-24743e35b273",
+          "name": "Part6",
+          "definition": "82c5e01b-8d2d-401c-aa6d-669c627198e9",
+          "placement": {
+            "translation": [
+              150.0,
+              -15.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "686a61fc-683a-4635-b9c2-5a1f16302889": {
+          "id": "686a61fc-683a-4635-b9c2-5a1f16302889",
+          "name": "Part5 · 11",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "821ca24e-9052-4a6b-bde5-24aa44dd4f2b": {
+          "id": "821ca24e-9052-4a6b-bde5-24aa44dd4f2b",
+          "name": "Part5 · 6",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "9634f00c-6219-4652-a600-aec71fba7e28": {
+          "id": "9634f00c-6219-4652-a600-aec71fba7e28",
+          "name": "Part5 · 4",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "9b2b1ac4-8a8a-425e-9426-bdbae72764df": {
+          "id": "9b2b1ac4-8a8a-425e-9426-bdbae72764df",
+          "name": "Part2 · 2",
+          "definition": "b73073a2-93a0-40bb-b65d-327af1178dde",
+          "placement": {
+            "translation": [
+              0.0,
+              0.0,
+              -25.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "a6e8e4b1-c709-4112-9b8c-8a1788b2c779": {
+          "id": "a6e8e4b1-c709-4112-9b8c-8a1788b2c779",
+          "name": "Part4 · 2",
+          "definition": "982d63ef-400c-45c2-9a49-5d1ccd1fcf95",
+          "placement": {
+            "translation": [
+              0.0,
+              -28.0,
+              25.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "a74159e3-f2f7-4a8a-a8e2-9d0c096ab25f": {
+          "id": "a74159e3-f2f7-4a8a-a8e2-9d0c096ab25f",
+          "name": "Part3 · 9",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "b6d812f4-9156-4b28-a94e-4acb49b7e758": {
+          "id": "b6d812f4-9156-4b28-a94e-4acb49b7e758",
+          "name": "Part2 · 3",
+          "definition": "b73073a2-93a0-40bb-b65d-327af1178dde",
+          "placement": {
+            "translation": [
+              0.0,
+              0.0,
+              -25.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a": {
+          "id": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+          "name": "Part5",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "cc943345-9867-400d-9b8f-0bed2e71926c": {
+          "id": "cc943345-9867-400d-9b8f-0bed2e71926c",
+          "name": "Part1",
+          "definition": "ab83c17a-918c-4485-9178-9f711fa60759",
+          "placement": {
+            "translation": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "rotation_deg": [
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": true,
+          "translation_expressions": null
+        },
+        "cf01c695-6106-4117-bd78-ae912a5e2c65": {
+          "id": "cf01c695-6106-4117-bd78-ae912a5e2c65",
+          "name": "Part2 · 2 · 2",
+          "definition": "b73073a2-93a0-40bb-b65d-327af1178dde",
+          "placement": {
+            "translation": [
+              0.0,
+              0.0,
+              -25.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "d53d9372-6bd6-4fb8-acc5-0fae021ffc5c": {
+          "id": "d53d9372-6bd6-4fb8-acc5-0fae021ffc5c",
+          "name": "Part5 · 7",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "d5d0902e-06bb-4d91-a313-2803ccc7a7d9": {
+          "id": "d5d0902e-06bb-4d91-a313-2803ccc7a7d9",
+          "name": "Part5 · 10",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "d7faf34c-9741-4e21-a9d2-313d8397660e": {
+          "id": "d7faf34c-9741-4e21-a9d2-313d8397660e",
+          "name": "Part3 · 10",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "de630818-e087-4d96-acf2-db79c6b02437": {
+          "id": "de630818-e087-4d96-acf2-db79c6b02437",
+          "name": "Part5 · 5",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "df8111fe-1246-4694-85bf-c201580cd707": {
+          "id": "df8111fe-1246-4694-85bf-c201580cd707",
+          "name": "Part3 · 8",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "e0690936-f983-48c8-a37c-5e4b47501773": {
+          "id": "e0690936-f983-48c8-a37c-5e4b47501773",
+          "name": "Part5 · 2",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "e2ef3807-b8aa-4cc6-aa2f-6bb10052c67b": {
+          "id": "e2ef3807-b8aa-4cc6-aa2f-6bb10052c67b",
+          "name": "Part2 · 2",
+          "definition": "b73073a2-93a0-40bb-b65d-327af1178dde",
+          "placement": {
+            "translation": [
+              0.0,
+              0.0,
+              -25.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "e6f488a5-7c15-4614-8611-3beb5eeaf53f": {
+          "id": "e6f488a5-7c15-4614-8611-3beb5eeaf53f",
+          "name": "Part5 · 12",
+          "definition": "8a7f425c-e823-4794-8463-011f35ad3453",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "e8956aec-f1c8-4c2d-bb90-c91d90c73d39": {
+          "id": "e8956aec-f1c8-4c2d-bb90-c91d90c73d39",
+          "name": "Part3 · 5",
+          "definition": "a962e85b-ec1b-42b3-8350-a95dce6e1464",
+          "placement": {
+            "translation": [
+              150.0,
+              25.0,
+              55.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        },
+        "f826a58d-d50f-466c-b4e6-989d993ad05c": {
+          "id": "f826a58d-d50f-466c-b4e6-989d993ad05c",
+          "name": "Part2 · 3",
+          "definition": "b73073a2-93a0-40bb-b65d-327af1178dde",
+          "placement": {
+            "translation": [
+              0.0,
+              0.0,
+              -25.0
+            ],
+            "rotation_deg": [
+              0.0,
+              -0.0,
+              0.0
+            ]
+          },
+          "configuration": null,
+          "fixed": false,
+          "translation_expressions": null
+        }
+      },
+      "mates": [],
+      "promoted_parameters": {},
+      "parameters": {},
+      "component_patterns": {
+        "497361c5-d312-4c89-8aa5-6242498755fa": {
+          "version": 1,
+          "id": "497361c5-d312-4c89-8aa5-6242498755fa",
+          "name": "Component Pattern2",
+          "seeds": [
+            "48fe822d-f57d-4bf4-9970-0e89f481e717",
+            "e2ef3807-b8aa-4cc6-aa2f-6bb10052c67b",
+            "f826a58d-d50f-466c-b4e6-989d993ad05c"
+          ],
+          "count": "2",
+          "mode": {
+            "kind": "linear",
+            "step": [
+              "0 mm",
+              "700 mm",
+              "0 mm"
+            ]
+          },
+          "copy_internal_mates": false,
+          "occurrences": [
+            {
+              "index": 1,
+              "seed": "48fe822d-f57d-4bf4-9970-0e89f481e717",
+              "instance": "9b2b1ac4-8a8a-425e-9426-bdbae72764df"
+            },
+            {
+              "index": 2,
+              "seed": "48fe822d-f57d-4bf4-9970-0e89f481e717",
+              "instance": "b6d812f4-9156-4b28-a94e-4acb49b7e758"
+            },
+            {
+              "index": 1,
+              "seed": "e2ef3807-b8aa-4cc6-aa2f-6bb10052c67b",
+              "instance": "cf01c695-6106-4117-bd78-ae912a5e2c65"
+            },
+            {
+              "index": 1,
+              "seed": "f826a58d-d50f-466c-b4e6-989d993ad05c",
+              "instance": "28719351-16ec-48ab-979c-1b143af12feb"
+            }
+          ],
+          "mates": []
+        },
+        "5b1b295b-b4b8-4e3c-bbf9-288f64c46c9d": {
+          "version": 1,
+          "id": "5b1b295b-b4b8-4e3c-bbf9-288f64c46c9d",
+          "name": "Component Pattern1",
+          "seeds": [
+            "48fe822d-f57d-4bf4-9970-0e89f481e717"
+          ],
+          "count": "3",
+          "mode": {
+            "kind": "linear",
+            "step": [
+              "1000 mm",
+              "0 mm",
+              "0 mm"
+            ]
+          },
+          "copy_internal_mates": false,
+          "occurrences": [
+            {
+              "index": 1,
+              "seed": "48fe822d-f57d-4bf4-9970-0e89f481e717",
+              "instance": "e2ef3807-b8aa-4cc6-aa2f-6bb10052c67b"
+            },
+            {
+              "index": 2,
+              "seed": "48fe822d-f57d-4bf4-9970-0e89f481e717",
+              "instance": "f826a58d-d50f-466c-b4e6-989d993ad05c"
+            }
+          ],
+          "mates": []
+        },
+        "5b33ed10-6438-45a0-9fd0-e6d71cbd2358": {
+          "version": 1,
+          "id": "5b33ed10-6438-45a0-9fd0-e6d71cbd2358",
+          "name": "Component Pattern5",
+          "seeds": [
+            "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a"
+          ],
+          "count": "12",
+          "mode": {
+            "kind": "linear",
+            "step": [
+              "150 mm",
+              "0 mm",
+              "0 mm"
+            ]
+          },
+          "copy_internal_mates": false,
+          "occurrences": [
+            {
+              "index": 1,
+              "seed": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+              "instance": "e0690936-f983-48c8-a37c-5e4b47501773"
+            },
+            {
+              "index": 2,
+              "seed": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+              "instance": "1708e00f-ff88-4ef4-a3e9-274b62ff57b6"
+            },
+            {
+              "index": 3,
+              "seed": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+              "instance": "9634f00c-6219-4652-a600-aec71fba7e28"
+            },
+            {
+              "index": 4,
+              "seed": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+              "instance": "de630818-e087-4d96-acf2-db79c6b02437"
+            },
+            {
+              "index": 5,
+              "seed": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+              "instance": "821ca24e-9052-4a6b-bde5-24aa44dd4f2b"
+            },
+            {
+              "index": 6,
+              "seed": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+              "instance": "d53d9372-6bd6-4fb8-acc5-0fae021ffc5c"
+            },
+            {
+              "index": 7,
+              "seed": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+              "instance": "0a36886e-0773-409f-adc6-b231a0c13563"
+            },
+            {
+              "index": 8,
+              "seed": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+              "instance": "247e1aca-73bf-4954-9804-1e787647519f"
+            },
+            {
+              "index": 9,
+              "seed": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+              "instance": "d5d0902e-06bb-4d91-a313-2803ccc7a7d9"
+            },
+            {
+              "index": 10,
+              "seed": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+              "instance": "686a61fc-683a-4635-b9c2-5a1f16302889"
+            },
+            {
+              "index": 11,
+              "seed": "c0eb9661-d486-4cd1-b2fe-3c73b6d9639a",
+              "instance": "e6f488a5-7c15-4614-8611-3beb5eeaf53f"
+            }
+          ],
+          "mates": []
+        },
+        "cc7eb3ce-0121-44ff-86f5-4bf2a90821a0": {
+          "version": 1,
+          "id": "cc7eb3ce-0121-44ff-86f5-4bf2a90821a0",
+          "name": "Component Pattern4",
+          "seeds": [
+            "59a8e30e-b9ef-496b-a8dd-2d5fabf6973c"
+          ],
+          "count": "2",
+          "mode": {
+            "kind": "linear",
+            "step": [
+              "0 mm",
+              "756 mm",
+              "0 mm"
+            ]
+          },
+          "copy_internal_mates": false,
+          "occurrences": [
+            {
+              "index": 1,
+              "seed": "59a8e30e-b9ef-496b-a8dd-2d5fabf6973c",
+              "instance": "a6e8e4b1-c709-4112-9b8c-8a1788b2c779"
+            }
+          ],
+          "mates": []
+        },
+        "fe731e12-0d68-4aee-8eb1-39f70de71283": {
+          "version": 1,
+          "id": "fe731e12-0d68-4aee-8eb1-39f70de71283",
+          "name": "Component Pattern3",
+          "seeds": [
+            "1adb4666-247e-4da4-8948-f788a0eeaf91"
+          ],
+          "count": "12",
+          "mode": {
+            "kind": "linear",
+            "step": [
+              "150 mm",
+              "0 mm",
+              "0 mm"
+            ]
+          },
+          "copy_internal_mates": false,
+          "occurrences": [
+            {
+              "index": 1,
+              "seed": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+              "instance": "19eaaee3-7dae-44e2-bebc-1e914a6b86a7"
+            },
+            {
+              "index": 2,
+              "seed": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+              "instance": "51ba2670-24b0-415a-b27f-0ab9118f9340"
+            },
+            {
+              "index": 3,
+              "seed": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+              "instance": "014d79d5-4492-428c-a24f-df41f66a1e36"
+            },
+            {
+              "index": 4,
+              "seed": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+              "instance": "e8956aec-f1c8-4c2d-bb90-c91d90c73d39"
+            },
+            {
+              "index": 5,
+              "seed": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+              "instance": "52fabf4b-5615-46ea-9c8b-7f29f8f1e127"
+            },
+            {
+              "index": 6,
+              "seed": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+              "instance": "48970516-bf8a-48ce-b563-0c518415ab54"
+            },
+            {
+              "index": 7,
+              "seed": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+              "instance": "df8111fe-1246-4694-85bf-c201580cd707"
+            },
+            {
+              "index": 8,
+              "seed": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+              "instance": "a74159e3-f2f7-4a8a-a8e2-9d0c096ab25f"
+            },
+            {
+              "index": 9,
+              "seed": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+              "instance": "d7faf34c-9741-4e21-a9d2-313d8397660e"
+            },
+            {
+              "index": 10,
+              "seed": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+              "instance": "5066373c-b722-4009-a478-9e791e650c83"
+            },
+            {
+              "index": 11,
+              "seed": "1adb4666-247e-4da4-8948-f788a0eeaf91",
+              "instance": "20c768c6-e6d1-4475-9ea9-c4c282c3fab6"
+            }
+          ],
+          "mates": []
+        }
+      }
+    }
+  },
+  "materials": {
+    "aluminum": {
+      "id": "aluminum",
+      "name": "Aluminum",
+      "density_kg_m3": 2700.0,
+      "color": [
+        0.68,
+        0.72,
+        0.77
+      ],
+      "metallic": 1.0,
+      "roughness": 0.28
+    },
+    "plastic": {
+      "id": "plastic",
+      "name": "Polymer",
+      "density_kg_m3": 1200.0,
+      "color": [
+        0.17,
+        0.2,
+        0.25
+      ],
+      "metallic": 0.0,
+      "roughness": 0.4
+    },
+    "rubber": {
+      "id": "rubber",
+      "name": "Rubber",
+      "density_kg_m3": 1100.0,
+      "color": [
+        0.025,
+        0.028,
+        0.03
+      ],
+      "metallic": 0.0,
+      "roughness": 0.85
+    },
+    "steel": {
+      "id": "steel",
+      "name": "Steel",
+      "density_kg_m3": 7850.0,
+      "color": [
+        0.42,
+        0.46,
+        0.52
+      ],
+      "metallic": 1.0,
+      "roughness": 0.22
+    }
+  },
+  "resources": {},
+  "drawings": [],
+  "comments": [],
+  "properties": {
+    "document_kind": "part"
+  },
+  "libraries": {}
+}

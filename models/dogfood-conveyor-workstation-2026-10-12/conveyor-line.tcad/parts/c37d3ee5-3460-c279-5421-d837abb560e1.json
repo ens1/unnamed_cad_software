@@ -1,0 +1,101 @@
+{
+  "id": "c37d3ee5-3460-c279-5421-d837abb560e1",
+  "name": "Part6",
+  "parameters": {},
+  "features": [
+    {
+      "id": "0fce6a21-9e0c-a960-099e-f03bacccce10",
+      "name": "Sketch1",
+      "operation": {
+        "kind": "profile",
+        "profile": {
+          "kind": "sketch",
+          "sketch": "1249d6b2-ed76-f27e-6687-d785bec8a408"
+        },
+        "plane": {
+          "origin": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "u": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "v": [
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "plane_reference": null,
+        "reference_body": null
+      },
+      "suppressed": false
+    },
+    {
+      "id": "a8dea292-1636-6657-1b24-d77ba85e6b3b",
+      "name": "Boss-Extrude1",
+      "operation": {
+        "kind": "extrude",
+        "profile": {
+          "definition": "c37d3ee5-3460-c279-5421-d837abb560e1",
+          "node": "0fce6a21-9e0c-a960-099e-f03bacccce10"
+        },
+        "distance": "730 mm",
+        "direction": [
+          0.0,
+          -1.0,
+          0.0
+        ],
+        "body": null,
+        "mode": "new",
+        "options": {
+          "profile_normal": true,
+          "reverse_direction": true,
+          "end": "blind",
+          "start_offset": "0 mm",
+          "reverse_distance": null,
+          "target": null,
+          "target_body": null,
+          "end_offset": "0 mm"
+        }
+      },
+      "suppressed": false
+    }
+  ],
+  "outputs": [
+    "a8dea292-1636-6657-1b24-d77ba85e6b3b"
+  ],
+  "material": "739ae8d8-8e34-a3dd-323f-5e69bc897b39",
+  "finish": "56c9eeef-d0f4-9d2f-e7e1-a41410fa86e0",
+  "properties": {},
+  "sketches": {
+    "1249d6b2-ed76-f27e-6687-d785bec8a408": {
+      "id": "1249d6b2-ed76-f27e-6687-d785bec8a408",
+      "name": "Sketch1",
+      "points": {
+        "cdc3cfd0-6eae-e86e-aa60-010cfdb44165": [
+          -0.0,
+          0.0
+        ]
+      },
+      "segments": [],
+      "constraints": [],
+      "profile_order": [],
+      "circles": {},
+      "members": {
+        "69445910-e706-264f-3508-fdd2c37d473f": {
+          "construction": false,
+          "curve": {
+            "kind": "circle",
+            "center": "cdc3cfd0-6eae-e86e-aa60-010cfdb44165",
+            "radius": "10 mm"
+          }
+        }
+      }
+    }
+  },
+  "configurations": {}
+}

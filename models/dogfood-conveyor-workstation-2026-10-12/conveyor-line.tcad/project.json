@@ -1,0 +1,409 @@
+{
+  "schema_version": 1,
+  "document": {
+    "schema_version": 1,
+    "id": "e31598fb-16ec-4c60-a70e-17c4792ac8d3",
+    "name": "conveyor-line",
+    "revision": 3,
+    "root": "2a56a416-44f4-4160-9c23-c5091986ad23",
+    "parts": {},
+    "assemblies": {},
+    "materials": {
+      "739ae8d8-8e34-a3dd-323f-5e69bc897b39": {
+        "id": "739ae8d8-8e34-a3dd-323f-5e69bc897b39",
+        "name": "Aluminum",
+        "density_kg_m3": 2700.0,
+        "color": [
+          0.68,
+          0.72,
+          0.77
+        ],
+        "metallic": 1.0,
+        "roughness": 0.28
+      },
+      "9b4de331-61aa-d871-bd04-1ce2da3bc2b1": {
+        "id": "9b4de331-61aa-d871-bd04-1ce2da3bc2b1",
+        "name": "Steel",
+        "density_kg_m3": 7850.0,
+        "color": [
+          0.42,
+          0.46,
+          0.52
+        ],
+        "metallic": 1.0,
+        "roughness": 0.22
+      },
+      "aluminum": {
+        "id": "aluminum",
+        "name": "Aluminum",
+        "density_kg_m3": 2700.0,
+        "color": [
+          0.68,
+          0.72,
+          0.77
+        ],
+        "metallic": 1.0,
+        "roughness": 0.28
+      },
+      "b0dce125-3f0c-37e8-785d-d1c4b5e69a52": {
+        "id": "b0dce125-3f0c-37e8-785d-d1c4b5e69a52",
+        "name": "Rubber",
+        "density_kg_m3": 1100.0,
+        "color": [
+          0.025,
+          0.028,
+          0.03
+        ],
+        "metallic": 0.0,
+        "roughness": 0.85
+      },
+      "c27a332d-fda1-bdd2-6194-2121d898baae": {
+        "id": "c27a332d-fda1-bdd2-6194-2121d898baae",
+        "name": "Polymer",
+        "density_kg_m3": 1200.0,
+        "color": [
+          0.17,
+          0.2,
+          0.25
+        ],
+        "metallic": 0.0,
+        "roughness": 0.4
+      },
+      "plastic": {
+        "id": "plastic",
+        "name": "Polymer",
+        "density_kg_m3": 1200.0,
+        "color": [
+          0.17,
+          0.2,
+          0.25
+        ],
+        "metallic": 0.0,
+        "roughness": 0.4
+      },
+      "rubber": {
+        "id": "rubber",
+        "name": "Rubber",
+        "density_kg_m3": 1100.0,
+        "color": [
+          0.025,
+          0.028,
+          0.03
+        ],
+        "metallic": 0.0,
+        "roughness": 0.85
+      },
+      "steel": {
+        "id": "steel",
+        "name": "Steel",
+        "density_kg_m3": 7850.0,
+        "color": [
+          0.42,
+          0.46,
+          0.52
+        ],
+        "metallic": 1.0,
+        "roughness": 0.22
+      }
+    },
+    "finishes": {
+      "56c9eeef-d0f4-9d2f-e7e1-a41410fa86e0": {
+        "id": "56c9eeef-d0f4-9d2f-e7e1-a41410fa86e0",
+        "name": "Aluminum · Clear Anodized",
+        "base_color": [
+          0.78,
+          0.8,
+          0.82
+        ],
+        "metallic": 1.0,
+        "roughness": 0.32,
+        "clearcoat": 0.18,
+        "clearcoat_roughness": 0.25,
+        "normal_strength": 0.25,
+        "height_mm": 0.02,
+        "builtin_bump": "brushed",
+        "anisotropy": 0.45,
+        "textures": {},
+        "mapping": {
+          "mode": "triplanar",
+          "scale_mm": [
+            25.0,
+            25.0
+          ],
+          "rotation_deg": 0.0,
+          "offset_mm": [
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "b841eab7-14a8-5efe-ceb1-a17898c7eaa6": {
+        "id": "b841eab7-14a8-5efe-ceb1-a17898c7eaa6",
+        "name": "Paint · RAL 1015 (Display Approximation)",
+        "base_color": [
+          0.9,
+          0.84,
+          0.68
+        ],
+        "metallic": 0.0,
+        "roughness": 0.4,
+        "clearcoat": 0.1,
+        "clearcoat_roughness": 0.25,
+        "normal_strength": 0.25,
+        "height_mm": 0.02,
+        "builtin_bump": "none",
+        "anisotropy": 0.0,
+        "textures": {},
+        "mapping": {
+          "mode": "triplanar",
+          "scale_mm": [
+            25.0,
+            25.0
+          ],
+          "rotation_deg": 0.0,
+          "offset_mm": [
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "bare-aluminum": {
+        "id": "bare-aluminum",
+        "name": "Aluminum · Bare",
+        "base_color": [
+          0.8,
+          0.81,
+          0.83
+        ],
+        "metallic": 1.0,
+        "roughness": 0.22,
+        "clearcoat": 0.0,
+        "clearcoat_roughness": 0.25,
+        "normal_strength": 0.25,
+        "height_mm": 0.02,
+        "builtin_bump": "brushed",
+        "anisotropy": 0.65,
+        "textures": {},
+        "mapping": {
+          "mode": "triplanar",
+          "scale_mm": [
+            25.0,
+            25.0
+          ],
+          "rotation_deg": 0.0,
+          "offset_mm": [
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "clear-anodized-aluminum": {
+        "id": "clear-anodized-aluminum",
+        "name": "Aluminum · Clear Anodized",
+        "base_color": [
+          0.78,
+          0.8,
+          0.82
+        ],
+        "metallic": 1.0,
+        "roughness": 0.32,
+        "clearcoat": 0.18,
+        "clearcoat_roughness": 0.25,
+        "normal_strength": 0.25,
+        "height_mm": 0.02,
+        "builtin_bump": "brushed",
+        "anisotropy": 0.45,
+        "textures": {},
+        "mapping": {
+          "mode": "triplanar",
+          "scale_mm": [
+            25.0,
+            25.0
+          ],
+          "rotation_deg": 0.0,
+          "offset_mm": [
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "d30e055c-6952-dae7-e29a-468521bf679d": {
+        "id": "d30e055c-6952-dae7-e29a-468521bf679d",
+        "name": "Aluminum · Bare",
+        "base_color": [
+          0.8,
+          0.81,
+          0.83
+        ],
+        "metallic": 1.0,
+        "roughness": 0.22,
+        "clearcoat": 0.0,
+        "clearcoat_roughness": 0.25,
+        "normal_strength": 0.25,
+        "height_mm": 0.02,
+        "builtin_bump": "brushed",
+        "anisotropy": 0.65,
+        "textures": {},
+        "mapping": {
+          "mode": "triplanar",
+          "scale_mm": [
+            25.0,
+            25.0
+          ],
+          "rotation_deg": 0.0,
+          "offset_mm": [
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "f29884d6-e947-d2ea-b1dc-be0541fcaf13": {
+        "id": "f29884d6-e947-d2ea-b1dc-be0541fcaf13",
+        "name": "Aluminum · Green Anodized",
+        "base_color": [
+          0.1,
+          0.4,
+          0.2
+        ],
+        "metallic": 1.0,
+        "roughness": 0.3,
+        "clearcoat": 0.18,
+        "clearcoat_roughness": 0.25,
+        "normal_strength": 0.25,
+        "height_mm": 0.02,
+        "builtin_bump": "brushed",
+        "anisotropy": 0.45,
+        "textures": {},
+        "mapping": {
+          "mode": "triplanar",
+          "scale_mm": [
+            25.0,
+            25.0
+          ],
+          "rotation_deg": 0.0,
+          "offset_mm": [
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "green-anodized-aluminum": {
+        "id": "green-anodized-aluminum",
+        "name": "Aluminum · Green Anodized",
+        "base_color": [
+          0.1,
+          0.4,
+          0.2
+        ],
+        "metallic": 1.0,
+        "roughness": 0.3,
+        "clearcoat": 0.18,
+        "clearcoat_roughness": 0.25,
+        "normal_strength": 0.25,
+        "height_mm": 0.02,
+        "builtin_bump": "brushed",
+        "anisotropy": 0.45,
+        "textures": {},
+        "mapping": {
+          "mode": "triplanar",
+          "scale_mm": [
+            25.0,
+            25.0
+          ],
+          "rotation_deg": 0.0,
+          "offset_mm": [
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "painted-ral1015": {
+        "id": "painted-ral1015",
+        "name": "Paint · RAL 1015 (Display Approximation)",
+        "base_color": [
+          0.9,
+          0.84,
+          0.68
+        ],
+        "metallic": 0.0,
+        "roughness": 0.4,
+        "clearcoat": 0.1,
+        "clearcoat_roughness": 0.25,
+        "normal_strength": 0.25,
+        "height_mm": 0.02,
+        "builtin_bump": "none",
+        "anisotropy": 0.0,
+        "textures": {},
+        "mapping": {
+          "mode": "triplanar",
+          "scale_mm": [
+            25.0,
+            25.0
+          ],
+          "rotation_deg": 0.0,
+          "offset_mm": [
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    "resources": {
+      "52d64638-2a7d-a030-5032-5af91f48d321": {
+        "id": "52d64638-2a7d-a030-5032-5af91f48d321",
+        "path": "libraries/742e182929ff1be790139ad8e48b7c47b4f01d33bb64a0c6d92fd2d1eb0849a7.json",
+        "sha256": "742e182929ff1be790139ad8e48b7c47b4f01d33bb64a0c6d92fd2d1eb0849a7",
+        "kind": "component_snapshot"
+      }
+    },
+    "drawings": [],
+    "comments": [],
+    "properties": {},
+    "libraries": {
+      "7f95d49e-45c0-4691-a5e5-6210e3db755f": {
+        "id": "7f95d49e-45c0-4691-a5e5-6210e3db755f",
+        "name": "Part1",
+        "source_path": "/Users/tyler/Software/Personal/tcad/models/dogfood-conveyor-workstation-2026-10-12/upper-frame.tcad/project.json",
+        "source_document": "175b93cf-1c6e-4327-9d56-fa4ae94a0f76",
+        "source_definition": "836d5718-8d4f-44ea-bcf0-af2701790016",
+        "source_revision": 29,
+        "source_sha256": "aad63ad94ef6d727eb762fde4eaca0bf1c693d35d24dd22cd97c5334fd8e645e",
+        "snapshot_resource": "52d64638-2a7d-a030-5032-5af91f48d321",
+        "definition": "42945c88-d36b-ddbc-c6e6-d82a9ac39bc7",
+        "pinned_definitions": {
+          "1fa7ca36-e6f7-d862-8171-4133738f85e4": "156ccc2bb63f588596d35b349924179b73f3d9358d06c2ebed6b645cc7b20333",
+          "30db28a9-9d87-65d3-3c52-62f2e89c9401": "5172bdc3c379340f3bbe2b9e9e74dd458e61bcd3abcdccca8397d1fb58e384d7",
+          "42945c88-d36b-ddbc-c6e6-d82a9ac39bc7": "c5d4f7c50f25b7570b240a41c4ecafeeacf3cc78447cc7f5b21037b52d6901cd",
+          "78fdd562-b2e7-ae8d-1625-7de0f00c6056": "a5473ef130f9e2946f76ef9ca91d8f78918942f00fb806abf015daaee1f29c29",
+          "9b613802-3795-f099-60c8-adc7967460e6": "e54e9ccc33a30fb58a9a216634454e47eac4de22f79db49d3d7abda9d00bebc7",
+          "c37d3ee5-3460-c279-5421-d837abb560e1": "3c25eb8c4a357232b92ebff490908f3b51083feb32739c310d3d2cb86342f756",
+          "d503d2f7-4eaf-8768-b019-d6b01f4dff1f": "3f69af8f75b17008f75fa3a01ffc78c2c64de59d95c8e389196284aaaeacb539"
+        },
+        "pinned_materials": {
+          "739ae8d8-8e34-a3dd-323f-5e69bc897b39": "24de52ac2ad53c6bd64e249a4756f89793e2154dd6509227650c2eab7052aef7",
+          "9b4de331-61aa-d871-bd04-1ce2da3bc2b1": "597a47ada3fd7e15aca8ac61cc112d7bda3373c71729e05e8f2e78c8fb632881",
+          "b0dce125-3f0c-37e8-785d-d1c4b5e69a52": "f00858897a0994701c7ab10cd38323b72f57ebea85dbe1d1b450c4e020993333",
+          "c27a332d-fda1-bdd2-6194-2121d898baae": "35b699baa60c1f83723544d704ad886c2a41e7d40c7f072d25fb14e4b619e642"
+        },
+        "pinned_finishes": {
+          "56c9eeef-d0f4-9d2f-e7e1-a41410fa86e0": "358414518e362aee416d15257c48cd40fc702b1c10a1df97e92b3c7d2b4fb696",
+          "b841eab7-14a8-5efe-ceb1-a17898c7eaa6": "eb7a744b7d547269aeb15c3cc36caf839a2ce27bbed3d9a50a143009456477a4",
+          "d30e055c-6952-dae7-e29a-468521bf679d": "9b0bb6cf7197126e88d1fcfad5b0b8fbeebf7833d43c244556f020a0525e62f4",
+          "f29884d6-e947-d2ea-b1dc-be0541fcaf13": "f6438d6dbd0ed14f968dda9b0b74e64db0d5f5f2aceedb3edc2686d4d24aaf11"
+        }
+      }
+    }
+  },
+  "parts": {
+    "1fa7ca36-e6f7-d862-8171-4133738f85e4": "parts/1fa7ca36-e6f7-d862-8171-4133738f85e4.json",
+    "30db28a9-9d87-65d3-3c52-62f2e89c9401": "parts/30db28a9-9d87-65d3-3c52-62f2e89c9401.json",
+    "78fdd562-b2e7-ae8d-1625-7de0f00c6056": "parts/78fdd562-b2e7-ae8d-1625-7de0f00c6056.json",
+    "9b613802-3795-f099-60c8-adc7967460e6": "parts/9b613802-3795-f099-60c8-adc7967460e6.json",
+    "c37d3ee5-3460-c279-5421-d837abb560e1": "parts/c37d3ee5-3460-c279-5421-d837abb560e1.json",
+    "d503d2f7-4eaf-8768-b019-d6b01f4dff1f": "parts/d503d2f7-4eaf-8768-b019-d6b01f4dff1f.json"
+  },
+  "assemblies": {
+    "2a56a416-44f4-4160-9c23-c5091986ad23": "assemblies/2a56a416-44f4-4160-9c23-c5091986ad23.json",
+    "42945c88-d36b-ddbc-c6e6-d82a9ac39bc7": "assemblies/42945c88-d36b-ddbc-c6e6-d82a9ac39bc7.json"
+  }
+}
