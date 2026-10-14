@@ -14,6 +14,26 @@ use cad_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
+mod paper_cache;
+pub use paper_cache::PaperWorker;
+
+#[derive(Clone, PartialEq)]
+struct BuildKey {
+    stamp: (u64, u64, Option<(Id, u64)>),
+    backend: String,
+    source: Drawing,
+    page: u32,
+}
+fn document_stamp(w: &Workspace) -> (u64, u64, Option<(Id, u64)>) {
+    (
+        w.session.generation,
+        w.session.committed.revision,
+        w.session
+            .draft
+            .as_ref()
+            .map(|draft| (draft.id.clone(), draft.edit)),
+    )
+}
 
 #[derive(Clone, Debug, Default)]
 struct PaperView {
@@ -48,12 +68,14 @@ enum Tool {
     },
 }
 struct Cache {
+    key: BuildKey,
     geometry: cad_core::Document,
     evaluation: Arc<Evaluation>,
     source: Drawing,
     page: u32,
     paper: Arc<cad_core::drawing::Sheet>,
     scene: Arc<Scene>,
+    paint: Arc<Vec<paper_cache::PreparedPrimitive>>,
 }
 struct Capture {
     session: Session,
@@ -79,6 +101,8 @@ struct Capture {
 #[derive(Default)]
 pub struct State {
     cache: Option<Cache>,
+    paper_request: Option<(u64, BuildKey)>,
+    paper_error: Option<(BuildKey, String)>,
     views: BTreeMap<String, PaperView>,
     selection: Option<(Id, u32, Target)>,
     cohort: Vec<Target>,
@@ -138,6 +162,32 @@ fn session_native(session: &Session) -> Option<&Evaluation> {
         .filter(|e| (e.valid || e.geometry_valid) && e.identity == session.identity())
 }
 fn refresh(w: &Workspace, state: &mut State, source: &Drawing, page: u32) -> Result<()> {
+    let key = BuildKey {
+        stamp: document_stamp(w),
+        backend: w.session.backend.clone(),
+        source: source.clone(),
+        page,
+    };
+    if let Some((ticket, result)) = w.drawing_worker.take()
+        && state
+            .paper_request
+            .as_ref()
+            .is_some_and(|(expected, requested)| *expected == ticket && requested == &key)
+    {
+        state.paper_request = None;
+        match result {
+            Ok(cache) => {
+                state.cache = Some(cache);
+                state.paper_error = None;
+            }
+            Err(error) => state.paper_error = Some((key.clone(), error)),
+        }
+    }
+    if let Some((failed, error)) = &state.paper_error
+        && failed == &key
+    {
+        return Err(invalid(error));
+    }
     let current = current_native(w);
     if current.is_none()
         && w.session
@@ -159,45 +209,24 @@ fn refresh(w: &Workspace, state: &mut State, source: &Drawing, page: u32) -> Res
             "Wait for current model geometry before interacting with the sheet",
         ));
     }
-    let geometry_changed = current.is_some_and(|e| {
-        state
-            .cache
+    if state.cache.as_ref().is_none_or(|cache| cache.key != key) {
+        if state
+            .paper_request
             .as_ref()
-            .is_none_or(|c| c.evaluation.identity != e.identity)
-    });
-    if geometry_changed || state.cache.is_none() || !can_reuse {
-        let evaluation = current
-            .ok_or_else(|| invalid("Current native geometry is unavailable"))?
-            .clone();
-        let paper =
-            cad_core::drawing::build_sheet_preview(w.session.visible(), &evaluation, source, page)?;
-        let scene = interaction::build(w.session.visible(), &evaluation, source, &paper, page)?;
-        state.cache = Some(Cache {
-            geometry: w.session.visible().clone(),
-            evaluation: Arc::new(evaluation),
-            source: source.clone(),
-            page,
-            paper: Arc::new(paper),
-            scene: Arc::new(scene),
-        });
-    } else if let Some(cache) = state.cache.as_mut()
-        && (&cache.source != source || cache.page != page)
-    {
-        cache.paper = Arc::new(cad_core::drawing::build_sheet_preview(
-            w.session.visible(),
-            &cache.evaluation,
-            source,
-            page,
-        )?);
-        cache.scene = Arc::new(interaction::build(
-            w.session.visible(),
-            &cache.evaluation,
-            source,
-            &cache.paper,
-            page,
-        )?);
-        cache.source = source.clone();
-        cache.page = page;
+            .is_none_or(|(_, pending)| pending != &key)
+        {
+            let evaluation = current
+                .map(|e| Arc::new(e.clone()))
+                .or_else(|| can_reuse.then(|| state.cache.as_ref().unwrap().evaluation.clone()))
+                .ok_or_else(|| invalid("Current native geometry is unavailable"))?;
+            let ticket =
+                w.drawing_worker
+                    .request(key.clone(), w.session.visible().clone(), evaluation);
+            state.paper_request = Some((ticket, key));
+        }
+        return Err(invalid(
+            "Preparing drawing geometry… Navigation and Cancel remain available",
+        ));
     }
     if let Some((id, selected_page, target)) = &state.selection
         && (id != &source.id
@@ -1916,54 +1945,6 @@ fn click_reference(
     }
     Ok(())
 }
-fn draw_primitive(
-    painter: &egui::Painter,
-    primitive: &Primitive,
-    paper: Rect,
-    scale: f32,
-    stroke: Stroke,
-) {
-    match primitive {
-        Primitive::Polyline { points, dashed } => {
-            let segments = if *dashed {
-                cad_core::drawing_strokes::reference_segments(points).unwrap_or_default()
-            } else {
-                points.windows(2).map(|pair| [pair[0], pair[1]]).collect()
-            };
-            for [a, b] in segments {
-                painter.line_segment([at(paper, scale, a), at(paper, scale, b)], stroke);
-            }
-        }
-        Primitive::Text {
-            at: point,
-            size,
-            text,
-        } => {
-            painter.text(
-                at(paper, scale, *point),
-                egui::Align2::LEFT_BOTTOM,
-                text,
-                egui::FontId::proportional((*size as f32 * scale).max(1.)),
-                stroke.color,
-            );
-        }
-        Primitive::Spline { curve, dashed } => {
-            if let Ok(points) = cad_core::drawing::display_curve(curve) {
-                let segments = if *dashed {
-                    cad_core::drawing_strokes::reference_segments(&points).unwrap_or_default()
-                } else {
-                    points.windows(2).map(|pair| [pair[0], pair[1]]).collect()
-                };
-                for [a, b] in segments {
-                    painter.line_segment([at(paper, scale, a), at(paper, scale, b)], stroke);
-                }
-            }
-        }
-        Primitive::Circle { center, radius } => {
-            painter.circle_stroke(at(paper, scale, *center), *radius as f32 * scale, stroke);
-        }
-    }
-}
 fn draw_status(
     ui: &mut egui::Ui,
     state: &mut State,
@@ -2092,6 +2073,7 @@ pub fn frame(
         return true;
     };
     let rendered = cache.paper.clone();
+    let paint = cache.paint.clone();
     let scene = cache.scene.clone();
     let native_evaluation = cache.evaluation.clone();
     let key = view_key(&source, page(w));
@@ -2180,8 +2162,8 @@ pub fn frame(
             }
         }
     }
-    for primitive in &rendered.primitives {
-        draw_primitive(&painter, primitive, paper, scale, stroke);
+    for primitive in paint.iter() {
+        primitive.draw(&painter, paper, scale, stroke);
     }
     let mut toolbar_rect = Rect::NOTHING;
     if let Some(rect) = overlay_rect {
@@ -2320,12 +2302,11 @@ pub fn frame(
                     stroke.width
                 },
             );
-            if let Some(primitives) = rendered
-                .primitives
-                .get(target.primitive_start..target.primitive_start + target.primitive_count)
+            if let Some(primitives) =
+                paint.get(target.primitive_start..target.primitive_start + target.primitive_count)
             {
                 for primitive in primitives {
-                    draw_primitive(&painter, primitive, paper, scale, Stroke::new(width, color));
+                    primitive.draw(&painter, paper, scale, Stroke::new(width, color));
                 }
             }
         }

@@ -14,6 +14,14 @@ const VERSION: u32 = 1;
 const ACTION: &str = "operation-editor.action";
 mod common;
 
+/// Disposable value projection. A displayed field must not regenerate all of
+/// the editor's topology/provenance choices just to read its current value.
+#[derive(Default)]
+pub struct ValueCache {
+    key: Option<Value>,
+    source: Value,
+}
+
 pub fn supports(operation: &Operation) -> bool {
     common::supports(operation)
         || matches!(
@@ -1629,6 +1637,15 @@ pub fn field_error(w: &mut Workspace, element: &SemanticElement, error: Option<S
     }
 }
 pub fn current_source_is_valid(w: &Workspace) -> bool {
+    // The usual valid case is queried by every Apply/toolbar presentation.
+    // Avoid generating topology choices when there is no invalid field text.
+    if !w
+        .fields
+        .keys()
+        .any(|key| key.starts_with("operation-editor:invalid:"))
+    {
+        return true;
+    }
     !semantics(w)
         .iter()
         .any(|element| field_is_invalid(w, element))
@@ -1657,22 +1674,45 @@ fn live_element(w: &Workspace, element: &SemanticElement) -> Result<SemanticElem
     Ok(fresh)
 }
 pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
-    let fresh = live_element(w, element).ok()?;
-    if fresh.data.get("transient").and_then(Value::as_str) == Some("skip-input") {
+    let (owner, feature) = current(w)?;
+    if element.data.get("document").and_then(Value::as_str) != Some(&w.session.visible().id)
+        || element.data.get("owner").and_then(Value::as_str) != Some(owner)
+        || element.data.get("feature").and_then(Value::as_str) != Some(&feature.id)
+        || element.data.get("editor").and_then(Value::as_str)
+            != w.fields
+                .get("feature-editor-generation")
+                .map(String::as_str)
+    {
+        return None;
+    }
+    if element.data.get("transient").and_then(Value::as_str) == Some("skip-input") {
         return Some(json!(
             w.fields
-                .get(&transient_key(&fresh))
+                .get(&transient_key(element))
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(1)
         ));
     }
-    let (_, feature) = current(w)?;
-    let source = editable_source(feature);
-    let value = source
-        .pointer(fresh.data.get("pointer")?.as_str()?)
+    let key = json!([
+        w.session.visible().id,
+        w.session.generation,
+        w.session.committed.revision,
+        w.session.draft.as_ref().map(|d| (&d.id, d.edit)),
+        owner,
+        feature.id,
+        w.fields.get("feature-editor-generation")
+    ]);
+    let mut cache = w.operation_values.lock().ok()?;
+    if cache.key.as_ref() != Some(&key) {
+        cache.source = editable_source(feature);
+        cache.key = Some(key);
+    }
+    let value = cache
+        .source
+        .pointer(element.data.get("pointer")?.as_str()?)
         .cloned()
-        .or_else(|| fresh.data.get("optional_default").map(|_| Value::Null))?;
-    if fresh.data.get("optional_default").is_some() {
+        .or_else(|| element.data.get("optional_default").map(|_| Value::Null))?;
+    if element.data.get("optional_default").is_some() {
         Some(json!(!value.is_null()))
     } else {
         Some(value)
