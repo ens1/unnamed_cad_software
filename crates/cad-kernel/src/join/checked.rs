@@ -103,6 +103,80 @@ fn endpoints(a: &Segment, b: &Segment) -> Vec<Point2> {
     vec![a.a, a.b, b.a, b.b]
 }
 
+fn distance_bound(a: Point2, b: Point2) -> Result<f64> {
+    Ok(norm2(sub(point(a)?, point(b)?)?)?.sqrt()?.high)
+}
+
+fn coincident_circles(c0: Point2, r0: f64, c1: Point2, r1: f64) -> Result<bool> {
+    let center_distance = norm2(sub(point(c1)?, point(c0)?)?)?.sqrt()?;
+    let radial_difference = scalar(r0)?.sub(scalar(r1)?)?;
+    // Independently recognized native circle pieces differ by a few ulps.
+    // Enclose the complete carriers' Hausdorff distance, including the final
+    // sum's rounding. Endpoint reconciliation spends a separate quarter of
+    // the existing membership tolerance; ordinary crossings spend neither.
+    Ok(center_distance
+        .add(Interval::new(0., radial_difference.magnitude())?)?
+        .high
+        <= EPS * 0.25)
+}
+
+fn coincident_membership(p: Point2, segment: &Segment) -> Result<bool> {
+    let a = distance_bound(p, segment.a)? <= EPS * 0.25;
+    let b = distance_bound(p, segment.b)? <= EPS * 0.25;
+    if a && b && segment.a != segment.b {
+        return Err(unsupported(
+            "coincident circular endpoints would collapse a distinct native interval",
+        ));
+    }
+    if a || b {
+        // This is an overlap endpoint, not a newly solved crossing. The
+        // caller has already bounded agreement of the complete carriers.
+        // Retain an authored native endpoint rather than generating a second
+        // nearly identical vertex at the cutter/existing-void boundary.
+        return Ok(true);
+    }
+    membership(p, segment)
+}
+
+fn coincident_circle_intersections(a: &Segment, b: &Segment) -> Result<Vec<Point2>> {
+    let mut candidates = endpoints(a, b);
+    candidates.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    let mut clusters: Vec<Vec<Point2>> = Vec::new();
+    for p in candidates {
+        if !coincident_membership(p, a)? || !coincident_membership(p, b)? {
+            continue;
+        }
+        let mut matched = None;
+        for (index, cluster) in clusters.iter().enumerate() {
+            let distances = cluster
+                .iter()
+                .map(|other| distance_bound(p, *other))
+                .collect::<Result<Vec<_>>>()?;
+            if distances.iter().any(|distance| *distance <= EPS * 0.25) {
+                if matched.is_some() || distances.iter().any(|distance| *distance > EPS * 0.25) {
+                    return Err(unsupported(
+                        "coincident circular endpoint clustering would bridge distinct native vertices",
+                    ));
+                }
+                matched = Some(index);
+            } else if distances.iter().any(|distance| *distance <= EPS) {
+                return Err(unsupported(
+                    "distinct circular overlap endpoints cannot be separated at native tolerance",
+                ));
+            }
+        }
+        if let Some(index) = matched {
+            clusters[index].push(p);
+        } else {
+            clusters.push(vec![p]);
+        }
+    }
+    // Sorted native representatives make pair order irrelevant. The layered
+    // arrangement still checks shared-vertex diameter, native split residuals,
+    // matching complete subcarriers, material sides, closure and B-rep validity.
+    Ok(clusters.into_iter().map(|cluster| cluster[0]).collect())
+}
+
 fn shared(a: &Segment, b: &Segment) -> Option<Point2> {
     [a.a, a.b].into_iter().find(|p| *p == b.a || *p == b.b)
 }
@@ -344,16 +418,6 @@ fn circle_circle(
     r1: f64,
     result: &mut Vec<Point2>,
 ) -> Result<()> {
-    let center_distance = norm2(sub(point(c1)?, point(c0)?)?)?.sqrt()?;
-    let radial_difference = scalar(r0)?.sub(scalar(r1)?)?;
-    // Independently recognized pieces of one native circle can differ by a
-    // few ulps. The complete circles have Hausdorff distance no greater than
-    // |center1-center0| + |radius1-radius0|. Enclose that bound explicitly and
-    // reserve only one quarter of the native membership tolerance for it.
-    if center_distance.high + radial_difference.magnitude() <= EPS * 0.25 {
-        result.extend(endpoints(a, b));
-        return Ok(());
-    }
     if c0 == c1 {
         if r0 == r1 {
             result.extend(endpoints(a, b));
@@ -482,6 +546,22 @@ pub(crate) fn checked_intersections(a: &Segment, b: &Segment) -> Result<Vec<Poin
     let bb = bounds(b)?;
     if (0..2).any(|i| ba[i].high < bb[i].low || bb[i].high < ba[i].low) {
         return Ok(Vec::new());
+    }
+    if let (
+        Kind::Arc {
+            center: c0,
+            radius: r0,
+            ..
+        },
+        Kind::Arc {
+            center: c1,
+            radius: r1,
+            ..
+        },
+    ) = (&a.kind, &b.kind)
+        && coincident_circles(*c0, *r0, *c1, *r1)?
+    {
+        return coincident_circle_intersections(a, b);
     }
     let mut result = Vec::new();
     match (&a.kind, &b.kind) {

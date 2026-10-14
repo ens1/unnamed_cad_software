@@ -938,7 +938,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/42;solver/tcad-native-lm/18"
+        "monstertruck/0.4.1+fc2306852a46;adapter/43;solver/tcad-native-lm/18"
     }
     fn clear_weld_joint_previews(&self) {
         self.weld_joints.borrow_mut().clear();
