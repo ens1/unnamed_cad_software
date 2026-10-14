@@ -151,7 +151,8 @@ pub fn new(w: &mut Workspace) {
         .unwrap();
     let mut source = Definition::new(name);
     source.configuration = doc.active_configurations.get(&doc.root).cloned();
-    source.boolean_tolerance = cad_core::Expr(format!("{} mm", w.tolerance()));
+    source.boolean_tolerance =
+        cad_core::Expr(format!("{} mm", w.modeling_tolerances().boolean_search_mm));
     source.targets = evaluation
         .instances
         .iter()
@@ -463,7 +464,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
     changed |= expression(ui, "Requested minimum clearance", &mut source.clearance);
     changed |= expression(
         ui,
-        "Native Boolean tolerance",
+        "Boolean search resolution",
         &mut source.boolean_tolerance,
     );
     changed |= ui

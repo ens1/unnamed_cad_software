@@ -582,7 +582,7 @@ pub fn export(w: &mut Workspace, format: &str) -> Result<()> {
                 project_root: w.root().to_string_lossy().into(),
                 path: path.to_string_lossy().into(),
                 format: format.into(),
-                tolerance: w.tolerance(),
+                display_tolerance_mm: w.display_tolerance(),
             });
         w.status = "Exporting the committed production source".into();
     }

@@ -45,6 +45,10 @@ impl Shape {
 }
 pub trait KernelAdapter {
     fn fingerprint(&self) -> &str;
+    /// Configures numerical geometry policy independently from display subdivision.
+    fn configure_tolerances(&self, modeling: &cad_core::tolerance::Modeling) -> Result<()> {
+        modeling.validate()
+    }
     fn spatial_sketch(&self, _shape: &Shape) -> Option<cad_core::sketch3d::Evaluated> {
         None
     }
@@ -184,6 +188,7 @@ pub trait KernelAdapter {
 }
 #[derive(Default)]
 pub struct MonstertruckAdapter {
+    modeling_tolerances: std::cell::RefCell<cad_core::tolerance::Modeling>,
     assembly_placements:
         std::cell::RefCell<BTreeMap<String, BTreeMap<String, cad_core::Placement>>>,
     material_deltas: std::cell::RefCell<BTreeMap<NodeRef, crate::constructor_delta::Record>>,
@@ -963,7 +968,12 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/44;solver/tcad-native-lm/18"
+        "monstertruck/0.4.1+6dba41312ccc;adapter/45;solver/tcad-native-lm/18"
+    }
+    fn configure_tolerances(&self, modeling: &cad_core::tolerance::Modeling) -> Result<()> {
+        modeling.validate()?;
+        *self.modeling_tolerances.borrow_mut() = *modeling;
+        Ok(())
     }
     fn clear_weld_joint_previews(&self) {
         self.weld_joints.borrow_mut().clear();
@@ -2284,6 +2294,7 @@ impl KernelAdapter for MonstertruckAdapter {
                 ),
             ));
         }
+        crate::native_trims::validate_shape(&result, self.modeling_tolerances().linear_mm)?;
         if let Shape::Bodies(all) = &result {
             for s in all {
                 crate::validation::solid(s)?;
@@ -2319,7 +2330,14 @@ impl KernelAdapter for MonstertruckAdapter {
         tolerance: f64,
     ) -> Result<(MeshData, Vec<Solid>, cad_core::weld_beads::Evaluated)> {
         self.weld_joints.borrow_mut().remove(owner);
-        crate::assembly_welds::build(self, doc, owner, definition, contexts, root, tolerance)
+        let result =
+            crate::assembly_welds::build(self, doc, owner, definition, contexts, root, tolerance)?;
+        for body in &result.1 {
+            for boundary in body.boundaries() {
+                crate::native_trims::shell(boundary, self.modeling_tolerances().linear_mm)?;
+            }
+        }
+        Ok(result)
     }
     fn mesh(&self, shape: &Shape, producer: &NodeRef, tolerance: f64) -> Result<MeshData> {
         if !tolerance.is_finite() || tolerance <= 0. {
@@ -2454,12 +2472,17 @@ impl KernelAdapter for MonstertruckAdapter {
                 mesh.bounds[0][axis] = mesh.bounds[0][axis].min(b[0][axis]);
                 mesh.bounds[1][axis] = mesh.bounds[1][axis].max(b[1][axis]);
             }
-            let tess = shell.robust_triangulation(tolerance);
-            for (face, tri_face) in shell.iter().zip(tess.iter()) {
+            let tess = crate::native_trims::triangulate(
+                shell,
+                self.modeling_tolerances().linear_mm,
+                tolerance,
+            )?;
+            for (face, tri_face) in shell.iter().zip(&tess.faces) {
                 let mut poly = tri_face
-                    .surface()
+                    .surface
+                    .clone()
                     .ok_or_else(|| err("Tessellation omitted a face"))?;
-                if !tri_face.orientation() {
+                if !tri_face.orientation {
                     poly.invert();
                 }
                 if poly.tri_faces().is_empty() {
@@ -2695,6 +2718,9 @@ impl KernelAdapter for MonstertruckAdapter {
 }
 
 impl MonstertruckAdapter {
+    pub(crate) fn modeling_tolerances(&self) -> cad_core::tolerance::Modeling {
+        *self.modeling_tolerances.borrow()
+    }
     fn load_step_table(&self, doc: &Document, resource: &str, root: &Path) -> Result<String> {
         use sha2::{Digest, Sha256};
         let resource = doc

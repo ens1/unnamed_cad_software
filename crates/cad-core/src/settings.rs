@@ -2,7 +2,7 @@
 use crate::{CadError, Document, Id, Result};
 use serde::{Deserialize, Serialize};
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
 
 /// Display units never rescale stored dimensions, coordinates or explicit expressions.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -67,13 +67,15 @@ impl LengthUnit {
 /// Saved with the model, edited through the shared document transaction and undo history.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+#[serde(from = "SavedModelSettings")]
 pub struct ModelSettings {
     pub version: u32,
     pub display_length_unit: LengthUnit,
     pub length_decimal_places: u8,
     pub angle_decimal_places: u8,
-    /// Worker evaluation and tessellation tolerance in canonical millimeters.
-    pub evaluation_tolerance_mm: f64,
+    /// Disposable viewport/export chord tolerance. Never used for construction.
+    pub display_tolerance_mm: f64,
+    pub modeling: crate::tolerance::Modeling,
     /// Applied to subsequently created part definitions; existing assignments are preserved.
     pub default_new_part_finish: Id,
     /// Engineering assignment for subsequently created parts, independent of finish.
@@ -91,7 +93,8 @@ impl Default for ModelSettings {
             display_length_unit: LengthUnit::default(),
             length_decimal_places: 3,
             angle_decimal_places: 2,
-            evaluation_tolerance_mm: 0.15,
+            display_tolerance_mm: 0.15,
+            modeling: Default::default(),
             default_new_part_finish: crate::appearance::default_finish(),
             default_new_part_material: default_new_part_material(),
             production: Default::default(),
@@ -113,13 +116,8 @@ impl ModelSettings {
                 "Model length and angle display precision must be 0–8 decimal places".into(),
             ));
         }
-        if !self.evaluation_tolerance_mm.is_finite()
-            || !(0.001..=1.).contains(&self.evaluation_tolerance_mm)
-        {
-            return Err(CadError::Invalid(
-                "Model evaluation tolerance must be finite and between 0.001 and 1 mm".into(),
-            ));
-        }
+        crate::tolerance::validate_display(self.display_tolerance_mm)?;
+        self.modeling.validate()?;
         let finish = &self.default_new_part_finish;
         if finish.is_empty()
             || finish.len() > 256
@@ -181,6 +179,59 @@ impl ModelSettings {
             radians.to_degrees(),
             precision = self.angle_decimal_places.min(8) as usize,
         )
+    }
+}
+
+/// Version 1's combined tolerance was a coarse display/search value. Migrate
+/// it only to display quality, and seed independent native modeling defaults.
+/// Never turn an old 0.15 mm viewport setting into boundary acceptance error.
+#[derive(Deserialize)]
+#[serde(default)]
+struct SavedModelSettings {
+    version: u32,
+    display_length_unit: LengthUnit,
+    length_decimal_places: u8,
+    angle_decimal_places: u8,
+    #[serde(alias = "evaluation_tolerance_mm")]
+    display_tolerance_mm: f64,
+    modeling: crate::tolerance::Modeling,
+    default_new_part_finish: Id,
+    default_new_part_material: Id,
+    production: crate::production::Preferences,
+}
+impl Default for SavedModelSettings {
+    fn default() -> Self {
+        let settings = ModelSettings::default();
+        Self {
+            version: settings.version,
+            display_length_unit: settings.display_length_unit,
+            length_decimal_places: settings.length_decimal_places,
+            angle_decimal_places: settings.angle_decimal_places,
+            display_tolerance_mm: settings.display_tolerance_mm,
+            modeling: settings.modeling,
+            default_new_part_finish: settings.default_new_part_finish,
+            default_new_part_material: settings.default_new_part_material,
+            production: settings.production,
+        }
+    }
+}
+impl From<SavedModelSettings> for ModelSettings {
+    fn from(saved: SavedModelSettings) -> Self {
+        Self {
+            version: if saved.version == 1 {
+                CONTRACT_VERSION
+            } else {
+                saved.version
+            },
+            display_length_unit: saved.display_length_unit,
+            length_decimal_places: saved.length_decimal_places,
+            angle_decimal_places: saved.angle_decimal_places,
+            display_tolerance_mm: saved.display_tolerance_mm,
+            modeling: saved.modeling,
+            default_new_part_finish: saved.default_new_part_finish,
+            default_new_part_material: saved.default_new_part_material,
+            production: saved.production,
+        }
     }
 }
 

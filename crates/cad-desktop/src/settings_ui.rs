@@ -124,17 +124,36 @@ fn field(w: &Workspace, spec: FieldSpec<'_>) -> SemanticElement {
             "category":spec.category, "json":value, "editable":editable,
             "range":spec.range, "choices":spec.choices, "unit":spec.unit,
             "minimum":spec.range.map(|range|range[0]), "maximum":spec.range.map(|range|range[1]),
+            "step":if spec.pointer.ends_with("/modeling/linear_mm") { Some(1e-7) } else if spec.pointer.ends_with("/modeling/boolean_search_mm") || spec.pointer.ends_with("/display_tolerance_mm") { Some(0.001) } else { None },
             "kind":if spec.choices.as_array().is_some_and(|choices|!choices.is_empty()) {"choice"} else if value.is_boolean() {"boolean"} else if value.is_number() {"number"} else {"text"},
             "accessibility_label":spec.label,
             "description":field_description(spec.scope, spec.pointer),
             "model_mutation":!matches!(spec.scope,"application"|"presentation"),
             "contract":match spec.scope {"application"=>"tcad.application-preferences", "lighting"=>"tcad.appearance", "presentation"=>"tcad.presentation.theme-library", _=>"tcad.model-settings"},
-            "version":1
+            "version":if spec.scope == "model" { cad_core::settings::CONTRACT_VERSION } else { 1 }
         }),
     }
 }
 
 fn field_description(scope: &str, pointer: &str) -> Option<&'static str> {
+    match pointer.strip_prefix("/default_model").unwrap_or(pointer) {
+        "/display_tolerance_mm" => {
+            return Some(
+                "Viewport and meshed export chord tolerance. Changing display quality never changes native modeling accuracy or Boolean search resolution.",
+            );
+        }
+        "/modeling/linear_mm" => {
+            return Some(
+                "Accepted native boundary/carrier residual in millimeters. This is independent of display meshes; existing native constructors may enforce stricter checks and unsupported geometry remains rejected.",
+            );
+        }
+        "/modeling/boolean_search_mm" => {
+            return Some(
+                "Native Boolean and intersection discovery resolution. This controls search subdivision, not final B-rep error; the boundary residual is validated independently.",
+            );
+        }
+        _ => {}
+    }
     if scope != "application" {
         return None;
     }
@@ -257,9 +276,34 @@ fn model_fields(w: &Workspace, application_defaults: bool) -> Vec<SemanticElemen
         ),
         (
             geometry,
-            "/evaluation_tolerance_mm",
-            "Evaluation and display tolerance",
-            Some([0.001, 1.]),
+            "/display_tolerance_mm",
+            "Display chord tolerance",
+            Some([
+                cad_core::tolerance::MIN_DISPLAY_MM,
+                cad_core::tolerance::MAX_DISPLAY_MM,
+            ]),
+            json!([]),
+            Some("mm"),
+        ),
+        (
+            geometry,
+            "/modeling/linear_mm",
+            "Boundary residual tolerance",
+            Some([
+                cad_core::tolerance::MIN_LINEAR_MM,
+                cad_core::tolerance::MAX_LINEAR_MM,
+            ]),
+            json!([]),
+            Some("mm"),
+        ),
+        (
+            geometry,
+            "/modeling/boolean_search_mm",
+            "Boolean search resolution",
+            Some([
+                cad_core::tolerance::MIN_SEARCH_MM,
+                cad_core::tolerance::MAX_SEARCH_MM,
+            ]),
             json!([]),
             Some("mm"),
         ),
@@ -740,15 +784,25 @@ pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Semantic
                                     Some(range.first()?.as_f64()?..=range.get(1)?.as_f64()?)
                                 });
                             let integral = value.is_u64() || value.is_i64();
-                            let mut widget =
-                                egui::DragValue::new(&mut candidate).speed(if integral {
-                                    1.
-                                } else if current.as_f64().is_some_and(|number| number.abs() < 0.1)
-                                {
-                                    0.0001
-                                } else {
-                                    0.01
+                            let speed = element
+                                .data
+                                .get("step")
+                                .and_then(Value::as_f64)
+                                .unwrap_or_else(|| {
+                                    if integral {
+                                        1.
+                                    } else if current
+                                        .as_f64()
+                                        .is_some_and(|number| number.abs() < 0.1)
+                                    {
+                                        0.0001
+                                    } else {
+                                        0.01
+                                    }
                                 });
+                            let mut widget = egui::DragValue::new(&mut candidate)
+                                .speed(speed)
+                                .max_decimals(9);
                             if let Some(range) = range {
                                 widget = widget.range(range);
                             }
@@ -867,7 +921,7 @@ fn category_description(category: &str) -> &'static str {
             "Saved with this model. Display units and precision do not resize geometry or change explicit unit expressions."
         }
         "model.geometry" => {
-            "Saved with this model. Tolerance controls geometry evaluation and tessellation. The default finish applies to newly created parts."
+            "Saved with this model. Boundary accuracy, Boolean search resolution, and display chord tolerance are independent. Default material and finish apply to newly created parts."
         }
         "model.lighting" => {
             "Saved with this model. Lighting updates the viewport while you edit. Theme overrides may alter the displayed lighting."

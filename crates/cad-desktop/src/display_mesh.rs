@@ -259,7 +259,7 @@ pub fn poll(w: &mut Workspace) {
         generation: w.display_mesh.generation,
         document: document.clone(),
         project_root: w.root().to_string_lossy().into(),
-        model_tolerance_mm: document.settings.evaluation_tolerance_mm,
+        modeling: document.settings.modeling,
         display_tolerance_mm: tolerance,
         targets,
     };

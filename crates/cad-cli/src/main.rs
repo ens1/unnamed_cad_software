@@ -29,7 +29,11 @@ enum Action {
     },
     Validate {
         project: PathBuf,
-        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        #[arg(
+            long = "display-tolerance",
+            visible_alias = "tolerance",
+            help = "Override display/export chord tolerance in mm; modeling accuracy remains in the saved model policy"
+        )]
         tolerance: Option<f64>,
         #[arg(long)]
         output: Option<PathBuf>,
@@ -39,13 +43,21 @@ enum Action {
         output: PathBuf,
         #[arg(long)]
         format: Option<String>,
-        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        #[arg(
+            long = "display-tolerance",
+            visible_alias = "tolerance",
+            help = "Override display/export chord tolerance in mm; modeling accuracy remains in the saved model policy"
+        )]
         tolerance: Option<f64>,
     },
     Edit {
         project: PathBuf,
         command: PathBuf,
-        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        #[arg(
+            long = "display-tolerance",
+            visible_alias = "tolerance",
+            help = "Override display/export chord tolerance in mm; modeling accuracy remains in the saved model policy"
+        )]
         tolerance: Option<f64>,
     },
     Bom {
@@ -62,7 +74,11 @@ enum Action {
             help = "Read parameter monitors without rebuilding geometry; property monitors report unavailable"
         )]
         source_only: bool,
-        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        #[arg(
+            long = "display-tolerance",
+            visible_alias = "tolerance",
+            help = "Override display/export chord tolerance in mm; modeling accuracy remains in the saved model policy"
+        )]
         tolerance: Option<f64>,
     },
     ToleranceStacks {
@@ -84,19 +100,31 @@ enum Action {
         ours: PathBuf,
         theirs: PathBuf,
         output: PathBuf,
-        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        #[arg(
+            long = "display-tolerance",
+            visible_alias = "tolerance",
+            help = "Override display/export chord tolerance in mm; modeling accuracy remains in the saved model policy"
+        )]
         tolerance: Option<f64>,
     },
     Release {
         project: PathBuf,
         destination: PathBuf,
-        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        #[arg(
+            long = "display-tolerance",
+            visible_alias = "tolerance",
+            help = "Override display/export chord tolerance in mm; modeling accuracy remains in the saved model policy"
+        )]
         tolerance: Option<f64>,
     },
     Import {
         project: PathBuf,
         step: PathBuf,
-        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        #[arg(
+            long = "display-tolerance",
+            visible_alias = "tolerance",
+            help = "Override display/export chord tolerance in mm; modeling accuracy remains in the saved model policy"
+        )]
         tolerance: Option<f64>,
     },
     Describe {
@@ -109,7 +137,11 @@ enum Action {
         definition: Option<String>,
         #[arg(long)]
         update: Option<String>,
-        #[arg(long, help = "Override the model's saved evaluation tolerance in mm")]
+        #[arg(
+            long = "display-tolerance",
+            visible_alias = "tolerance",
+            help = "Override display/export chord tolerance in mm; modeling accuracy remains in the saved model policy"
+        )]
         tolerance: Option<f64>,
     },
     Git {
@@ -139,7 +171,7 @@ fn checked(
         identity(d, e),
         d,
         root,
-        tolerance.unwrap_or(d.settings.evaluation_tolerance_mm),
+        tolerance.unwrap_or(d.settings.display_tolerance_mm),
     )?;
     if !evaluation.valid {
         return Err(CadError::Invalid(
@@ -211,7 +243,7 @@ fn run() -> Result<()> {
                 &project_root(&project),
                 &output,
                 &format,
-                tolerance.unwrap_or(d.settings.evaluation_tolerance_mm),
+                tolerance.unwrap_or(d.settings.display_tolerance_mm),
             )?;
             println!("Exported {}", output.display());
         }
@@ -340,7 +372,7 @@ fn run() -> Result<()> {
                 &d,
                 &project_root(&project),
                 &destination,
-                tolerance.unwrap_or(d.settings.evaluation_tolerance_mm),
+                tolerance.unwrap_or(d.settings.display_tolerance_mm),
             )?;
             println!(
                 "Released {} from {}",

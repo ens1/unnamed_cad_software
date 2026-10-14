@@ -33,8 +33,8 @@ profiles align their endpoint direction and use the same bounded perimeter
 refinement. Explicit solid-loft connectors retain their selected native boundary
 vertices.
 
-Corresponding rational boundaries are multiplied by each other's positive
-denominator in the exact Bernstein basis. Both then have the same denominator,
+Corresponding rational boundaries retain already identical synchronized
+denominators, or are multiplied by each other's positive denominator in the exact Bernstein basis. Both then have the same denominator,
 so the skin interpolates Euclidean boundary positions rather than interpolating
 unrelated projective weights. Uncontrolled loft skins use a degree-one section
 direction directly, avoiding rounded cubic degree elevation. Explicit solid
@@ -49,11 +49,12 @@ requires distinct source sketches; repeating the same source section and closed
 periodic lofts need additional occurrence and seam intent and fail explicitly.
 Surface Loft retains the specified section order and never silently reorders
 sections. A two-section loft can run in either direction and can use angled
-section planes when its complete native proof succeeds. Three or more sections
-currently require exact, consistently ordered native planes parallel to Front,
-Top or Right. This explicit limit excludes cross-pair intersections until a
-general inter-skin proof is available; height reversals and angled multi-pair
-lofts return an unsupported diagnostic. Default interpolation between sections
+section planes when its complete native proof succeeds. Three or more sections retain exact ordered principal-plane slabs as a cheap
+sufficient certificate. Other station sequences instead require complete native
+separation between all skin faces across section pairs. This admits bounded
+angled and turning sequences where the certificates succeed; it does not assume
+that independent per-pair regularity prevents distant skins from intersecting.
+Default interpolation between sections
 is ruled and position-continuous.
 Guide curves, surface end-tangency controls and smooth interpolation through
 multiple intermediate sections remain separate unsupported modes.
@@ -75,61 +76,67 @@ substantial shear, concavity and angled section planes without the former
 single-midpoint-frame restriction. The certificate proves each actual native
 face injective; a separate native separation proof covers the rest of its skin.
 
-Other surface skins use a bounded Bernstein certificate of an injective fixed
-rational projection. Differentiable carriers use positive principal minors,
-following the rectangular-domain [Gale–Nikaido theorem](https://link.springer.com/article/10.1007/BF01360282).
-Position-continuous carriers with nonsmooth interior knots retain the stronger
-positive-definite symmetric-Jacobian certificate. Proof coefficient subdivision
-keeps the same projection axes and cancellation bounds across the complete face;
-it never fits or samples replacement geometry. The generic proof supports
-carrier degrees one through sixteen in each direction. Genuine constant-weight
-carriers use their exact polynomial derivatives, avoiding unnecessary rational
-degree growth and zero-denominator-derivative cancellation. Bernstein product
-weights are reused within each proof product; proof budgets still bound the
-complete operation. The specialized ruled
-chart proof shares the source-degree-through-sixteen limit. An exhausted or
-uncertain certificate remains an unsupported case; it is not proof that the
-authored section is folded. Fallback diagnostics identify the section pair and
-native strip.
+Other surface skins first use the bounded fixed-projection certificate.
+Differentiable carriers use positive principal minors, following the
+rectangular-domain [Gale–Nikaido theorem](https://link.springer.com/article/10.1007/BF01360282).
+Position-continuous carriers with nonsmooth knots retain the stronger
+positive-definite symmetric-Jacobian certificate. A failure of this sufficient
+condition does not establish folding.
+
+A complete positive rational Bernstein carrier also has a local-atlas fallback.
+Outward interval arithmetic refines the original homogeneous net with de
+Casteljau subdivision. Every local rectangle must have a proven injective
+projected Jacobian. All chart pairs then need either separated native hulls or
+an injectivity certificate on their bounding native parameter rectangle, with
+further bounded refinement when necessary. The latter permits contact at a
+common parameter edge or vertex while ruling out different parameter points
+occupying the same position. Rounded subpatches and rendering meshes are never
+proof authority. This permits turning carriers which lack one valid projection
+for the whole face, when global separation can still be established. The local
+atlas currently requires one native Bernstein carrier; multi-knot carriers
+retain the fixed-frame proof until their chart-continuity authority is expanded.
+Both paths support native degrees one through sixteen and preserve explicit
+conditioning/work limits. An unavailable or exhausted proof remains unsupported.
 
 Nonradial ruled skins now require separation of all distinct native faces within
 one section pair. A broad phase uses positive rational control hulls; remaining
 pairs use directed-rounding interval arithmetic for every homogeneous de
 Casteljau subdivision and projected hull comparison. Candidate axes only choose
 separating directions. The complete native control enclosures prove the result.
-Adjacent strips must establish opposite strict half-spaces about their shared
-straight connector; the native endpoint row supplies a symbolic Bernstein
-boundary factor. Omitting that row from the strict half-space comparison
-requires exact projective equality of both actual native endpoint rows, checked
-with product residuals. A shared edge identity or tolerance-only curve/surface
-membership cannot establish that equality and cannot authorize the omission.
+Shared straight boundaries can establish opposite strict halfspaces; the
+common native coefficient row supplies a Bernstein boundary factor. Omitting
+that row requires exact projective equality, verified with product residuals.
+Shared curved section boundaries can instead construct a continuous joint
+native rational rectangle from exactly identical control rows. Its complete C0
+monotonicity certificate proves separation of the two faces across that join.
+Synchronized identical denominators are retained rather than unnecessarily
+reweighted, making these joint carriers available without approximate matching.
+Diagonal skin faces meeting only at one native vertex need exact projective
+corner equality and strict opposite halfspaces for every other coefficient.
+A shared topological identity or tolerance-only carrier membership does not
+authorize any boundary or corner omission.
 Away from that shared boundary, subdivision must prove disjointness. Intersections,
 extra contacts and uncertain exhausted certificates return a diagnostic naming
 the involved native strips, without substituting triangles or calling uncertainty
 a demonstrated fold.
 
-Uninfluenced solid lofts use the same native chart and skin separation proofs to
-admit nonradial concave sections beyond the previous affine, convex and
-nested-circle families. The proof includes all outer/hole contour skins, so hole
-collisions and material passage closures cannot bypass separation. Source sections
-must still be parallel, ordered strictly by height, and valid closed material
-regions. This preserves nesting throughout each certified morph. If any pair uses
-the new nonradial separation certificate, a loft with three or more sections
-also requires exact, consistently ordered Front/Top/Right native planes across
-every pair, including its neighboring family-proven skins. Cubic
-endpoint-influenced solids retain their
-existing radial/affine/convex/nested-circle family and axial monotonicity guards.
+Uninfluenced solid lofts use the same native chart and complete skin separation
+proofs for all outer/hole contours. Parallel sections retain their strictly
+ordered height and known radial/affine/convex/nested-circle families. Other
+multi-pair parallel sequences can use complete inter-skin separation instead of
+the principal-plane slab restriction. Cubic endpoint-influenced solids retain
+their existing supported-family and axial-monotonicity guards.
 
-Native manifold orientation, curve endpoints and curve-on-surface membership
-are validated for the complete result. Per-pair injectivity and separation alone
-do not certify separation between section pairs. The multi-pair guard therefore
-checks exact projective station equality on the actual constructed rational
-control rows of both adjoining skins, and uses outward-rounded station bounds
-to establish disjoint, strictly ordered slabs. Checking only source sketch planes
-or allowing an EPS-thick station band would leave an unproved overlap near the
-shared section. Angled, tolerance-planar or reversing multi-pair skins remain
-unsupported. Surface Loft creates an open sheet; solid lofts retain their
-additional cap and volume guards.
+Nonparallel planar solid sections are admitted only with proven individual
+ruled strips, complete skin separation, and native end-cap separation. Exact
+floating-point expansions establish that every shared boundary coefficient is
+on the cap's represented plane. All other skin coefficients must have a strict
+interior halfspace sign, factoring the common boundary without an epsilon band.
+This also separates the two caps. Merely tolerance-planar shared controls,
+non-halfspace cap neighborhoods, and general trim collars remain unsupported.
+The complete result still requires native closed manifold orientation, consistent
+curve endpoints, and curve-on-surface validation. This is bounded admission of
+additional valid families, not unrestricted freeform loft parity.
 
 The exact adapter bounds each source curve to 4096 controls, each refined
 contour to 4096 pieces, and all prepared section pieces to 32768. Complete
@@ -146,7 +153,9 @@ carrier limits are reported as unsupported geometry rather than substituting
 rendering triangles. Native skin separation is bounded to 4096 charts per skin,
 131072 overlapping broad-phase face pairs, 65536 refinement cells per candidate
 pair, 24 subdivision levels and 24 million operation-wide proof work units.
-The multi-pair slab proof admits at most 262144 native section controls. Surface wall identities include their two authored
+Local atlases admit at most 1024 charts and sixteen local subdivision levels;
+chart-pair checks share the bounded native separation budgets. The multi-pair
+slab fast path admits at most 262144 native section controls. Surface wall identities include their two authored
 section/member sources and refined parameter intervals. Section boundaries and
 connectors likewise carry construction ancestry. Existing downstream references
 to location-named faces or edges from older adapters can require explicit
@@ -177,3 +186,9 @@ Adapter 26 final integration passed workspace compilation, formatting, strict
 library/binary linting and the macOS package/signature checks on 2026-10-11.
 This remains source and package evidence; no interactive or saved-model
 acceptance exercise was performed.
+
+The 2026-10-14 local-atlas and cross-skin extension changes evaluated carriers
+and supported certificate paths. The integrated adapter fingerprint invalidates
+old derived caches; saved loft intent and source identities remain unchanged.
+Compilation and strict linting passed for the implementation. No tests, probes,
+or interactive acceptance checks were performed.

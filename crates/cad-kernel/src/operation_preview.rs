@@ -197,8 +197,9 @@ fn exact_solids(
     owner: &NodeRef,
     tolerance: f64,
 ) -> Result<OperationPreviewChange> {
-    let added = difference(after, before, tolerance)?;
-    let removed = difference(before, after, tolerance)?;
+    let search = adapter.modeling_tolerances().boolean_search_mm;
+    let added = difference(after, before, search)?;
+    let removed = difference(before, after, search)?;
     Ok(OperationPreviewChange {
         added: mesh(adapter, added, owner, tolerance)?,
         removed: mesh(adapter, removed, owner, tolerance)?,

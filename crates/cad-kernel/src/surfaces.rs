@@ -318,7 +318,13 @@ fn loft(
         }
         shell.extend(skin);
     }
-    crate::loft_correspondence::ordered_ruled_sections(&native_sections)?;
+    if crate::loft_correspondence::ordered_ruled_sections(&native_sections).is_err() {
+        // Ordered principal-plane slabs remain a cheap sufficient certificate.
+        // Turning and angled station sequences instead need complete native
+        // inter-face separation across all section pairs, including their exact
+        // shared section boundaries and diagonal shared vertices.
+        crate::loft_correspondence::prove_skin_separation(&shell, &mut separation_work)?;
+    }
     Ok(shell)
 }
 

@@ -109,7 +109,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/44;solver/tcad-native-lm/18";
+const BACKEND: &str = "monstertruck/0.4.1+6dba41312ccc;adapter/45;solver/tcad-native-lm/18";
 fn initial_part_context(document: &Document) -> Option<cad_core::Id> {
     if document.parts.contains_key(&document.root) {
         return Some(document.root.clone());
@@ -385,8 +385,11 @@ impl Workspace {
                     .join(&self.session.committed.id)
             })
     }
-    pub fn tolerance(&self) -> f64 {
-        self.session.visible().settings.evaluation_tolerance_mm
+    pub fn display_tolerance(&self) -> f64 {
+        self.session.visible().settings.display_tolerance_mm
+    }
+    pub fn modeling_tolerances(&self) -> cad_core::tolerance::Modeling {
+        self.session.visible().settings.modeling
     }
     pub fn activate_context(
         &mut self,
@@ -1369,7 +1372,7 @@ fn poll_workers(mut w: ResMut<Workspace>) {
             identity: identity.clone(),
             document: w.session.visible().clone(),
             project_root: w.root().to_string_lossy().into(),
-            tolerance: w.tolerance(),
+            display_tolerance_mm: w.display_tolerance(),
             operation_preview: preview_key
                 .as_ref()
                 .map(|key| Box::new(operation_preview::request(&w, key))),

@@ -78,6 +78,7 @@ struct Cell {
     net: Vec<Vec<Homogeneous>>,
     points: Vec<IntervalPoint>,
     bounds: IntervalPoint,
+    domain: [f64; 4],
 }
 impl Cell {
     fn new(net: Vec<Vec<Homogeneous>>, work: &mut usize) -> Result<Self> {
@@ -98,6 +99,7 @@ impl Cell {
             net,
             points,
             bounds,
+            domain: [0., 1., 0., 1.],
         })
     }
     fn from_face(face: &Face, work: &mut usize) -> Result<Self> {
@@ -106,15 +108,33 @@ impl Cell {
                 "the skin must retain its native rational carrier",
             ));
         };
-        let net = surface.control_points();
-        let degree = surface.knot_vector_u().len() - net.len() - 1;
-        if net.len() != degree + 1
-            || net.len() > 33
-            || net.iter().any(|row| row.len() != 2)
-            || surface.knot_vector_v().len() != 4
+        Self::from_surface(&surface, work)
+    }
+    fn from_surface(surface: &NurbsSurface<Vector4>, work: &mut usize) -> Result<Self> {
+        let ((u0, u1), (v0, v1)) = surface.range_tuple();
+        if ![u0, u1, v0, v1, u1 - u0, v1 - v0]
+            .into_iter()
+            .all(f64::is_finite)
+            || u0 >= u1
+            || v0 >= v1
         {
             return Err(unsupported(
-                "separation requires one native ruled Bernstein chart per face",
+                "native chart parameter ranges must be finite and strictly increasing",
+            ));
+        }
+        let net = surface.control_points();
+        let degree_u = surface.knot_vector_u().len().checked_sub(net.len() + 1);
+        let degree_v = surface
+            .knot_vector_v()
+            .len()
+            .checked_sub(net.first().map_or(0, Vec::len) + 1);
+        if !surface.is_clamped()
+            || degree_u.is_none_or(|d| !(1..=16).contains(&d) || net.len() != d + 1)
+            || degree_v
+                .is_none_or(|d| !(1..=16).contains(&d) || net.iter().any(|row| row.len() != d + 1))
+        {
+            return Err(unsupported(
+                "separation requires one positive rational Bernstein chart of degree one through sixteen",
             ));
         }
         Self::new(
@@ -142,6 +162,16 @@ impl Cell {
             .fold(0., f64::max)
     }
     fn split(&self, u: bool, work: &mut usize) -> Result<(Self, Self)> {
+        let axis = if u { 0 } else { 2 };
+        self.split_at(u, (self.domain[axis] + self.domain[axis + 1]) * 0.5, work)
+    }
+    fn split_at(&self, u: bool, coordinate: f64, work: &mut usize) -> Result<(Self, Self)> {
+        let axis = if u { 0 } else { 2 };
+        if coordinate <= self.domain[axis] || coordinate >= self.domain[axis + 1] {
+            return Err(unsupported(
+                "chart subdivision has no strict native parameter interval",
+            ));
+        }
         let mut left = self.net.clone();
         let mut right = self.net.clone();
         let degree = if u {
@@ -150,7 +180,12 @@ impl Cell {
             self.net[0].len() - 1
         };
         let count = if u { self.net[0].len() } else { self.net.len() };
-        let half = Interval::exact(0.5)?;
+        let fraction = Interval::exact(coordinate)?
+            .sub(Interval::exact(self.domain[axis])?)?
+            .div(
+                Interval::exact(self.domain[axis + 1])?.sub(Interval::exact(self.domain[axis])?)?,
+            )?;
+        let remainder = Interval::exact(1.)?.sub(fraction)?;
         charge(work, (degree + 1) * (degree + 1) * count * 8)?;
         for other in 0..count {
             let mut controls = (0..=degree)
@@ -173,12 +208,30 @@ impl Cell {
                 for i in 0..degree - level {
                     let next = controls[i + 1];
                     for (value, next) in controls[i].iter_mut().zip(next) {
-                        *value = value.mul(half)?.add(next.mul(half)?)?;
+                        *value = value.mul(remainder)?.add(next.mul(fraction)?)?;
                     }
                 }
             }
         }
-        Ok((Self::new(left, work)?, Self::new(right, work)?))
+        let mut left = Self::new(left, work)?;
+        let mut right = Self::new(right, work)?;
+        left.domain = self.domain;
+        right.domain = self.domain;
+        left.domain[axis + 1] = coordinate;
+        right.domain[axis] = coordinate;
+        Ok((left, right))
+    }
+    fn restrict(&self, domain: [f64; 4], work: &mut usize) -> Result<Self> {
+        let mut cell = self.clone();
+        for (u, axis) in [(true, 0), (false, 2)] {
+            if domain[axis + 1] < cell.domain[axis + 1] {
+                cell = cell.split_at(u, domain[axis + 1], work)?.0;
+            }
+            if domain[axis] > cell.domain[axis] {
+                cell = cell.split_at(u, domain[axis], work)?.1;
+            }
+        }
+        Ok(cell)
     }
     fn split_direction(&self) -> bool {
         let p = self.net.len() - 1;
@@ -216,8 +269,9 @@ fn hulls_separate(a: &Cell, b: &Cell, work: &mut usize) -> Result<bool> {
     let mut axes = vec![bc - ac];
     for cell in [a, b] {
         let last = cell.net.len() - 1;
-        let x = middle(&cell.points[2 * last]) - middle(&cell.points[0]);
-        let y = middle(&cell.points[1]) - middle(&cell.points[0]);
+        let width = cell.net[0].len();
+        let x = middle(&cell.points[width * last]) - middle(&cell.points[0]);
+        let y = middle(&cell.points[width - 1]) - middle(&cell.points[0]);
         axes.extend([x, y, x.cross(y)]);
     }
     for axis in axes {
@@ -235,11 +289,197 @@ fn hulls_separate(a: &Cell, b: &Cell, work: &mut usize) -> Result<bool> {
     Ok(false)
 }
 
+fn homogeneous_hull(net: &[Vec<Homogeneous>]) -> Homogeneous {
+    let mut result = net[0][0];
+    for h in net.iter().flatten() {
+        for (bound, value) in result.iter_mut().zip(h) {
+            bound.low = bound.low.min(value.low);
+            bound.high = bound.high.max(value.high);
+        }
+    }
+    result
+}
+fn midpoint_net(net: &[Vec<Homogeneous>], work: &mut usize) -> Result<Homogeneous> {
+    fn midpoint(mut row: Vec<Homogeneous>, work: &mut usize) -> Result<Homogeneous> {
+        let half = Interval::exact(0.5)?;
+        while row.len() > 1 {
+            charge(work, row.len() * 8)?;
+            for i in 0..row.len() - 1 {
+                let next = row[i + 1];
+                for (value, next) in row[i].iter_mut().zip(next) {
+                    *value = value.mul(half)?.add(next.mul(half)?)?;
+                }
+            }
+            row.pop();
+        }
+        Ok(row[0])
+    }
+    let rows = net
+        .iter()
+        .map(|row| midpoint(row.clone(), work))
+        .collect::<Result<Vec<_>>>()?;
+    midpoint(rows, work)
+}
+fn derivative_net(cell: &Cell, u: bool, work: &mut usize) -> Result<Vec<Vec<Homogeneous>>> {
+    let rows = cell.net.len() - usize::from(u);
+    let columns = cell.net[0].len() - usize::from(!u);
+    let degree = Interval::exact(if u { rows } else { columns } as f64)?;
+    charge(work, rows * columns * 8)?;
+    (0..rows)
+        .map(|i| {
+            (0..columns)
+                .map(|j| {
+                    let a = cell.net[i][j];
+                    let b = cell.net[i + usize::from(u)][j + usize::from(!u)];
+                    Ok([
+                        b[0].sub(a[0])?.mul(degree)?,
+                        b[1].sub(a[1])?.mul(degree)?,
+                        b[2].sub(a[2])?.mul(degree)?,
+                        b[3].sub(a[3])?.mul(degree)?,
+                    ])
+                })
+                .collect()
+        })
+        .collect()
+}
+fn numerator(position: Homogeneous, derivative: Homogeneous) -> Result<IntervalPoint> {
+    Ok([
+        derivative[0]
+            .mul(position[3])?
+            .sub(position[0].mul(derivative[3])?)?,
+        derivative[1]
+            .mul(position[3])?
+            .sub(position[1].mul(derivative[3])?)?,
+        derivative[2]
+            .mul(position[3])?
+            .sub(position[2].mul(derivative[3])?)?,
+    ])
+}
+/// All principal minors of one projected native Jacobian are strictly positive
+/// on this rectangle. Candidate axes may round freely: interval evaluation of
+/// the complete rational derivative hull establishes the actual certificate.
+fn chart_injective(cell: &Cell, work: &mut usize) -> Result<bool> {
+    let du = derivative_net(cell, true, work)?;
+    let dv = derivative_net(cell, false, work)?;
+    let position = homogeneous_hull(&cell.net);
+    let nu = numerator(position, homogeneous_hull(&du))?;
+    let nv = numerator(position, homogeneous_hull(&dv))?;
+    let center = midpoint_net(&cell.net, work)?;
+    let a = middle(&numerator(center, midpoint_net(&du, work)?)?);
+    let b = middle(&numerator(center, midpoint_net(&dv, work)?)?);
+    let la = a.magnitude();
+    let lb = b.magnitude();
+    if !la.is_finite() || !lb.is_finite() || la <= 0. || lb <= 0. {
+        return Ok(false);
+    }
+    let x = a / la;
+    let y = b / lb;
+    let cosine = x.dot(y);
+    let determinant = 1. - cosine * cosine;
+    if !determinant.is_finite() || determinant <= 1e-12 {
+        return Ok(false);
+    }
+    let u = exact((x - y * cosine) / determinant)?;
+    let v = exact((y - x * cosine) / determinant)?;
+    let aa = dot_intervals(&nu, &u)?;
+    let dd = dot_intervals(&nv, &v)?;
+    let bb = dot_intervals(&nv, &u)?;
+    let cc = dot_intervals(&nu, &v)?;
+    Ok(aa.low > 0. && dd.low > 0. && aa.mul(dd)?.sub(bb.mul(cc)?)?.low > 0.)
+}
+fn union_domain(a: &Cell, b: &Cell) -> [f64; 4] {
+    [
+        a.domain[0].min(b.domain[0]),
+        a.domain[1].max(b.domain[1]),
+        a.domain[2].min(b.domain[2]),
+        a.domain[3].max(b.domain[3]),
+    ]
+}
+fn atlas_pair(root: &Cell, a: Cell, b: Cell, work: &mut usize) -> Result<()> {
+    let mut pending = vec![(a, b, 0usize)];
+    let mut visited = 0;
+    while let Some((a, b, depth)) = pending.pop() {
+        visited += 1;
+        if visited > MAX_CELLS {
+            return Err(unsupported(
+                "a native atlas pair exceeds its separation cell budget",
+            ));
+        }
+        if hulls_separate(&a, &b, work)? {
+            continue;
+        }
+        // Adjacent parameter cells may meet at their common parameter edge or
+        // vertex. Injectivity of their bounding native rectangle permits exactly
+        // that contact; no geometric distance tolerance exempts another contact.
+        let joint = root.restrict(union_domain(&a, &b), work)?;
+        if chart_injective(&joint, work)? {
+            continue;
+        }
+        if depth >= MAX_DEPTH {
+            return Err(unsupported(
+                "native chart interiors overlap, or their complete separation cannot be certified within bounded refinement; proof failure does not establish a fold",
+            ));
+        }
+        if a.extent() >= b.extent() {
+            let (left, right) = a.split(a.split_direction(), work)?;
+            pending.push((right, b.clone(), depth + 1));
+            pending.push((left, b, depth + 1));
+        } else {
+            let (left, right) = b.split(b.split_direction(), work)?;
+            pending.push((a.clone(), right, depth + 1));
+            pending.push((a, left, depth + 1));
+        }
+    }
+    Ok(())
+}
+/// Prove a complete positive rational Bernstein carrier with multiple local
+/// projection charts, then establish separation between every chart pair.
+/// De Casteljau refinement uses outward intervals on the original native net;
+/// rounded subpatches or display triangles never become proof authority.
+pub(crate) fn prove_carrier_atlas(surface: &NurbsSurface<Vector4>, work: &mut usize) -> Result<()> {
+    let root = Cell::from_surface(surface, work)?;
+    let mut pending = vec![(root.clone(), 0usize)];
+    let mut charts = Vec::new();
+    while let Some((cell, depth)) = pending.pop() {
+        if chart_injective(&cell, work)? {
+            charts.push(cell);
+            continue;
+        }
+        if depth >= 16 || charts.len() + pending.len() + 2 > 1024 {
+            return Err(unsupported(
+                "local native charts cannot establish regular injective rectangles within their subdivision budget; this does not establish folding",
+            ));
+        }
+        let (left, right) = cell.split(cell.split_direction(), work)?;
+        pending.push((right, depth + 1));
+        pending.push((left, depth + 1));
+    }
+    let mut pairs = 0usize;
+    for (i, a) in charts.iter().enumerate() {
+        for b in charts.iter().skip(i + 1) {
+            if boxes_separate(a, b) {
+                continue;
+            }
+            pairs += 1;
+            if pairs > MAX_PAIRS {
+                return Err(unsupported(
+                    "local native atlas exceeds its overlapping-chart pair budget",
+                ));
+            }
+            atlas_pair(&root, a.clone(), b.clone(), work)?;
+        }
+    }
+    Ok(())
+}
+
 /// Adjacent faces are exempt only at their shared native connector. A plane
 /// through that line must put every other rational control strictly on its
 /// own side. The omitted endpoint row is the exact Bernstein factor u or 1-u,
 /// so this proves separation up to the common boundary, not an epsilon gap.
 fn connector_separates(a: &Cell, b: &Cell, ends: (bool, bool), work: &mut usize) -> Result<bool> {
+    if a.net[0].len() != 2 || b.net[0].len() != 2 {
+        return Ok(false);
+    }
     let ia = if ends.0 { a.net.len() - 1 } else { 0 };
     let ib = if ends.1 { b.net.len() - 1 } else { 0 };
     if !(0..2).all(|j| same_projective_point(&a.net[ia][j], &b.net[ib][j])) {
@@ -306,7 +546,32 @@ fn connector_separates(a: &Cell, b: &Cell, ends: (bool, bool), work: &mut usize)
     Ok(false)
 }
 
-fn shared_connector(a: &Face, b: &Face) -> Result<Option<(bool, bool)>> {
+#[derive(Clone, Copy)]
+enum Contact {
+    Edge { u: bool, ends: (bool, bool) },
+    Vertex { a: [bool; 2], b: [bool; 2] },
+}
+fn boundary(index: usize) -> (bool, bool) {
+    match index {
+        0 => (false, false),
+        1 => (true, true),
+        2 => (false, true),
+        _ => (true, false),
+    }
+}
+fn face_vertices(face: &Face) -> Result<[(VertexId, [bool; 2]); 4]> {
+    let wires = face.boundaries();
+    if wires.len() != 1 || wires[0].len() != 4 {
+        return Err(unsupported("a native chart lost its four-sided boundary"));
+    }
+    Ok([
+        (wires[0][0].front().id(), [false, false]),
+        (wires[0][0].back().id(), [true, false]),
+        (wires[0][2].front().id(), [true, true]),
+        (wires[0][2].back().id(), [false, true]),
+    ])
+}
+fn shared_contact(a: &Face, b: &Face) -> Result<Option<Contact>> {
     let wa = a.boundaries();
     let wb = b.boundaries();
     if wa.len() != 1 || wb.len() != 1 || wa[0].len() != 4 || wb[0].len() != 4 {
@@ -320,18 +585,192 @@ fn shared_connector(a: &Face, b: &Face) -> Result<Option<(bool, bool)>> {
             if x.id() != y.id() {
                 continue;
             }
-            if ![1, 3].contains(&i) || ![1, 3].contains(&j) || shared.is_some() {
+            let (u, end_a) = boundary(i);
+            let (v, end_b) = boundary(j);
+            if u != v || shared.is_some() {
                 return Err(unsupported(
                     "loft charts have unexpected shared boundary topology",
                 ));
             }
-            shared = Some((i == 1, j == 1));
+            shared = Some(Contact::Edge {
+                u,
+                ends: (end_a, end_b),
+            });
+        }
+    }
+    if shared.is_some() {
+        return Ok(shared);
+    }
+    for (a, corner_a) in face_vertices(a)? {
+        for (b, corner_b) in face_vertices(b)? {
+            if a != b {
+                continue;
+            }
+            if shared.is_some() {
+                return Err(unsupported(
+                    "charts meet at multiple isolated native vertices without shared boundary authority",
+                ));
+            }
+            shared = Some(Contact::Vertex {
+                a: corner_a,
+                b: corner_b,
+            });
         }
     }
     Ok(shared)
 }
 
-fn pair(a: Cell, b: Cell, shared: Option<(bool, bool)>, work: &mut usize) -> Result<()> {
+fn transpose(cell: &Cell, work: &mut usize) -> Result<Cell> {
+    Cell::new(
+        (0..cell.net[0].len())
+            .map(|j| cell.net.iter().map(|row| row[j]).collect())
+            .collect(),
+        work,
+    )
+}
+fn vertex_separates(
+    a: &Cell,
+    b: &Cell,
+    corners: ([bool; 2], [bool; 2]),
+    work: &mut usize,
+) -> Result<bool> {
+    let corner = |cell: &Cell, ends: [bool; 2]| {
+        [
+            if ends[0] { cell.net.len() - 1 } else { 0 },
+            if ends[1] { cell.net[0].len() - 1 } else { 0 },
+        ]
+    };
+    let ia = corner(a, corners.0);
+    let ib = corner(b, corners.1);
+    if !same_projective_point(&a.net[ia[0]][ia[1]], &b.net[ib[0]][ib[1]]) {
+        return Ok(false);
+    }
+    let anchor = physical(&a.net[ia[0]][ia[1]])?;
+    let da = middle(&a.bounds) - middle(&anchor);
+    let db = middle(&b.bounds) - middle(&anchor);
+    for candidate in [db - da, db, -da] {
+        let length = candidate.magnitude();
+        if !length.is_finite() || length <= 1e-12 {
+            continue;
+        }
+        let axis = exact(candidate / length)?;
+        let mut separated = true;
+        for (cell, corner, negative) in [(a, ia, true), (b, ib, false)] {
+            for (i, row) in cell.net.iter().enumerate() {
+                for (j, h) in row.iter().enumerate() {
+                    if [i, j] == corner {
+                        continue;
+                    }
+                    charge(work, 36)?;
+                    let value = dot_intervals(&difference(&physical(h)?, &anchor)?, &axis)?;
+                    separated &= if negative {
+                        value.high < 0.
+                    } else {
+                        value.low > 0.
+                    };
+                }
+            }
+        }
+        // The omitted coefficient is the one exact common Bernstein corner.
+        // Every other basis coefficient is strictly on its own side, proving
+        // contact only at this vertex throughout both complete rectangles.
+        if separated {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+fn joint_chart(a: &Face, b: &Face, contact: Contact, work: &mut usize) -> Result<bool> {
+    let Contact::Edge { u, ends } = contact else {
+        return Ok(false);
+    };
+    let (Surface::NurbsSurface(a), Surface::NurbsSurface(b)) = (a.surface(), b.surface()) else {
+        return Ok(false);
+    };
+    let mut aa = a.control_points().clone();
+    let mut bb = b.control_points().clone();
+    if !u {
+        let transpose = |net: Vec<Vec<Vector4>>| {
+            (0..net[0].len())
+                .map(|j| net.iter().map(|row| row[j]).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        };
+        aa = transpose(aa);
+        bb = transpose(bb);
+    }
+    let (p, q) = (aa.len() - 1, aa[0].len() - 1);
+    if bb.len() != p + 1 || bb.iter().any(|row| row.len() != q + 1) {
+        return Ok(false);
+    }
+    if !ends.0 {
+        aa.reverse();
+    }
+    if ends.1 {
+        bb.reverse();
+    }
+    if aa[p] != bb[0] {
+        let mut reverse = bb[0].clone();
+        reverse.reverse();
+        if aa[p] != reverse {
+            return Ok(false);
+        }
+        for row in &mut bb {
+            row.reverse();
+        }
+    }
+    // An exact common native control row makes this a continuous piecewise
+    // rational rectangle. C0 joins use the full projected monotonicity proof,
+    // not merely independent local Jacobian signs.
+    aa.pop();
+    aa.extend(bb);
+    let knots = std::iter::repeat_n(0., p + 1)
+        .chain(std::iter::repeat_n(1., p))
+        .chain(std::iter::repeat_n(2., p + 1))
+        .collect::<Vec<_>>();
+    let carrier = NurbsSurface::new(BsplineSurface::new(
+        (KnotVector::from(knots), KnotVector::bezier_knot(q)),
+        aa,
+    ));
+    match crate::surface_construct::prove_regular(&carrier, work) {
+        Ok(()) => Ok(true),
+        Err(CadError::Unsupported(_)) => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+fn contact_separates(a: &Cell, b: &Cell, contact: Contact, work: &mut usize) -> Result<bool> {
+    match contact {
+        Contact::Edge { u: true, ends } => connector_separates(a, b, ends, work),
+        Contact::Edge { u: false, ends } => {
+            connector_separates(&transpose(a, work)?, &transpose(b, work)?, ends, work)
+        }
+        Contact::Vertex { a: ca, b: cb } => vertex_separates(a, b, (ca, cb), work),
+    }
+}
+fn retained_contact(
+    contact: Option<Contact>,
+    first: bool,
+    u: bool,
+    right: bool,
+) -> Option<Contact> {
+    contact.filter(|contact| match *contact {
+        Contact::Edge { u: axis, ends } => {
+            axis != u
+                || if first {
+                    ends.0 == right
+                } else {
+                    ends.1 == right
+                }
+        }
+        Contact::Vertex { a, b } => {
+            if first {
+                a[usize::from(!u)] == right
+            } else {
+                b[usize::from(!u)] == right
+            }
+        }
+    })
+}
+fn pair(a: Cell, b: Cell, shared: Option<Contact>, work: &mut usize) -> Result<()> {
     let mut pending = vec![(a, b, shared, 0usize)];
     let mut visited = 0;
     while let Some((a, b, shared, depth)) = pending.pop() {
@@ -341,8 +780,8 @@ fn pair(a: Cell, b: Cell, shared: Option<(bool, bool)>, work: &mut usize) -> Res
                 "a native face pair exceeded the separation cell budget",
             ));
         }
-        if let Some(ends) = shared {
-            if connector_separates(&a, &b, ends, work)? {
+        if let Some(contact) = shared {
+            if contact_separates(&a, &b, contact, work)? {
                 continue;
             }
         } else if hulls_separate(&a, &b, work)? {
@@ -354,22 +793,26 @@ fn pair(a: Cell, b: Cell, shared: Option<(bool, bool)>, work: &mut usize) -> Res
             ));
         }
         let split_a = a.extent() >= b.extent();
-        let u = shared.is_some()
-            || if split_a {
-                a.split_direction()
-            } else {
-                b.split_direction()
-            };
+        let u = match shared {
+            Some(Contact::Edge { u, .. }) => u,
+            _ => {
+                if split_a {
+                    a.split_direction()
+                } else {
+                    b.split_direction()
+                }
+            }
+        };
         if split_a {
             let (left, right) = a.split(u, work)?;
-            let left_shared = shared.filter(|ends| !ends.0);
-            let right_shared = shared.filter(|ends| ends.0);
+            let left_shared = retained_contact(shared, true, u, false);
+            let right_shared = retained_contact(shared, true, u, true);
             pending.push((right, b.clone(), right_shared, depth + 1));
             pending.push((left, b, left_shared, depth + 1));
         } else {
             let (left, right) = b.split(u, work)?;
-            let left_shared = shared.filter(|ends| !ends.1);
-            let right_shared = shared.filter(|ends| ends.1);
+            let left_shared = retained_contact(shared, false, u, false);
+            let right_shared = retained_contact(shared, false, u, true);
             pending.push((a.clone(), right, right_shared, depth + 1));
             pending.push((a, left, left_shared, depth + 1));
         }
@@ -377,9 +820,8 @@ fn pair(a: Cell, b: Cell, shared: Option<(bool, bool)>, work: &mut usize) -> Res
     Ok(())
 }
 
-/// Certify mutual separation of all faces in one section-pair skin. Each face
-/// must separately have its complete native injectivity certificate. This
-/// does not establish separation from a different section-pair skin.
+/// Certify mutual separation of every native face, including different section
+/// pairs. Each face separately needs its complete native injectivity proof.
 pub(crate) fn prove_skin_separation(skin: &Shell, work: &mut usize) -> Result<()> {
     if skin.is_empty() || skin.len() > 4096 {
         return Err(unsupported(
@@ -408,7 +850,12 @@ pub(crate) fn prove_skin_separation(skin: &Shell, work: &mut usize) -> Result<()
                     "the native skin exceeds its overlapping-face pair budget",
                 ));
             }
-            let shared = shared_connector(&skin[a], &skin[b])?;
+            let shared = shared_contact(&skin[a], &skin[b])?;
+            if let Some(contact) = shared
+                && joint_chart(&skin[a], &skin[b], contact, work)?
+            {
+                continue;
+            }
             pair(cells[a].clone(), cells[b].clone(), shared, work).map_err(
                 |error| match error {
                     CadError::Unsupported(message) => CadError::Unsupported(format!(
@@ -419,6 +866,194 @@ pub(crate) fn prove_skin_separation(skin: &Shell, work: &mut usize) -> Result<()
                     other => other,
                 },
             )?;
+        }
+    }
+    Ok(())
+}
+
+fn grow_exact(expansion: &mut Vec<f64>, mut value: f64) -> Result<()> {
+    let mut output = Vec::with_capacity(expansion.len() + 1);
+    for component in expansion.iter().copied() {
+        let sum = value + component;
+        if !sum.is_finite() {
+            return Err(unsupported("exact plane-functional arithmetic overflowed"));
+        }
+        let virtual_component = sum - value;
+        let error = (value - (sum - virtual_component)) + (component - virtual_component);
+        if error != 0. {
+            output.push(error);
+        }
+        value = sum;
+    }
+    if value != 0. {
+        output.push(value);
+    }
+    *expansion = output;
+    Ok(())
+}
+fn scale_exact(expansion: &[f64], scale: f64) -> Result<Vec<f64>> {
+    let mut result = Vec::new();
+    for value in expansion {
+        let product = value * scale;
+        // Error-free FMA products require representable tails. Refuse extreme
+        // scales rather than treating an underflowed determinant as exact zero.
+        if !product.is_finite() || (*value != 0. && scale != 0. && product.abs() < 1e-250) {
+            return Err(unsupported(
+                "exact cap-plane arithmetic exceeds its safe exponent range",
+            ));
+        }
+        grow_exact(&mut result, value.mul_add(scale, -product))?;
+        grow_exact(&mut result, product)?;
+    }
+    Ok(result)
+}
+struct CapPlane {
+    origin: Vector3,
+    u: Vector3,
+    v: Vector3,
+    normal: IntervalPoint,
+}
+impl CapPlane {
+    fn new(face: &Face) -> Result<Self> {
+        let Surface::Plane(plane) = face.oriented_surface() else {
+            return Err(unsupported(
+                "solid loft end caps need native planar carriers",
+            ));
+        };
+        let u = plane.axis_u();
+        let v = plane.axis_v();
+        Ok(Self {
+            origin: plane.origin().to_vec(),
+            u,
+            v,
+            normal: cross(&exact(u)?, &exact(v)?)?,
+        })
+    }
+    fn zero(&self, h: Vector4, work: &mut usize) -> Result<bool> {
+        charge(work, 256)?;
+        let mut delta = Vec::new();
+        for i in 0..3 {
+            let mut value = scale_exact(&[self.origin[i]], -h.w)?;
+            grow_exact(&mut value, h[i])?;
+            delta.push(value);
+        }
+        let mut result = Vec::new();
+        for (i, j, k, sign) in [
+            (0, 1, 2, 1.),
+            (0, 2, 1, -1.),
+            (1, 2, 0, 1.),
+            (1, 0, 2, -1.),
+            (2, 0, 1, 1.),
+            (2, 1, 0, -1.),
+        ] {
+            for value in scale_exact(&scale_exact(&delta[k], self.v[j])?, self.u[i] * sign)? {
+                grow_exact(&mut result, value)?;
+            }
+        }
+        Ok(result.is_empty())
+    }
+    fn value(&self, h: Vector4) -> Result<Interval> {
+        let h = [
+            Interval::exact(h.x)?,
+            Interval::exact(h.y)?,
+            Interval::exact(h.z)?,
+            Interval::exact(h.w)?,
+        ];
+        let origin = exact(self.origin)?;
+        let relative = [
+            h[0].sub(origin[0].mul(h[3])?)?,
+            h[1].sub(origin[1].mul(h[3])?)?,
+            h[2].sub(origin[2].mul(h[3])?)?,
+        ];
+        dot_intervals(&relative, &self.normal)
+    }
+}
+/// A nonparallel solid loft needs separation from its end caps as well as
+/// between skins. The actual plane functional vanishes on every shared native
+/// boundary coefficient; all other coefficients have a strict interior sign.
+/// This factors the common boundary without a tolerance band or omitted collar.
+pub(crate) fn prove_end_caps(
+    skin: &Shell,
+    start: &Face,
+    end: &Face,
+    work: &mut usize,
+) -> Result<()> {
+    use monstertruck::geometry::prelude::TryIntoHomogeneousBsplineCurve;
+    if skin.is_empty() {
+        return Err(unsupported(
+            "solid loft cap separation requires a complete nonempty native skin",
+        ));
+    }
+    for (cap, positive) in [(start, true), (end, false)] {
+        let plane = CapPlane::new(cap)?;
+        let edges = cap
+            .edge_iter()
+            .map(|e| e.id())
+            .collect::<std::collections::HashSet<_>>();
+        for edge in cap.edge_iter() {
+            let curve = edge
+                .curve()
+                .try_into_homogeneous_bspline_curve()
+                .ok_or_else(|| {
+                    unsupported("loft cap boundaries need explicit native rational carriers")
+                })?;
+            for h in curve.control_points() {
+                if h.w <= 0. || !plane.zero(*h, work)? {
+                    return Err(unsupported(
+                        "cap boundary coefficients are not exactly on their represented native plane; a general trim collar certificate is required",
+                    ));
+                }
+            }
+        }
+        for face in skin {
+            let Surface::NurbsSurface(carrier) = face.surface() else {
+                return Err(unsupported("loft skin lost its native rational carrier"));
+            };
+            let wires = face.boundaries();
+            if wires.len() != 1 || wires[0].len() != 4 {
+                return Err(unsupported("loft skin lost its native four-sided trim"));
+            }
+            let shared = wires[0]
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| edges.contains(&e.id()))
+                .map(|(i, _)| i)
+                .collect::<Vec<_>>();
+            if shared.len() > 1 || shared.first().is_some_and(|i| ![0, 2].contains(i)) {
+                return Err(unsupported(
+                    "end-cap contact has unsupported native boundary topology",
+                ));
+            }
+            let column = shared.first().map(|i| {
+                if *i == 0 {
+                    0
+                } else {
+                    carrier.control_points()[0].len() - 1
+                }
+            });
+            for row in carrier.control_points() {
+                for (j, h) in row.iter().enumerate() {
+                    charge(work, 48)?;
+                    if column == Some(j) {
+                        if !plane.zero(*h, work)? {
+                            return Err(unsupported(
+                                "skin and cap do not share an exact plane boundary; complete native collar separation is unresolved",
+                            ));
+                        }
+                        continue;
+                    }
+                    let value = plane.value(*h)?;
+                    if !(if positive {
+                        value.low > 0.
+                    } else {
+                        value.high < 0.
+                    }) {
+                        return Err(unsupported(
+                            "the skin approaches an end cap away from its shared boundary, or a strict native cap halfspace certificate is unavailable",
+                        ));
+                    }
+                }
+            }
         }
     }
     Ok(())

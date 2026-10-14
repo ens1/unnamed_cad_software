@@ -43,12 +43,18 @@ Source definitions remain authoritative. The result also has the natural
 rectangular carrier expected by parameter-domain Trim and Untrim.
 
 The former all-pairs derivative-control-hull normal check has been replaced by
-the surface adapter's bounded fixed-projection certificate. Every accepted
-complete face has a proven injective projected rational Jacobian. Differentiable
+the surface adapter's bounded fixed-projection certificate, followed by a
+local-atlas fallback for a single positive rational Bernstein carrier. Every accepted complete face has either a proven globally injective projection
+or certified local injective rectangles with complete inter-chart separation. Differentiable
 carriers use positive principal minors. Position-continuous carriers with
 nonsmooth interior knot joins retain the stronger positive-definite symmetric
 Jacobian certificate. Bernstein proof subdivision refines proof coefficients,
-not replacement geometry; all native cells retain the same projection frame.
+not replacement geometry; fixed-frame proof cells retain the same projection.
+The local-atlas fallback uses outward intervals on the original native net and
+checks every chart pair by native hull separation or a joint parameter-rectangle
+injectivity certificate. It supports turning carriers without requiring one
+projection for the whole face; multi-knot fills currently retain the fixed-frame
+certificate. Local regularity alone never establishes global injection.
 This admits legitimate shear and some nonconvex control nets that the previous
 gate rejected, while uncertain, singular, folded or exhausted cases remain
 explicitly unsupported. A failed certificate does not establish that the

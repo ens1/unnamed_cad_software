@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     io::{Read, Write},
 };
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAX_FRAME: usize = 256 * 1024 * 1024;
 pub const OPERATION_PREVIEW_VERSION: u32 = 3;
 pub const BODY_COUNTS_VERSION: u32 = 1;
@@ -199,6 +199,7 @@ pub struct OperationPreview {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Evaluation {
+    pub accuracy: crate::tolerance::Accuracy,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pattern_guides: BTreeMap<String, crate::body_editing::PatternGuide>,
     pub identity: RequestIdentity,
@@ -315,7 +316,9 @@ pub enum WorkerRequest {
         identity: RequestIdentity,
         document: Document,
         project_root: String,
-        tolerance: f64,
+        /// Display chord budget only; modeling policy is in document.settings.
+        #[serde(alias = "tolerance")]
+        display_tolerance_mm: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         operation_preview: Option<Box<OperationPreviewRequest>>,
     },
@@ -325,14 +328,16 @@ pub enum WorkerRequest {
         project_root: String,
         path: String,
         format: String,
-        tolerance: f64,
+        #[serde(alias = "tolerance")]
+        display_tolerance_mm: f64,
     },
     Release {
         identity: RequestIdentity,
         document: Document,
         project_root: String,
         path: String,
-        tolerance: f64,
+        #[serde(alias = "tolerance")]
+        display_tolerance_mm: f64,
     },
     Import {
         identity: RequestIdentity,
@@ -412,19 +417,21 @@ pub fn read_frame<T: serde::de::DeserializeOwned>(reader: &mut impl Read) -> Res
 }
 pub trait GeometryService {
     fn fingerprint(&self) -> &str;
+    /// Disposable chord tolerance; document.settings.modeling controls CAD.
     fn evaluate(
         &mut self,
         identity: RequestIdentity,
         document: &Document,
         project_root: &std::path::Path,
-        tolerance: f64,
+        display_tolerance_mm: f64,
     ) -> Result<Evaluation>;
+    /// Meshed/drawing export accuracy, independent of native construction.
     fn export(
         &mut self,
         document: &Document,
         root: &std::path::Path,
         path: &std::path::Path,
         format: &str,
-        tolerance: f64,
+        display_tolerance_mm: f64,
     ) -> Result<()>;
 }

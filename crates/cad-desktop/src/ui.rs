@@ -2672,7 +2672,7 @@ fn export(w: &mut Workspace, release: bool) {
                 document: doc,
                 project_root: root,
                 path: path.to_string_lossy().into(),
-                tolerance: w.tolerance(),
+                display_tolerance_mm: w.display_tolerance(),
             });
             w.status = "Building release from committed revision".into();
         }
@@ -2697,7 +2697,7 @@ fn export(w: &mut Workspace, release: bool) {
             project_root: root,
             path: path.to_string_lossy().into(),
             format,
-            tolerance: w.tolerance(),
+            display_tolerance_mm: w.display_tolerance(),
         });
         w.status = "Exporting committed geometry".into();
     }
@@ -4330,7 +4330,7 @@ pub(crate) fn export_format(w: &mut Workspace, format: &str, name: &str) {
             project_root: w.root().to_string_lossy().into(),
             path: path.to_string_lossy().into(),
             format: format.into(),
-            tolerance: w.tolerance(),
+            display_tolerance_mm: w.display_tolerance(),
         });
         w.status = "Exporting committed revision".into();
     }
@@ -4704,7 +4704,7 @@ fn compare(w: &mut Workspace, d: Document, root: PathBuf) {
         identity,
         document: d,
         project_root: root.to_string_lossy().into(),
-        tolerance: w.tolerance(),
+        display_tolerance_mm: w.display_tolerance(),
         operation_preview: None,
     });
     w.status = "Evaluating comparison revision".into();

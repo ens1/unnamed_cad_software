@@ -162,14 +162,14 @@ fn run() -> Result<()> {
                 identity,
                 document,
                 project_root,
-                tolerance,
+                display_tolerance_mm,
                 operation_preview,
             } => evaluator
                 .evaluate_with_operation_preview(
                     identity,
                     &document,
                     std::path::Path::new(&project_root),
-                    tolerance,
+                    display_tolerance_mm,
                     operation_preview,
                 )
                 .map(|result| WorkerResponse::Evaluation { result }),
@@ -179,14 +179,14 @@ fn run() -> Result<()> {
                 project_root,
                 path,
                 format,
-                tolerance,
+                display_tolerance_mm,
             } => evaluator
                 .export(
                     &document,
                     std::path::Path::new(&project_root),
                     std::path::Path::new(&path),
                     &format,
-                    tolerance,
+                    display_tolerance_mm,
                 )
                 .map(|()| WorkerResponse::Exported { identity, path }),
             WorkerRequest::Release {
@@ -194,13 +194,13 @@ fn run() -> Result<()> {
                 document,
                 project_root,
                 path,
-                tolerance,
+                display_tolerance_mm,
             } => cad_core::release::create(
                 &mut evaluator,
                 &document,
                 std::path::Path::new(&project_root),
                 std::path::Path::new(&path),
-                tolerance,
+                display_tolerance_mm,
             )
             .map(|_| WorkerResponse::Exported { identity, path }),
             WorkerRequest::Import {

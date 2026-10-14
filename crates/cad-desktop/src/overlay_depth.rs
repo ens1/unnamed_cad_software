@@ -354,7 +354,7 @@ impl Index {
             self.source_triangles = 0;
             self.references = 0;
             self.bias_mm =
-                (w.session.visible().settings.evaluation_tolerance_mm * 0.5).clamp(1e-6, 0.05);
+                (w.session.visible().settings.display_tolerance_mm * 0.5).clamp(1e-6, 0.05);
             self.columns = (f64::from(rect.width().max(1.)) / TILE).ceil().max(1.) as usize;
             self.rows = (f64::from(rect.height().max(1.)) / TILE).ceil().max(1.) as usize;
             if self.columns.saturating_mul(self.rows) > 65_536 {

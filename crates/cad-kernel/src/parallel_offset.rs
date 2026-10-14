@@ -399,7 +399,7 @@ struct Strip {
     side: f64,
     profile: Span,
     /// Complete common generator edges at the profile's two endpoints.
-    ends: [EdgeId; 2],
+    ends: [Join; 2],
     /// Oriented unit normal for straight rails; radial sign for circular rails.
     normal: Vector2,
 }
@@ -451,7 +451,7 @@ impl Strip {
 
 struct Collar {
     boundaries: [Span; 4],
-    ends: [EdgeId; 2],
+    ends: [Join; 2],
     witness: Point2,
 }
 impl Collar {
@@ -634,6 +634,14 @@ fn collars_disjoint(a: &Collar, b: &Collar) -> Result<bool> {
 struct Sheet {
     strips: Vec<Strip>,
 }
+
+/// Contacts are authorized by actual source topology, not proximity. Sheet
+/// collars share a generator; planar contour collars share a native vertex.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Join {
+    Generator(EdgeId),
+    Vertex(VertexId),
+}
 impl Sheet {
     fn recognize(shell: &Shell) -> Result<Option<Self>> {
         if shell.is_empty() || shell.len() > MAX_FACES {
@@ -707,7 +715,7 @@ impl Sheet {
         };
         let mut strips = Vec::new();
         let mut limits: Option<[f64; 2]> = None;
-        let mut seams: HashMap<EdgeId, (Point2, Vector2, usize)> = HashMap::new();
+        let mut seams: HashMap<Join, (Point2, Vector2, usize)> = HashMap::new();
         let mut rails = std::collections::HashSet::new();
         for (face, carrier) in shell.iter().zip(carriers) {
             match carrier {
@@ -813,7 +821,7 @@ impl Sheet {
                 carrier,
                 side,
                 profile,
-                ends: [ends[0], ends[1]],
+                ends: [Join::Generator(ends[0]), Join::Generator(ends[1])],
                 normal,
             };
             for (end, p) in strip.ends.iter().zip([profile.start, profile.end]) {
@@ -946,4 +954,177 @@ pub(crate) fn certify_thickness(shell: &Shell, lower: f64, upper: f64) -> Result
         sheet.certify(lower, upper)?;
     }
     Ok(())
+}
+
+/// Certify complete normal collars of selected *closed* planar cap contours.
+/// Unselected contours remain exact protected boundaries. This is also used
+/// by connected rim treatments: their three-dimensional removal is contained
+/// in these collars, while shared contour vertices authorize complete seams.
+pub(crate) fn certify_cap_collars(
+    cap: &Face,
+    walls: &HashMap<EdgeId, Face>,
+    selected: &std::collections::HashSet<EdgeId>,
+    lower: f64,
+    upper: f64,
+) -> Result<bool> {
+    let Some(Carrier::Plane { .. }) = analytic_offset::recognize(cap)? else {
+        return Ok(false);
+    };
+    let axis = cap.oriented_surface().normal(0., 0.).normalize();
+    let Some(origin) = cap.vertex_iter().next().map(|v| v.point()) else {
+        return Ok(false);
+    };
+    let seed = if axis.x.abs() < 0.8 {
+        Vector3::unit_x()
+    } else {
+        Vector3::unit_y()
+    };
+    let x = (seed - axis * seed.dot(axis)).normalize();
+    let frame = Frame {
+        origin,
+        axis,
+        x,
+        y: axis.cross(x),
+    };
+    if !lower.is_finite() || !upper.is_finite() {
+        return Err(invalid("Normal collar distances must be finite"));
+    }
+    let (lower, upper) = (lower.min(upper), lower.max(upper));
+    if upper - lower <= EPS {
+        return Err(invalid("Normal collar width is below native resolution"));
+    }
+    let mut strips = Vec::new();
+    let mut protected = Vec::new();
+    let mut count = 0usize;
+    for wire in cap.boundaries() {
+        let chosen = wire
+            .iter()
+            .filter(|edge| selected.contains(&edge.id()))
+            .count();
+        if chosen != 0 && chosen != wire.len() {
+            return Ok(false);
+        }
+        for edge in &wire {
+            count = count.saturating_add(1);
+            if count > MAX_FACES {
+                return Err(unsupported(
+                    "Cap collar proof exceeds the profile work budget",
+                ));
+            }
+            let Some(profile) = Span::native(&edge.oriented_curve(), &frame)? else {
+                return Ok(false);
+            };
+            if chosen == 0 {
+                protected.push(profile);
+                continue;
+            }
+            let Some(wall) = walls.get(&edge.id()) else {
+                return Ok(false);
+            };
+            let Some(carrier) = analytic_offset::recognize(wall)? else {
+                return Ok(false);
+            };
+            let side = analytic_offset::side(wall, carrier)?;
+            let normal = match carrier {
+                Carrier::Plane { normal, .. } if normal.dot(axis).abs() <= REL => {
+                    frame.vector(normal) * side
+                }
+                Carrier::Cone {
+                    axis: other,
+                    slope: 0.,
+                    ..
+                } if other.dot(axis).abs() > 1. - REL => Vector2::zero(),
+                _ => return Ok(false),
+            };
+            match (carrier, profile.support) {
+                (Carrier::Plane { .. }, Support::Line { .. }) => {}
+                (Carrier::Cone { origin, radius, .. }, Support::Circle { center, radius: r })
+                    if frame.point(origin).distance(center) <= EPS && (radius - r).abs() <= EPS => {
+                }
+                _ => return Ok(false),
+            }
+            strips.push(Strip {
+                face: wall.id(),
+                carrier,
+                side,
+                profile,
+                ends: [
+                    Join::Vertex(edge.front().id()),
+                    Join::Vertex(edge.back().id()),
+                ],
+                normal,
+            });
+        }
+    }
+    if strips.is_empty() {
+        return Ok(false);
+    }
+    let mut joins: HashMap<Join, (Point2, Vector2, usize)> = HashMap::new();
+    for strip in &strips {
+        for (join, point) in strip
+            .ends
+            .iter()
+            .zip([strip.profile.start, strip.profile.end])
+        {
+            let normal = strip.normal_at(point);
+            if let Some((previous, prior_normal, incidence)) = joins.get_mut(join) {
+                if *incidence != 1
+                    || previous.distance(point) > EPS
+                    || (*prior_normal - normal).magnitude() > 1e-8
+                {
+                    return Ok(false);
+                }
+                *incidence += 1;
+            } else {
+                joins.insert(*join, (point, normal, 1));
+            }
+        }
+    }
+    if joins.values().any(|(_, _, count)| *count != 2) {
+        return Ok(false);
+    }
+    let collars = strips
+        .iter()
+        .map(|strip| strip.collar(lower, upper))
+        .collect::<Result<Vec<_>>>()?;
+    for (i, collar) in collars.iter().enumerate() {
+        for other in &collars[..i] {
+            if !collars_disjoint(collar, other)? {
+                return Err(invalid(
+                    "Connected rim collars cross, overlap or touch away from a native tangent junction",
+                ));
+            }
+        }
+        for span in &protected {
+            for boundary in &collar.boundaries {
+                let points = intersections(boundary.support, span.support, &[])?;
+                let collides = match points {
+                    Some(points) => points
+                        .into_iter()
+                        .any(|p| boundary.contains(p) && span.contains(p)),
+                    None => [
+                        boundary.start,
+                        boundary.end,
+                        boundary.point(0.5),
+                        span.start,
+                        span.end,
+                        span.point(0.5),
+                    ]
+                    .into_iter()
+                    .any(|p| boundary.contains(p) && span.contains(p)),
+                };
+                if collides {
+                    return Err(invalid(
+                        "A connected rim collar reaches an unselected contour",
+                    ));
+                }
+            }
+            if collar.contains(span.point(0.5))? {
+                return Err(invalid(
+                    "A connected rim collar contains an unselected contour",
+                ));
+            }
+        }
+    }
+    Ok(true)
 }

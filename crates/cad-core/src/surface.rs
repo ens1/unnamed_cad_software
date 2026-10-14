@@ -280,10 +280,10 @@ pub fn semantic_fields(
     }).collect();
     let capabilities = match operation {
         SurfaceOperation::Ruled { .. } => {
-            serde_json::json!({"geometry":"explicit_line_positive_rational_native_curves","sources":["sketch_member","model_edge","reference_curve"],"construction":"exact_vector_translation","direction":"associative_or_explicit","bounded_regularity":"positive_bernstein_projection","native_degree_range":[1,8],"maximum_sources":256,"maximum_strips":4096,"surface_orientation_reversal":true})
+            serde_json::json!({"geometry":"explicit_line_positive_rational_native_curves","sources":["sketch_member","model_edge","reference_curve"],"construction":"exact_vector_translation","direction":"associative_or_explicit","bounded_regularity":"fixed_projection_or_local_native_atlas_with_complete_pair_separation","local_atlas_domain":"one_positive_bernstein_carrier","native_degree_range":[1,16],"maximum_sources":256,"maximum_strips":4096,"surface_orientation_reversal":true})
         }
         SurfaceOperation::MidSurface { .. } => {
-            serde_json::json!({"geometry":["parallel_planar_faces_with_matching_translated_trims","compatible_full_natural_rational_patches"],"fraction":"normalized_0_to_1","rational_mean":"corresponding_uv_positions","rational_correspondence":["swap_uv","reverse_u","reverse_v"],"regularity":"bounded_global_injective_projection_certificate","normal_offset_equivalence":"parallel_planar_pairs_only"})
+            serde_json::json!({"geometry":["parallel_planar_faces_with_matching_translated_trims","compatible_full_natural_rational_patches"],"fraction":"normalized_0_to_1","rational_mean":"corresponding_uv_positions","rational_correspondence":["swap_uv","reverse_u","reverse_v"],"regularity":"fixed_projection_or_local_native_atlas_with_complete_pair_separation","local_atlas_domain":"one_positive_bernstein_carrier","normal_offset_equivalence":"parallel_planar_pairs_only"})
         }
         SurfaceOperation::Planar { .. } => {
             serde_json::json!({"geometry":"closed_coplanar_contours","holes":true,"multiple_regions":true})
@@ -295,13 +295,13 @@ pub fn semantic_fields(
             serde_json::json!({"geometry":"open_or_closed_exact_contours","axis":"numeric_or_associative","angle":"signed_up_to_360_degrees"})
         }
         SurfaceOperation::Loft { .. } => {
-            serde_json::json!({"geometry":"exact_ruled_between_single_native_contours","closed_or_open":true,"unequal_edge_counts":"exact_native_refinement","rational_weights":"exact_common_denominator","correspondence":"automatic_winding_and_geometric_seam","intermediate_topology":"shared_section_boundaries","regularity":"radial_or_native_ruled_chart_or_bounded_projected_jacobian_certificate","ruled_parameter_degree":1,"concave_charts":"exact_native_shared_column_refinement","within_pair_self_intersection_certificate":"parallel_radial_pairs_only","cross_section_pair_intersections":"not_certified","guides":false,"continuity":"positional"})
+            serde_json::json!({"geometry":"exact_ruled_between_single_native_contours","closed_or_open":true,"unequal_edge_counts":"exact_native_refinement","rational_weights":"exact_common_denominator","correspondence":"automatic_winding_and_geometric_seam","intermediate_topology":"shared_section_boundaries","regularity":"radial_or_native_ruled_chart_or_fixed_projection_or_complete_local_atlas_certificate","ruled_parameter_degree":1,"concave_charts":"exact_native_shared_column_refinement","within_pair_self_intersection_certificate":"radial_family_or_complete_native_chart_separation","cross_section_pair_intersections":"ordered_exact_slabs_or_complete_native_pair_separation","shared_boundary_admission":"exact_projective_halfspace_or_exact_continuous_joint_chart","guides":false,"continuity":"positional"})
         }
         SurfaceOperation::Sweep { .. } => {
             serde_json::json!({"geometry":"ruled_fixed_orientation_polyline","sketch_path":"single_open_polyline","guides":false,"twist":false})
         }
         SurfaceOperation::Fill { .. } => {
-            serde_json::json!({"geometry":"four_exact_polynomial_boundaries","construction":"coons_tensor_product","continuity":"positional","rational_variable_weights":false})
+            serde_json::json!({"geometry":"four_exact_positive_rational_or_polynomial_boundaries","construction":"euclidean_coons_tensor_product","continuity":"positional","rational_variable_weights":true,"regularity":"fixed_projection_or_local_native_atlas_with_complete_pair_separation","local_atlas_domain":"one_positive_bernstein_carrier"})
         }
         SurfaceOperation::Trim { .. } => {
             serde_json::json!({"geometry":"planar_faces_and_coplanar_closed_sketches","modes":["keep_inside","remove_inside"],"holes":true,"curves":"exact_boolean_intersections"})

@@ -89,6 +89,7 @@ pub mod sensors;
 pub mod settings;
 pub mod sketch_actions;
 pub mod standard_parts;
+pub mod tolerance;
 pub mod tolerance_stacks;
 
 pub mod modeling_tools;

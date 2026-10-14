@@ -369,7 +369,13 @@ pub(crate) fn prove_regular(
     surface: &NurbsSurface<Vector4>,
     operation_work: &mut usize,
 ) -> Result<()> {
-    prove_injective_projection(surface, None, operation_work)
+    match prove_injective_projection(surface, None, operation_work) {
+        Ok(()) => Ok(()),
+        Err(CadError::Unsupported(_)) => {
+            crate::loft_correspondence::prove_carrier_atlas(surface, operation_work)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub(crate) fn prove_projection(

@@ -3,11 +3,15 @@ use cad_core::{
 };
 use monstertruck::{
     assembly::assy::{Assembly as KernelAssembly, EdgeEntity, NodeEntity},
-    modeling::{Curve, Matrix4, Shell, Solid},
+    modeling::{Matrix4, Shell, Solid},
     step::{
         common::PartAttributes,
-        save::{CompleteStepDisplay, StepDesign, StepHeaderDescriptor, StepModel},
+        save::{
+            CompleteStepDisplay, StepDesign, StepHeaderDescriptor, StepMeasurementContext,
+            StepModel,
+        },
     },
+    topology::compress::CompressedTrimmedSolid,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -22,22 +26,32 @@ fn attrs(id: &str, name: &str) -> PartAttributes {
     }
 }
 
-fn validate_step_boundaries(shell: &Shell) -> Result<()> {
-    for edge in shell.edge_iter() {
-        if let Curve::IntersectionCurve(curve) = edge.curve()
-            && !curve.branch_halfspaces().is_empty()
-        {
-            // STEP's current writer serializes the search guide as CURVE_3D.
-            // A branch-constrained intersection need not lie on that guide,
-            // and the branch halfspaces have no matching export representation.
-            // Refuse before Display (which cannot report a modeling error) or
-            // any destination write rather than export a different boundary.
-            return Err(CadError::Unsupported(
-                "STEP export cannot yet preserve branch-constrained intersection trims from cylindrical-end fillets; save the editable TCAD document instead".into(),
-            ));
-        }
-    }
-    Ok(())
+fn format_step(value: impl std::fmt::Display) -> Result<String> {
+    let mut content = String::new();
+    std::fmt::write(&mut content, format_args!("{value}")).map_err(|_| {
+        CadError::Unsupported(
+            "STEP serialization cannot faithfully encode a native carrier or boundary in this model".into(),
+        )
+    })?;
+    Ok(content)
+}
+
+fn solid_step(body: &Solid, linear_mm: f64) -> Result<StepBody> {
+    let compressed = CompressedTrimmedSolid {
+        boundaries: body
+            .boundaries()
+            .iter()
+            .map(|shell| crate::native_trims::exchange_shell(shell, linear_mm))
+            .collect::<Result<Vec<_>>>()?,
+        id_allocator: Some(body.id_allocator().clone()),
+        attributes: Some(body.attributes().clone()),
+    };
+    StepBody::new(format_step(StepModel::from(&compressed))?)
+}
+
+fn surface_step(shell: &Shell, linear_mm: f64) -> Result<StepBody> {
+    let compressed = crate::native_trims::exchange_shell(shell, linear_mm)?;
+    StepBody::new(format_step(StepModel::from(&compressed))?)
 }
 
 pub fn export_step(
@@ -48,6 +62,7 @@ pub fn export_step(
     assembly_welds: &BTreeMap<String, cad_core::assembly_welds::Evaluated>,
     path: &Path,
 ) -> Result<()> {
+    doc.settings.modeling.validate()?;
     struct Traversal<'a> {
         doc: &'a Document,
         evaluated: &'a BTreeMap<Id, cad_core::assembly_geometry::EvaluatedAssembly>,
@@ -90,25 +105,22 @@ pub fn export_step(
             } else {
                 name
             };
-            let shape = if scoped.parts.contains_key(definition) {
-                self.bodies
-                    .get(&key)
-                    .into_iter()
-                    .flatten()
-                    .map(|body| {
-                        for shell in body.boundaries() {
-                            validate_step_boundaries(shell)?;
-                        }
-                        StepBody::new(StepModel::from(&body.compress()).to_string())
-                    })
-                    .chain(self.surfaces.get(&key).into_iter().flatten().map(|shell| {
-                        validate_step_boundaries(shell)?;
-                        StepBody::new(StepModel::from(&shell.compress()).to_string())
-                    }))
-                    .collect::<Result<Vec<_>>>()?
-            } else {
-                Vec::new()
-            };
+            let shape =
+                if scoped.parts.contains_key(definition) {
+                    self.bodies
+                        .get(&key)
+                        .into_iter()
+                        .flatten()
+                        .map(|body| solid_step(body, self.doc.settings.modeling.linear_mm))
+                        .chain(
+                            self.surfaces.get(&key).into_iter().flatten().map(|shell| {
+                                surface_step(shell, self.doc.settings.modeling.linear_mm)
+                            }),
+                        )
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    Vec::new()
+                };
             let node = self.graph.create_node(NodeEntity {
                 shape,
                 attrs: attrs(&key, &name),
@@ -170,12 +182,7 @@ pub fn export_step(
                             })?;
                     let shape = geometry
                         .iter()
-                        .map(|body| {
-                            for shell in body.boundaries() {
-                                validate_step_boundaries(shell)?;
-                            }
-                            StepBody::new(StepModel::from(&body.compress()).to_string())
-                        })
+                        .map(|body| solid_step(body, self.doc.settings.modeling.linear_mm))
                         .collect::<Result<Vec<_>>>()?;
                     let weld_key = format!("assembly-weld:{key}::{}", weld.id);
                     let child = if let Some(child) = self.nodes.get(&weld_key) {
@@ -222,14 +229,17 @@ pub fn export_step(
         &doc.root,
         doc.active_configurations.get(&doc.root).map(String::as_str),
     )?;
-    let content = CompleteStepDisplay::new(
-        StepDesign::<StepBody, Vec<StepBody>, Matrix4>::new(traversal.graph),
+    let content = format_step(CompleteStepDisplay::new(
+        StepDesign::<StepBody, Vec<StepBody>, Matrix4>::new(traversal.graph)
+            .with_measurement_context(StepMeasurementContext {
+                distance_accuracy_value: doc.settings.modeling.linear_mm,
+                ..Default::default()
+            }),
         StepHeaderDescriptor {
             organization_system: "TCAD / Monstertruck 0.4.1".into(),
             ..Default::default()
         },
-    )
-    .to_string();
+    ))?;
     cad_core::persistence::atomic_write(path, content.as_bytes())
 }
 pub fn import_structure(doc: &mut Document, resource: &str, root: &Path) -> Result<Id> {

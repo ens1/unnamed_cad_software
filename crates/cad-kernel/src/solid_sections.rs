@@ -308,20 +308,22 @@ pub(crate) fn loft(
             }
         })
         .collect::<Vec<_>>();
-    if sections.iter().any(|face| {
-        !matches!(face.surface(), Surface::Plane(_))
-            || face
-                .oriented_surface()
-                .normal(0., 0.)
-                .normalize()
-                .cross(normal)
-                .magnitude()
-                > 1e-9
-    }) {
+    if sections
+        .iter()
+        .any(|face| !matches!(face.surface(), Surface::Plane(_)))
+    {
         return Err(unsupported(
-            "solid loft separation currently requires parallel planar sections",
+            "solid loft sections require native planar material contours",
         ));
     }
+    let parallel = sections.iter().all(|face| {
+        face.oriented_surface()
+            .normal(0., 0.)
+            .normalize()
+            .cross(normal)
+            .magnitude()
+            <= 1e-9
+    });
     let source_wires = sections.iter().map(Face::boundaries).collect::<Vec<_>>();
     let contours = source_wires[0].len();
     if contours == 0 || source_wires.iter().any(|wires| wires.len() != contours) {
@@ -405,7 +407,7 @@ pub(crate) fn loft(
             ));
         }
         let distance = (anchor(&sections[index + 1])? - anchor(&sections[index])?).dot(normal);
-        if distance <= EPS {
+        if parallel && distance <= EPS {
             return Err(unsupported(
                 "loft sections must advance strictly without a fold or reversal",
             ));
@@ -418,10 +420,11 @@ pub(crate) fn loft(
             .collect::<Result<Vec<_>>>()?;
         let radial =
             contours == 1 && crate::loft_correspondence::prove_radial_pair(&prepared[0], index)?;
-        let known_family = radial
-            || affine_family(&pairs, normal)?
-            || convex_family(lower, upper, normal)?
-            || concentric_family(lower, upper, normal)?;
+        let known_family = parallel
+            && (radial
+                || affine_family(&pairs, normal)?
+                || convex_family(lower, upper, normal)?
+                || concentric_family(lower, upper, normal)?);
         let prove_separation = !known_family && start.is_none() && end.is_none();
         if !known_family && !prove_separation {
             return Err(unsupported(
@@ -449,7 +452,9 @@ pub(crate) fn loft(
         let h1 = tangent_end
             .map(|vector| vector.dot(normal))
             .unwrap_or(distance);
-        if h0 <= EPS || h1 <= EPS || h0 + h1 >= 3. * distance - EPS {
+        if (start.is_some() || end.is_some())
+            && (h0 <= EPS || h1 <= EPS || h0 + h1 >= 3. * distance - EPS)
+        {
             return Err(unsupported(
                 "endpoint influences must keep every axial cubic control interval strictly positive",
             ));
@@ -505,7 +510,20 @@ pub(crate) fn loft(
                 }
             }
         }
-        crate::loft_correspondence::ordered_ruled_sections(&native_sections)?;
+        if crate::loft_correspondence::ordered_ruled_sections(&native_sections).is_err() {
+            crate::loft_correspondence::prove_skin_separation(
+                &Shell::from(shell[1..].to_vec()),
+                &mut separation_work,
+            )?;
+        }
+    }
+    if !parallel {
+        crate::loft_correspondence::prove_end_caps(
+            &Shell::from(shell[1..].to_vec()),
+            &sections[0],
+            sections.last().unwrap(),
+            &mut separation_work,
+        )?;
     }
     shell.push(sections.last().unwrap().clone());
     let sources = origins

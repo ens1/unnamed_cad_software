@@ -10,7 +10,7 @@ pub struct Service {
 struct NativeCache {
     evaluator: Evaluator,
     source: String,
-    tolerance: f64,
+    modeling: Option<cad_core::tolerance::Modeling>,
     solved: Option<cad_core::Document>,
 }
 impl Service {
@@ -43,7 +43,7 @@ impl Service {
             let cache = self.evaluators.entry(variant_key).or_default();
             let result = (|| {
                 if cache.source != request.identity.source
-                    || cache.tolerance != request.model_tolerance_mm
+                    || cache.modeling != Some(request.modeling)
                     || cache.solved.is_none()
                 {
                     let variant = cad_core::configuration::source_variant(
@@ -52,13 +52,13 @@ impl Service {
                         target.configuration.as_deref(),
                     );
                     cache.solved = None;
-                    cache.solved = Some(cache.evaluator.build(
-                        &variant,
-                        std::path::Path::new(&request.project_root),
-                        request.model_tolerance_mm,
-                    )?);
+                    cache.solved = Some(
+                        cache
+                            .evaluator
+                            .build(&variant, std::path::Path::new(&request.project_root))?,
+                    );
                     cache.source = request.identity.source.clone();
-                    cache.tolerance = request.model_tolerance_mm;
+                    cache.modeling = Some(request.modeling);
                 }
                 let document = cache.solved.as_ref().ok_or_else(|| {
                     cad_core::CadError::Invalid("Display native cache is unavailable".into())

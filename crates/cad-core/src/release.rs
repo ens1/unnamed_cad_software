@@ -13,7 +13,7 @@ pub struct ReleaseManifest {
     pub source_sha256: String,
     pub revision: u64,
     pub backend: String,
-    pub tolerance_mm: f64,
+    pub accuracy: crate::tolerance::Accuracy,
     pub artifacts: BTreeMap<String, String>,
 }
 /// Immutable local release folder: source, exchange files and a hash manifest.
@@ -83,12 +83,12 @@ pub fn create(
             );
         }
         let manifest = ReleaseManifest {
-            schema_version: 1,
+            schema_version: 2,
             name: doc.name.clone(),
             source_sha256: doc.fingerprint(),
             revision: doc.revision,
             backend: service.fingerprint().into(),
-            tolerance_mm: tolerance,
+            accuracy: evaluated.accuracy,
             artifacts,
         };
         atomic_write(

@@ -224,6 +224,7 @@ fn native_solids(
     instance: &PlacedPart,
     bodies: &BTreeMap<Id, Vec<Solid>>,
     budget: &mut Budget,
+    linear_mm: f64,
 ) -> std::result::Result<Vec<NativeBody>, String> {
     let transform = matrix(instance)?;
     let sources = bodies
@@ -241,6 +242,9 @@ fn native_solids(
             return Err(message(
                 "Placed native vertices exceed the finite inspection coordinate bound",
             ));
+        }
+        for boundary in solid.boundaries() {
+            crate::native_trims::shell(boundary, linear_mm).map_err(message)?;
         }
         crate::validation::solid(&solid).map_err(message)?;
         let bounds = native_bounds(&solid);
@@ -654,6 +658,7 @@ fn interference(
     tolerance: f64,
     pair: &mut Pair,
     budget: &mut Budget,
+    linear_mm: f64,
 ) {
     let (first, second) = match (first, second) {
         (Ok(a), Ok(b)) if !a.is_empty() && !b.is_empty() => (a, b),
@@ -710,7 +715,14 @@ fn interference(
                         diagnostic(pair, error);
                         continue;
                     }
-                    match crate::validation::solid(&common) {
+                    let valid = common
+                        .boundaries()
+                        .iter()
+                        .try_for_each(|boundary| {
+                            crate::native_trims::shell(boundary, linear_mm).map(|_| ())
+                        })
+                        .and_then(|()| crate::validation::solid(&common));
+                    match valid {
                         Ok(()) => {
                             pair.common_solid_results += 1;
                             let volume = planar_volume(&common);
@@ -997,7 +1009,12 @@ pub(crate) fn evaluate<K: KernelAdapter>(
                 .get_mut(&instance.path)
                 .expect("Admitted occurrence cache exists");
             if definition.mode != Mode::BoundaryDistance && entry.solids.is_none() {
-                entry.solids = Some(native_solids(instance, bodies, &mut budget));
+                entry.solids = Some(native_solids(
+                    instance,
+                    bodies,
+                    &mut budget,
+                    doc.settings.modeling.linear_mm,
+                ));
             }
             if definition.mode != Mode::Interference && entry.boundary.is_none() {
                 entry.boundary = Some(
@@ -1050,7 +1067,14 @@ pub(crate) fn evaluate<K: KernelAdapter>(
                 if definition.mode != Mode::BoundaryDistance
                     && let (Some(a), Some(b)) = (&a.solids, &b.solids)
                 {
-                    interference(a, b, tolerance, &mut pair, &mut budget);
+                    interference(
+                        a,
+                        b,
+                        tolerance,
+                        &mut pair,
+                        &mut budget,
+                        doc.settings.modeling.linear_mm,
+                    );
                 }
                 if definition.mode != Mode::Interference {
                     match (a.boundary.as_ref(), b.boundary.as_ref()) {

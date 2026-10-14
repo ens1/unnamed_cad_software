@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 #[path = "loft_separation.rs"]
 mod separation;
-pub(crate) use separation::prove_skin_separation;
+pub(crate) use separation::{prove_carrier_atlas, prove_end_caps, prove_skin_separation};
 
 const EPS: f64 = 1e-7;
 const MAX_PIECES: usize = 4096;
@@ -1117,6 +1117,18 @@ pub(crate) fn compatible(
         return Err(invalid(
             "Native rational spans could not be exactly synchronized",
         ));
+    }
+    // Already synchronized positive denominators need no product reweighting.
+    // Retaining these actual native controls also preserves exact common rows
+    // between neighboring loft pairs for their joint-chart certificate.
+    if a.knot_vector() == b.knot_vector()
+        && a.control_points().len() == b.control_points().len()
+        && a.control_points()
+            .iter()
+            .zip(b.control_points())
+            .all(|(a, b)| a.w == b.w)
+    {
+        return Ok((a, b));
     }
     let degree = a.degree() + b.degree();
     let mut ac = Vec::new();

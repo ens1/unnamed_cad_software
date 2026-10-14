@@ -2,7 +2,7 @@
 use crate::{CadError, Document, Id, Result, protocol::*};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const MAX_TARGETS: usize = 256;
 pub const MAX_TRIANGLES: usize = 500_000;
 pub const MAX_VERTICES: usize = 1_500_000;
@@ -38,7 +38,7 @@ pub struct Request {
     pub generation: u64,
     pub document: Document,
     pub project_root: String,
-    pub model_tolerance_mm: f64,
+    pub modeling: crate::tolerance::Modeling,
     pub display_tolerance_mm: f64,
     pub targets: Vec<Target>,
 }
@@ -53,16 +53,15 @@ pub struct Output {
 }
 impl Request {
     pub fn validate(&self, backend: &str) -> Result<()> {
+        self.modeling.validate()?;
+        crate::tolerance::validate_display(self.display_tolerance_mm)?;
         if self.version != VERSION
             || self.identity.protocol != PROTOCOL_VERSION
             || self.identity.backend != backend
             || self.identity.source != self.document.fingerprint()
             || self.targets.len() > MAX_TARGETS
             || self.targets.iter().any(|t| t.outputs.len() > MAX_TARGETS)
-            || !self.display_tolerance_mm.is_finite()
-            || !(1e-6..=1.).contains(&self.display_tolerance_mm)
-            || !self.model_tolerance_mm.is_finite()
-            || !(1e-6..=1.).contains(&self.model_tolerance_mm)
+            || self.modeling != self.document.settings.modeling
         {
             return Err(CadError::Invalid(
                 "Display tessellation source, version, tolerance or work bounds mismatch".into(),

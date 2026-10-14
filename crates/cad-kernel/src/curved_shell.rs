@@ -358,6 +358,11 @@ pub(crate) fn shell(
     overrides: &HashMap<FaceId, f64>,
     history: &mut ShellHistory,
 ) -> Result<Option<Vec<Solid>>> {
+    if let Some(result) =
+        crate::connected_shell::shell(solid, thickness, removed, outward, overrides, history)?
+    {
+        return Ok(Some(result));
+    }
     // Complete spherical shells retain their exact analytic carrier and seam
     // topology. Openings are connected to their exact inward/outward boundary.
     if solid.boundaries().len() == 1

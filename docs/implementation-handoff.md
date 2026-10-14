@@ -1,5 +1,23 @@
 # Implementation handoff — 2026-10-10
 
+## Latest kernel foundation checkpoint — 2026-10-14
+
+Read [kernel foundation](kernel-foundation-2026-10-14.md) for this checkpoint's
+current geometry scope and remaining kernel gaps. It supersedes the historical
+backend and tolerance notes below: model settings and worker protocol are now
+version 2, modeling policy is version 1, and residual, search and display
+budgets are distinct. Current source includes native branch continuation
+admission, stronger rational loft separation, connected rounded-stock
+fillets/chamfers/shells, trimmed topology identity, and faithful bounded STEP
+boundary export. No Open Cascade or alternate geometry kernel was introduced.
+Public generic dependency work lives in the pinned `ens1/monstertruck` fork;
+TCAD definitions and implementation remain private. Current backend: `monstertruck/0.4.1+6dba41312ccc;adapter/45;solver/tcad-native-lm/18`;
+Monstertruck revision `6dba41312cccaa67ae146ef869b8380ddf8411d8`. Native spline cuts
+also retain the requested parameter through exact knot handling and transactional
+failure. Tests and interactive checks were not performed under the user's
+repository instructions.
+
+
 The user resumed work after enabling Ultra; the earlier stop request is revoked. The latest target is the mainstream mechanical CAD capability set shared by SolidWorks, NX, Onshape and Creo, replacing full vendor parity. Completion is unclaimed. This handoff records saved source capabilities and their actual geometry/solver bounds. The continuation adds ribs, direct face edits, body filtering, reference curves, curve/sketch/table patterns, grouped dimensions, equation curves, tangent/bisector planes and supported STEP surface import. This continuation also adds exact tap-drill holes with explicit cosmetic thread intent/callouts, directed ruled and bounded matching mid-surfaces, drawing sheet formats/templates/linked title cells, saved paper view layout, and root-assembly exploded views shared by viewport and drawings. No code tests, assertion probes, manual smoke tests, export exercises or new interactive acceptance have been performed.
 
 The 2026-10-11 P1 follow-up implements current component/selection framing,

@@ -27,7 +27,6 @@ pub struct Evaluator<K: KernelAdapter = MonstertruckAdapter> {
     pub surface_sets: BTreeMap<String, Vec<monstertruck::modeling::Shell>>,
     assemblies: BTreeMap<String, cad_core::assembly_geometry::EvaluatedAssembly>,
     last_source: String,
-    last_tolerance: f64,
     history_cache: BTreeMap<String, (String, f64, cad_core::history::PartHistory)>,
     preview_focus: Option<NodeRef>,
     focused_previews: BTreeMap<String, OperationPreviewChange>,
@@ -42,7 +41,6 @@ impl Default for Evaluator {
             surface_sets: BTreeMap::new(),
             assemblies: BTreeMap::new(),
             last_source: String::new(),
-            last_tolerance: 0.,
             history_cache: BTreeMap::new(),
             preview_focus: None,
             focused_previews: BTreeMap::new(),
@@ -51,15 +49,20 @@ impl Default for Evaluator {
     }
 }
 impl<K: KernelAdapter> Evaluator<K> {
-    /// Remesh retained native output shapes without changing construction tolerance.
-    pub(crate) fn display_output(&self, part: &cad_core::Part, tolerance: f64) -> Result<MeshData> {
-        self.part_output(part, tolerance).map(|(mesh, _, _)| mesh)
+    /// Remesh retained native output shapes without changing native modeling policy.
+    pub(crate) fn display_output(
+        &self,
+        part: &cad_core::Part,
+        display_tolerance_mm: f64,
+    ) -> Result<MeshData> {
+        self.part_output(part, display_tolerance_mm)
+            .map(|(mesh, _, _)| mesh)
     }
     fn failure_evaluation(
         &mut self,
         identity: RequestIdentity,
         source: &Document,
-        tolerance: f64,
+        display_tolerance_mm: f64,
         elapsed_ms: u64,
     ) -> Result<Option<Evaluation>> {
         let Some((document, diagnostics)) = self.failed_build.take() else {
@@ -87,7 +90,8 @@ impl<K: KernelAdapter> Evaluator<K> {
                 .map(String::as_str);
             let key = cad_core::configuration::key(&part.id, configuration);
             available_keys.insert(key.clone());
-            let mut part_history = self.history_output(&document, &part.id, &key, tolerance);
+            let mut part_history =
+                self.history_output(&document, &part.id, &key, display_tolerance_mm);
             let mut first_failure = None;
             for feature in &part.features {
                 if let Some(message) = failed.get(&feature.id) {
@@ -108,7 +112,7 @@ impl<K: KernelAdapter> Evaluator<K> {
             if let Some(station) = station {
                 let mut display_part = part.clone();
                 display_part.outputs = station.bodies.clone();
-                if let Ok((mesh, _, _)) = self.part_output(&display_part, tolerance) {
+                if let Ok((mesh, _, _)) = self.part_output(&display_part, display_tolerance_mm) {
                     meshes.insert(key.clone(), mesh);
                 }
             }
@@ -136,7 +140,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                     .into_iter()
                     .map(|(id, value)| (format!("{key}::{id}"), value)),
             );
-            if let Ok(output) = self.curve_output(&document, &part.id, tolerance) {
+            if let Ok(output) = self.curve_output(&document, &part.id, display_tolerance_mm) {
                 for (id, value, mesh) in output {
                     reference_curves.insert(format!("{key}::{id}"), value);
                     reference_curve_meshes.insert(format!("{key}::{id}"), mesh);
@@ -162,6 +166,10 @@ impl<K: KernelAdapter> Evaluator<K> {
         self.surface_sets.clear();
         self.history_cache.clear();
         Ok(Some(Evaluation {
+            accuracy: cad_core::tolerance::Accuracy::new(
+                source.settings.modeling,
+                display_tolerance_mm,
+            )?,
             pattern_guides: BTreeMap::new(),
             identity,
             meshes,
@@ -197,14 +205,14 @@ impl<K: KernelAdapter> Evaluator<K> {
         identity: RequestIdentity,
         document: &Document,
         root: &Path,
-        tolerance: f64,
+        display_tolerance_mm: f64,
         request: Option<Box<OperationPreviewRequest>>,
     ) -> Result<Evaluation> {
         let start = Instant::now();
         self.preview_focus = None;
         self.focused_previews.clear();
         let Some(request) = request else {
-            return self.evaluate(identity, document, root, tolerance);
+            return self.evaluate(identity, document, root, display_tolerance_mm);
         };
         let mut preview = OperationPreview {
             version: OPERATION_PREVIEW_VERSION,
@@ -215,7 +223,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                 PreviewBaseline::Checkpoint
             },
             focus: request.focus.clone(),
-            tolerance_mm: tolerance,
+            tolerance_mm: display_tolerance_mm,
             changes: BTreeMap::new(),
             placement_changes_valid: false,
             occurrence_changes: BTreeMap::new(),
@@ -240,7 +248,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                     request.baseline_identity.clone(),
                     &request.baseline,
                     root,
-                    tolerance,
+                    display_tolerance_mm,
                 )
             })) {
                 Ok(Ok(evaluated)) if evaluated.valid => {
@@ -271,7 +279,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         } else {
             self.preview_focus = request.focus.clone();
         }
-        let evaluated = self.evaluate(identity, document, root, tolerance);
+        let evaluated = self.evaluate(identity, document, root, display_tolerance_mm);
         self.preview_focus = None;
         let mut evaluated = evaluated?;
         if request.focus.is_some() && baseline_valid {
@@ -320,7 +328,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                     shape(&self.body_sets, &self.surface_sets),
                 ) {
                     (Some(before), Some(after)) => {
-                        self.display_delta(&before, &after, &owner, tolerance)
+                        self.display_delta(&before, &after, &owner, display_tolerance_mm)
                     }
                     _ => Self::unavailable_change(
                         &owner,
@@ -491,11 +499,11 @@ impl<K: KernelAdapter> Evaluator<K> {
         before: &Shape,
         after: &Shape,
         owner: &NodeRef,
-        tolerance: f64,
+        display_tolerance_mm: f64,
     ) -> OperationPreviewChange {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.adapter
-                .operation_delta(before, after, owner, tolerance)
+                .operation_delta(before, after, owner, display_tolerance_mm)
         })) {
             Ok(Ok(change)) => change,
             Ok(Err(error)) => Self::unavailable_change(owner, error.to_string()),
@@ -506,7 +514,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         }
     }
 
-    fn focused_preview(&mut self, part: &cad_core::Part, key: &str, tolerance: f64) {
+    fn focused_preview(&mut self, part: &cad_core::Part, key: &str, display_tolerance_mm: f64) {
         let Some(owner) = self
             .preview_focus
             .as_ref()
@@ -555,23 +563,19 @@ impl<K: KernelAdapter> Evaluator<K> {
             self.focused_previews.insert(key.into(), Self::unavailable_change(&owner, "The selected feature mixes solid and surface input; localized comparison is unavailable"));
             return;
         };
-        let change = self.display_delta(&before, after, &owner, tolerance);
+        let change = self.display_delta(&before, after, &owner, display_tolerance_mm);
         self.focused_previews.insert(key.into(), change);
     }
 
-    pub(crate) fn build(
-        &mut self,
-        doc: &Document,
-        root: &Path,
-        tolerance: f64,
-    ) -> Result<Document> {
+    pub(crate) fn build(&mut self, doc: &Document, root: &Path) -> Result<Document> {
         self.failed_build = None;
         doc.validate()?;
-        if !tolerance.is_finite() || !(1e-6..=1.).contains(&tolerance) {
-            return Err(CadError::Invalid(
-                "Geometry tolerance must be 0.000001..1 mm".into(),
-            ));
-        }
+        let modeling = doc.settings.modeling;
+        modeling.validate()?;
+        self.adapter.configure_tolerances(&modeling)?;
+        // Search subdivision is a discovery budget, never the final residual
+        // tolerance and never derived from viewport or export chord quality.
+        let search_resolution_mm = modeling.boolean_search_mm;
         let mut solved = cad_core::configuration::effective(doc)?;
         for part in solved.parts.values() {
             for parameter in part.parameters.values() {
@@ -620,10 +624,11 @@ impl<K: KernelAdapter> Evaluator<K> {
                 &doc.resources,
                 &mechanical_assemblies,
                 &doc.active_configurations,
+                &modeling,
                 root.to_string_lossy()
             ))?)
         );
-        if source == self.last_source && tolerance == self.last_tolerance {
+        if source == self.last_source {
             for (definition, assembly) in &mut solved.assemblies {
                 let key = cad_core::configuration::key(
                     definition,
@@ -650,8 +655,13 @@ impl<K: KernelAdapter> Evaluator<K> {
         self.adapter.clear_operation_previews();
         self.adapter.clear_spatial_sketch_inputs();
         self.adapter.set_assembly_placements(&BTreeMap::new());
-        let report =
-            crate::assemblies::build_shapes_report(&self.adapter, &solved, root, tolerance, true)?;
+        let report = crate::assemblies::build_shapes_report(
+            &self.adapter,
+            &solved,
+            root,
+            search_resolution_mm,
+            true,
+        )?;
         if !report.failures.is_empty() {
             let diagnostics = report
                 .failures
@@ -679,8 +689,14 @@ impl<K: KernelAdapter> Evaluator<K> {
             return Err(CadError::Invalid(message));
         }
         let shapes = report.shapes;
-        let assemblies =
-            crate::assemblies::solve(&self.adapter, doc, &mut solved, &shapes, root, tolerance)?;
+        let assemblies = crate::assemblies::solve(
+            &self.adapter,
+            doc,
+            &mut solved,
+            &shapes,
+            root,
+            search_resolution_mm,
+        )?;
         self.adapter.set_assembly_placements(&assemblies);
         // Restore base topology provenance after configured reference evaluation and
         // regenerate in-context geometry from the current solved assembly placements.
@@ -697,7 +713,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                 &self.adapter,
                 &solved,
                 root,
-                tolerance,
+                search_resolution_mm,
                 false,
             )?;
             if !report.failures.is_empty() {
@@ -734,7 +750,6 @@ impl<K: KernelAdapter> Evaluator<K> {
         self.shapes = shapes;
         self.resolve_sketch_definitions(&mut solved)?;
         self.last_source = source;
-        self.last_tolerance = tolerance;
         Ok(solved)
     }
     fn resolve_sketch_definitions(&self, doc: &mut Document) -> Result<()> {
@@ -779,7 +794,7 @@ impl<K: KernelAdapter> Evaluator<K> {
     fn part_output(
         &self,
         part: &cad_core::Part,
-        tolerance: f64,
+        display_tolerance_mm: f64,
     ) -> Result<(
         MeshData,
         Vec<monstertruck::modeling::Solid>,
@@ -813,7 +828,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                     )));
                 }
             }
-            let m = self.adapter.mesh(shape, &r, tolerance)?;
+            let m = self.adapter.mesh(shape, &r, display_tolerance_mm)?;
             let has_geometry = !m.positions.is_empty();
             let offset = all.positions.len() as u32;
             let index_offset = all.indices.len();
@@ -849,11 +864,11 @@ impl<K: KernelAdapter> Evaluator<K> {
         doc: &Document,
         definition: &str,
         key: &str,
-        tolerance: f64,
+        display_tolerance_mm: f64,
     ) -> cad_core::history::PartHistory {
         if let Some((source, previous_tolerance, cached)) = self.history_cache.get(key)
             && source == &self.last_source
-            && *previous_tolerance == tolerance
+            && *previous_tolerance == display_tolerance_mm
         {
             return cached.clone();
         }
@@ -878,7 +893,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         for feature in &bodies {
             let reference = part.reference(feature);
             if let Some(shape) = self.shapes.get(&reference) {
-                match self.adapter.mesh(shape, &reference, tolerance) {
+                match self.adapter.mesh(shape, &reference, display_tolerance_mm) {
                     Ok(mesh) => {
                         history
                             .meshes
@@ -908,7 +923,11 @@ impl<K: KernelAdapter> Evaluator<K> {
         }
         self.history_cache.insert(
             key.into(),
-            (self.last_source.clone(), tolerance, history.clone()),
+            (
+                self.last_source.clone(),
+                display_tolerance_mm,
+                history.clone(),
+            ),
         );
         history
     }
@@ -916,7 +935,6 @@ impl<K: KernelAdapter> Evaluator<K> {
         &self,
         doc: &Document,
         definition: &str,
-        tolerance: f64,
     ) -> Result<BTreeMap<String, cad_core::sheet_metal::EvaluatedSheet>> {
         let part = &doc.parts[definition];
         let mut output = BTreeMap::new();
@@ -929,7 +947,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                 doc,
                 &part.reference(&feature.id),
                 &self.shapes,
-                tolerance,
+                doc.settings.modeling.boolean_search_mm,
             )? {
                 output.insert(feature.id.clone(), sheet);
             }
@@ -1025,7 +1043,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         &self,
         doc: &Document,
         definition: &str,
-        tolerance: f64,
+        display_tolerance_mm: f64,
     ) -> Result<Vec<(String, cad_core::reference_curves::Evaluated, MeshData)>> {
         let part = &doc.parts[definition];
         part.features
@@ -1038,7 +1056,11 @@ impl<K: KernelAdapter> Evaluator<K> {
                 };
                 Some(
                     self.adapter
-                        .mesh(self.shapes.get(&producer).unwrap(), &producer, tolerance)
+                        .mesh(
+                            self.shapes.get(&producer).unwrap(),
+                            &producer,
+                            display_tolerance_mm,
+                        )
                         .map(|mesh| (feature.id.clone(), evaluated.clone(), mesh)),
                 )
             })
@@ -1195,9 +1217,10 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         identity: RequestIdentity,
         document: &Document,
         root: &Path,
-        tolerance: f64,
+        display_tolerance_mm: f64,
     ) -> Result<Evaluation> {
         let start = Instant::now();
+        cad_core::tolerance::validate_display(display_tolerance_mm)?;
         if identity.protocol != PROTOCOL_VERSION {
             return Err(CadError::Invalid(
                 "Evaluation protocol version does not match worker".into(),
@@ -1215,13 +1238,13 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 "Evaluation document fingerprint changed in transport".into(),
             ));
         }
-        let solved = match self.build(document, root, tolerance) {
+        let solved = match self.build(document, root) {
             Ok(solved) => solved,
             Err(error) => {
                 if let Some(evaluation) = self.failure_evaluation(
                     identity.clone(),
                     document,
-                    tolerance,
+                    display_tolerance_mm,
                     start.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
                 )? {
                     return Ok(evaluation);
@@ -1246,7 +1269,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         let mut weld_joints = vec![];
         let mut history = BTreeMap::new();
         for part in solved.parts.values() {
-            self.focused_preview(part, &part.id, tolerance);
+            self.focused_preview(part, &part.id, display_tolerance_mm);
             for feature in part.features.iter().filter(|f| !f.suppressed) {
                 if let Ok(Some(guide)) = self.adapter.pattern_guide(
                     &solved,
@@ -1272,13 +1295,15 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             for (feature, report) in self.mold_output(&solved, &part.id) {
                 mold_analyses.insert(format!("{}::{feature}", part.id), report);
             }
-            for (feature, sheet) in self.sheet_output(&solved, &part.id, tolerance)? {
+            for (feature, sheet) in self.sheet_output(&solved, &part.id)? {
                 sheets.insert(format!("{}::{feature}", part.id), sheet);
             }
             for (feature, geometry) in self.reference_output(&solved, &part.id) {
                 references.insert(format!("{}::{feature}", part.id), geometry);
             }
-            for (feature, geometry, mesh) in self.curve_output(&solved, &part.id, tolerance)? {
+            for (feature, geometry, mesh) in
+                self.curve_output(&solved, &part.id, display_tolerance_mm)?
+            {
                 let key = format!("{}::{feature}", part.id);
                 reference_curves.insert(key.clone(), geometry);
                 reference_curve_meshes.insert(key, mesh);
@@ -1291,11 +1316,11 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             }
             history.insert(
                 part.id.clone(),
-                self.history_output(&solved, &part.id, &part.id, tolerance),
+                self.history_output(&solved, &part.id, &part.id, display_tolerance_mm),
             );
         }
         for p in solved.parts.values().filter(|p| !p.outputs.is_empty()) {
-            let (mesh, bodies, surfaces) = self.part_output(p, tolerance)?;
+            let (mesh, bodies, surfaces) = self.part_output(p, display_tolerance_mm)?;
             meshes.insert(p.id.clone(), mesh);
             body_sets.insert(p.id.clone(), bodies);
             surface_sets.insert(p.id.clone(), surfaces);
@@ -1309,13 +1334,13 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                     &i.definition,
                     i.configuration.as_deref(),
                 );
-                let configured_solved = match self.build(&variant, root, tolerance) {
+                let configured_solved = match self.build(&variant, root) {
                     Ok(solved) => solved,
                     Err(error) => {
                         if let Some(evaluation) = self.failure_evaluation(
                             identity.clone(),
                             document,
-                            tolerance,
+                            display_tolerance_mm,
                             start.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
                         )? {
                             return Ok(evaluation);
@@ -1342,7 +1367,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                     references.insert(format!("{key}::{feature}"), geometry);
                 }
                 for (feature, geometry, mesh) in
-                    self.curve_output(&configured_solved, &i.definition, tolerance)?
+                    self.curve_output(&configured_solved, &i.definition, display_tolerance_mm)?
                 {
                     let key = format!("{key}::{feature}");
                     reference_curves.insert(key.clone(), geometry);
@@ -1356,9 +1381,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 for (feature, report) in self.mold_output(&configured_solved, &i.definition) {
                     mold_analyses.insert(format!("{key}::{feature}"), report);
                 }
-                for (feature, sheet) in
-                    self.sheet_output(&configured_solved, &i.definition, tolerance)?
-                {
+                for (feature, sheet) in self.sheet_output(&configured_solved, &i.definition)? {
                     sheets.insert(format!("{key}::{feature}"), sheet);
                 }
                 for (feature, weldment) in
@@ -1385,12 +1408,17 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 }
                 history.insert(
                     key.clone(),
-                    self.history_output(&configured_solved, &i.definition, &key, tolerance),
+                    self.history_output(
+                        &configured_solved,
+                        &i.definition,
+                        &key,
+                        display_tolerance_mm,
+                    ),
                 );
                 let part = &configured_solved.parts[&i.definition];
-                self.focused_preview(part, &key, tolerance);
+                self.focused_preview(part, &key, display_tolerance_mm);
                 if !part.outputs.is_empty() {
-                    let (mesh, bodies, surfaces) = self.part_output(part, tolerance)?;
+                    let (mesh, bodies, surfaces) = self.part_output(part, display_tolerance_mm)?;
                     meshes.insert(key.clone(), mesh);
                     body_sets.insert(key.clone(), bodies);
                     surface_sets.insert(key, surfaces);
@@ -1451,7 +1479,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                     weld,
                     &contexts,
                     root,
-                    tolerance,
+                    display_tolerance_mm,
                 );
                 if let Some(mut preview) = self
                     .adapter
@@ -1531,6 +1559,10 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             &self.body_sets,
         )?;
         let mut evaluated = Evaluation {
+            accuracy: cad_core::tolerance::Accuracy::new(
+                document.settings.modeling,
+                display_tolerance_mm,
+            )?,
             pattern_guides,
             identity,
             meshes,
@@ -1576,7 +1608,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         root: &Path,
         path: &Path,
         format: &str,
-        tolerance: f64,
+        display_tolerance_mm: f64,
     ) -> Result<()> {
         let identity = RequestIdentity {
             protocol: PROTOCOL_VERSION,
@@ -1587,7 +1619,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             source: document.fingerprint(),
             backend: self.fingerprint().into(),
         };
-        let evaluated = self.evaluate(identity, document, root, tolerance)?;
+        let evaluated = self.evaluate(identity, document, root, display_tolerance_mm)?;
         if !evaluated.valid {
             return Err(CadError::Invalid(
                 evaluated
@@ -1605,7 +1637,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             "stl" => cad_core::manufacturing::stl(&evaluated, path),
             "pdf" => cad_core::manufacturing::drawing_pdf(document, &evaluated, path),
             "dxf" => {
-                let solved = self.build(document, root, tolerance)?;
+                let solved = self.build(document, root)?;
                 cad_core::persistence::atomic_write(
                     path,
                     cad_core::manufacturing::dxf_profiles(&solved)?.as_bytes(),

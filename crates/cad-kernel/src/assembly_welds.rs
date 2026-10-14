@@ -16,7 +16,6 @@ fn prepared(
     contexts: &BTreeMap<Vec<String>, (Document, [[f64; 4]; 4])>,
     path: &[String],
     root: &Path,
-    tolerance: f64,
 ) -> Result<(Evaluator, Document, Matrix4)> {
     let (doc, transform) = contexts.get(path).ok_or_else(|| {
         CadError::Invalid(
@@ -27,7 +26,7 @@ fn prepared(
     // The occurrence walker already applied its complete parameter/configuration scope.
     doc.active_configurations.clear();
     let mut evaluator = Evaluator::default();
-    let solved = evaluator.build(&doc, root, tolerance)?;
+    let solved = evaluator.build(&doc, root)?;
     Ok((evaluator, solved, pose(*transform)))
 }
 pub(crate) fn build(
@@ -50,7 +49,7 @@ pub(crate) fn build(
         .chain(definition.supports.iter().map(|face| face.path.as_slice()))
     {
         if !scoped.contains_key(path) {
-            scoped.insert(path.to_vec(), prepared(contexts, path, root, tolerance)?);
+            scoped.insert(path.to_vec(), prepared(contexts, path, root)?);
         }
     }
     let (source, solved, transform) = &scoped[definition.seam.path()];

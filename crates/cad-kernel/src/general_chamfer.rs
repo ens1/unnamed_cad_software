@@ -30,7 +30,7 @@ pub(crate) enum Treatment {
     Fillet,
 }
 impl Treatment {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Chamfer => "chamfer",
             Self::Fillet => "fillet",
@@ -1253,13 +1253,14 @@ fn attempt_native(
     history: &mut ShellHistory,
 ) -> Result<Option<Solid>> {
     let mut diagnostic = None;
-    for constructor in 0..4 {
+    for constructor in 0..5 {
         let mut candidate = history.clone();
         let material_captures = candidate.material_captures();
         let result = match constructor {
-            0 => concave_treatment::construct(solid, selected, spec, treatment, &mut candidate),
-            1 => local_blend::construct(solid, selected, spec, treatment, &mut candidate),
-            2 => circular_with_caps(solid, selected, spec, treatment, &mut candidate),
+            0 => crate::connected_rims::construct(solid, selected, spec, treatment, &mut candidate),
+            1 => concave_treatment::construct(solid, selected, spec, treatment, &mut candidate),
+            2 => local_blend::construct(solid, selected, spec, treatment, &mut candidate),
+            3 => circular_with_caps(solid, selected, spec, treatment, &mut candidate),
             _ => match treatment {
                 Treatment::Chamfer => crate::planar::chamfer(solid, selected, spec, &mut candidate),
                 Treatment::Fillet => {
