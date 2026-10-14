@@ -81,16 +81,23 @@ pub fn new(w: &mut Workspace, assembly: &str) {
     };
     let generated = component_pattern::generated(a);
     let selected = w
-        .view
-        .active_instance
+        .selected_component
         .as_ref()
+        .and_then(|path| path.first())
         .filter(|id| a.instances.contains_key(*id) && !generated.contains(*id))
         .cloned()
         .or_else(|| {
-            a.instances
-                .keys()
-                .find(|id| !generated.contains(*id))
+            w.view
+                .active_instance
+                .as_ref()
+                .filter(|id| a.instances.contains_key(*id) && !generated.contains(*id))
                 .cloned()
+                .or_else(|| {
+                    a.instances
+                        .keys()
+                        .find(|id| !generated.contains(*id))
+                        .cloned()
+                })
         });
     let Some(seed) = selected else {
         w.status = "Insert a component before creating a component pattern".into();

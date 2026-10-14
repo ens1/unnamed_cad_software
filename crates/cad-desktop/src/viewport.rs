@@ -701,7 +701,12 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
     let (o, d) = ray(w, rect, p);
     let mut hits = vec![];
     for instance in display_instances(w, e) {
-        if !visible(w, instance) || !crate::display_states_ui::pickable(w, &instance.path) {
+        let context_references = w.fields.contains_key("pick-context-references");
+        if !visible(w, instance)
+            || (!context_references
+                && (ghost_neighbor(w, instance)
+                    || !crate::display_states_ui::pickable(w, &instance.path)))
+        {
             continue;
         }
         for mesh in selection_meshes(w, e, instance) {
@@ -780,11 +785,21 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
     }
     hits.extend(crate::reference_ui::picks(w, rect, p, e));
     hits.sort_by(|a, b| {
+        let active_a = w.view.active_part.as_ref() == Some(&a.definition)
+            && w.edge_selection_path
+                .as_ref()
+                .is_none_or(|path| path == &a.path);
+        let active_b = w.view.active_part.as_ref() == Some(&b.definition)
+            && w.edge_selection_path
+                .as_ref()
+                .is_none_or(|path| path == &b.path);
         let edge_a = a.reference.topology == "edge";
         let edge_b = b.reference.topology == "edge";
-        edge_b
-            .cmp(&edge_a)
-            .then_with(|| a.distance.total_cmp(&b.distance))
+        active_b.cmp(&active_a).then_with(|| {
+            edge_b
+                .cmp(&edge_a)
+                .then_with(|| a.distance.total_cmp(&b.distance))
+        })
     });
     hits.dedup_by(|a, b| {
         a.path == b.path
@@ -863,6 +878,7 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
         w.edge_selection_path = Some(s.path.clone());
     }
     w.geometry_selection = vec![s.clone()];
+    w.selected_component = Some(s.path.clone());
     w.selected = Some(s);
     w.active_plane = None;
     w.rendered_key.clear();
@@ -2101,27 +2117,33 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
         });
         for m in meshes {
             for edge in &m.edges {
-                let active = selected.is_some_and(|s| {
-                    selected_topology(s, &edge.reference, &edge.body)
-                        || (s.reference.topology == "face"
-                            && s.body == edge.body
-                            && edge.faces.iter().any(|face| {
-                                face.producer == s.reference.producer
-                                    && face.role == s.reference.role
-                                    && face.topology == s.reference.topology
-                            }))
-                }) || edge_feature.as_ref().is_some_and(|feature| {
-                    crate::selection_ui::edge_selection(feature).is_some_and(|(body, edges)| {
-                        i.definition == body.definition
-                            && w.edge_selection_path
-                                .as_ref()
-                                .is_some_and(|path| path == &i.path)
-                            && edge.body.as_ref() == Some(body)
-                            && edges.iter().any(|reference| {
-                                crate::selection_ui::same_edge(reference, &edge.reference)
-                            })
+                let active = w.selected.is_none()
+                    && w.selected_component
+                        .as_ref()
+                        .is_some_and(|path| i.path.starts_with(path))
+                    || selected.is_some_and(|s| {
+                        selected_topology(s, &edge.reference, &edge.body)
+                            || (s.reference.topology == "face"
+                                && s.body == edge.body
+                                && edge.faces.iter().any(|face| {
+                                    face.producer == s.reference.producer
+                                        && face.role == s.reference.role
+                                        && face.topology == s.reference.topology
+                                }))
                     })
-                }) || spatial_feature_selected(w, i, &edge.reference.producer)
+                    || edge_feature.as_ref().is_some_and(|feature| {
+                        crate::selection_ui::edge_selection(feature).is_some_and(|(body, edges)| {
+                            i.definition == body.definition
+                                && w.edge_selection_path
+                                    .as_ref()
+                                    .is_some_and(|path| path == &i.path)
+                                && edge.body.as_ref() == Some(body)
+                                && edges.iter().any(|reference| {
+                                    crate::selection_ui::same_edge(reference, &edge.reference)
+                                })
+                        })
+                    })
+                    || spatial_feature_selected(w, i, &edge.reference.producer)
                     || w.geometry_selection.iter().any(|pick| {
                         selected_instance(pick, i)
                             && (selected_topology(pick, &edge.reference, &edge.body)

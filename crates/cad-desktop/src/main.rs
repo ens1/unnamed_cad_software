@@ -4,6 +4,7 @@ mod assembly_groups_ui;
 mod assembly_inspection_ui;
 mod assembly_motion_ui;
 mod assembly_tools_ui;
+mod assembly_tree_ui;
 mod assembly_welds_ui;
 mod background;
 mod body_filter_ui;
@@ -146,6 +147,8 @@ pub struct Workspace {
     pub theme_text: String,
     pub source_text: String,
     pub selected: Option<viewport::Selection>,
+    pub selected_component: Option<Vec<cad_core::Id>>,
+    pub assembly_tree: assembly_tree_ui::State,
     pub hover_guide: Option<viewport_guides::Guide>,
     pub hover_cache: viewport_guides::Cache,
     pub display_state_cache: std::sync::Mutex<display_states_ui::Cache>,
@@ -299,6 +302,8 @@ impl Workspace {
             theme_text,
             source_text: String::new(),
             selected: None,
+            selected_component: None,
+            assembly_tree: Default::default(),
             hover_guide: None,
             hover_cache: viewport_guides::Cache::default(),
             display_state_cache: Default::default(),
@@ -397,6 +402,9 @@ impl Workspace {
         self.view.active_node = None;
         self.active_plane = None;
         self.selected = None;
+        if let Some(occurrence) = occurrence {
+            self.selected_component = Some(occurrence.path.clone());
+        }
         self.geometry_selection.clear();
         self.selected_feature_path = None;
         self.context_selection = None;
@@ -717,6 +725,8 @@ impl Workspace {
         self.requested = None;
         self.changed = Instant::now();
         self.selected = None;
+        self.selected_component = None;
+        self.assembly_tree = Default::default();
         self.selection_popup = None;
         self.dialog = None;
         self.context_selection = None;

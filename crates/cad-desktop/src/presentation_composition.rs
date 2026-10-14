@@ -334,6 +334,7 @@ impl Registry {
 /// One snapshot supplies the native workspace, binding catalog and user templates.
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = cad_core::presentation::project(&w.session, w.view.active_part.as_deref());
+    elements.extend(crate::assembly_tree_ui::semantics(w));
     if let Some(sketch) = &w.sketch {
         elements.retain(|element| {
             !(matches!(

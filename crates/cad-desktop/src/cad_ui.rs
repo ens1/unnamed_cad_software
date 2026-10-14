@@ -1795,36 +1795,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                     open: None,
                 },
                 |ui| {
-                    for placed in doc.placed_parts().unwrap_or_default() {
-                        let response = controls::button(
-                            ui,
-                            &format!("component:{}", placed.path.join("/")),
-                            "component-instance",
-                            &["feature-tree-row"],
-                            &placed.name,
-                            true,
-                            w.view.active_instance.as_ref() == placed.path.last(),
-                        );
-                        if response.clicked() {
-                            if w.tool_checkpoint.is_none() {
-                                w.activate_context(
-                                    Some(placed.definition.clone()),
-                                    Some(placed.path.clone()),
-                                );
-                            }
-                            crate::selection_ui::object_selected(
-                                w,
-                                cad_core::selection_actions::SelectionTarget::Object {
-                                    definition: placed.definition.clone(),
-                                    object: placed.path.last().cloned().unwrap_or_default(),
-                                    role: "component-instance".into(),
-                                },
-                            );
-                            if w.tool_checkpoint.is_none() {
-                                w.edge_selection_path = Some(placed.path.clone());
-                            }
-                        }
-                    }
+                    crate::assembly_tree_ui::show(ui, w);
                     if ui.button("Insert Component").clicked() {
                         ui::action(w, "assembly.insert-existing");
                     }

@@ -1027,6 +1027,7 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         || crate::operation_editor_ui::action(w, command, Some(&element.data))
         || crate::drawing_interaction_ui::action(w, command, Some(&element.data))
         || crate::drawing_editor_ui::action(w, command, Some(&element.data))
+        || crate::assembly_tree_ui::action(w, command, Some(&element.data))
         || crate::assembly_motion_ui::action(w, command, Some(&element.data))
         || crate::assembly_tools_ui::action(w, command, Some(&element.data))
         || crate::assembly_welds_ui::action(w, command, Some(&element.data))
@@ -1872,6 +1873,7 @@ fn model_view(
                 viewport::select(w, selected);
             } else {
                 w.selected = None;
+                w.selected_component = None;
                 w.selected_feature_path = None;
                 w.view.active_node = None;
                 w.context_selection = None;
@@ -1971,6 +1973,7 @@ fn model_view(
                 }
             } else {
                 w.selected = None;
+                w.selected_component = None;
                 w.geometry_selection.clear();
                 w.selected_feature_path = None;
                 w.view.active_node = None;
@@ -1986,6 +1989,11 @@ fn model_view(
         && ui.input(|i| i.key_pressed(egui::Key::Tab))
         && !w.candidates.is_empty()
     {
+        ui.input_mut(|input| {
+            input.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
+        });
+        ui.ctx()
+            .memory_mut(|memory| memory.request_focus(response.id));
         w.candidate_index = (w.candidate_index + 1) % w.candidates.len();
         if viewport::select(w, w.candidates[w.candidate_index].clone()) {
             if !crate::reference_repair_ui::capture_selection(w) {

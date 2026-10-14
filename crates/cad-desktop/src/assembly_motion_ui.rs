@@ -1244,6 +1244,7 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>
                         .map(|s| s.path.clone())
                         .filter(|p| !p.is_empty())
                 })
+                .or_else(|| w.selected_component.clone())
                 .or_else(|| {
                     w.view
                         .active_instance

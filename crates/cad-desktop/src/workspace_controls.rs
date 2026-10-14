@@ -228,6 +228,13 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "viewport.isolation",
         ),
         (
+            "workspace.reference-picking",
+            "Pick references",
+            in_place(w) && w.sketch.is_none(),
+            w.fields.contains_key("pick-context-references"),
+            "viewport.isolation",
+        ),
+        (
             "workspace.finish-editing",
             "Finish editing",
             in_place(w) && idle,
@@ -280,7 +287,7 @@ fn selection_summary(w: &Workspace) -> String {
     } else if let Some(selection) = &w.selected {
         format!("{} · {}", selection.name, selection.reference.topology)
     } else {
-        String::new()
+        crate::assembly_tree_ui::selection_label(w).unwrap_or_default()
     }
 }
 
@@ -356,7 +363,7 @@ pub(crate) fn toolbar(ui: &mut egui::Ui, w: &mut Workspace) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             crate::cad_ui::confirmation(ui, w)
         });
-    } else if w.selected.is_some() {
+    } else if w.selected.is_some() || w.selected_component.is_some() {
         ui.horizontal(|ui| {
             controls::label(
                 ui,
@@ -446,6 +453,14 @@ pub(crate) fn isolation(ui: &mut egui::Ui, w: &mut Workspace) {
             w.tool_checkpoint.is_none(),
             false,
         );
+        button(
+            ui,
+            w,
+            "workspace.reference-picking",
+            "Pick references",
+            true,
+            w.fields.contains_key("pick-context-references"),
+        );
         if !w.view.pinned.is_empty() {
             button(ui, w, "workspace.clear-pins", "Clear pins", true, false);
         }
@@ -497,6 +512,17 @@ pub(crate) fn action(w: &mut Workspace, command: &str) -> bool {
         "workspace.hide-others" => {
             w.view.ghost_others = false;
             w.rendered_key.clear();
+        }
+        "workspace.reference-picking" => {
+            if w.fields.remove("pick-context-references").is_some() {
+                w.status = "Pick active geometry; surrounding context is display only".into();
+            } else {
+                w.fields
+                    .insert("pick-context-references".into(), "true".into());
+                w.status = "Reference picking includes visible surrounding components".into();
+            }
+            w.candidates.clear();
+            w.candidate_index = 0;
         }
         "workspace.finish-editing" => w.isolate(),
         "workspace.clear-pins" => {
