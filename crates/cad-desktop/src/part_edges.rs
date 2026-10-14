@@ -82,6 +82,7 @@ fn edge_target(
     parent: &StyleTarget,
     instance: &cad_core::PlacedPart,
     edge: &cad_core::protocol::EdgeData,
+    ghost: bool,
 ) -> StyleTarget {
     let mut target = parent.child(
         &format!(
@@ -102,8 +103,16 @@ fn edge_target(
             token(&edge.reference.role)
         ),
         "part-edge",
-        &["viewport-overlay".into()],
-        "ready",
+        &[
+            "viewport-overlay".into(),
+            if ghost {
+                "ghost-context"
+            } else {
+                "active-geometry"
+            }
+            .into(),
+        ],
+        if ghost { "ghost" } else { "ready" },
     );
     for (name, value) in [
         ("definition", instance.definition.clone()),
@@ -191,9 +200,10 @@ pub fn sync(
                 continue;
             }
             for edge in &mesh.edges {
+                let ghost = viewport::ghost_neighbor(&w, instance);
                 let props = w
                     .theme
-                    .properties_for(&edge_target(&parent, instance, edge));
+                    .properties_for(&edge_target(&parent, instance, edge, ghost));
                 if hidden(&props) {
                     continue;
                 }
@@ -210,9 +220,13 @@ pub fn sync(
                 }
                 .to_srgba_unmultiplied()
                 .map(|channel| f32::from(channel) / 255.);
-                color[3] *=
-                    crate::presentation_controls::number(&props, "opacity", 1.).clamp(0., 1.);
-                if viewport::ghost_neighbor(&w, instance) {
+                color[3] *= crate::presentation_controls::number(
+                    &props,
+                    "opacity",
+                    if ghost { 0.4 } else { 1. },
+                )
+                .clamp(0., 1.);
+                if ghost {
                     color[3] *= crate::presentation_controls::number(
                         &viewport_props,
                         "ghost-opacity",

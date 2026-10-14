@@ -500,7 +500,7 @@ fn toggle_component(state: &mut State, component: &str) -> Result<()> {
     changed(state);
     Ok(())
 }
-fn component_selection(ui: &mut egui::Ui, state: &mut State) {
+fn component_selection(ui: &mut egui::Ui, state: &mut State, w: &mut Workspace) {
     let identity = id(state, "components");
     let properties = controls::properties(
         &identity,
@@ -514,15 +514,22 @@ fn component_selection(ui: &mut egui::Ui, state: &mut State) {
     {
         return;
     }
-    controls::label(
+    let Some(query) = crate::workspace_controls::reference_filter(
         ui,
-        &format!("{identity}.label"),
-        "field-label",
-        &[],
-        &format!("Components · {} selected", state.values.components.len()),
-        "ready",
-    );
-    let choices = state.components.keys().cloned().collect::<Vec<_>>();
+        w,
+        &identity,
+        "components",
+        state.values.components.len(),
+        state.components.len(),
+    ) else {
+        return;
+    };
+    let choices = state
+        .components
+        .iter()
+        .filter(|(_, entry)| query.is_empty() || entry.name.to_lowercase().contains(&query))
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
     egui::ScrollArea::vertical()
         .id_salt(&identity)
         .max_height(controls::number(&properties, "max-height", 140.))
@@ -1056,6 +1063,44 @@ fn placement_scope_control(ui: &mut egui::Ui, state: &State) {
     });
 }
 
+pub fn compact_status(w: &Workspace) -> Option<(String, String)> {
+    let state = w.assembly_motion.as_ref()?;
+    Some(if let Some(error) = &state.error {
+        (
+            "invalid".into(),
+            crate::workspace_controls::concise_problem(error),
+        )
+    } else if state.pending.is_some() || state.needs_solve || state.values != state.accepted {
+        ("pending".into(), "Solving movement…".into())
+    } else if let Some(outcome) = &state.outcome {
+        let limited = outcome.position_error_mm.is_some_and(|error| error > 1e-6)
+            || outcome.rotation_error_deg.is_some_and(|error| error > 1e-6)
+            || outcome.goal_errors.values().any(|error| {
+                error.position_error_mm.is_some_and(|error| error > 1e-6)
+                    || error.rotation_error_deg.is_some_and(|error| error > 1e-6)
+            });
+        if limited {
+            (
+                "limited".into(),
+                "Movement limited by mates · review Diagnostics".into(),
+            )
+        } else {
+            (
+                "valid".into(),
+                "Movement preview ready · mates preserved".into(),
+            )
+        }
+    } else {
+        (
+            "required".into(),
+            "Enter offsets or drag the component".into(),
+        )
+    })
+}
+pub fn detail_status(w: &Workspace) -> Option<String> {
+    w.assembly_motion.as_ref().map(movement_status)
+}
+
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     let Some(mut state) = w.assembly_motion.take() else {
         return;
@@ -1064,32 +1109,16 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     controls::label(
         ui,
         &id(&state, "title"),
-        "tool-title",
+        "selection-summary",
         &[],
-        &title(&state),
-        "ready",
+        &format!(
+            "{} · {} selected",
+            state.name,
+            state.values.components.len()
+        ),
+        "selected",
     );
     modes(ui, &mut state);
-    component_selection(ui, &mut state);
-    controls::label(
-        ui,
-        &id(&state, "guidance"),
-        "tool-guidance",
-        &[],
-        "Selected components move together about the primary component's origin or picked point. Offsets use assembly axes; mates and travel limits remain enforced.",
-        "ready",
-    );
-    if state.path.len() > 1 {
-        controls::label(
-            ui,
-            &id(&state, "scope"),
-            "tool-guidance",
-            &[],
-            "The selected nested occurrence moves with its rigid top-level subassembly.",
-            "ready",
-        );
-    }
-    pivot(ui, &mut state);
     if state.values.mode != Mode::Rotate {
         for key in ["tx", "ty", "tz"] {
             field(ui, &mut state, key);
@@ -1100,26 +1129,36 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             field(ui, &mut state, key);
         }
     }
-    let status = movement_status(&state);
-    controls::label(
+    pivot(ui, &mut state);
+    component_selection(ui, &mut state, w);
+    if crate::workspace_controls::disclosure(
         ui,
-        &id(&state, "status"),
-        "assembly-motion-status",
-        &["preview-status"],
-        &status,
-        if state.error.is_some() {
-            "invalid"
-        } else if state.pending.is_some() {
-            "pending"
-        } else {
-            "ready"
-        },
-    );
-    placement_scope_control(ui, &state);
+        w,
+        &id(&state, "options"),
+        "Scope and instructions",
+    ) {
+        placement_scope_control(ui, &state);
+        controls::label(
+            ui,
+            &id(&state, "guidance"),
+            "tool-guidance",
+            &[],
+            "Offsets use assembly axes. Selected components move together about the primary origin or picked point; mates and travel limits remain enforced.",
+            "ready",
+        );
+        if state.path.len() > 1 {
+            controls::label(
+                ui,
+                &id(&state, "scope"),
+                "tool-guidance",
+                &[],
+                "This nested occurrence moves with its rigid top-level subassembly.",
+                "ready",
+            );
+        }
+    }
     let mut reset = false;
     let mut retry = false;
-    let mut confirm = false;
-    let mut cancel = false;
     ui.horizontal_wrapped(|ui| {
         if state.error.is_some() {
             retry = controls::button(
@@ -1127,7 +1166,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                 &id(&state, "retry"),
                 "command-action",
                 &[],
-                "Retry movement",
+                "Retry",
                 true,
                 false,
             )
@@ -1138,27 +1177,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             &id(&state, "reset"),
             "command-action",
             &[],
-            "Reset movement",
-            true,
-            false,
-        )
-        .clicked();
-        confirm = controls::button(
-            ui,
-            &id(&state, "apply"),
-            "apply-action",
-            &[],
-            "OK",
-            state.error.is_none(),
-            false,
-        )
-        .clicked();
-        cancel = controls::button(
-            ui,
-            &id(&state, "cancel"),
-            "cancel-action",
-            &[],
-            "Cancel",
+            "Reset offsets",
             true,
             false,
         )
@@ -1179,11 +1198,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         w.rendered_key.clear();
     }
     w.assembly_motion = Some(state);
-    if cancel {
-        w.cancel_tool();
-    } else if confirm {
-        w.confirm_tool();
-    }
 }
 
 pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement) {
@@ -1416,6 +1430,20 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         data:serde_json::json!({"contract":"tcad.assembly_motion","version":assembly_motion::CONTRACT_VERSION,"token":state.token,"scope":state.placement_scope,"editable":false,"base_requires_active_base_configuration":true}),
     });
     elements.extend(viewport::semantics(w, state));
+    elements.extend(
+        crate::workspace_controls::reference_controls(
+            w,
+            &id(state, "options"),
+            "Scope and instructions",
+        )
+        .into_iter()
+        .take(1),
+    );
+    elements.extend(crate::workspace_controls::reference_controls(
+        w,
+        &id(state, "components"),
+        "components",
+    ));
     if let Some(outcome) = &state.outcome {
         for (component, error) in &outcome.goal_errors {
             elements.push(SemanticElement {id:format!("{}.{}",id(state,"goal-error"),component),role:"assembly-motion-goal-status".into(),label:state.components.get(component).map(|entry|entry.name.clone()).unwrap_or_else(||component.clone()),value:Some(format!("Point {:.6} mm · rotation {:.6}°",error.position_error_mm.unwrap_or(0.),error.rotation_error_deg.unwrap_or(0.))),state:if error.position_error_mm.is_some_and(|error|error>1e-6) || error.rotation_error_deg.is_some_and(|error|error>1e-6){"limited"}else{"reached"}.into(),commands:vec![],relationships:vec![component.clone()],data:serde_json::json!({"contract":"tcad.assembly_motion","version":assembly_motion::CONTRACT_VERSION,"goal_error":error,"selected":state.values.components.contains(component),"shared_pivot":true,"temporary_relative_locks":state.values.components.len()>1})});

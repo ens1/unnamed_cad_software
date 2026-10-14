@@ -31,27 +31,71 @@ pub fn begin_save_as(w: &mut Workspace) {
     begin(w);
     if active(w) {
         w.fields.insert(SAVE_AS.into(), "true".into());
-        w.status = "Name the saved copy, then confirm the current validated document".into();
-    }
-}
-
-/// A user-chosen file/folder name is the initial document-name proposal.
-/// It remains an editable, cancelable draft until the shared confirmation.
-pub fn propose_save_name(w: &mut Workspace, name: &str) {
-    if !pending_save_as(w) || validate_name(name).is_err() {
-        return;
-    }
-    w.fields.insert(NAME.into(), name.trim().into());
-    if let Err(error) = submit(w) {
-        w.status = error.to_string();
+        w.fields.insert(SYNC.into(), "false".into());
+        let stem = w
+            .session
+            .visible()
+            .name
+            .chars()
+            .map(|c| if "/\\:*?\"<>|".contains(c) { '_' } else { c })
+            .collect::<String>();
+        let folder = if w.project.is_some() {
+            format!("{stem}-copy.tcad")
+        } else {
+            format!("{stem}.tcad")
+        };
+        let parent = w
+            .project
+            .as_ref()
+            .and_then(|path| path.parent())
+            .and_then(|path| path.parent())
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok());
+        if let Some(parent) = parent {
+            w.fields
+                .entry("document-identity-save-as-path".into())
+                .or_insert_with(|| {
+                    parent
+                        .join(folder)
+                        .join("project.json")
+                        .display()
+                        .to_string()
+                });
+        }
+        w.status = "Choose the destination and document name, then Save Copy".into();
     }
 }
 pub fn confirmation_label(w: &Workspace) -> &'static str {
     if pending_save_as(w) {
-        "Save Named Copy"
+        "Save Copy"
     } else {
         "Rename Document"
     }
+}
+fn destination(value: &str) -> Result<std::path::PathBuf> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return Err(CadError::Invalid(
+            "Choose a project destination or enter its folder path".into(),
+        ));
+    }
+    let path = std::path::PathBuf::from(value);
+    let path = if path.file_name().and_then(|name| name.to_str()) == Some("project.json") {
+        path
+    } else if path.extension().and_then(|extension| extension.to_str()) == Some("json") {
+        path.with_extension("tcad").join("project.json")
+    } else {
+        path.join("project.json")
+    };
+    if path
+        .parent()
+        .is_some_and(|parent| parent.exists() && !parent.is_dir())
+    {
+        return Err(CadError::Invalid(
+            "The destination must be a project folder".into(),
+        ));
+    }
+    Ok(path)
 }
 
 pub fn location_control(ui: &mut egui::Ui, w: &Workspace) {
@@ -186,13 +230,28 @@ pub fn current_source_is_valid(w: &Workspace) -> bool {
             && w.fields
                 .get(NAME)
                 .is_some_and(|name| validate_name(name).is_ok())
+            && (!pending_save_as(w)
+                || w.fields
+                    .get("document-identity-save-as-path")
+                    .is_some_and(|path| destination(path).is_ok()))
             && !w.fields.keys().any(|key| key.starts_with(INVALID)))
 }
 pub fn ready_to_confirm(w: &mut Workspace) -> bool {
     if current_source_is_valid(w) {
+        if pending_save_as(w)
+            && let Some(path) = w
+                .fields
+                .get("document-identity-save-as-path")
+                .and_then(|value| destination(value).ok())
+        {
+            w.fields.insert(
+                "document-identity-save-as-path".into(),
+                path.display().to_string(),
+            );
+        }
         true
     } else {
-        w.status = "Correct the document name before confirming".into();
+        w.status = "Correct the document name and save destination before confirming".into();
         false
     }
 }
@@ -258,6 +317,16 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
     match command {
         "document.rename" => begin(w),
         "document.save-as-name" => crate::ui::action(w, "file.save-as"),
+        "document.save-as-browse" if pending_save_as(w) => {
+            if let Some(path) = crate::ui::choose_save_destination(w) {
+                w.fields.insert(
+                    "document-identity-save-as-path".into(),
+                    path.display().to_string(),
+                );
+                w.fields.remove(&format!("{INVALID}document-identity:path"));
+                w.fields.remove("presentation-field:document-identity:path");
+            }
+        }
         "document.rename.apply" if active(w) => {
             if ready_to_confirm(w) {
                 // The common confirmation path handles validated drafts and
@@ -271,7 +340,10 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
     true
 }
 pub fn semantic_action(w: &mut Workspace, command: &str, arguments: &Value) -> bool {
-    if !matches!(command, "document.rename.apply" | "document.rename.cancel") {
+    if !matches!(
+        command,
+        "document.rename.apply" | "document.rename.cancel" | "document.save-as-browse"
+    ) {
         return false;
     }
     if !active(w)
@@ -289,6 +361,9 @@ pub fn value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
         return None;
     }
     match element.data.get("field")?.as_str()? {
+        "path" if pending_save_as(w) => {
+            Some(json!(w.fields.get("document-identity-save-as-path")?))
+        }
         "name" => Some(json!(w.fields.get(NAME)?)),
         "sync-part" => Some(json!(
             w.fields.get(SYNC).is_some_and(|value| value == "true")
@@ -303,6 +378,15 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
         ));
     }
     match element.data.get("field").and_then(Value::as_str) {
+        Some("path") if pending_save_as(w) => {
+            let path = value
+                .as_str()
+                .ok_or_else(|| CadError::Invalid("Enter a destination path".into()))?;
+            w.fields
+                .insert("document-identity-save-as-path".into(), path.into());
+            destination(path)?;
+            return Ok(());
+        }
         Some("name") => {
             let name = value
                 .as_str()
@@ -344,7 +428,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         relationships: vec![w.session.visible().id.clone()],
         data: json!({"contract":"tcad.document-identity","version":CONTRACT_VERSION,"renderer":"document-identity-editor",
             "enabled":available(w),"transaction":"shared-document-draft","identities_preserved":true,
-            "save_path_changes":pending_save_as(w),"save_after_validated_commit":pending_save_as(w),
+            "save_path_changes":pending_save_as(w),"save_from_validated_staged_commit":pending_save_as(w),"promote_after_disk_success":pending_save_as(w),
             "project_path":w.project.as_ref().map(|path|path.display().to_string()),
             "save_as_destination":w.fields.get("document-identity-save-as-path"),
             "saved_document_name":w.session.committed.name,"undo":"one-confirmed-operation"}),
@@ -374,13 +458,24 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             role: "document-identity-destination".into(),
             label: "Save destination".into(),
             value: Some(path.clone()),
-            state: "readonly".into(),
-            commands: vec![],
+            state: "draft".into(),
+            commands: vec!["document.save-as-browse".into()],
             relationships: vec!["workspace.document-identity".into()],
-            data: json!({"path":path,"filesystem_write_after_validated_commit":true}),
+            data: json!({"path":path,"document":w.fields.get(DOCUMENT),"token":w.fields.get(TOKEN),"filesystem_write_after_validated_commit":true}),
         });
     }
     for (field, label, value_type, value) in [
+        (
+            "path",
+            "Project folder / manifest",
+            "string",
+            json!(
+                w.fields
+                    .get("document-identity-save-as-path")
+                    .cloned()
+                    .unwrap_or_default()
+            ),
+        ),
         (
             "name",
             "Document name",
@@ -394,6 +489,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             json!(w.fields.get(SYNC).is_some_and(|value| value == "true")),
         ),
     ] {
+        if field == "path" && !pending_save_as(w) {
+            continue;
+        }
         if field == "sync-part" && !w.fields.contains_key(PART) {
             continue;
         }
@@ -420,7 +518,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data:json!({"enabled":enabled,"document":w.fields.get(DOCUMENT),"token":w.fields.get(TOKEN),"apply_requires_current_validated_evaluation":command.ends_with(".apply")})});
     }
     elements.push(SemanticElement { id:"document-identity:help".into(),role:"document-identity-help".into(),label:
-        if pending_save_as(w) { "Confirm the name to save the validated copy at the chosen destination. Source identities and references are preserved." }
+        if pending_save_as(w) { "The folder name and document name are independent. Existing definition names are preserved unless you choose to rename the standalone part." }
         else { "The name is saved with the project. Feature IDs, linked references and the project folder stay unchanged." }.into(),
         value:w.project.as_ref().map(|path|path.display().to_string()),state:"ready".into(),commands:vec![],relationships:vec!["workspace.document-identity".into()],data:json!({}),
     });
@@ -446,25 +544,25 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         "editing",
     );
     cad_ui::confirmation(ui, w);
-    if let Some(path) = w
-        .fields
-        .get("document-identity-save-as-path")
-        .filter(|_| pending_save_as(w))
-    {
-        controls::label(
-            ui,
-            "document-identity:save-destination",
-            "document-identity-destination",
-            &[],
-            path,
-            "readonly",
-        );
-    }
     for element in semantics(w)
         .into_iter()
         .filter(|element| element.role == "document-identity-field")
     {
         crate::ui::semantic_field(ui, w, &element);
+        if element.data.get("field").and_then(Value::as_str) == Some("path")
+            && controls::button(
+                ui,
+                "document-identity:browse",
+                "document-identity-action",
+                &["compact"],
+                "Browse…",
+                true,
+                false,
+            )
+            .clicked()
+        {
+            action(w, "document.save-as-browse");
+        }
     }
     for error in w
         .fields
@@ -487,7 +585,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         "document-identity-help",
         &[],
         if pending_save_as(w) {
-            "Confirm the name to save at the chosen destination. The current validated document is saved; source IDs stay unchanged."
+            "Folder and document names are independent. Definition names stay unchanged unless you select the part rename option."
         } else {
             "Names are saved in the project. The project folder and all source IDs remain unchanged."
         },

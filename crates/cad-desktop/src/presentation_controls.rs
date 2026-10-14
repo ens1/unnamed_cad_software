@@ -486,7 +486,7 @@ pub fn icon_button(
             color.gamma_multiply(opacity),
         );
     }
-    if elided {
+    if elided || natural.x > visual.x || natural.y > visual.y {
         response.on_hover_text(label)
     } else {
         response
@@ -620,6 +620,9 @@ fn inspector_heading(
     section: &InspectorSection<'_>,
     mut folding: Option<&mut egui::collapsing_header::CollapsingState>,
 ) -> Option<Response> {
+    if section.label.is_empty() {
+        return None;
+    }
     let id = format!("{}/heading", section.id);
     let role = "inspector-section-heading";
     let expanded = folding.as_ref().is_none_or(|folding| folding.is_open());

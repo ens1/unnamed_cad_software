@@ -1736,6 +1736,27 @@ pub fn navigation(ui: &mut egui::Ui, w: &mut Workspace) {
     });
 }
 pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
+    if w.editing_manager() {
+        let open = crate::workspace_controls::history_open(w);
+        if controls::button(
+            ui,
+            "workspace.task-history",
+            "task-section-toggle",
+            &["secondary-control"],
+            if open {
+                "▾ Model history"
+            } else {
+                "▸ Model history"
+            },
+            true,
+            open,
+        )
+        .clicked()
+        {
+            crate::workspace_controls::action(w, "workspace.task-history");
+        }
+        return;
+    }
     let doc = w.session.visible().clone();
     if doc.parts.len() > 1 || w.view.active_part.is_none() {
         let mut active = w.view.active_part.clone();
@@ -1843,7 +1864,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
         crate::ui::graph(ui, w, part);
         return;
     }
-    if w.view.mode == "History" || w.editing_manager() {
+    if w.view.mode == "History" {
         history(ui, w, part);
         return;
     }
@@ -2426,49 +2447,29 @@ pub fn confirmation_label(w: &Workspace) -> String {
     if crate::document_identity_ui::active(w) {
         return crate::document_identity_ui::confirmation_label(w).into();
     }
-    if crate::sketch3d_ui::active(w) {
-        return "Finish 3D Sketch".into();
+    if w.sketch.is_some() || crate::sketch3d_ui::active(w) {
+        return "Finish".into();
     }
-    if w.sketch.is_some() {
-        return crate::holes_ui::sketch_semantics(w)
-            .iter()
-            .find_map(|element| element.data["completion_label"].as_str().map(str::to_owned))
-            .unwrap_or_else(|| "Finish Sketch".into());
-    }
-    if w.dialog.as_deref() == Some("component-insert") {
-        "OK Component".into()
-    } else if w.fields.contains_key("mate-editor") {
-        "OK Mate".into()
-    } else if w.fields.contains_key("tolerance-stack-tool") {
-        "Apply Tolerance Stacks".into()
-    } else if w.fields.contains_key("standard-parts-tool") {
-        "Insert Standard Hardware".into()
-    } else if crate::camera_views_ui::active(w) {
-        "Apply Named View".into()
-    } else if w.fields.contains_key("sensor-tool") {
-        "Apply Design Monitors".into()
-    } else if w.fields.contains_key("display-state-editor") {
-        "Apply Display State".into()
-    } else if w.dialog.as_deref() == Some("assembly") {
-        "Apply Assembly".into()
-    } else if crate::drawing_ui::is_workspace(w) {
-        "Apply Drawing".into()
-    } else if w.fields.contains_key("properties-tool")
-        || w.fields.contains_key("material-tool") && w.fields.contains_key("appearance-tool")
+    if w.dialog.as_deref() == Some("component-insert")
+        || w.fields.contains_key("standard-parts-tool")
     {
-        "Apply Properties".into()
-    } else if w.fields.contains_key("material-tool") {
-        "Apply Materials".into()
-    } else if w.fields.contains_key("appearance-tool") {
-        "Apply Appearance".into()
+        return "Insert".into();
+    }
+    if w.dialog.as_deref() == Some("feature")
+        || w.assembly_motion.is_some()
+        || w.fields.contains_key("mate-editor")
+        || w.fields.contains_key("component-pattern-editor")
+    {
+        "OK".into()
     } else {
-        "OK Feature".into()
+        "Apply".into()
     }
 }
+
 pub fn confirmation(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::operation_preview::status_control(ui, w);
     let label = confirmation_label(w);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let enabled = confirmation_available(w);
         if controls::button(
             ui,
@@ -2502,12 +2503,37 @@ pub fn confirmation(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         }
     });
-    if w.confirm_requested {
-        ui.small("Rebuilding before confirmation…");
+}
+
+pub(crate) fn task_history(ui: &mut egui::Ui, w: &mut Workspace) {
+    if !crate::workspace_controls::history_open(w) {
+        return;
     }
-    if let Some(error) = w.session.draft.as_ref().and_then(|d| d.error.as_ref()) {
-        ui.colored_label(Color32::from_rgb(170, 50, 35), error);
-    }
+    controls::inspector_section(
+        ui,
+        controls::InspectorSection {
+            id: "workspace.task-history-panel",
+            role: "task-history-panel",
+            classes: &["secondary-section"],
+            label: "Model history",
+            state: "open",
+            collapse: None,
+            open: None,
+        },
+        |ui| {
+            let part = w
+                .view
+                .active_part
+                .as_ref()
+                .and_then(|owner| w.session.visible().parts.get(owner))
+                .cloned();
+            if let Some(part) = part {
+                history(ui, w, &part);
+            } else {
+                crate::assembly_tree_ui::show(ui, w);
+            }
+        },
+    );
 }
 pub(crate) fn expression(ui: &mut egui::Ui, label: &str, expression: &mut cad_core::Expr) -> bool {
     controls::expression(
@@ -3535,12 +3561,15 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
             changed |= ui
                 .add(egui::DragValue::new(count).range(1..=10000))
                 .changed();
-            for (label, value) in ["X Spacing", "Y Spacing", "Z Spacing"]
-                .into_iter()
-                .zip(step)
-            {
-                changed |= expression(ui, label, value);
-            }
+            changed |= crate::component_pattern_ui::part_direction_controls(
+                ui,
+                w,
+                &doc,
+                &feature.id,
+                "Direction 1",
+                step,
+                &mut options.direction,
+            );
             changed |= ui
                 .checkbox(
                     &mut options.angle_is_total,
@@ -3592,12 +3621,15 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
                             .prefix("Direction 2 instances "),
                     )
                     .changed();
-                for (label, value) in ["Direction 2 · X", "Direction 2 · Y", "Direction 2 · Z"]
-                    .into_iter()
-                    .zip(&mut second.step)
-                {
-                    changed |= expression(ui, label, value);
-                }
+                changed |= crate::component_pattern_ui::part_direction_controls(
+                    ui,
+                    w,
+                    &doc,
+                    &feature.id,
+                    "Direction 2",
+                    &mut second.step,
+                    &mut second.direction,
+                );
             }
             egui::CollapsingHeader::new("Instances to Skip").show(ui, |ui| {
                 let secondary = options
@@ -4023,8 +4055,30 @@ pub fn status(ui: &mut egui::Ui, w: &mut Workspace) {
         if w.session.draft.as_ref().is_some_and(|d| d.pending) {
             ui.spinner();
         }
-        ui.label(&w.status);
-        if let Some((state, label)) = crate::operation_preview::summary(w) {
+        if w.tool_checkpoint.is_some() {
+            let label = "Editing operation";
+            controls::label(
+                ui,
+                "workspace.status-message",
+                "status-message",
+                &[],
+                label,
+                "ready",
+            );
+        } else {
+            controls::label(
+                ui,
+                "workspace.status-message",
+                "status-message",
+                &[],
+                &w.status,
+                "ready",
+            )
+            .on_hover_text(&w.status);
+        }
+        if w.tool_checkpoint.is_none()
+            && let Some((state, label)) = crate::operation_preview::summary(w)
+        {
             ui.separator();
             controls::label(
                 ui,

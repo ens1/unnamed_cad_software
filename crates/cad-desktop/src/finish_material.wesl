@@ -157,6 +157,16 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         ty *= select(-1.0, 1.0, dot(ty, reference) >= 0.0);
         tz *= select(-1.0, 1.0, dot(tz, reference) >= 0.0);
         var tangent = tx * weights.x + ty * weights.y + tz * weights.z;
+        // The resolved height gradient runs across the grain. Its perpendicular
+        // follows the imported/built-in image, including texture rotation and
+        // irregular machining marks, rather than imposing an unrelated stripe.
+        // Keep the mapped direction where a locally flat texel has no evidence.
+        var grain = cross(geometric_n, height_normal);
+        if (flags & 32u) != 0u && dot(grain, grain) > 0.000001 {
+            grain = normalize(grain);
+            grain *= select(-1.0, 1.0, dot(grain, tangent) >= 0.0);
+            tangent = mix(tangent / max(length(tangent), 0.00001), grain, 0.65);
+        }
         if dot(tangent, tangent) < 0.000001 {
             let axis = select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), abs(mapped_n.x) > 0.8);
             tangent = cross(mapped_n, axis);

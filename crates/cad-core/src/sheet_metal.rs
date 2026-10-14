@@ -565,6 +565,61 @@ pub struct EvaluatedSheet {
     pub flat_contours: Vec<crate::sketch_edit::Curve2>,
     pub flat_export_error: Option<String>,
 }
+/// Explicit flat fabrication output selection, independent of viewport state.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExportSelection {
+    pub source: NodeRef,
+    #[serde(default)]
+    pub occurrence: Option<Vec<Id>>,
+}
+pub fn selected_export(
+    doc: &Document,
+    evaluation: &crate::protocol::Evaluation,
+    selection: &ExportSelection,
+) -> Result<std::collections::BTreeMap<String, EvaluatedSheet>> {
+    let mut sheets = std::collections::BTreeMap::new();
+    for instance in &evaluation.instances {
+        if instance.definition != selection.source.definition
+            || selection
+                .occurrence
+                .as_ref()
+                .is_some_and(|path| path != &instance.path)
+        {
+            continue;
+        }
+        let part = crate::configuration::effective_part(
+            doc,
+            &instance.definition,
+            instance.configuration.as_deref(),
+        )?;
+        if !part.outputs.contains(&selection.source.node)
+            || !part.features.iter().any(|feature| {
+                feature.id == selection.source.node
+                    && !feature.suppressed
+                    && matches!(feature.operation, crate::Operation::Sheet { .. })
+            })
+        {
+            return Err(invalid(
+                "Select a current configured native sheet output for flat fabrication export",
+            ));
+        }
+        let key = format!(
+            "{}::{}",
+            crate::history::mesh_key(instance),
+            selection.source.node
+        );
+        let sheet = evaluation.sheets.get(&key).ok_or_else(|| {
+            invalid("The selected sheet has no current evaluated flat fabrication data")
+        })?;
+        sheets.entry(key).or_insert_with(|| sheet.clone());
+    }
+    if sheets.len() != 1 {
+        return Err(invalid(
+            "Choose one placed sheet occurrence; different configured sheets are ambiguous",
+        ));
+    }
+    Ok(sheets)
+}
 pub fn semantic_fields(
     doc: &Document,
     owner: &str,

@@ -117,6 +117,12 @@ pub fn summary(w: &Workspace) -> Option<(String, String)> {
     if !active(w) || w.view.original || w.view.history_cursor.is_some() {
         return None;
     }
+    if let Some(prompt) = crate::workspace_controls::required_action(w) {
+        return Some(("required".into(), prompt.into()));
+    }
+    if let Some(status) = crate::assembly_motion_ui::compact_status(w) {
+        return Some(status);
+    }
     let invalid_source = !crate::quantity_display::source_fields_valid(w)
         || w.fields.contains_key("feature-source-invalid");
     let retained = invalid_source
@@ -154,12 +160,20 @@ pub fn summary(w: &Workspace) -> Option<(String, String)> {
         .changes
         .values()
         .chain(preview.occurrence_changes.values())
-        .any(|change| change.added.is_some());
+        .any(|change| change.added.is_some())
+        || preview
+            .occurrence_meshes
+            .values()
+            .any(|change| change.added);
     let removed = preview
         .changes
         .values()
         .chain(preview.occurrence_changes.values())
-        .any(|change| change.removed.is_some());
+        .any(|change| change.removed.is_some())
+        || preview
+            .occurrence_meshes
+            .values()
+            .any(|change| !change.added);
     let approximate = preview
         .changes
         .values()
@@ -210,17 +224,7 @@ pub fn summary(w: &Workspace) -> Option<(String, String)> {
 }
 
 pub fn status_control(ui: &mut bevy_egui::egui::Ui, w: &Workspace) {
-    if let Some((state, label)) = summary(w) {
-        crate::presentation_controls::label(
-            ui,
-            "workspace.operation-preview",
-            "operation-preview-status",
-            &["property-control"],
-            &label,
-            &state,
-        )
-        .on_hover_text(tooltip(w));
-    }
+    crate::workspace_controls::task_status_control(ui, w);
 }
 
 pub fn viewport_status(ui: &mut bevy_egui::egui::Ui, w: &Workspace, rect: bevy_egui::egui::Rect) {
@@ -228,6 +232,15 @@ pub fn viewport_status(ui: &mut bevy_egui::egui::Ui, w: &Workspace, rect: bevy_e
     let Some((state, label)) = summary(w) else {
         return;
     };
+    let props = crate::presentation_controls::properties(
+        "viewport.operation-preview",
+        "operation-preview-status",
+        &["viewport-overlay"],
+        &state,
+    );
+    if crate::presentation_composition::task_controls_hosted(w) && !props.contains_key("display") {
+        return;
+    }
     let Some(area) = crate::presentation_controls::overlay_rect_state(
         "viewport.operation-preview",
         "operation-preview-status",
@@ -246,12 +259,6 @@ pub fn viewport_status(ui: &mut bevy_egui::egui::Ui, w: &Workspace, rect: bevy_e
             .id_salt("operation-preview-overlay"),
     );
     status.set_clip_rect(area.intersect(rect));
-    let props = crate::presentation_controls::properties(
-        "viewport.operation-preview",
-        "operation-preview-status",
-        &["viewport-overlay"],
-        &state,
-    );
     crate::presentation_controls::apply_properties(&mut status, &props);
     crate::presentation_controls::label(
         &mut status,
@@ -330,10 +337,11 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "baseline_kind":preview.map(|preview|preview.baseline_kind),
             "baseline_identity":preview.map(|preview|&preview.baseline_identity),
             "tolerance_mm":preview.map(|preview|preview.tolerance_mm),"retained":retained,
-            "added":preview.is_some_and(|preview|preview.changes.values().chain(preview.occurrence_changes.values()).any(|change|change.added.is_some())),
-            "removed":preview.is_some_and(|preview|preview.changes.values().chain(preview.occurrence_changes.values()).any(|change|change.removed.is_some())),
+            "added":preview.is_some_and(|preview|preview.changes.values().chain(preview.occurrence_changes.values()).any(|change|change.added.is_some()) || preview.occurrence_meshes.values().any(|change|change.added)),
+            "removed":preview.is_some_and(|preview|preview.changes.values().chain(preview.occurrence_changes.values()).any(|change|change.removed.is_some()) || preview.occurrence_meshes.values().any(|change|!change.added)),
             "placement_changes_valid":preview.is_some_and(|preview|preview.placement_changes_valid),
             "occurrence_changes":preview.map(|preview|preview.occurrence_changes.iter().map(|(path,change)|serde_json::json!({"path":path,"added":change.added.is_some(),"removed":change.removed.is_some(),"representation":change.representation})).collect::<Vec<_>>()),
+            "shared_occurrence_meshes":preview.map(|preview|&preview.occurrence_meshes),
             "diagnostic":tooltip(w),
             "display_only":true,"apply_eligible":false}),
     }];
@@ -346,6 +354,10 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "classes":["viewport-overlay"],"layout_anchor":"viewport"}),
     });
     if let Some(preview) = preview {
+        for (path, change) in &preview.occurrence_meshes {
+            let kind = if change.added { "added" } else { "removed" };
+            elements.push(SemanticElement { id:format!("operation-preview-occurrence:{path}:{kind}"),role:format!("operation-preview-{kind}"),label:format!("{} occurrence",if change.added {"Added"} else {"Removed"}),value:Some(path.clone()),state:state.clone(),commands:vec![],relationships:vec!["workspace.operation-preview".into()],data:serde_json::json!({"contract":"tcad.operation-preview","version":OPERATION_PREVIEW_VERSION,"mesh_key":change.mesh_key,"path":path,"kind":kind,"shared_mesh":true,"display_only":true,"pickable":false}) });
+        }
         for (key, change) in &preview.changes {
             for (kind, mesh) in [
                 ("added", change.added.as_ref()),

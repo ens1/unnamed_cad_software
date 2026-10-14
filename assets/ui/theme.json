@@ -839,6 +839,70 @@
       "properties": {
         "max-height": "160px"
       }
+    },
+    {
+      "selector": "[role=task-header]",
+      "properties": {
+        "font-size": "13px",
+        "font-weight": "bold",
+        "padding": "2px 0px"
+      }
+    },
+    {
+      "selector": "[role=task-status]",
+      "properties": {
+        "height": "24px",
+        "font-size": "11px",
+        "text-overflow": "ellipsis",
+        "max-width": "100%"
+      }
+    },
+    {
+      "selector": "[role=task-status][state=required]",
+      "properties": {
+        "color": "var(--ink)"
+      }
+    },
+    {
+      "selector": "[role=task-status][state=invalid]",
+      "properties": {
+        "color": "var(--error)"
+      }
+    },
+    {
+      "selector": "[role=task-section-toggle], [role=task-reference-toggle]",
+      "properties": {
+        "width": "100%",
+        "text-align": "left",
+        "height": "24px",
+        "padding": "2px 4px",
+        "border-radius": "3px",
+        "border": "1px solid #C7C4BD",
+        "text-overflow": "ellipsis",
+        "font-size": "11px"
+      }
+    },
+    {
+      "selector": "[role=task-diagnostics]",
+      "properties": {
+        "font-size": "10px",
+        "font-family": "monospace",
+        "max-height": "240px",
+        "overflow": "auto"
+      }
+    },
+    {
+      "selector": "[role=confirmation-group] [role=inspector-section-heading]",
+      "properties": {
+        "display": "none"
+      }
+    },
+    {
+      "selector": "[role=status-message]",
+      "properties": {
+        "text-overflow": "ellipsis",
+        "max-width": "100%"
+      }
     }
   ]
 }

@@ -148,8 +148,12 @@ fn lookup<'a>(doc: &'a Document, path: &[Id]) -> Option<(&'a str, &'a Instance)>
 }
 pub fn selection_label(w: &Workspace) -> Option<String> {
     let path = w.selected_component.as_ref()?;
-    let (_, instance) = lookup(w.session.visible(), path)?;
-    Some(format!("{} · component", instance.name))
+    let names = (1..=path.len())
+        .filter_map(|length| {
+            lookup(w.session.visible(), &path[..length]).map(|(_, instance)| instance.name.as_str())
+        })
+        .collect::<Vec<_>>();
+    (!names.is_empty()).then(|| format!("{} · occurrence", names.join(" › ")))
 }
 fn rename(w: &mut Workspace, path: &[Id]) {
     if w.tool_checkpoint.is_some() || w.sketch.is_some() {
@@ -163,6 +167,87 @@ fn rename(w: &mut Workspace, path: &[Id]) {
     w.fields
         .insert("assembly-tree-rename".into(), json!(path).to_string());
     w.fields.insert("assembly-tree-name".into(), name);
+}
+pub fn value(w: &Workspace, control: &SemanticElement) -> Option<Value> {
+    if control.data.get("setter").and_then(Value::as_str) != Some("assembly-tree")
+        || control.data.get("document").and_then(Value::as_str)
+            != Some(w.session.visible().id.as_str())
+    {
+        return None;
+    }
+    match control.data.get("field").and_then(Value::as_str) {
+        Some("query") => Some(json!(w.assembly_tree.query)),
+        Some("name")
+            if control.data.get("path").map(Value::to_string).as_ref()
+                == w.fields.get("assembly-tree-rename") =>
+        {
+            w.fields.get("assembly-tree-name").map(|name| json!(name))
+        }
+        _ => None,
+    }
+}
+pub fn set_value(
+    w: &mut Workspace,
+    control: &SemanticElement,
+    value: Value,
+) -> cad_core::Result<()> {
+    if self::value(w, control).is_none() {
+        return Err(cad_core::CadError::Invalid(
+            "The assembly search belongs to another document".into(),
+        ));
+    }
+    let text = value
+        .as_str()
+        .filter(|value| value.len() <= 1024)
+        .ok_or_else(|| {
+            cad_core::CadError::Invalid("Enter at most 1024 bytes of search text".into())
+        })?;
+    match control.data.get("field").and_then(Value::as_str) {
+        Some("query") => w.assembly_tree.query = text.into(),
+        Some("name") => {
+            w.fields.insert("assembly-tree-name".into(), text.into());
+        }
+        _ => {}
+    }
+    Ok(())
+}
+fn apply_rename(w: &mut Workspace) {
+    if w.tool_checkpoint.is_some() || w.sketch.is_some() {
+        return;
+    }
+    let Some(path) = w
+        .fields
+        .get("assembly-tree-rename")
+        .and_then(|path| serde_json::from_str::<Vec<Id>>(path).ok())
+    else {
+        return;
+    };
+    let Some((owner, instance)) = lookup(w.session.visible(), &path) else {
+        return;
+    };
+    let Some(name) = w
+        .fields
+        .get("assembly-tree-name")
+        .map(|name| name.trim())
+        .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+    else {
+        w.status = "Enter a nonempty occurrence name".into();
+        return;
+    };
+    let mut updated = instance.clone();
+    updated.name = name.into();
+    let owner = owner.to_owned();
+    let changed = &updated != instance;
+    w.fields.remove("assembly-tree-rename");
+    w.fields.remove("assembly-tree-name");
+    if changed {
+        w.start_tool();
+        w.dispatch(Command::PutInstance {
+            assembly: owner,
+            instance: updated,
+        });
+        w.confirm_tool();
+    }
 }
 pub fn select(w: &mut Workspace, path: Vec<Id>) {
     let Some((_, instance)) = lookup(w.session.visible(), &path) else {
@@ -229,6 +314,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     refresh(w, &mut state);
     ui.add(
         egui::TextEdit::singleline(&mut state.query)
+            .id_salt("assembly.tree-search")
             .hint_text("Find components or patterns")
             .desired_width(f32::INFINITY),
     );
@@ -342,10 +428,8 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             .fields
             .get("assembly-tree-rename")
             .and_then(|s| serde_json::from_str::<Vec<Id>>(s).ok())
-        && let Some((owner, instance)) = lookup(w.session.visible(), &path)
+        && let Some((_, instance)) = lookup(w.session.visible(), &path)
     {
-        let owner = owner.to_owned();
-        let mut instance = instance.clone();
         let text = w
             .fields
             .entry("assembly-tree-name".into())
@@ -355,15 +439,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             && ui.input(|i| i.key_pressed(egui::Key::Enter))
             && !text.trim().is_empty()
         {
-            instance.name = text.trim().into();
-            w.fields.remove("assembly-tree-rename");
-            w.fields.remove("assembly-tree-name");
-            w.start_tool();
-            w.dispatch(Command::PutInstance {
-                assembly: owner,
-                instance,
-            });
-            w.confirm_tool();
+            apply_rename(w);
         }
     }
     w.assembly_tree = state;
@@ -411,8 +487,51 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             visit(w, &node.children, &node.id, depth + 1, out);
         }
     }
-    let mut out = vec![];
+    let mut out = vec![
+        SemanticElement {
+            id: "assembly.tree".into(),
+            role: "component-tree".into(),
+            label: "Components".into(),
+            value: selection_label(w),
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec!["workspace.document-context".into()],
+            data: json!({"contract":"tcad.presentation.assembly-tree","version":1,"document":w.session.visible().id,"children":roots.iter().map(|node|&node.id).collect::<Vec<_>>(),"occurrence_selection":w.selected_component,"definition_editing":w.view.active_part,"presentation_state_only":true}),
+        },
+        SemanticElement {
+            id: "assembly.tree-search".into(),
+            role: "assembly-tree-search".into(),
+            label: "Find components or patterns".into(),
+            value: Some(w.assembly_tree.query.clone()),
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec!["assembly.tree".into()],
+            data: json!({"contract":"tcad.presentation.assembly-tree","version":1,"setter":"assembly-tree","field":"query","document":w.session.visible().id,"json":w.assembly_tree.query,"value_type":"string","editable":true,"classes":["compact","search-field"],"geometry_changes":false}),
+        },
+    ];
     visit(w, roots, "assembly.tree", 0, &mut out);
+    if let Some(path) = w
+        .fields
+        .get("assembly-tree-rename")
+        .and_then(|path| serde_json::from_str::<Vec<Id>>(path).ok())
+    {
+        out.push(SemanticElement {id:"assembly.tree-rename-name".into(),role:"occurrence-name-field".into(),label:"Occurrence name".into(),value:w.fields.get("assembly-tree-name").cloned(),state:"editing".into(),commands:vec![],relationships:vec![format!("component:{}",path.join("/"))],data:json!({"contract":"tcad.presentation.assembly-tree","version":1,"setter":"assembly-tree","field":"name","document":w.session.visible().id,"path":path,"json":w.fields.get("assembly-tree-name"),"value_type":"string","editable":w.tool_checkpoint.is_none(),"classes":["compact"]})});
+        for (command, label) in [
+            ("assembly.tree-rename-apply", "Rename"),
+            ("assembly.tree-rename-cancel", "Cancel rename"),
+        ] {
+            out.push(SemanticElement {
+                id: command.into(),
+                role: "occurrence-name-action".into(),
+                label: label.into(),
+                value: None,
+                state: "ready".into(),
+                commands: vec![command.into()],
+                relationships: vec!["assembly.tree-rename-name".into()],
+                data: json!({"document":w.session.visible().id,"path":path}),
+            });
+        }
+    }
     out
 }
 pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
@@ -433,6 +552,17 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
         "assembly.tree-edit" => edit(w, path),
         "assembly.tree-ground" => ground(w, &path),
         "assembly.tree-rename" => rename(w, &path),
+        "assembly.tree-rename-apply"
+            if w.fields.get("assembly-tree-rename") == Some(&json!(path).to_string()) =>
+        {
+            apply_rename(w)
+        }
+        "assembly.tree-rename-cancel" => {
+            if w.fields.get("assembly-tree-rename") == Some(&json!(path).to_string()) {
+                w.fields.remove("assembly-tree-rename");
+                w.fields.remove("assembly-tree-name");
+            }
+        }
         "assembly.tree-toggle" => {
             if let Some(id) = args.get("node").and_then(Value::as_str)
                 && !w.assembly_tree.expanded.remove(id)

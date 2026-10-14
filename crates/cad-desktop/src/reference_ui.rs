@@ -2110,27 +2110,34 @@ pub(crate) fn picked_axis(w: &Workspace, selected: &viewport::Selection) -> Axis
             body,
         };
     }
-    let straight = viewport::display_evaluation(w).is_some_and(|evaluation| {
-        evaluation.meshes.values().flat_map(|m| &m.edges).any(|e| {
-            e.body == selected.body
-                && e.reference.producer == selected.reference.producer
-                && e.reference.role == selected.reference.role
-                && e.curve.as_ref().is_some_and(|curve| {
-                    let Some(first) = curve.control_points.first() else {
-                        return false;
-                    };
-                    let Some(last) = curve.control_points.last() else {
-                        return false;
-                    };
-                    let a = DVec3::from_array(*first);
-                    let d = DVec3::from_array(*last) - a;
-                    d.length() > 1e-9
-                        && curve.weights.iter().all(|w| w.is_finite() && *w > 0.)
-                        && curve.control_points.iter().all(|p| {
-                            (DVec3::from_array(*p) - a).cross(d).length() <= 1e-7 * d.length()
-                        })
-                })
-        })
+    let straight = viewport::selection_evaluation(w).is_some_and(|evaluation| {
+        viewport::display_instances(w, evaluation)
+            .into_iter()
+            .filter(|instance| {
+                instance.path == selected.path && instance.definition == selected.definition
+            })
+            .flat_map(|instance| viewport::selection_meshes(w, evaluation, instance))
+            .flat_map(|mesh| &mesh.edges)
+            .any(|e| {
+                e.body == selected.body
+                    && e.reference.producer == selected.reference.producer
+                    && e.reference.role == selected.reference.role
+                    && e.curve.as_ref().is_some_and(|curve| {
+                        let Some(first) = curve.control_points.first() else {
+                            return false;
+                        };
+                        let Some(last) = curve.control_points.last() else {
+                            return false;
+                        };
+                        let a = DVec3::from_array(*first);
+                        let d = DVec3::from_array(*last) - a;
+                        d.length() > 1e-9
+                            && curve.weights.iter().all(|w| w.is_finite() && *w > 0.)
+                            && curve.control_points.iter().all(|p| {
+                                (DVec3::from_array(*p) - a).cross(d).length() <= 1e-7 * d.length()
+                            })
+                    })
+            })
     });
     if straight {
         AxisSource::Edge {

@@ -262,6 +262,8 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
         } else if crate::command_palette::escape(w)
             || crate::drawing_interaction_ui::escape(w)
             || crate::assembly_motion_ui::cancel_drag(w)
+            || crate::component_pattern_ui::picking_direction(w)
+                && crate::component_pattern_ui::action(w, "pattern.direction-cancel", &Value::Null)
         {
             ctx.input_mut(|i| {
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
@@ -650,6 +652,9 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
         }
     });
     registry.register("preview-status", |ui, w, _| preview_status(ui, w));
+    registry.register("task-history-panel", |ui, w, _| {
+        crate::cad_ui::task_history(ui, w)
+    });
     registry.register("project-location", |ui, w, _| {
         crate::document_identity_ui::location_control(ui, w)
     });
@@ -820,6 +825,21 @@ pub(crate) fn semantic_element(
     element: &SemanticElement,
 ) {
     let widget = binding.widget.as_deref().unwrap_or("auto");
+    if element.data["theme_preview"] == true
+        && matches!(element.role.as_str(), "apply-action" | "cancel-action")
+    {
+        crate::presentation_controls::button(
+            ui,
+            &element.id,
+            &element.role,
+            &["confirmation-control", "theme-preview"],
+            &element.label,
+            true,
+            false,
+        )
+        .on_hover_text("Appearance preview; no model changes");
+        return;
+    }
     if element.role == "menu" {
         crate::cad_ui::semantic_menu(ui, w, element);
         return;
@@ -1027,6 +1047,10 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         || crate::operation_editor_ui::action(w, command, Some(&element.data))
         || crate::drawing_interaction_ui::action(w, command, Some(&element.data))
         || crate::drawing_editor_ui::action(w, command, Some(&element.data))
+        || crate::component_pattern_ui::action(w, command, &element.data)
+        || crate::viewport::picking_action(w, command, Some(&element.data))
+        || crate::fabrication_ui::state_action(w, command, Some(&element.data))
+        || crate::workspace_controls::task_action(w, command, &element.data)
         || crate::assembly_tree_ui::action(w, command, Some(&element.data))
         || crate::assembly_motion_ui::action(w, command, Some(&element.data))
         || crate::assembly_tools_ui::action(w, command, Some(&element.data))
@@ -1941,9 +1965,15 @@ fn model_view(
     {
         let p = response.interact_pointer_pos().unwrap_or(r.center());
         w.selection_popup = None;
-        let structural_pick =
-            crate::structural_member_ui::capture_click(w, r, p, ui.input(|input| input.modifiers));
-        let sketch_feature = if !structural_pick && w.tool_checkpoint.is_none() {
+        let direction_pick = crate::component_pattern_ui::capture_sketch_pick(w, r, p);
+        let structural_pick = !direction_pick
+            && crate::structural_member_ui::capture_click(
+                w,
+                r,
+                p,
+                ui.input(|input| input.modifiers),
+            );
+        let sketch_feature = if !direction_pick && !structural_pick && w.tool_checkpoint.is_none() {
             crate::sketch::pick(w, r, p).or_else(|| crate::sketch3d_ui::pick_inactive(w, r, p))
         } else {
             None
@@ -1956,7 +1986,7 @@ fn model_view(
                 w.status =
                     "Sketch selected. Choose an action; double-click to edit on the model".into();
             }
-        } else if !structural_pick {
+        } else if !direction_pick && !structural_pick {
             w.candidates = viewport::pick(w, r, p);
             w.candidate_index = 0;
             let toggle = ui.input(|input| {
@@ -2480,28 +2510,7 @@ fn save(w: &mut Workspace, choose: bool) -> bool {
         && (w.tool_checkpoint.is_none() && w.session.draft.is_none()
             || crate::document_identity_ui::active(w))
     {
-        let Some(path) = choose_save_destination(w) else {
-            return false;
-        };
         crate::document_identity_ui::begin_save_as(w);
-        if crate::document_identity_ui::pending_save_as(w) {
-            if let Some(name) = path
-                .parent()
-                .and_then(|folder| folder.file_name())
-                .and_then(|name| name.to_str())
-            {
-                let proposed = if name.to_ascii_lowercase().ends_with(".tcad") {
-                    &name[..name.len() - 5]
-                } else {
-                    name
-                };
-                crate::document_identity_ui::propose_save_name(w, proposed);
-            }
-            w.fields.insert(
-                "document-identity-save-as-path".into(),
-                path.to_string_lossy().into_owned(),
-            );
-        }
         return false;
     }
     save_now(w, choose)
@@ -2511,6 +2520,44 @@ pub(crate) fn take_save_as_destination(w: &mut Workspace) -> Option<std::path::P
         .remove("document-identity-save-as-path")
         .map(Into::into)
 }
+/// Save the validated copy before promoting its name/history. A failed write
+/// leaves the original session and retryable Save As editor intact.
+pub(crate) fn save_identity_copy(w: &mut Workspace) {
+    let Some(destination) = w
+        .fields
+        .get("document-identity-save-as-path")
+        .map(std::path::PathBuf::from)
+    else {
+        w.status = "Choose a project destination before saving the copy".into();
+        return;
+    };
+    if w.session.draft.as_ref().is_some_and(|draft| draft.pending) {
+        w.confirm_requested = true;
+        w.status = "Waiting for the current named copy to validate".into();
+        return;
+    }
+    let mut staged = w.session.clone();
+    if staged.draft.is_some()
+        && let Err(error) = staged.apply()
+    {
+        w.confirm_requested = false;
+        w.status = error.to_string();
+        return;
+    }
+    let original = std::mem::replace(&mut w.session, staged);
+    if !save_committed_to(w, destination) {
+        w.session = original;
+        w.confirm_requested = false;
+        return;
+    }
+    w.tool_checkpoint = None;
+    w.confirm_requested = false;
+    w.dialog = None;
+    w.manager_tree = true;
+    w.fields.clear();
+    w.requested = Some(w.session.identity());
+    crate::drawing_ui::retain_workspace(w);
+}
 pub(crate) fn save_after_confirm(w: &mut Workspace, destination: Option<std::path::PathBuf>) {
     if let Some(destination) = destination {
         save_committed_to(w, destination);
@@ -2518,7 +2565,7 @@ pub(crate) fn save_after_confirm(w: &mut Workspace, destination: Option<std::pat
         save_now(w, true);
     }
 }
-fn choose_save_destination(w: &mut Workspace) -> Option<std::path::PathBuf> {
+pub(crate) fn choose_save_destination(w: &mut Workspace) -> Option<std::path::PathBuf> {
     let name = w
         .session
         .visible()
@@ -3132,7 +3179,10 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
             angle: "0 deg".into(),
             axis: [0., 0., 1.],
             axis_reference: None,
-            options: Default::default(),
+            options: Box::new(cad_core::body_editing::PatternOptions {
+                direction: Some(cad_core::body_editing::PatternDirection::default()),
+                ..Default::default()
+            }),
         },
         "Associative reference" => {
             let Some(selected) = w.selected.as_ref() else {
@@ -3295,7 +3345,13 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
             *body = target_body;
             *mode = "cut".into();
         }
-        Operation::Pattern { step, angle, .. } if requested_name == "Circular Pattern" => {
+        Operation::Pattern {
+            step,
+            angle,
+            options,
+            ..
+        } if requested_name == "Circular Pattern" => {
+            options.direction = None;
             *step = ["0 mm".into(), "0 mm".into(), "0 mm".into()];
             *angle = "90 deg".into();
         }
@@ -3379,46 +3435,18 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         crate::document_identity_ui::controls(ui, w);
         return;
     }
-    if matches!(
-        dialog.as_str(),
-        "feature" | "sketch" | "reference-repair" | "feature-order"
-    ) || (w.tool_checkpoint.is_some() || w.session.draft.is_some())
-        && !matches!(
-            dialog.as_str(),
-            "drawings" | "materials" | "standard-parts" | "camera-views" | "commands"
-        )
-    {
-        crate::presentation_controls::inspector_section(
-            ui,
-            crate::presentation_controls::InspectorSection {
-                id: "inspector/confirmation",
-                role: "confirmation-group",
-                classes: &["pending-changes"],
-                label: "Pending changes",
-                state: "draft",
-                collapse: None,
-                open: None,
-            },
-            |ui| crate::cad_ui::confirmation(ui, w),
-        );
-        if w.dialog.is_none() {
-            return;
-        }
-        ui.separator();
-    }
     if dialog == "drawings" {
         crate::drawing_ui::footer(ui, w);
         ui.separator();
     }
+    let operation_title = crate::workspace_controls::task_title(w);
     ui.horizontal(|ui| {
         let title = match dialog.as_str() {
-            "feature" => w.dialog_title.as_str(),
+            "feature" | "sketch" | "assembly-motion" => operation_title.as_str(),
             "reference-repair" => "Repair References",
             "feature-order" => "Feature Order",
-            "assembly-motion" => "Move / Rotate Component",
             "component-insert" => "Insert Existing Component",
             "selection" => "Selection Actions",
-            "sketch" => "Sketch on model",
             "source" => "Source definitions",
             "presentation" => "Layout and theme",
             "assembly" => "Assembly",
@@ -3442,10 +3470,23 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "properties" => "Model Properties",
             _ => "Command search",
         };
+        let title = if w.tool_checkpoint.is_some() {
+            operation_title.as_str()
+        } else {
+            title
+        };
         crate::presentation_controls::label(
             ui,
-            "inspector/title",
-            "inspector-title",
+            if w.tool_checkpoint.is_some() {
+                "workspace.task-header"
+            } else {
+                "inspector/title"
+            },
+            if w.tool_checkpoint.is_some() {
+                "task-header"
+            } else {
+                "inspector-title"
+            },
             &[],
             title,
             "ready",
@@ -3495,117 +3536,151 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         );
     }
     ui.separator();
+    if !crate::presentation_composition::confirmation_hosted(w)
+        && (matches!(
+            dialog.as_str(),
+            "feature" | "sketch" | "reference-repair" | "feature-order"
+        ) || (w.tool_checkpoint.is_some() || w.session.draft.is_some())
+            && !matches!(
+                dialog.as_str(),
+                "drawings" | "materials" | "standard-parts" | "camera-views" | "commands"
+            ))
+    {
+        crate::presentation_controls::inspector_section(
+            ui,
+            crate::presentation_controls::InspectorSection {
+                id: "inspector/confirmation",
+                role: "confirmation-group",
+                classes: &["pending-changes"],
+                label: "",
+                state: "draft",
+                collapse: None,
+                open: None,
+            },
+            |ui| crate::cad_ui::confirmation(ui, w),
+        );
+        if w.dialog.is_none() {
+            return;
+        }
+        ui.separator();
+    }
     egui::ScrollArea::vertical()
         .id_salt("workspace-editor")
-        .show(ui, |ui| match dialog.as_str() {
-            "reference-repair" => crate::reference_repair_ui::show(ui, w),
-            "feature-order" => crate::feature_order_ui::show(ui, w),
-            "assembly-motion" => crate::assembly_motion_ui::show(ui, w),
-            "selection" => {
-                if let Some(target) = crate::selection_ui::current(w) {
-                    crate::selection_ui::contents(ui, w, &target);
-                }
-            }
-            "configurations" => crate::configuration_ui::show(ui, w),
-            "inspection" => crate::inspection_ui::controls(ui, w),
-            "sensors" => crate::sensors_ui::show(ui, w),
-            "sketch-block-library" => crate::sketch_block_library_ui::show(ui, w),
-            "camera-views" => crate::camera_views_ui::show(ui, w),
-            "standard-parts" => crate::standard_parts_ui::show(ui, w),
-            "tolerance-stacks" => crate::tolerance_stacks_ui::show(ui, w),
-            "feature" => feature_editor(ui, w),
-            "sketch" => crate::sketch::controls(ui, w),
-            "source" => {
-                ui.label("Source changes use the same preview and Apply path.");
-                ui.add(
-                    egui::TextEdit::multiline(&mut w.source_text)
-                        .code_editor()
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(24),
-                );
-                if ui.button("Preview source changes").clicked() {
-                    match serde_json::from_str::<Document>(&w.source_text) {
-                        Ok(document) => w.dispatch(Command::ReplaceDocument { document }),
-                        Err(e) => w.status = e.to_string(),
+        .show(ui, |ui| {
+            match dialog.as_str() {
+                "reference-repair" => crate::reference_repair_ui::show(ui, w),
+                "feature-order" => crate::feature_order_ui::show(ui, w),
+                "assembly-motion" => crate::assembly_motion_ui::show(ui, w),
+                "selection" => {
+                    if let Some(target) = crate::selection_ui::current(w) {
+                        crate::selection_ui::contents(ui, w, &target);
                     }
                 }
-            }
-            "presentation" => presentation_editor(ui, w),
-            "assembly" => assembly_editor(ui, w),
-            "component-insert" => crate::components_ui::show(ui, w),
-            "versions" => versions(ui, w),
-            "bom" => bom(ui, w),
-            "materials" => materials(ui, w),
-            "properties" => crate::properties_ui::show(ui, w),
-            "appearances" => crate::appearances_ui::show(ui, w),
-            "libraries" => library_editor(ui, w),
-            "drawings" => drawings(ui, w),
-            "manufacturing" => manufacturing(ui, w),
-            "comments" => comments(ui, w),
-            "controls" => {
-                if ui.button("Open Settings…").clicked() {
-                    crate::settings::open(w, Some("application.navigation"));
-                }
-            }
-            "parameter" => {
-                let mut name = w
-                    .fields
-                    .get("parameter-name")
-                    .cloned()
-                    .unwrap_or("dimension".into());
-                let mut value = w
-                    .fields
-                    .get("parameter-value")
-                    .cloned()
-                    .unwrap_or("10 mm".into());
-                ui.label("Identity / name");
-                ui.text_edit_singleline(&mut name);
-                ui.label("Expression");
-                ui.text_edit_singleline(&mut value);
-                w.fields.insert("parameter-name".into(), name.clone());
-                w.fields.insert("parameter-value".into(), value.clone());
-                let mut dimension = w
-                    .fields
-                    .get("parameter-dimension")
-                    .cloned()
-                    .unwrap_or("length".into());
-                egui::ComboBox::from_id_salt("param-dimension")
-                    .selected_text(&dimension)
-                    .show_ui(ui, |ui| {
-                        for d in ["length", "angle", "scalar"] {
-                            ui.selectable_value(&mut dimension, d.into(), d);
+                "configurations" => crate::configuration_ui::show(ui, w),
+                "inspection" => crate::inspection_ui::controls(ui, w),
+                "sensors" => crate::sensors_ui::show(ui, w),
+                "sketch-block-library" => crate::sketch_block_library_ui::show(ui, w),
+                "camera-views" => crate::camera_views_ui::show(ui, w),
+                "standard-parts" => crate::standard_parts_ui::show(ui, w),
+                "tolerance-stacks" => crate::tolerance_stacks_ui::show(ui, w),
+                "feature" => feature_editor(ui, w),
+                "sketch" => crate::sketch::controls(ui, w),
+                "source" => {
+                    ui.label("Source changes use the same preview and Apply path.");
+                    ui.add(
+                        egui::TextEdit::multiline(&mut w.source_text)
+                            .code_editor()
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(24),
+                    );
+                    if ui.button("Preview source changes").clicked() {
+                        match serde_json::from_str::<Document>(&w.source_text) {
+                            Ok(document) => w.dispatch(Command::ReplaceDocument { document }),
+                            Err(e) => w.status = e.to_string(),
                         }
-                    });
-                w.fields
-                    .insert("parameter-dimension".into(), dimension.clone());
-                if ui.button("Add to draft").clicked() {
-                    if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                        let definition = w
-                            .view
-                            .active_part
-                            .clone()
-                            .unwrap_or(w.session.visible().root.clone());
-                        w.dispatch(Command::PutParameter {
-                            definition,
-                            parameter: name.clone(),
-                            value: Parameter {
-                                name,
-                                expression: Expr(value),
-                                dimension: match dimension.as_str() {
-                                    "angle" => Dimension::Angle,
-                                    "scalar" => Dimension::Scalar,
-                                    _ => Dimension::Length,
-                                },
-                            },
-                        });
-                        w.dialog = None;
-                    } else {
-                        w.status =
-                            "Use letters, digits and underscores for the parameter identity".into();
                     }
                 }
+                "presentation" => presentation_editor(ui, w),
+                "assembly" => assembly_editor(ui, w),
+                "component-insert" => crate::components_ui::show(ui, w),
+                "versions" => versions(ui, w),
+                "bom" => bom(ui, w),
+                "materials" => materials(ui, w),
+                "properties" => crate::properties_ui::show(ui, w),
+                "appearances" => crate::appearances_ui::show(ui, w),
+                "libraries" => library_editor(ui, w),
+                "drawings" => drawings(ui, w),
+                "manufacturing" => manufacturing(ui, w),
+                "comments" => comments(ui, w),
+                "controls" => {
+                    if ui.button("Open Settings…").clicked() {
+                        crate::settings::open(w, Some("application.navigation"));
+                    }
+                }
+                "parameter" => {
+                    let mut name = w
+                        .fields
+                        .get("parameter-name")
+                        .cloned()
+                        .unwrap_or("dimension".into());
+                    let mut value = w
+                        .fields
+                        .get("parameter-value")
+                        .cloned()
+                        .unwrap_or("10 mm".into());
+                    ui.label("Identity / name");
+                    ui.text_edit_singleline(&mut name);
+                    ui.label("Expression");
+                    ui.text_edit_singleline(&mut value);
+                    w.fields.insert("parameter-name".into(), name.clone());
+                    w.fields.insert("parameter-value".into(), value.clone());
+                    let mut dimension = w
+                        .fields
+                        .get("parameter-dimension")
+                        .cloned()
+                        .unwrap_or("length".into());
+                    egui::ComboBox::from_id_salt("param-dimension")
+                        .selected_text(&dimension)
+                        .show_ui(ui, |ui| {
+                            for d in ["length", "angle", "scalar"] {
+                                ui.selectable_value(&mut dimension, d.into(), d);
+                            }
+                        });
+                    w.fields
+                        .insert("parameter-dimension".into(), dimension.clone());
+                    if ui.button("Add to draft").clicked() {
+                        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                        {
+                            let definition = w
+                                .view
+                                .active_part
+                                .clone()
+                                .unwrap_or(w.session.visible().root.clone());
+                            w.dispatch(Command::PutParameter {
+                                definition,
+                                parameter: name.clone(),
+                                value: Parameter {
+                                    name,
+                                    expression: Expr(value),
+                                    dimension: match dimension.as_str() {
+                                        "angle" => Dimension::Angle,
+                                        "scalar" => Dimension::Scalar,
+                                        _ => Dimension::Length,
+                                    },
+                                },
+                            });
+                            w.dialog = None;
+                        } else {
+                            w.status =
+                                "Use letters, digits and underscores for the parameter identity"
+                                    .into();
+                        }
+                    }
+                }
+                _ => crate::command_palette::show(ui, w),
             }
-            _ => crate::command_palette::show(ui, w),
+            crate::workspace_controls::diagnostics(ui, w);
+            crate::cad_ui::task_history(ui, w);
         });
 }
 fn feature_editor(ui: &mut egui::Ui, w: &mut Workspace) {
@@ -3624,8 +3699,6 @@ fn feature_editor(ui: &mut egui::Ui, w: &mut Workspace) {
         ui.label("Choose a modeling command from Features or select a feature to edit.");
         return;
     };
-    ui.strong(&feature.name);
-    ui.separator();
     let changed = ui
         .add_enabled_ui(!w.fields.contains_key("feature-source-invalid"), |ui| {
             if crate::operation_editor_ui::show(ui, w) {
@@ -3705,6 +3778,11 @@ pub(crate) fn preview_feature(w: &mut Workspace, feature: Feature) {
     }
 }
 fn capture_feature_selection(w: &mut Workspace, cycle: bool, toggle: bool) {
+    if let Some(selected) = w.selected.clone()
+        && crate::component_pattern_ui::capture_selection(w, &selected)
+    {
+        return;
+    }
     if let Some(selected) = w.selected.clone()
         && crate::fabrication_sources_ui::capture_selection(w, &selected)
     {
@@ -3820,6 +3898,7 @@ fn capture_feature_selection(w: &mut Workspace, cycle: bool, toggle: bool) {
     }
 }
 fn presentation_editor(ui: &mut egui::Ui, w: &mut Workspace) {
+    crate::workspace_controls::confirmation_preview(ui);
     ui.horizontal(|ui| {
         ui.label("Composition");
         let mut active = w.view.active_layout.clone();

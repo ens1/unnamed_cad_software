@@ -6,7 +6,7 @@ use std::{
 };
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const MAX_FRAME: usize = 256 * 1024 * 1024;
-pub const OPERATION_PREVIEW_VERSION: u32 = 2;
+pub const OPERATION_PREVIEW_VERSION: u32 = 3;
 pub const BODY_COUNTS_VERSION: u32 = 1;
 /// Disposable inventory reported from native solids/surface bodies. Shells,
 /// optical batches and output features are not individual solid bodies.
@@ -165,6 +165,12 @@ pub struct OperationPreviewChange {
     pub diagnostics: Vec<Diagnostic>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OccurrencePreviewMesh {
+    /// Current evaluation meshes for additions; baseline_meshes for removals.
+    pub mesh_key: Id,
+    pub added: bool,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OperationPreview {
     pub version: u32,
     pub baseline_identity: RequestIdentity,
@@ -180,6 +186,12 @@ pub struct OperationPreview {
     /// Added/removed complete native occurrences, keyed by full stable path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub occurrence_changes: BTreeMap<String, OperationPreviewChange>,
+    /// Complete added/removed native occurrences share one mesh per definition.
+    /// These are disposable display references, never authoritative bodies.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub occurrence_meshes: BTreeMap<String, OccurrencePreviewMesh>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub baseline_meshes: BTreeMap<Id, MeshData>,
     /// Placement context for a completely removed body or occurrence.
     pub baseline_instances: Vec<PlacedPart>,
     #[serde(default)]
@@ -187,6 +199,8 @@ pub struct OperationPreview {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Evaluation {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pattern_guides: BTreeMap<String, crate::body_editing::PatternGuide>,
     pub identity: RequestIdentity,
     pub meshes: BTreeMap<Id, MeshData>,
     pub instances: Vec<PlacedPart>,

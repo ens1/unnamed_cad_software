@@ -7,7 +7,50 @@ use crate::{
 use nalgebra::{Matrix4, Rotation3, Vector3};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
+/// Positive spacing along a source axis, with an explicit numeric fallback.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LinearDirection {
+    pub spacing: Expr,
+    pub vector: [f64; 3],
+    #[serde(default)]
+    pub reverse: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<Box<AxisReference>>,
+}
+impl Default for LinearDirection {
+    fn default() -> Self {
+        Self {
+            spacing: "30 mm".into(),
+            vector: [1., 0., 0.],
+            reverse: false,
+            reference: None,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct LinearGridDirection {
+    pub count: Expr,
+    pub direction: LinearDirection,
+}
+impl Default for LinearGridDirection {
+    fn default() -> Self {
+        Self {
+            count: "2".into(),
+            direction: LinearDirection {
+                vector: [0., 1., 0.],
+                ..Default::default()
+            },
+        }
+    }
+}
+#[derive(Default)]
+pub struct ResolvedFrames {
+    source_only: bool,
+    pub first: Option<Frame>,
+    pub second: Option<Frame>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AxisReference {
     pub instance: Id,
@@ -18,6 +61,10 @@ pub struct AxisReference {
 pub enum Mode {
     Linear {
         step: [Expr; 3],
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<LinearDirection>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        second_direction: Option<Box<LinearGridDirection>>,
     },
     Circular {
         origin: [Expr; 3],
@@ -34,6 +81,9 @@ pub struct Occurrence {
     pub index: usize,
     pub seed: Id,
     pub instance: Id,
+    /// Stable grid coordinates; absent legacy entries mean [index, 0].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[usize; 2]>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MateCopy {
@@ -67,6 +117,8 @@ impl Definition {
             count: "3".into(),
             mode: Mode::Linear {
                 step: ["30 mm".into(), "0 mm".into(), "0 mm".into()],
+                direction: Some(LinearDirection::default()),
+                second_direction: None,
             },
             copy_internal_mates: false,
             occurrences: Vec::new(),
@@ -77,14 +129,95 @@ impl Definition {
 fn invalid(s: impl Into<String>) -> CadError {
     CadError::Invalid(format!("Component Pattern: {}", s.into()))
 }
-pub fn count(doc: &Document, assembly: &str, pattern: &Definition) -> Result<usize> {
-    let n = crate::expression::value(doc, assembly, &pattern.count, crate::Dimension::Scalar)?;
+fn scalar_count(doc: &Document, owner: &str, expression: &Expr) -> Result<usize> {
+    let n = crate::expression::value(doc, owner, expression, crate::Dimension::Scalar)?;
     if !(1. ..=256.).contains(&n) || n.fract() != 0. {
         return Err(invalid(
-            "Count must be an integer from 1 to 256, including the seed",
+            "Each direction count must be an integer from 1 to 256, including the seed",
         ));
     }
     Ok(n as usize)
+}
+pub fn counts(doc: &Document, owner: &str, pattern: &Definition) -> Result<[usize; 2]> {
+    let first = scalar_count(doc, owner, &pattern.count)?;
+    let second = if let Mode::Linear {
+        second_direction: Some(second),
+        ..
+    } = &pattern.mode
+    {
+        scalar_count(doc, owner, &second.count)?
+    } else {
+        1
+    };
+    let total = first
+        .checked_mul(second)
+        .ok_or_else(|| invalid("Pattern grid count overflow"))?;
+    if total.saturating_sub(1).saturating_mul(pattern.seeds.len()) > 4096 {
+        return Err(invalid(
+            "A component pattern supports at most 4096 generated occurrences",
+        ));
+    }
+    Ok([first, second])
+}
+pub fn count(doc: &Document, owner: &str, pattern: &Definition) -> Result<usize> {
+    let n = counts(doc, owner, pattern)?;
+    Ok(n[0] * n[1])
+}
+impl Mode {
+    pub fn references(&self) -> Vec<&AxisReference> {
+        match self {
+            Self::Circular { axis_reference, .. } => {
+                axis_reference.as_deref().into_iter().collect()
+            }
+            Self::Linear {
+                direction,
+                second_direction,
+                ..
+            } => direction
+                .iter()
+                .filter_map(|d| d.reference.as_deref())
+                .chain(
+                    second_direction
+                        .iter()
+                        .filter_map(|d| d.direction.reference.as_deref()),
+                )
+                .collect(),
+        }
+    }
+    pub fn references_mut(&mut self) -> Vec<&mut AxisReference> {
+        match self {
+            Self::Circular { axis_reference, .. } => {
+                axis_reference.as_deref_mut().into_iter().collect()
+            }
+            Self::Linear {
+                direction,
+                second_direction,
+                ..
+            } => direction
+                .iter_mut()
+                .filter_map(|d| d.reference.as_deref_mut())
+                .chain(
+                    second_direction
+                        .iter_mut()
+                        .filter_map(|d| d.direction.reference.as_deref_mut()),
+                )
+                .collect(),
+        }
+    }
+}
+impl Occurrence {
+    pub fn coordinates(&self) -> [usize; 2] {
+        self.position.unwrap_or([self.index, 0])
+    }
+}
+pub fn straight_reference(reference: &Reference) -> Result<()> {
+    use crate::assembly_geometry::Source;
+    use crate::reference_geometry::AxisSource;
+    if !matches!(&reference.source, Source::Axis { axis } if !matches!(axis, AxisSource::CircleEdge { .. } | AxisSource::SketchCircle { .. } | AxisSource::FaceAxis { .. }))
+    {
+        return Err(CadError::Unsupported("Linear Component Pattern: choose a straight sketch line, straight component edge, or reference axis; curved edges and face normals are not linear directions".into()));
+    }
+    Ok(())
 }
 pub fn generated(assembly: &Assembly) -> BTreeSet<Id> {
     assembly
@@ -108,16 +241,8 @@ pub fn order(assembly: &Assembly) -> Result<Vec<Id>> {
             return Err(invalid("Pattern seed/reference dependency cycle"));
         }
         let p = &a.component_patterns[id];
-        let anchor = if let Mode::Circular {
-            axis_reference: Some(reference),
-            ..
-        } = &p.mode
-        {
-            Some(&reference.instance)
-        } else {
-            None
-        };
-        for seed in p.seeds.iter().chain(anchor) {
+        let anchors = p.mode.references();
+        for seed in p.seeds.iter().chain(anchors.iter().map(|r| &r.instance)) {
             if let Some(parent) = a
                 .component_patterns
                 .values()
@@ -145,7 +270,7 @@ pub fn validate(doc: &Document) -> Result<()> {
         let mut mate_ids = BTreeSet::new();
         for (id, p) in &a.component_patterns {
             if id != &p.id
-                || p.version != CONTRACT_VERSION
+                || !(1..=CONTRACT_VERSION).contains(&p.version)
                 || p.name.trim().is_empty()
                 || p.seeds.is_empty()
                 || p.seeds.len() > 256
@@ -160,11 +285,16 @@ pub fn validate(doc: &Document) -> Result<()> {
                 return Err(invalid("Seed components are missing or duplicated"));
             }
             let mut positions = BTreeSet::new();
+            let mut indices = std::collections::BTreeMap::new();
             for entry in &p.occurrences {
                 if entry.index == 0
-                    || entry.index >= 256
+                    || entry.coordinates() == [0, 0]
+                    || indices
+                        .insert(entry.index, entry.coordinates())
+                        .is_some_and(|position| position != entry.coordinates())
+                    || entry.coordinates().iter().any(|n| *n >= 256)
                     || !seeds.contains(&entry.seed)
-                    || !positions.insert((entry.index, entry.seed.clone()))
+                    || !positions.insert((entry.coordinates(), entry.seed.clone()))
                     || !occurrences.insert(entry.instance.clone())
                     || !a.instances.contains_key(&entry.instance)
                     || seeds.contains(&entry.instance)
@@ -176,7 +306,6 @@ pub fn validate(doc: &Document) -> Result<()> {
             }
             for entry in &p.mates {
                 if entry.index == 0
-                    || entry.index >= 256
                     || !mate_ids.insert(entry.mate.clone())
                     || a.mates.iter().any(|m| m.id == entry.mate)
                     || !a.mates.iter().any(|m| m.id == entry.source)
@@ -197,16 +326,39 @@ pub fn validate(doc: &Document) -> Result<()> {
                 {
                     return Err(invalid("Circular axis direction is invalid"));
                 }
-                if let Some(reference) = axis_reference {
-                    let i = a
-                        .instances
-                        .get(&reference.instance)
-                        .ok_or_else(|| invalid("Circular pattern axis component is missing"))?;
-                    crate::assembly_geometry::validate_reference(
-                        doc,
-                        &i.definition,
-                        &reference.geometry,
-                    )?;
+                let _ = axis_reference;
+            }
+            for reference in p.mode.references() {
+                let i = a
+                    .instances
+                    .get(&reference.instance)
+                    .ok_or_else(|| invalid("Pattern direction component is missing"))?;
+                crate::assembly_geometry::validate_reference(
+                    doc,
+                    &i.definition,
+                    &reference.geometry,
+                )?;
+                if matches!(p.mode, Mode::Linear { .. }) {
+                    straight_reference(&reference.geometry)?;
+                }
+            }
+            if let Mode::Linear {
+                direction,
+                second_direction,
+                ..
+            } = &p.mode
+            {
+                for d in direction
+                    .iter()
+                    .chain(second_direction.iter().map(|d| &d.direction))
+                {
+                    if d.vector.iter().any(|v| !v.is_finite())
+                        || Vector3::from(d.vector).norm() < 1e-12
+                    {
+                        return Err(invalid(
+                            "Linear direction vector must be finite and nonzero",
+                        ));
+                    }
                 }
             }
         }
@@ -227,7 +379,11 @@ pub fn validate(doc: &Document) -> Result<()> {
 }
 /// Reserve native occurrence and copied-mate identities before handing source to a worker.
 pub fn put(doc: &mut Document, assembly: &str, mut pattern: Definition) -> Result<()> {
-    let n = maximum_count(doc, assembly, &pattern)?;
+    if !(1..=CONTRACT_VERSION).contains(&pattern.version) {
+        return Err(invalid("Unsupported component-pattern source version"));
+    }
+    let positions = reservation_positions(doc, assembly, &pattern)?;
+    pattern.version = CONTRACT_VERSION;
     let a = doc
         .assemblies
         .get_mut(assembly)
@@ -259,14 +415,27 @@ pub fn put(doc: &mut Document, assembly: &str, mut pattern: Definition) -> Resul
             .filter(|e| !pattern.seeds.contains(&e.seed))
             .map(|e| e.instance.clone())
             .collect::<BTreeSet<_>>();
-        if a.component_patterns.values().any(|other| other.id != pattern.id && (other.seeds.iter().any(|seed| removed.contains(seed)) || matches!(&other.mode, Mode::Circular { axis_reference: Some(r), .. } if removed.contains(&r.instance)))) {
-            return Err(invalid("A dependent pattern references an occurrence of the removed seed; update that pattern first"));
+        if a.component_patterns.values().any(|other| {
+            other.id != pattern.id
+                && (other.seeds.iter().any(|seed| removed.contains(seed))
+                    || other
+                        .mode
+                        .references()
+                        .iter()
+                        .any(|r| removed.contains(&r.instance)))
+        }) {
+            return Err(invalid(
+                "A dependent pattern references an occurrence of the removed seed; update that pattern first",
+            ));
         }
         a.instances.retain(|id, _| !removed.contains(id));
         for c in a.configurations.values_mut() {
             c.overrides.components.retain(|id, _| !removed.contains(id));
             c.overrides
                 .component_configurations
+                .retain(|id, _| !removed.contains(id));
+            c.overrides
+                .component_placements
                 .retain(|id, _| !removed.contains(id));
         }
         let removed_mates = previous
@@ -279,6 +448,9 @@ pub fn put(doc: &mut Document, assembly: &str, mut pattern: Definition) -> Resul
             c.overrides
                 .mates
                 .retain(|id, _| !removed_mates.contains(id));
+            c.overrides
+                .mate_curve_seeds
+                .retain(|id, _| !removed_mates.contains(id));
         }
     }
     pattern
@@ -287,12 +459,30 @@ pub fn put(doc: &mut Document, assembly: &str, mut pattern: Definition) -> Resul
     pattern
         .mates
         .retain(|e| a.mates.iter().any(|m| m.id == e.source));
-    if n.saturating_sub(1).saturating_mul(pattern.seeds.len()) > 4096 {
-        return Err(invalid(
-            "A pattern supports at most 4096 generated occurrences",
-        ));
-    }
-    for index in 1..n {
+    let mut next_index = pattern
+        .occurrences
+        .iter()
+        .map(|e| e.index)
+        .chain(pattern.mates.iter().map(|e| e.index))
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| invalid("Occurrence reservation index overflow"))?;
+    for position in positions {
+        let [column, row] = position;
+        let index = if let Some(entry) = pattern
+            .occurrences
+            .iter()
+            .find(|e| e.coordinates() == position)
+        {
+            entry.index
+        } else {
+            let index = next_index;
+            next_index = next_index
+                .checked_add(1)
+                .ok_or_else(|| invalid("Occurrence reservation index overflow"))?;
+            index
+        };
         for seed in &pattern.seeds {
             let seed_instance = a
                 .instances
@@ -302,7 +492,7 @@ pub fn put(doc: &mut Document, assembly: &str, mut pattern: Definition) -> Resul
             let id = if let Some(entry) = pattern
                 .occurrences
                 .iter()
-                .find(|e| e.index == index && &e.seed == seed)
+                .find(|e| e.coordinates() == position && &e.seed == seed)
             {
                 entry.instance.clone()
             } else {
@@ -311,12 +501,23 @@ pub fn put(doc: &mut Document, assembly: &str, mut pattern: Definition) -> Resul
                     index,
                     seed: seed.clone(),
                     instance: instance.clone(),
+                    position: Some(position),
                 });
                 instance
             };
             let mut instance = seed_instance;
             instance.id = id.clone();
-            instance.name = format!("{} · {}", instance.name, index + 1);
+            instance.name = if !matches!(
+                pattern.mode,
+                Mode::Linear {
+                    second_direction: Some(_),
+                    ..
+                }
+            ) {
+                format!("{} · {}", instance.name, column + 1)
+            } else {
+                format!("{} · {},{}", instance.name, column + 1, row + 1)
+            };
             instance.translation_expressions = None;
             if let Some(existing) = a.instances.get_mut(&id) {
                 existing.definition = instance.definition;
@@ -360,10 +561,15 @@ pub fn remove(doc: &mut Document, assembly: &str, id: &str) -> Result<()> {
         .iter()
         .map(|e| e.instance.clone())
         .collect::<BTreeSet<_>>();
-    if a.component_patterns
-        .values()
-        .any(|other| other.id != id && (other.seeds.iter().any(|seed| ids.contains(seed)) || matches!(&other.mode, Mode::Circular { axis_reference: Some(r), .. } if ids.contains(&r.instance))))
-    {
+    if a.component_patterns.values().any(|other| {
+        other.id != id
+            && (other.seeds.iter().any(|seed| ids.contains(seed))
+                || other
+                    .mode
+                    .references()
+                    .iter()
+                    .any(|r| ids.contains(&r.instance)))
+    }) {
         return Err(invalid(
             "Delete dependent patterns before removing their seed or axis pattern",
         ));
@@ -395,20 +601,94 @@ fn placement(matrix: Matrix4<f64>) -> Result<Placement> {
         rotation_deg: [x, y, z].map(f64::to_degrees),
     })
 }
+fn linear_vector(
+    doc: &Document,
+    owner: &str,
+    direction: &LinearDirection,
+    frame: Option<&Frame>,
+) -> Result<Vector3<f64>> {
+    let spacing =
+        crate::expression::value(doc, owner, &direction.spacing, crate::Dimension::Length)?;
+    if !spacing.is_finite() || spacing <= 0. {
+        return Err(invalid(
+            "Spacing must be a positive finite length; use Reverse to change direction",
+        ));
+    }
+    let vector = Vector3::from(frame.map(|f| f.axis).unwrap_or(direction.vector))
+        .try_normalize(1e-12)
+        .ok_or_else(|| invalid("Direction is zero or invalid"))?;
+    Ok(vector * spacing * if direction.reverse { -1. } else { 1. })
+}
+pub fn step_vectors(
+    doc: &Document,
+    owner: &str,
+    p: &Definition,
+    frames: &ResolvedFrames,
+) -> Result<[[f64; 3]; 2]> {
+    let Mode::Linear {
+        step,
+        direction,
+        second_direction,
+    } = &p.mode
+    else {
+        return Err(invalid(
+            "Linear directions requested for a circular pattern",
+        ));
+    };
+    if !frames.source_only
+        && (direction
+            .as_ref()
+            .is_some_and(|d| d.reference.is_some() && frames.first.is_none())
+            || second_direction
+                .as_ref()
+                .is_some_and(|d| d.direction.reference.is_some() && frames.second.is_none()))
+    {
+        return Err(invalid(
+            "Current native direction frames are required for an associative pattern",
+        ));
+    }
+    let first = if let Some(direction) = direction {
+        linear_vector(doc, owner, direction, frames.first.as_ref())?
+    } else {
+        Vector3::new(
+            crate::expression::value(doc, owner, &step[0], crate::Dimension::Length)?,
+            crate::expression::value(doc, owner, &step[1], crate::Dimension::Length)?,
+            crate::expression::value(doc, owner, &step[2], crate::Dimension::Length)?,
+        )
+    };
+    let second = second_direction
+        .as_ref()
+        .map(|d| linear_vector(doc, owner, &d.direction, frames.second.as_ref()))
+        .transpose()?
+        .unwrap_or_else(Vector3::zeros);
+    if first.iter().chain(second.iter()).any(|v| !v.is_finite()) {
+        return Err(invalid(
+            "Pattern spacing exceeds the finite coordinate range",
+        ));
+    }
+    let n = counts(doc, owner, p)?;
+    if (n[0] > 1 && first.norm() < 1e-12) || (n[1] > 1 && second.norm() < 1e-12) {
+        return Err(invalid(
+            "Repeated pattern positions require nonzero spacing",
+        ));
+    }
+    Ok([first.into(), second.into()])
+}
 pub fn transform(
     doc: &Document,
     owner: &str,
     p: &Definition,
-    index: usize,
-    frame: Option<&Frame>,
+    position: [usize; 2],
+    frames: &ResolvedFrames,
 ) -> Result<Matrix4<f64>> {
     match &p.mode {
-        Mode::Linear { step } => {
+        Mode::Linear { .. } => {
+            let vectors = step_vectors(doc, owner, p, frames)?;
+            let shift = Vector3::from(vectors[0]) * position[0] as f64
+                + Vector3::from(vectors[1]) * position[1] as f64;
             let mut m = Matrix4::identity();
             for axis in 0..3 {
-                m[(axis, 3)] =
-                    crate::expression::value(doc, owner, &step[axis], crate::Dimension::Length)?
-                        * index as f64;
+                m[(axis, 3)] = shift[axis];
             }
             Ok(m)
         }
@@ -423,13 +703,13 @@ pub fn transform(
                 center[i] =
                     crate::expression::value(doc, owner, &origin[i], crate::Dimension::Length)?;
             }
-            let direction = frame.map(|f| f.axis).unwrap_or(*axis);
-            let center = Vector3::from(frame.map(|f| f.origin).unwrap_or(center));
+            let direction = frames.first.as_ref().map(|f| f.axis).unwrap_or(*axis);
+            let center = Vector3::from(frames.first.as_ref().map(|f| f.origin).unwrap_or(center));
             let axis = Vector3::from(direction)
                 .try_normalize(1e-12)
                 .ok_or_else(|| invalid("Circular axis is zero"))?;
             let angle = crate::expression::value(doc, owner, angle, crate::Dimension::Angle)?
-                * index as f64;
+                * position[0] as f64;
             let r = Rotation3::from_axis_angle(&nalgebra::Unit::new_normalize(axis), angle);
             let mut matrix = r.to_homogeneous();
             let shift = center - r * center;
@@ -447,7 +727,7 @@ pub fn expand(
     assembly: &mut Assembly,
     p: &Definition,
     overrides: &Overrides,
-    frame: Option<&Frame>,
+    frames: &ResolvedFrames,
 ) -> Result<()> {
     if overrides
         .component_patterns
@@ -457,19 +737,25 @@ pub fn expand(
     {
         return Ok(());
     }
-    let n = count(doc, &assembly.id, p)?;
-    if (1..n).any(|index| {
-        p.seeds.iter().any(|seed| {
-            !p.occurrences
-                .iter()
-                .any(|e| e.index == index && &e.seed == seed)
+    let n = counts(doc, &assembly.id, p)?;
+    if (0..n[1]).any(|j| {
+        (0..n[0]).any(|i| {
+            [i, j] != [0, 0]
+                && p.seeds.iter().any(|seed| {
+                    !p.occurrences
+                        .iter()
+                        .any(|e| e.coordinates() == [i, j] && &e.seed == seed)
+                })
         })
     }) {
         return Err(invalid(
-            "The current count needs native occurrence reservations; edit the count through the document command API",
+            "The current grid needs native occurrence reservations; edit counts through the document command API",
         ));
     }
-    for entry in p.occurrences.iter().filter(|e| e.index < n) {
+    for entry in p.occurrences.iter().filter(|e| {
+        let p = e.coordinates();
+        p[0] < n[0] && p[1] < n[1]
+    }) {
         if overrides
             .components
             .get(&entry.instance)
@@ -483,12 +769,17 @@ pub fn expand(
         };
         let mut instance = seed.clone();
         instance.id = entry.instance.clone();
-        instance.name = format!("{} · {}", seed.name, entry.index + 1);
+        let position = entry.coordinates();
+        instance.name = if n[1] == 1 {
+            format!("{} · {}", seed.name, position[0] + 1)
+        } else {
+            format!("{} · {},{}", seed.name, position[0] + 1, position[1] + 1)
+        };
         instance.translation_expressions = None;
         if let Some(configuration) = overrides.component_configurations.get(&entry.instance) {
             instance.configuration = configuration.clone();
         }
-        let matrix = transform(doc, &assembly.id, p, entry.index, frame)?;
+        let matrix = transform(doc, &assembly.id, p, position, frames)?;
         let mut target = matrix * seed.placement.matrix();
         if matches!(
             p.mode,
@@ -598,12 +889,25 @@ pub fn prepare(doc: &Document, assembly: &Assembly, overrides: &Overrides) -> Re
     a.instances.retain(|id, _| !generated.contains(id));
     for id in order(&a)? {
         let p = a.component_patterns[&id].clone();
-        expand(doc, &mut a, &p, overrides, None)?;
+        expand(
+            doc,
+            &mut a,
+            &p,
+            overrides,
+            &ResolvedFrames {
+                source_only: true,
+                ..Default::default()
+            },
+        )?;
     }
     Ok(a)
 }
 
-fn maximum_count(doc: &Document, owner: &str, pattern: &Definition) -> Result<usize> {
+fn reservation_positions(
+    doc: &Document,
+    owner: &str,
+    pattern: &Definition,
+) -> Result<BTreeSet<[usize; 2]>> {
     let mut context = doc.clone();
     for (definition, configuration) in &doc.active_configurations {
         let resolved = crate::configuration::resolve(doc, definition, configuration)?;
@@ -626,7 +930,17 @@ fn maximum_count(doc: &Document, owner: &str, pattern: &Definition) -> Result<us
         .get_mut(owner)
         .ok_or_else(|| invalid("Pattern assembly is missing"))?
         .parameters = doc.assemblies[owner].parameters.clone();
-    let mut maximum = count(&context, owner, pattern)?;
+    let mut positions = BTreeSet::new();
+    let add = |positions: &mut BTreeSet<[usize; 2]>, n: [usize; 2]| {
+        for row in 0..n[1] {
+            for column in 0..n[0] {
+                if [column, row] != [0, 0] {
+                    positions.insert([column, row]);
+                }
+            }
+        }
+    };
+    add(&mut positions, counts(&context, owner, pattern)?);
     for configuration in crate::configuration::names(doc, owner).keys() {
         let mut variant = context.clone();
         let a = variant
@@ -641,9 +955,9 @@ fn maximum_count(doc: &Document, owner: &str, pattern: &Definition) -> Result<us
                 .ok_or_else(|| invalid("Configured pattern count parameter is missing"))?
                 .expression = expression;
         }
-        maximum = maximum.max(count(&variant, owner, pattern)?);
+        add(&mut positions, counts(&variant, owner, pattern)?);
     }
-    Ok(maximum)
+    Ok(positions)
 }
 /// Native commands reserve any newly driven count before worker evaluation. The
 /// expression remains authoritative; growing and shrinking reuses every old ID.

@@ -1165,37 +1165,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             _ => {}
         }
     }
-    if let Some(draft) = &w.session.draft {
-        let status = draft.error.as_deref().unwrap_or(if draft.pending {
-            "Updating deposited weld metal…"
-        } else {
-            "Current weld preview evaluated"
-        });
-        controls::label(
-            ui,
-            "assembly-weld-preview",
-            "preview-status",
-            &["modeling-status"],
-            status,
-            if draft.error.is_some() {
-                "invalid"
-            } else if draft.pending {
-                "pending"
-            } else {
-                "ready"
-            },
-        );
-    }
-    if w.fields.contains_key(INVALID) {
-        controls::label(
-            ui,
-            "assembly-weld-source-status",
-            "source-diagnostic",
-            &[],
-            "Preview the edited source in its original assembly/configuration before applying.",
-            "invalid",
-        );
-    }
     egui::CollapsingHeader::new("Advanced Source")
         .id_salt("assembly-weld-source")
         .show(ui, |ui| {
@@ -1224,7 +1193,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                 action(w, "assembly.weld-preview-source", None);
             }
         });
-    crate::cad_ui::confirmation(ui, w);
 }
 pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
     let elements = semantics(w)

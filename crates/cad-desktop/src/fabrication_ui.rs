@@ -3,6 +3,257 @@ use crate::{Workspace, ui, viewport};
 use bevy_egui::egui;
 use cad_core::{Document, Expr, Feature, NodeRef, Operation, commands::Command, sheet_metal::*};
 const DEFERRED: &str = "tcad:fabrication-preset:";
+fn state_occurrence(w: &Workspace, definition: &str) -> Option<cad_core::PlacedPart> {
+    let evaluation = viewport::display_evaluation(w)?;
+    if !evaluation.geometry_valid || evaluation.identity != w.session.identity() {
+        return None;
+    }
+    let candidates = evaluation
+        .instances
+        .iter()
+        .filter(|instance| instance.definition == definition)
+        .collect::<Vec<_>>();
+    if let Some(path) = &w.selected_component {
+        let chosen = candidates
+            .iter()
+            .copied()
+            .filter(|instance| instance.path.starts_with(path))
+            .collect::<Vec<_>>();
+        if chosen.len() == 1 {
+            return Some(chosen[0].clone());
+        }
+    }
+    if let Some(id) = &w.view.active_instance {
+        let chosen = candidates
+            .iter()
+            .copied()
+            .filter(|instance| instance.path.last() == Some(id))
+            .collect::<Vec<_>>();
+        if chosen.len() == 1 {
+            return Some(chosen[0].clone());
+        }
+    }
+    (candidates.len() == 1).then(|| candidates[0].clone())
+}
+/// Compact fabrication-state projection over current native sheet outputs.
+pub fn state_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+    use cad_core::presentation::SemanticElement;
+    let doc = w.session.visible();
+    let Some(owner) = w.view.active_part.as_ref() else {
+        return vec![];
+    };
+    if !doc.parts.get(owner).is_some_and(|part| {
+        part.features
+            .iter()
+            .any(|feature| matches!(feature.operation, Operation::Sheet { .. }))
+    }) {
+        return vec![];
+    }
+    let Some(instance) = state_occurrence(w, owner) else {
+        return vec![];
+    };
+    let Ok(part) =
+        cad_core::configuration::effective_part(doc, owner, instance.configuration.as_deref())
+    else {
+        return vec![];
+    };
+    let Some(base) = doc.parts.get(owner) else {
+        return vec![];
+    };
+    let Some(evaluation) = viewport::display_evaluation(w) else {
+        return vec![];
+    };
+    let idle = w.tool_checkpoint.is_none()
+        && w.sketch.is_none()
+        && w.settings.is_none()
+        && w.session.draft.is_none()
+        && w.view.history_cursor.is_none()
+        && !w.view.original;
+    let mut out = Vec::new();
+    for feature in part.features.iter().filter(|feature| {
+        part.outputs.contains(&feature.id)
+            && !feature.suppressed
+            && matches!(feature.operation, Operation::Sheet { .. })
+    }) {
+        let source = part.reference(&feature.id);
+        let Some(sheet) = evaluation.sheets.get(&format!(
+            "{}::{}",
+            cad_core::history::mesh_key(&instance),
+            feature.id
+        )) else {
+            continue;
+        };
+        let id = format!("sheet-state:{}/{}", part.id, feature.id);
+        out.push(SemanticElement { id:id.clone(), role:"sheet-state-controls".into(), label:format!("{} · fabrication", feature.name), value:Some(format!("{:?}", sheet.state)), state:"ready".into(), commands:vec![], relationships:vec![feature.id.clone(), "workspace.viewport".into()], data:serde_json::json!({"contract":"tcad.sheet-state-controls","version":1,"source":source,"state":sheet.state,"configuration":instance.configuration,"occurrence":instance.path,"export_state":"flat","requires_current_validation":true}) });
+        for (command, label, selected) in [
+            (
+                "fabrication.state-formed",
+                "Formed",
+                sheet.state == State::Formed,
+            ),
+            ("fabrication.state-flat", "Flat", sheet.state == State::Flat),
+            ("fabrication.export-flat", "Export flat DXF…", false),
+        ] {
+            let editable = base.outputs.contains(&feature.id)
+                && !cad_core::library::is_definition_pinned(doc, owner);
+            let enabled = idle && (command == "fabrication.export-flat" || editable);
+            out.push(SemanticElement {id:format!("{id}/{command}"),role:"sheet-state-action".into(),label:label.into(),value:(!editable && command!="fabrication.export-flat").then(||"Make the linked definition unique, or restore its base output in Configurations, before changing fabrication state".into()),state:if !enabled {"disabled"} else if selected {"selected"} else {"ready"}.into(),commands:vec![command.into()],relationships:vec![id.clone()],data:serde_json::json!({"document":doc.id,"source":source,"occurrence":instance.path,"configuration":instance.configuration,"export_state":"flat","enabled":enabled,"classes":["compact","viewport-control"]})});
+        }
+    }
+    out
+}
+pub fn state_action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>) -> bool {
+    if !matches!(
+        command,
+        "fabrication.state-formed" | "fabrication.state-flat" | "fabrication.export-flat"
+    ) {
+        return false;
+    }
+    let Some(data) = data.filter(|data| {
+        data.get("document").and_then(serde_json::Value::as_str)
+            == Some(w.session.visible().id.as_str())
+    }) else {
+        return true;
+    };
+    if w.tool_checkpoint.is_some()
+        || w.sketch.is_some()
+        || w.settings.is_some()
+        || w.session.draft.is_some()
+        || w.view.history_cursor.is_some()
+        || w.view.original
+    {
+        w.status = "Finish the current operation before changing fabrication state".into();
+        return true;
+    }
+    let Some(source) = data
+        .get("source")
+        .and_then(|source| serde_json::from_value::<NodeRef>(source.clone()).ok())
+    else {
+        return true;
+    };
+    let Some(mut part) = w.session.visible().parts.get(&source.definition).cloned() else {
+        return true;
+    };
+    if w.view.active_part.as_ref() != Some(&source.definition) {
+        return true;
+    }
+    let Some(instance) = state_occurrence(w, &source.definition) else {
+        w.status = "Select one current placed sheet occurrence".into();
+        return true;
+    };
+    if data.get("occurrence") != Some(&serde_json::json!(instance.path)) {
+        w.status = "The sheet occurrence changed; use its current fabrication controls".into();
+        return true;
+    }
+    // Layouts can retain a descriptor across configuration/source changes.
+    // Reconstruct availability from the current native output before invoking
+    // either a shared-definition edit or a configured-sheet export.
+    let current = state_semantics(w).into_iter().find(|control| {
+        control.role == "sheet-state-action"
+            && control
+                .commands
+                .iter()
+                .any(|candidate| candidate == command)
+            && ["document", "source", "occurrence", "configuration"]
+                .iter()
+                .all(|key| control.data.get(key) == data.get(key))
+    });
+    if !current.is_some_and(|control| {
+        control.state != "disabled"
+            && control
+                .data
+                .get("enabled")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+    }) {
+        w.status =
+            "The sheet output or configuration changed; use its current fabrication controls"
+                .into();
+        return true;
+    }
+    if command == "fabrication.export-flat" {
+        let selection = cad_core::sheet_metal::ExportSelection {
+            source,
+            occurrence: Some(instance.path),
+        };
+        if let Ok(payload) = serde_json::to_string(&selection) {
+            ui::export_format(w, &format!("sheet-metal-dxf:{payload}"), "flat-pattern.dxf");
+        }
+        return true;
+    }
+    if cad_core::library::is_definition_pinned(w.session.visible(), &source.definition) {
+        w.status =
+            "Make the linked sheet definition unique before editing fabrication state".into();
+        return true;
+    }
+    let Some(index) = part.features.iter().position(|f| {
+        f.id == source.node
+            && !f.suppressed
+            && part.outputs.contains(&f.id)
+            && matches!(f.operation, Operation::Sheet { .. })
+    }) else {
+        return true;
+    };
+    let state = if command == "fabrication.state-flat" {
+        State::Flat
+    } else {
+        State::Formed
+    };
+    if cad_core::sheet_metal::stock(w.session.visible(), &source)
+        .is_ok_and(|stock| stock.state == state)
+    {
+        return true;
+    }
+    let feature = if let Operation::Sheet { operation } = &mut part.features[index].operation
+        && let SheetOperation::Flatten { state: current, .. } = operation.as_mut()
+    {
+        *current = state;
+        part.features[index].clone()
+    } else {
+        let feature = Feature {
+            id: cad_core::id(),
+            name: "Fabrication State".into(),
+            operation: Operation::Sheet {
+                operation: Box::new(SheetOperation::Flatten {
+                    body: source.clone(),
+                    state,
+                }),
+            },
+            suppressed: false,
+        };
+        for output in &mut part.outputs {
+            if output == &source.node {
+                *output = feature.id.clone();
+            }
+        }
+        part.features.push(feature.clone());
+        feature
+    };
+    w.start_tool();
+    w.dispatch(Command::PutPart {
+        part,
+        assembly: None,
+        placement: Default::default(),
+    });
+    ui::feature_dialog(w, Some(feature));
+    true
+}
+pub fn state_controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    let controls = state_semantics(w);
+    for group in controls
+        .iter()
+        .filter(|control| control.role == "sheet-state-controls")
+    {
+        ui.horizontal_wrapped(|ui| {
+            crate::presentation_controls::label(ui,&group.id,&group.role,&[],&group.label,&group.state);
+            for control in controls.iter().filter(|control|control.role=="sheet-state-action" && control.relationships.contains(&group.id)) {
+                if crate::presentation_controls::button(ui,&control.id,&control.role,&["compact","viewport-control"],&control.label,control.state!="disabled",control.state=="selected").on_hover_text(if control.commands[0]=="fabrication.export-flat" {"Export this sheet's evaluated flat fabrication geometry; the viewport state stays unchanged"} else {"Preview the fabrication state, then confirm or cancel the shared operation"}).clicked() {
+                    state_action(w,&control.commands[0],Some(&control.data));
+                }
+            }
+        });
+    }
+}
 pub fn is_preset(name: &str) -> bool {
     name.starts_with(DEFERRED) || native_preset(name)
 }

@@ -20,6 +20,8 @@ mod common;
 pub struct ValueCache {
     key: Option<Value>,
     source: Value,
+    semantic_key: Option<Value>,
+    semantic_elements: Vec<SemanticElement>,
 }
 
 pub fn supports(operation: &Operation) -> bool {
@@ -1582,6 +1584,37 @@ fn mold_fields(fields: &mut Fields<'_>, operation: &cad_core::mold::MoldOperatio
 }
 
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
+    // One disposable projection is retained for the active editor. The key
+    // includes source/draft, both available evaluation revisions, the editor,
+    // selected geometry and field errors; camera navigation never rebuilds
+    // topology/provenance choices. Do not hold the lock while constructing it.
+    let key = json!({"document":w.session.visible().id,"generation":w.session.generation,
+        "revision":w.session.committed.revision,"draft":w.session.draft.as_ref().map(|draft|(&draft.id,draft.edit)),
+        "dialog":w.dialog,"owner":w.view.active_part,"instance":w.view.active_instance,"node":w.view.active_node,
+        "editor":w.fields.get("feature-editor-generation"),"feature":w.fields.get("feature-editor-id"),
+        "evaluation":w.session.evaluation.as_ref().map(|e|&e.identity),
+        "draft_evaluation":w.session.draft.as_ref().and_then(|d|d.preview_evaluation()).map(|e|&e.identity),
+        "checkpoint_evaluation":w.tool_checkpoint.as_ref().and_then(|s|s.evaluation.as_ref()).map(|e|&e.identity),
+        "checkpoint_draft_evaluation":w.tool_checkpoint.as_ref().and_then(|s|s.draft.as_ref()).and_then(|d|d.preview_evaluation()).map(|e|&e.identity),
+        "settings":w.settings.is_some(),"original":w.view.original,"history":w.view.history_cursor,
+        "context_selection":w.context_selection,"edge_occurrence":w.edge_selection_path,
+        "selected":w.selected.as_ref().map(|s|json!([s.path,s.body,s.reference,s.point])),
+        "geometry_selection":w.geometry_selection.iter().map(|s|json!([s.path,s.body,s.reference])).collect::<Vec<_>>(),
+        "errors":w.fields.iter().filter(|(key,_)|key.starts_with("operation-editor:invalid:") || key.starts_with("feature-source-") || key.starts_with("edge-selection-mode/")).collect::<Vec<_>>() });
+    if let Ok(cache) = w.operation_values.lock()
+        && cache.semantic_key.as_ref() == Some(&key)
+    {
+        return cache.semantic_elements.clone();
+    }
+    let elements = build_semantics(w);
+    if let Ok(mut cache) = w.operation_values.lock() {
+        cache.semantic_key = Some(key);
+        cache.semantic_elements = elements.clone();
+    }
+    elements
+}
+
+fn build_semantics(w: &Workspace) -> Vec<SemanticElement> {
     if crate::sketch3d_ui::active(w) {
         return vec![];
     }
@@ -1655,7 +1688,9 @@ fn invalid(message: &str) -> CadError {
     CadError::Invalid(message.into())
 }
 fn live_element(w: &Workspace, element: &SemanticElement) -> Result<SemanticElement> {
-    let fresh = semantics(w)
+    // Command dispatch resolves the current projection directly; a display
+    // cache never authorizes a source mutation or Apply.
+    let fresh = build_semantics(w)
         .into_iter()
         .find(|e| e.id == element.id)
         .ok_or_else(|| invalid("This modeling control is no longer available"))?;
@@ -2143,22 +2178,85 @@ pub(crate) fn render_elements(
                 classes: &classes,
                 label: &group.label,
                 state: "draft",
-                collapse: None,
+                collapse: Some(!matches!(
+                    group.data["group"].as_str(),
+                    Some(
+                        "guides"
+                            | "placement"
+                            | "orientation"
+                            | "appearance"
+                            | "priority"
+                            | "conditions"
+                            | "advanced"
+                    )
+                )),
                 open: None,
             },
             |ui| {
+                let reference_items = children
+                    .iter()
+                    .filter(|element| reference_item(element))
+                    .collect::<Vec<_>>();
+                let selected = reference_items
+                    .iter()
+                    .filter(|element| reference_selected(element))
+                    .count();
+                let query = if reference_items.len() > 2 {
+                    crate::workspace_controls::reference_filter(
+                        ui,
+                        w,
+                        &group.id,
+                        "references",
+                        selected,
+                        reference_items.len(),
+                    )
+                } else {
+                    Some(String::new())
+                };
                 let mut render = |ui: &mut egui::Ui| {
                     let mut index = 0;
+                    let mut shown_selected = 0;
                     while index < children.len() {
                         let element = &children[index];
                         if element.data.get("inline_parent").is_some() {
                             index += 1;
                             continue;
                         }
+                        if matches!(
+                            element.role.as_str(),
+                            "operation-editor-help" | "structural-member-note"
+                        ) {
+                            index += 1;
+                            continue;
+                        }
+                        if reference_item(element) {
+                            match &query {
+                                Some(query)
+                                    if !query.is_empty()
+                                        && !element.label.to_lowercase().contains(query) =>
+                                {
+                                    index += 1;
+                                    continue;
+                                }
+                                None if !reference_selected(element) || shown_selected >= 2 => {
+                                    index += 1;
+                                    continue;
+                                }
+                                None => {
+                                    shown_selected += 1;
+                                }
+                                _ => {}
+                            }
+                        }
                         if element.role.ends_with("-action") {
+                            if reference_item(element) {
+                                render_action(ui, w, element);
+                                index += 1;
+                                continue;
+                            }
                             let end = children[index..]
                                 .iter()
-                                .position(|e| !e.role.ends_with("-action"))
+                                .position(|e| !e.role.ends_with("-action") || reference_item(e))
                                 .map_or(children.len(), |n| index + n);
                             ui.horizontal_wrapped(|ui| {
                                 for element in &children[index..end] {
@@ -2209,9 +2307,50 @@ pub(crate) fn render_elements(
                 } else {
                     render(ui);
                 }
+                let notes = children
+                    .iter()
+                    .filter(|element| {
+                        matches!(
+                            element.role.as_str(),
+                            "operation-editor-help" | "structural-member-note"
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if !notes.is_empty()
+                    && crate::workspace_controls::disclosure(
+                        ui,
+                        w,
+                        &format!("{}/instructions", group.id),
+                        "Instructions",
+                    )
+                {
+                    for element in notes {
+                        controls::label(
+                            ui,
+                            &element.id,
+                            &element.role,
+                            &["modeling-help"],
+                            &element.label,
+                            &element.state,
+                        );
+                    }
+                }
             },
         );
     }
+}
+
+fn reference_item(element: &SemanticElement) -> bool {
+    element.role == "edge-selection-item"
+        || element.data["mutation"]["kind"] == "member_toggle"
+        || element.data["field"]
+            .as_str()
+            .is_some_and(|field| field.starts_with("member/"))
+}
+fn reference_selected(element: &SemanticElement) -> bool {
+    element.role == "edge-selection-item"
+        || element.state == "selected"
+        || element.data["json"].as_bool() == Some(true)
 }
 
 fn render_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement) {

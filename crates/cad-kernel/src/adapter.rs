@@ -52,6 +52,11 @@ pub trait KernelAdapter {
         None
     }
     fn clear_spatial_sketch_inputs(&self) {}
+    fn set_assembly_placements(
+        &self,
+        _assemblies: &BTreeMap<String, cad_core::assembly_geometry::EvaluatedAssembly>,
+    ) {
+    }
     fn clear_weld_joint_previews(&self) {}
     fn clear_operation_previews(&self) {}
     fn weld_joint_previews(&self) -> Vec<cad_core::weld_beads::JointPreview> {
@@ -100,6 +105,15 @@ pub trait KernelAdapter {
         Err(CadError::Unsupported(
             "This kernel adapter does not resolve associative mate geometry".into(),
         ))
+    }
+    fn pattern_guide(
+        &self,
+        _doc: &Document,
+        _owner: &NodeRef,
+        _operation: &Operation,
+        _inputs: &BTreeMap<NodeRef, Shape>,
+    ) -> Result<Option<cad_core::body_editing::PatternGuide>> {
+        Ok(None)
     }
     fn operation(
         &self,
@@ -170,6 +184,8 @@ pub trait KernelAdapter {
 }
 #[derive(Default)]
 pub struct MonstertruckAdapter {
+    assembly_placements:
+        std::cell::RefCell<BTreeMap<String, BTreeMap<String, cad_core::Placement>>>,
     material_deltas: std::cell::RefCell<BTreeMap<NodeRef, crate::constructor_delta::Record>>,
     histories: std::cell::RefCell<BTreeMap<NodeRef, TopologyHistory>>,
     tables: std::cell::RefCell<BTreeMap<String, (monstertruck::step::load::Table, f64)>>,
@@ -880,6 +896,15 @@ impl KernelAdapter for MonstertruckAdapter {
     fn spatial_sketch_input(&self, owner: &NodeRef) -> Option<cad_core::sketch3d::Evaluated> {
         self.spatial_inputs.borrow().get(owner).cloned()
     }
+    fn set_assembly_placements(
+        &self,
+        assemblies: &BTreeMap<String, cad_core::assembly_geometry::EvaluatedAssembly>,
+    ) {
+        *self.assembly_placements.borrow_mut() = assemblies
+            .iter()
+            .map(|(key, a)| (key.clone(), a.placements.clone()))
+            .collect();
+    }
     fn clear_spatial_sketch_inputs(&self) {
         self.spatial_inputs.borrow_mut().clear();
     }
@@ -938,7 +963,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+fc2306852a46;adapter/43;solver/tcad-native-lm/18"
+        "monstertruck/0.4.1+fc2306852a46;adapter/44;solver/tcad-native-lm/18"
     }
     fn clear_weld_joint_previews(&self) {
         self.weld_joints.borrow_mut().clear();
@@ -1064,6 +1089,65 @@ impl KernelAdapter for MonstertruckAdapter {
                 inputs,
             },
         )
+    }
+    fn pattern_guide(
+        &self,
+        doc: &Document,
+        owner: &NodeRef,
+        operation: &Operation,
+        inputs: &BTreeMap<NodeRef, Shape>,
+    ) -> Result<Option<cad_core::body_editing::PatternGuide>> {
+        let Operation::Pattern {
+            body,
+            count,
+            step,
+            options,
+            ..
+        } = operation
+        else {
+            return Ok(None);
+        };
+        let second_count = options.validate(*count)?;
+        let resolver = DatumResolver {
+            adapter: self,
+            doc,
+            inputs,
+        };
+        let explicit = |step: &[Expr; 3]| -> Result<[f64; 3]> {
+            Ok([
+                expression::value(doc, &owner.definition, &step[0], Dimension::Length)?,
+                expression::value(doc, &owner.definition, &step[1], Dimension::Length)?,
+                expression::value(doc, &owner.definition, &step[2], Dimension::Length)?,
+            ])
+        };
+        let first = if let Some(direction) = &options.direction {
+            direction.resolve(doc, &owner.definition, &resolver)?
+        } else {
+            explicit(step)?
+        };
+        let second = if let Some(second) = &options.second_direction {
+            if let Some(direction) = &second.direction {
+                direction.resolve(doc, &owner.definition, &resolver)?
+            } else {
+                explicit(&second.step)?
+            }
+        } else {
+            [0.; 3]
+        };
+        let origin = bodies(inputs, body)?
+            .iter()
+            .flat_map(|b| b.boundaries())
+            .flat_map(|s| s.vertex_iter())
+            .next()
+            .map(|v| v.point())
+            .map(|p| [p.x, p.y, p.z])
+            .unwrap_or([0.; 3]);
+        Ok(Some(cad_core::body_editing::PatternGuide {
+            document: doc.id.clone(),
+            origin_mm: origin,
+            steps_mm: [first, second],
+            counts: [*count, second_count],
+        }))
     }
     fn operation(
         &self,
@@ -1474,7 +1558,16 @@ impl KernelAdapter for MonstertruckAdapter {
                 options,
             } => {
                 let secondary_count = options.validate(*count)?;
-                let step = Vector3::new(value(&step[0])?, value(&step[1])?, value(&step[2])?);
+                let resolver = DatumResolver {
+                    adapter: self,
+                    doc,
+                    inputs,
+                };
+                let step = if let Some(direction) = &options.direction {
+                    Vector3::from(direction.resolve(doc, &owner.definition, &resolver)?)
+                } else {
+                    Vector3::new(value(&step[0])?, value(&step[1])?, value(&step[2])?)
+                };
                 let mut a = angle(a)?;
                 if options.angle_is_total {
                     a /= if *count < 2 {
@@ -1489,11 +1582,19 @@ impl KernelAdapter for MonstertruckAdapter {
                     .second_direction
                     .as_ref()
                     .map(|direction| {
-                        Ok::<_, CadError>(Vector3::new(
-                            value(&direction.step[0])?,
-                            value(&direction.step[1])?,
-                            value(&direction.step[2])?,
-                        ))
+                        if let Some(source) = &direction.direction {
+                            Ok::<_, CadError>(Vector3::from(source.resolve(
+                                doc,
+                                &owner.definition,
+                                &resolver,
+                            )?))
+                        } else {
+                            Ok(Vector3::new(
+                                value(&direction.step[0])?,
+                                value(&direction.step[1])?,
+                                value(&direction.step[2])?,
+                            ))
+                        }
                     })
                     .transpose()?
                     .unwrap_or_else(Vector3::zero);
@@ -3513,6 +3614,48 @@ struct DatumResolver<'a> {
     inputs: &'a BTreeMap<NodeRef, Shape>,
 }
 impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
+    fn occurrence_placement(&self, path: &[cad_core::Id]) -> Result<[[f64; 4]; 4]> {
+        let mut definition = self.doc.root.clone();
+        let mut configuration = self.doc.active_configurations.get(&definition).cloned();
+        let mut matrix = nalgebra::Matrix4::<f64>::identity();
+        let placements = self.adapter.assembly_placements.borrow();
+        for key in path {
+            let scoped =
+                cad_core::configuration::variant(self.doc, &definition, configuration.as_deref())?;
+            let a = scoped
+                .assemblies
+                .get(&definition)
+                .ok_or_else(|| err("Pattern direction occurrence path enters a part"))?;
+            let i = a
+                .instances
+                .get(key)
+                .ok_or_else(|| err("Pattern direction component is missing"))?;
+            let solved=placements.get(&cad_core::configuration::key(&definition,configuration.as_deref())).and_then(|p|p.get(key)).ok_or_else(||err("Pattern direction component is suppressed or its current placement has not been solved"))?;
+            matrix *= solved.matrix();
+            definition = i.definition.clone();
+            configuration =
+                cad_core::configuration::selected(self.doc, &definition, i.configuration.as_ref())
+                    .cloned();
+        }
+        if self.doc.parts.contains_key(&definition)
+            && configuration.as_ref() != self.doc.active_configurations.get(&definition)
+        {
+            return Err(CadError::Unsupported("An in-context part-pattern direction needs the reference occurrence's currently active part configuration. Activate that configuration or choose an independent local reference axis; a different configured geometry carrier cannot be substituted".into()));
+        }
+        let scoped = cad_core::configuration::source_variant(
+            self.doc,
+            &definition,
+            configuration.as_deref(),
+        );
+        cad_core::configuration::check_geometry_context(self.doc, &scoped, &definition)?;
+        if matrix.iter().any(|v| !v.is_finite()) {
+            return Err(err("Pattern direction occurrence transform is not finite"));
+        }
+        Ok(std::array::from_fn(|r| {
+            std::array::from_fn(|c| matrix[(r, c)])
+        }))
+    }
+
     fn tangent_plane(
         &self,
         reference: &TopologyRef,

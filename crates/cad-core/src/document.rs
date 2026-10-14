@@ -596,6 +596,7 @@ impl Operation {
                 ..
             } => step
                 .iter()
+                .filter(|_| options.direction.is_none())
                 .chain(std::iter::once(angle))
                 .chain(options.expressions())
                 .collect(),
@@ -680,8 +681,11 @@ impl Operation {
         };
         match self {
             Self::Scale { options, .. } => dependencies.extend(options.center.dependencies()),
-            Self::Pattern { options, .. } if !options.rotate_instances => {
-                dependencies.extend(options.seed.dependencies())
+            Self::Pattern { options, .. } => {
+                dependencies.extend(options.dependencies());
+                if !options.rotate_instances {
+                    dependencies.extend(options.seed.dependencies());
+                }
             }
             _ => {}
         }

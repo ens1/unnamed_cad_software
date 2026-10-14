@@ -493,7 +493,7 @@ fn snap(
         && position.distance(cursor) <= 9.
         && best
             .as_ref()
-            .is_none_or(|(_, _, prior)| position.distance(cursor) < *prior)
+            .is_none_or(|(point, _, prior)| *point == [0.; 3] || position.distance(cursor) < *prior)
     {
         best = Some(([0.; 3], Entity::Origin, position.distance(cursor)));
     }
@@ -1891,6 +1891,7 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
         "radius" => json!(state.radius),
         "degree" => json!(state.degree),
         "parameterization" => json!(state.parameterization),
+        "pick-filter" => json!(crate::sketch_overlay::pick_filter(w)),
         "dimension-kind" => json!(state.dimension.as_ref()?.kind),
         _ => {
             let parts = key.split('/').collect::<Vec<_>>();
@@ -2022,6 +2023,14 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
             .ok_or_else(|| invalid("Enter a quantity or parameter expression"))
     };
     match key {
+        "pick-filter" => {
+            let filter = value
+                .as_str()
+                .filter(|filter| matches!(*filter, "all" | "points" | "members" | "construction"))
+                .ok_or_else(|| invalid("Choose a sketch selection filter"))?;
+            w.fields.insert("sketch-pick-filter".into(), filter.into());
+            return Ok(());
+        }
         "tool" => {
             let tool = serde_json::from_value(value)?;
             cancel_placement(w);
@@ -2702,6 +2711,10 @@ pub fn action(w: &mut Workspace, command: &str, payload: Option<&Value>) -> bool
             return Err(invalid("Release or cancel the active spatial handle first"));
         }
         match kind {
+            "fit-selection" => {
+                fit_selection(w);
+                Ok(())
+            }
             _ if kind.starts_with("tool/") => {
                 let tool: Tool = serde_json::from_value(json!(kind.trim_start_matches("tool/")))?;
                 cancel_placement(w);
@@ -3240,6 +3253,31 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     out.push(note(w,"plane-help","Part XYZ coordinates · Tab cycles planes through the last point · Alt bypasses grid, joins and inferred axes","ready"));
     out.push(field(
         w,
+        "pick-filter",
+        "Selection filter",
+        json!(crate::sketch_overlay::pick_filter(w)),
+        [
+            ("all", "All geometry"),
+            ("points", "Points & centers"),
+            ("members", "Members"),
+            ("construction", "Construction"),
+        ]
+        .into_iter()
+        .map(|(value, label)| choice(label, value))
+        .collect(),
+        None,
+    ));
+    let mut inference = note(
+        w,
+        "snap-inference",
+        "Origin snaps save a fixed part-origin point; entity snaps share a native point. Alt keeps placement independent.",
+        "ready",
+    );
+    inference.data["snap_target"] = json!(state.snap_target);
+    inference.data["origin_inference"] = json!("persistent_fixed_world_origin");
+    out.push(inference);
+    out.push(field(
+        w,
         "reference-frame",
         "Sketch reference frame",
         json!(definition.workplane),
@@ -3318,6 +3356,12 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "selection",
             &format!("Selected geometry · {}", state.selection.len()),
         ));
+        out.push(action_element(
+            w,
+            "fit-selection",
+            "Fit sketch selection",
+            true,
+        ));
         out.push(note(
             w,
             "selection-hint",
@@ -3336,14 +3380,20 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                                         .map(|(value, _)| value.clone())
                                 })
                                 .unwrap_or_else(|| coordinate(coordinate_value));
-                            out.push(field(
+                            let mut coordinate_field = field(
                                 w,
                                 &format!("point/{point}/{index}"),
-                                &format!("Point {}", axis_name(axis(index))),
+                                &format!("Driving {} from Origin", axis_name(axis(index))),
                                 json!(value),
                                 vec![],
                                 Some("mm"),
-                            ));
+                            );
+                            coordinate_field.data["coordinate_edit_intent"] =
+                                json!("driving_dimension");
+                            coordinate_field.data["description"] = json!(
+                                "Editing saves a driving coordinate relation from the part origin. Drag handles move solver seeds while existing relations remain active."
+                            );
+                            out.push(coordinate_field);
                         }
                     }
                 }
@@ -3873,6 +3923,66 @@ fn segment_distance(point: egui::Pos2, a: egui::Pos2, b: egui::Pos2) -> f32 {
     };
     point.distance(a + delta * parameter)
 }
+pub fn fit_selection(w: &mut Workspace) {
+    let Some(definition) = displayed(w) else {
+        return;
+    };
+    let Some(state) = &w.sketch3d else {
+        return;
+    };
+    let Some(matrix) = part_matrix(w) else {
+        return;
+    };
+    let points = state
+        .selection
+        .iter()
+        .filter_map(|entity| match entity {
+            Entity::Point { point } => definition.points.get(point).copied(),
+            Entity::Origin => Some([0.; 3]),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let members = state
+        .selection
+        .iter()
+        .filter_map(|entity| match entity {
+            Entity::Member { member } => Some(member),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut coordinates = points;
+    if let Some(evaluation) = display_evaluation(w) {
+        coordinates.extend(
+            evaluation
+                .polylines
+                .iter()
+                .filter(|line| members.contains(&&line.member))
+                .flat_map(|line| line.points.iter().copied()),
+        );
+    }
+    for member in members {
+        if let Some(member) = definition.members.get(member) {
+            coordinates.extend(
+                member
+                    .curve
+                    .points()
+                    .into_iter()
+                    .filter_map(|point| definition.points.get(point).copied()),
+            );
+        }
+    }
+    let coordinates = coordinates
+        .into_iter()
+        .map(|point| transform(&matrix, point))
+        .collect::<Vec<_>>();
+    if coordinates.is_empty() {
+        w.status = "Select spatial members or points to frame".into();
+        return;
+    }
+    viewport::frame_points(w, &coordinates, None, false);
+    w.pending_context_focus = false;
+    crate::navigation::stop(w);
+}
 fn hit(w: &Workspace, rect: egui::Rect, cursor: egui::Pos2, handles: bool) -> Option<Hit> {
     let definition = displayed(w)?;
     let matrix = part_matrix(w)?;
@@ -3891,6 +4001,17 @@ fn hit(w: &Workspace, rect: egui::Rect, cursor: egui::Pos2, handles: bool) -> Op
     }
     let mut best = None;
     for (id, point) in &definition.points {
+        let allowed = match crate::sketch_overlay::pick_filter(w) {
+            "members" => false,
+            "construction" => definition
+                .members
+                .values()
+                .any(|member| member.construction && member.curve.points().contains(&id)),
+            _ => true,
+        };
+        if !allowed {
+            continue;
+        }
         if let Some(point) = viewport::project(w, rect, transform(&matrix, *point)) {
             let distance = point.distance(cursor);
             if distance <= 9.
@@ -3906,10 +4027,12 @@ fn hit(w: &Workspace, rect: egui::Rect, cursor: egui::Pos2, handles: bool) -> Op
             }
         }
     }
-    if let Some(best) = best {
-        return Some(best);
+    if best.as_ref().is_some_and(|hit| hit.distance <= 4.) {
+        return best;
     }
-    if let Some(origin) = viewport::project(w, rect, transform(&matrix, [0.; 3]))
+    if best.is_none()
+        && crate::sketch_overlay::pick_reference(w)
+        && let Some(origin) = viewport::project(w, rect, transform(&matrix, [0.; 3]))
         && origin.distance(cursor) <= 8.
     {
         return Some(Hit {
@@ -3920,7 +4043,11 @@ fn hit(w: &Workspace, rect: egui::Rect, cursor: egui::Pos2, handles: bool) -> Op
     }
     if let Some(evaluation) = display_evaluation(w) {
         for line in &evaluation.polylines {
-            if !definition.members.contains_key(&line.member) {
+            if definition
+                .members
+                .get(&line.member)
+                .is_none_or(|member| !crate::sketch_overlay::pick_member(w, member.construction))
+            {
                 continue;
             }
             for pair in line.points.windows(2) {
@@ -3950,6 +4077,9 @@ fn hit(w: &Workspace, rect: egui::Rect, cursor: egui::Pos2, handles: bool) -> Op
     // pending. Curved control polygons are not substituted for real curves.
     if display_evaluation(w).is_none() {
         for (id, member) in &definition.members {
+            if !crate::sketch_overlay::pick_member(w, member.construction) {
+                continue;
+            }
             if let Curve::Line { start, end } = &member.curve
                 && let (Some(a), Some(b)) =
                     (definition.points.get(start), definition.points.get(end))
@@ -4347,6 +4477,19 @@ fn draw(w: &Workspace, ui: &mut egui::Ui, rect: egui::Rect) {
                     controls::number(&props, "handle-size", 4.),
                     egui::Stroke::new(1.5, accent),
                 );
+                if let Some(target) = &state.snap_target {
+                    painter.text(
+                        point + egui::vec2(12., -12.),
+                        egui::Align2::LEFT_BOTTOM,
+                        if matches!(target, Entity::Origin) {
+                            "Coincident with part origin · persistent reference · Alt bypasses"
+                        } else {
+                            "Join endpoint · persistent shared point · Alt bypasses"
+                        },
+                        egui::FontId::proportional(controls::number(&props, "font-size", 11.)),
+                        accent,
+                    );
+                }
             }
             if let Some(start) = state
                 .clicks
@@ -4449,7 +4592,13 @@ pub fn overlay(
     }
     poll(w);
     let modifiers = ui.input(|input| input.modifiers);
-    if response.hovered() && !blocked && ui.input(|input| input.key_pressed(egui::Key::Tab)) {
+    let cycle_plane = response.hovered()
+        && !blocked
+        && !ui.ctx().egui_wants_keyboard_input()
+        && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
+    if cycle_plane {
+        ui.ctx()
+            .memory_mut(|memory| memory.request_focus(response.id));
         if let Some(state) = &mut w.sketch3d
             && let Some(drag) = &mut state.drag
         {
@@ -4466,9 +4615,7 @@ pub fn overlay(
             }
         }
     }
-    if response.hovered()
-        && !blocked
-        && ui.input(|input| input.key_pressed(egui::Key::Tab))
+    if cycle_plane
         && let Some(cursor) = response.hover_pos()
         && let Some(drag) = w.sketch3d.as_ref().and_then(|state| state.drag.as_ref())
     {

@@ -473,6 +473,12 @@ impl EvaluatedReference {
 }
 /// Implemented by adapters; source identities and evaluated values remain application-owned.
 pub trait Resolver {
+    /// Current solved root-to-occurrence transform. Source-only approximations are not valid here.
+    fn occurrence_placement(&self, _path: &[Id]) -> Result<[[f64; 4]; 4]> {
+        Err(CadError::Unsupported(
+            "This adapter does not resolve current solved occurrence transforms".into(),
+        ))
+    }
     fn mate_profile_center(&self, _profile: &NodeRef) -> Result<crate::assembly_geometry::Frame> {
         Err(CadError::Unsupported(
             "This adapter does not evaluate planar profile centroids".into(),

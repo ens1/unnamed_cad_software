@@ -106,6 +106,16 @@ pub struct EditingSketch {
     pub dimension_model: Option<viewport::Selection>,
     pub last_valid: Option<Sketch>,
     pub drag: Option<crate::sketch_handles::DragGesture>,
+    pub pick_candidates: Vec<PickCandidate>,
+    pub pick_index: usize,
+    pick_pointer: Option<egui::Pos2>,
+}
+#[derive(Clone)]
+pub struct PickCandidate {
+    pub entity: cad_core::sketch_actions::SketchEntity,
+    pub label: String,
+    pub distance: f32,
+    priority: u8,
 }
 /// A chain owns only the point seeds created before its first completed
 /// member. These are transient authoring inputs, not standalone sketch points.
@@ -319,6 +329,62 @@ pub fn fit_active(w: &mut Workspace) {
     viewport::frame_points(w, &points, None, false);
     w.pending_context_focus = false;
 }
+pub fn fit_selection(w: &mut Workspace) {
+    let Some(s) = &w.sketch else {
+        w.status = "Open a sketch and select geometry to frame".into();
+        return;
+    };
+    let source = display_definition(s);
+    let mut keys = BTreeSet::new();
+    for entity in &s.selection {
+        if let cad_core::sketch_actions::SketchEntity::Constraint { constraint } = entity {
+            if let Some(constraint) = source
+                .constraints
+                .iter()
+                .find(|candidate| &candidate.id == constraint)
+            {
+                keys.extend(constraint.entities.iter().cloned());
+            }
+        } else {
+            keys.insert(entity.key().to_owned());
+        }
+    }
+    let controls = keys
+        .iter()
+        .filter_map(|key| source.members.get(key))
+        .flat_map(|member| member.curve.points().into_iter().map(str::to_owned))
+        .collect::<Vec<_>>();
+    keys.extend(controls);
+    let mut points = source
+        .points
+        .iter()
+        .filter(|(key, _)| keys.contains(*key))
+        .map(|(_, point)| *point)
+        .collect::<Vec<_>>();
+    points.extend(
+        cad_core::sketch_geometry::polylines(w.session.visible(), &s.definition, &source)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|path| keys.contains(&path.member))
+            .flat_map(|path| path.points),
+    );
+    if s.selection
+        .contains(&cad_core::sketch_actions::SketchEntity::Origin)
+    {
+        points.push([0.; 2]);
+    }
+    let world_points = points
+        .into_iter()
+        .map(|point| world(&s.plane, &s.matrix, point))
+        .collect::<Vec<_>>();
+    if world_points.is_empty() {
+        w.status = "Select a sketch member, point or dimension to frame".into();
+        return;
+    }
+    viewport::frame_points(w, &world_points, None, false);
+    w.pending_context_focus = false;
+    crate::navigation::stop(w);
+}
 pub fn fit_support(w: &mut Workspace) {
     let points = support_framing_points(w);
     if points.is_empty() {
@@ -498,6 +564,9 @@ pub fn begin(w: &mut Workspace, existing: Option<Feature>) {
         dimension_model: None,
         last_valid: None,
         drag: None,
+        pick_candidates: vec![],
+        pick_index: 0,
+        pick_pointer: None,
     };
     if let Some(feature) = existing {
         if let Operation::Profile {
@@ -785,6 +854,9 @@ pub fn set_tool(w: &mut Workspace, tool: Tool) {
     }
 }
 pub(crate) fn restore(s: &mut EditingSketch, source: Sketch) {
+    s.pick_candidates.clear();
+    s.pick_index = 0;
+    s.pick_pointer = None;
     if let Some(editor) = s.edit.as_mut().and_then(|editor| editor.equation.as_mut()) {
         editor.refresh(&source);
     }
@@ -824,6 +896,25 @@ pub(crate) fn restore(s: &mut EditingSketch, source: Sketch) {
     s.block_instances = source.block_instances;
     s.dimension_groups = source.dimension_groups;
     s.constraints = source.constraints;
+    s.selection.retain(|entity| match entity {
+        cad_core::sketch_actions::SketchEntity::Point { point } => s.keys.contains(point),
+        cad_core::sketch_actions::SketchEntity::Member { member } => s.members.contains_key(member),
+        cad_core::sketch_actions::SketchEntity::Constraint { constraint } => s
+            .constraints
+            .iter()
+            .any(|candidate| &candidate.id == constraint),
+        _ => true,
+    });
+    s.selected = s.selection.iter().rev().find_map(|entity| match entity {
+        cad_core::sketch_actions::SketchEntity::Point { point } => {
+            s.keys.iter().position(|key| key == point)
+        }
+        _ => None,
+    });
+    s.selected_member = s.selection.iter().rev().find_map(|entity| match entity {
+        cad_core::sketch_actions::SketchEntity::Member { member } => Some(member.clone()),
+        _ => None,
+    });
     s.closed = !s.members.is_empty();
     s.chain.clear();
     s.pending_chain = None;
@@ -1038,6 +1129,9 @@ fn add_point(s: &mut EditingSketch, p: [f64; 2], snap_existing: bool) -> Id {
         .as_ref()
         .filter(|target| !generated.contains(*target))
     {
+        if snap_existing && p == [0.; 2] {
+            constrain_origin(s, target);
+        }
         return target.clone();
     }
     let key = id();
@@ -1054,7 +1148,27 @@ fn add_point(s: &mut EditingSketch, p: [f64; 2], snap_existing: bool) -> Id {
             contact: None,
         });
     }
+    if snap_existing && p == [0.; 2] {
+        constrain_origin(s, &key);
+    }
     key
+}
+fn constrain_origin(s: &mut EditingSketch, point: &str) {
+    let relation = origin_relation(point);
+    if !cad_core::sketch_actions::relation_already_present(&sketch_definition(s), &relation) {
+        s.constraints.push(relation);
+    }
+}
+fn origin_relation(point: &str) -> SketchConstraint {
+    SketchConstraint {
+        id: id(),
+        kind: "coincident".into(),
+        entities: vec![point.into(), cad_core::sketch_actions::ORIGIN.into()],
+        value: "0 mm".into(),
+        driven: false,
+        distance_side: None,
+        contact: None,
+    }
 }
 fn dynamic_generated_points(source: &Sketch) -> BTreeSet<Id> {
     if source.transforms.values().any(|pattern| pattern.dynamic) {
@@ -1159,6 +1273,7 @@ fn conic_request(
     rho: &Expr,
     clockwise: bool,
     construction: bool,
+    joins: &[bool],
 ) -> Option<cad_core::sketch_conic::Create> {
     let kind = tool.conic_kind()?;
     if positions.len() < 3 {
@@ -1167,19 +1282,32 @@ fn conic_request(
     let suppressed = cad_core::sketch_transform::suppressed_points(source);
     let generated = dynamic_generated_points(source);
     let keys = std::array::from_fn(|i| {
-        let snapped = source
-            .points
-            .iter()
-            .filter(|(key, point)| {
-                !suppressed.contains(*key)
-                    && (point[0] - positions[i][0]).hypot(point[1] - positions[i][1]) < 1e-7
+        let snapped = joins
+            .get(i)
+            .copied()
+            .unwrap_or(false)
+            .then(|| {
+                source
+                    .points
+                    .iter()
+                    .filter(|(key, point)| {
+                        !suppressed.contains(*key)
+                            && (point[0] - positions[i][0]).hypot(point[1] - positions[i][1]) < 1e-7
+                    })
+                    .min_by_key(|(key, _)| generated.contains(*key))
+                    .map(|(key, _)| key.clone())
             })
-            .min_by_key(|(key, _)| generated.contains(*key))
-            .map(|(key, _)| key.clone());
+            .flatten();
         if let Some(target) = snapped
             .as_ref()
             .filter(|target| !generated.contains(*target))
         {
+            if positions[i] == [0.; 2] {
+                let relation = origin_relation(target);
+                if !cad_core::sketch_actions::relation_already_present(source, &relation) {
+                    source.constraints.push(relation);
+                }
+            }
             return target.clone();
         }
         let key = id();
@@ -1194,6 +1322,9 @@ fn conic_request(
                 distance_side: None,
                 contact: None,
             });
+        }
+        if joins.get(i).copied().unwrap_or(false) && positions[i] == [0.; 2] {
+            source.constraints.push(origin_relation(&key));
         }
         key
     });
@@ -1230,6 +1361,7 @@ fn finish_conic(w: &mut Workspace) {
         &s.conic_rho,
         s.clockwise,
         s.construction,
+        &s.click_join,
     ) else {
         return;
     };
@@ -1639,6 +1771,8 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     let mut clicked_entity = None;
     let mut delete_selected = false;
     let mut finish_curve = false;
+    let mut coordinate_action = None;
+    let mut coordinate_relation = None;
     if let Some(s) = &mut w.sketch {
         crate::presentation_controls::inspector_section(
             ui,
@@ -1862,11 +1996,12 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         let point_inspector =
             crate::sketch_ui::selected_inspector_open(ui, "sketch-point-inspector", selected_point);
         let mut point_order = (0..s.points.len()).collect::<Vec<_>>();
-        point_order.sort_by_key(|index| s.selected != Some(*index));
-        egui::CollapsingHeader::new("Point Coordinates")
+        point_order.retain(|index| s.selected == Some(*index));
+        egui::CollapsingHeader::new("Point position")
             .open(point_inspector)
             .default_open(s.selected.is_some())
             .show(ui, |ui| {
+                if point_order.is_empty() { ui.small("Pick a sketch point or center to move it or add a driving coordinate."); }
                 for i in point_order {
                     let p = &mut s.points[i];
                     ui.push_id(&s.keys[i], |ui| {
@@ -1879,15 +2014,79 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                                 },
                             );
                         }
+                        if s.selected != Some(i) { return; }
+                        ui.small("Move seed · existing dimensions and relations remain active");
+                        let old_position = *p;
                         ui.add_enabled_ui(!driven_points.contains(&s.keys[i]), |ui| {
                             ui.horizontal(|ui| {
-                                changed |= crate::sketch_ui::coordinate(ui, "X", &mut p[0], &settings);
-                                changed |= crate::sketch_ui::coordinate(ui, "Y", &mut p[1], &settings);
+                                changed |= crate::sketch_ui::coordinate(ui, "Move X", &mut p[0], &settings);
+                                changed |= crate::sketch_ui::coordinate(ui, "Move Y", &mut p[1], &settings);
                             });
+                        });
+                        if *p != old_position { s.history.push(member_checkpoint.clone()); }
+                        ui.horizontal_wrapped(|ui| {
+                            for (axis, label) in [(0, "Constrain X"), (1, "Constrain Y")] {
+                                if crate::presentation_controls::button(ui, &format!("{}::constrain-{axis}", s.keys[i]), "sketch-relation-action", &["modeling-action", "compact"], label,
+                                    !driven_points.contains(&s.keys[i]) && s.dimension.is_none() && s.edit.is_none(), false)
+                                    .on_hover_text("Save an editable driving dimension from the sketch origin; enter its expression with a live preview.").clicked()
+                                { coordinate_action = Some((s.keys[i].clone(), axis)); }
+                            }
+                            for (kind, label) in [("origin", "Origin"), ("on_x_axis", "X axis"), ("on_y_axis", "Y axis")] {
+                                if crate::presentation_controls::button(ui, &format!("{}::relation-action.{kind}", s.sketch_id), "sketch-relation-action", &["modeling-action", "compact"], label,
+                                    !driven_points.contains(&s.keys[i]) && s.dimension.is_none() && s.edit.is_none(), false)
+                                    .on_hover_text("Add a persistent relation to the selected sketch reference.").clicked()
+                                { clicked_entity = Some(cad_core::sketch_actions::SketchEntity::Point { point: s.keys[i].clone() }); coordinate_relation = Some(format!("sketch.relation.{kind}")); }
+                            }
                         });
                     });
                 }
             });
+        crate::presentation_controls::collapsing(
+            ui,
+            &format!("{}::point-browser", s.sketch_id),
+            "sketch-secondary-section",
+            "All sketch points",
+            false,
+            |ui| {
+                let props = crate::presentation_controls::properties(
+                    &format!("{}::point-browser", s.sketch_id),
+                    "sketch-point-list",
+                    &["compact"],
+                    "ready",
+                );
+                let height =
+                    crate::presentation_controls::number(&props, "max-height", 150.).max(24.);
+                let row_height = ui.spacing().interact_size.y;
+                egui::ScrollArea::vertical()
+                    .id_salt(("sketch-point-browser", &s.sketch_id))
+                    .max_height(height)
+                    .show_rows(ui, row_height, s.points.len(), |ui, range| {
+                        for i in range {
+                            if crate::presentation_controls::button(
+                                ui,
+                                &s.keys[i],
+                                "sketch-point",
+                                &["selection-candidate", "compact"],
+                                &format!(
+                                    "Point {} · {}, {}",
+                                    i + 1,
+                                    settings.format_length(s.points[i][0]),
+                                    settings.format_length(s.points[i][1])
+                                ),
+                                true,
+                                s.selected == Some(i),
+                            )
+                            .clicked()
+                            {
+                                clicked_entity =
+                                    Some(cad_core::sketch_actions::SketchEntity::Point {
+                                        point: s.keys[i].clone(),
+                                    });
+                            }
+                        }
+                    });
+            },
+        );
         egui::CollapsingHeader::new("Advanced Point Relations").show(ui, |ui| {
             let kind = w
                 .fields
@@ -2112,6 +2311,9 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     }
     crate::sketch_issues_ui::controls(ui, w);
     crate::sketch_ui::secondary_controls(ui, w);
+    if let Some((point, axis)) = coordinate_action {
+        crate::sketch_ui::constrain_coordinate(w, &point, axis);
+    }
     if let Some(entity) = clicked_entity {
         let continue_dimension = w.fields.contains_key("smart-dimension-mode")
             && w.sketch.as_ref().is_some_and(|s| s.selection.len() == 1);
@@ -2123,6 +2325,9 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         );
         if w.fields.contains_key("smart-dimension-mode") {
             crate::sketch_ui::selection_changed(w);
+        }
+        if let Some(command) = coordinate_relation {
+            crate::sketch_ui::action(w, &command);
         }
     }
     if delete_selected {
@@ -2218,6 +2423,127 @@ fn universe_pick(
     } else {
         None
     }
+}
+fn pick_candidates(
+    w: &Workspace,
+    rect: egui::Rect,
+    pointer: egui::Pos2,
+    frame: (&Plane, &[[f64; 4]; 4]),
+    paths: &[cad_core::sketch_geometry::SketchPolyline],
+    extent: f64,
+) -> Vec<PickCandidate> {
+    use cad_core::sketch_actions::SketchEntity;
+    let Some(s) = &w.sketch else { return vec![] };
+    let source = display_definition(s);
+    let suppressed = cad_core::sketch_transform::suppressed_points(&sketch_definition(s));
+    let mut candidates = vec![];
+    for (index, (key, point)) in source.points.iter().enumerate() {
+        if suppressed.contains(key) || !crate::sketch_overlay::pick_point(w, &source, key) {
+            continue;
+        }
+        let Some(position) = viewport::project(w, rect, world(frame.0, frame.1, *point)) else {
+            continue;
+        };
+        let distance = pointer.distance(position);
+        if distance <= 9. {
+            let center = source
+                .members
+                .iter()
+                .enumerate()
+                .find_map(|(index, (_, member))| match &member.curve {
+                    SketchCurve::Circle { center, .. } | SketchCurve::Ellipse { center, .. }
+                        if center == key =>
+                    {
+                        Some(format!(
+                            "{} {} center",
+                            if matches!(member.curve, SketchCurve::Circle { .. }) {
+                                "Circle"
+                            } else {
+                                "Ellipse"
+                            },
+                            index + 1
+                        ))
+                    }
+                    _ => None,
+                });
+            candidates.push(PickCandidate {
+                entity: SketchEntity::Point { point: key.clone() },
+                label: center.unwrap_or_else(|| format!("Point {}", index + 1)),
+                distance,
+                priority: u8::from(distance > 4.),
+            });
+        }
+    }
+    for path in paths {
+        if !crate::sketch_overlay::pick_member(w, path.construction) {
+            continue;
+        }
+        let distance = polyline_distance(w, rect, frame, &path.points, path.closed, pointer, None);
+        if distance <= 7. {
+            let label = source
+                .members
+                .iter()
+                .enumerate()
+                .find(|(_, (key, _))| *key == &path.member)
+                .map(|(index, (_, member))| {
+                    let kind = match member.curve {
+                        SketchCurve::Line { .. } => "Line",
+                        SketchCurve::Arc { .. } => "Arc",
+                        SketchCurve::Circle { .. } => "Circle",
+                        SketchCurve::Ellipse { .. } => "Ellipse",
+                        SketchCurve::Bezier { .. } | SketchCurve::Nurbs { .. } => "Spline",
+                    };
+                    format!(
+                        "{kind} {}{}",
+                        index + 1,
+                        if path.construction {
+                            " · construction"
+                        } else {
+                            ""
+                        }
+                    )
+                })
+                .unwrap_or_else(|| {
+                    if path.construction {
+                        "Construction member".into()
+                    } else {
+                        "Derived member".into()
+                    }
+                });
+            candidates.push(PickCandidate {
+                entity: SketchEntity::Member {
+                    member: path.member.clone(),
+                },
+                label,
+                distance,
+                priority: 1,
+            });
+        }
+    }
+    if crate::sketch_overlay::pick_reference(w)
+        && let Some(entity) = universe_pick(w, rect, pointer, frame, extent)
+    {
+        let label = match entity {
+            SketchEntity::Origin => "Origin",
+            SketchEntity::XAxis => "X axis",
+            _ => "Y axis",
+        };
+        candidates.push(PickCandidate {
+            entity,
+            label: label.into(),
+            distance: 0.,
+            priority: 2,
+        });
+    }
+    candidates.sort_by(|a, b| {
+        a.priority
+            .cmp(&b.priority)
+            .then(a.distance.total_cmp(&b.distance))
+            .then(a.entity.key().cmp(b.entity.key()))
+    });
+    candidates.dedup_by(|a, b| a.entity == b.entity);
+    candidates.truncate(64);
+    candidates
 }
 fn circle_points(center: [f64; 2], radius: f64) -> Vec<[f64; 2]> {
     (0..=96)
@@ -2703,7 +3029,7 @@ pub fn overlay(
     let mut cursor = pointer.and_then(|p| hit_plane(w, r, p, &plane, &matrix));
     let bypass_snap = ui.input(|i| i.modifiers.alt);
     let entity_snap = w.view.sketch_entity_snap && !bypass_snap;
-    let snapped = if entity_snap {
+    let mut snapped = if entity_snap {
         w.sketch
             .as_ref()
             .filter(|s| s.tool != Tool::Select)
@@ -2726,16 +3052,41 @@ pub fn overlay(
     } else {
         None
     };
+    let origin_snap = entity_snap
+        && w.sketch.as_ref().is_some_and(|s| s.tool != Tool::Select)
+        && pointer.is_some_and(|pointer| {
+            viewport::project(w, r, world(&plane, &matrix, [0.; 2])).is_some_and(|origin| {
+                let distance = origin.distance(pointer);
+                distance <= 9.
+                    && w.sketch.as_ref().is_none_or(|s| {
+                        snapped.is_none_or(|index| {
+                            s.points[index] == [0.; 2]
+                                || viewport::project(w, r, world(&plane, &matrix, s.points[index]))
+                                    .is_none_or(|point| distance < point.distance(pointer))
+                        })
+                    })
+            })
+        });
+    if origin_snap {
+        cursor = Some([0.; 2]);
+        snapped = w
+            .sketch
+            .as_ref()
+            .and_then(|s| snapped.filter(|index| s.points[*index] == [0.; 2]));
+    }
     if let Some(s) = &w.sketch
         && s.snap
         && !bypass_snap
     {
         cursor = cursor.map(|p| p.map(|v| (v / s.grid).round() * s.grid));
     }
-    if let Some((point, key)) = w
-        .sketch
-        .as_ref()
-        .and_then(|s| snapped.map(|index| (s.points[index], s.keys[index].clone())))
+    if let Some((point, key)) = origin_snap
+        .then(|| ([0.; 2], cad_core::sketch_actions::ORIGIN.to_owned()))
+        .or_else(|| {
+            w.sketch
+                .as_ref()
+                .and_then(|s| snapped.map(|index| (s.points[index], s.keys[index].clone())))
+        })
     {
         cursor = Some(point);
         w.fields.insert("sketch-snap-target".into(), key);
@@ -2759,7 +3110,11 @@ pub fn overlay(
             ui.painter().with_clip_rect(r).text(
                 pos + egui::vec2(12., -12.),
                 egui::Align2::LEFT_BOTTOM,
-                "Join endpoint · Alt for independent point",
+                if origin_snap {
+                    "Coincident with Origin · persistent relation · Alt bypasses"
+                } else {
+                    "Join endpoint · persistent shared point · Alt bypasses"
+                },
                 egui::FontId::proportional(11.),
                 color,
             );
@@ -3021,6 +3376,7 @@ pub fn overlay(
                 &s.conic_rho,
                 s.clockwise,
                 s.construction,
+                &s.click_join,
             ) && let Ok(member) = cad_core::sketch_conic::add(
                 w.session.visible(),
                 &s.definition,
@@ -3067,7 +3423,7 @@ pub fn overlay(
         .as_ref()
         .map(|s| s.points.clone())
         .unwrap_or_default();
-    let picked_member = w
+    let paths = w
         .sketch
         .as_ref()
         .and_then(|s| {
@@ -3078,26 +3434,71 @@ pub fn overlay(
             )
             .ok()
         })
-        .and_then(|paths| {
-            pointer.and_then(|pointer| {
-                paths
-                    .into_iter()
-                    .filter_map(|path| {
-                        let distance = polyline_distance(
-                            w,
-                            r,
-                            (&plane, &matrix),
-                            &path.points,
-                            path.closed,
-                            pointer,
-                            None,
-                        );
-                        (distance < 7.).then_some((distance, path.member))
-                    })
-                    .min_by(|a, b| a.0.total_cmp(&b.0))
-                    .map(|(_, member)| member)
-            })
-        });
+        .unwrap_or_default();
+    let candidates = pointer
+        .map(|pointer| pick_candidates(w, r, pointer, (&plane, &matrix), &paths, extent))
+        .unwrap_or_default();
+    if !candidates.is_empty()
+        && let Some(s) = &mut w.sketch
+    {
+        let changed = s.pick_candidates.len() != candidates.len()
+            || s.pick_candidates
+                .iter()
+                .zip(&candidates)
+                .any(|(a, b)| a.entity != b.entity);
+        if changed
+            || s.pick_pointer
+                .zip(pointer)
+                .is_none_or(|(a, b)| a.distance(b) > 3.)
+        {
+            s.pick_index = 0;
+            s.pick_pointer = pointer;
+        }
+        s.pick_candidates.clone_from(&candidates);
+        if s.tool == Tool::Select
+            && s.pick_candidates.len() > 1
+            && response.hovered()
+            && !ui.ctx().egui_wants_keyboard_input()
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Tab))
+        {
+            s.pick_index = (s.pick_index + 1) % s.pick_candidates.len();
+            ui.ctx()
+                .memory_mut(|memory| memory.request_focus(response.id));
+        }
+    }
+    let picked_entity = candidates
+        .get(w.sketch.as_ref().map_or(0, |s| s.pick_index))
+        .or_else(|| candidates.first())
+        .map(|candidate| candidate.entity.clone());
+    if let Some(entity) = &picked_entity {
+        let painter = ui.painter().with_clip_rect(r);
+        match entity {
+            cad_core::sketch_actions::SketchEntity::Point { point } => {
+                if let Some(point) = w
+                    .sketch
+                    .as_ref()
+                    .and_then(|s| display_definition(s).points.get(point).copied())
+                    .and_then(|point| viewport::project(w, r, world(&plane, &matrix, point)))
+                {
+                    painter.circle_stroke(point, 6., Stroke::new(1.5, accent));
+                }
+            }
+            cad_core::sketch_actions::SketchEntity::Member { member } => {
+                for path in paths.iter().filter(|path| &path.member == member) {
+                    draw_polyline(
+                        w,
+                        ui,
+                        r,
+                        (&plane, &matrix),
+                        &path.points,
+                        path.closed,
+                        Stroke::new(3., accent.gamma_multiply(0.75)),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
     for pair in crate::sketch_ui::model_dimension_highlight(w).windows(2) {
         if let (Some(a), Some(b)) = (
             viewport::project(w, r, pair[0]),
@@ -3116,27 +3517,7 @@ pub fn overlay(
             .as_ref()
             .is_some_and(|sketch| sketch.tool != Tool::Select && sketch.edit.is_none());
     if command_pick {
-        let picked_point = w.sketch.as_ref().and_then(|sketch| {
-            let displayed = display_definition(sketch);
-            let inactive =
-                cad_core::sketch_transform::suppressed_points(&sketch_definition(sketch));
-            displayed
-                .points
-                .iter()
-                .filter(|(id, _)| !inactive.contains(*id))
-                .filter_map(|(id, point)| {
-                    let distance =
-                        viewport::project(w, r, world(&plane, &matrix, *point))?.distance(pointer?);
-                    (distance <= 8.).then_some((distance, id.clone()))
-                })
-                .min_by(|a, b| a.0.total_cmp(&b.0))
-                .map(|(_, point)| cad_core::sketch_actions::SketchEntity::Point { point })
-        });
-        let mut entity = picked_point.or_else(|| {
-            picked_member
-                .clone()
-                .map(|member| cad_core::sketch_actions::SketchEntity::Member { member })
-        });
+        let mut entity = picked_entity.clone();
         let model_edge = if entity.is_none() {
             pointer.and_then(|pointer| {
                 viewport::pick(w, r, pointer).into_iter().find(|hit| {
@@ -3149,7 +3530,7 @@ pub fn overlay(
         } else {
             None
         };
-        if entity.is_none() && model_edge.is_none() {
+        if entity.is_none() && model_edge.is_none() && crate::sketch_overlay::pick_reference(w) {
             entity =
                 pointer.and_then(|pointer| universe_pick(w, r, pointer, (&plane, &matrix), extent));
         }
@@ -3174,6 +3555,7 @@ pub fn overlay(
         return;
     }
     let mut handle_clicked = crate::sketch_ui::annotations(w, ui, r);
+    handle_clicked |= crate::sketch_overlay::candidate_controls(w, ui, r);
     handle_clicked |= crate::sketch_handles::overlay(w, ui, r);
     let mut selection_click = None;
     let mut placed_hole_center = None;
@@ -3234,23 +3616,25 @@ pub fn overlay(
         let cursor = snapped.map(|i| s.points[i]).unwrap_or(cursor);
         match s.tool {
             Tool::Select => {
-                let entity = picked_member
-                    .clone()
-                    .map(|member| cad_core::sketch_actions::SketchEntity::Member { member });
-                selection_click = Some((entity, response.clone()));
+                selection_click = Some((picked_entity.clone(), response.clone()));
             }
             Tool::Point => {
-                placed_hole_center = Some(
-                    snapped
-                        .map(|index| s.keys[index].clone())
-                        .unwrap_or_else(|| add_point(s, cursor, false)),
-                );
+                let point = snapped
+                    .map(|index| s.keys[index].clone())
+                    .unwrap_or_else(|| add_point(s, cursor, origin_snap));
+                if origin_snap {
+                    constrain_origin(s, &point);
+                }
+                placed_hole_center = Some(point);
                 s.closed = true;
             }
             Tool::Polyline => {
                 let key = snapped
                     .map(|i| s.keys[i].clone())
-                    .unwrap_or_else(|| add_point(s, cursor, false));
+                    .unwrap_or_else(|| add_point(s, cursor, origin_snap));
+                if origin_snap {
+                    constrain_origin(s, &key);
+                }
                 if let Some(last) = s.chain.last().cloned() {
                     let previous = s.members.len();
                     line(s, last, key.clone());
@@ -3279,7 +3663,10 @@ pub fn overlay(
                 {
                     let key = snapped
                         .map(|i| s.keys[i].clone())
-                        .unwrap_or_else(|| add_point(s, cursor, false));
+                        .unwrap_or_else(|| add_point(s, cursor, origin_snap));
+                    if origin_snap {
+                        constrain_origin(s, &key);
+                    }
                     if s.chain.last() != Some(&key) {
                         s.chain.push(key);
                     }
@@ -3288,7 +3675,7 @@ pub fn overlay(
             Tool::Conic | Tool::Parabola | Tool::EllipseArc | Tool::ArcSlot => {
                 s.click_join.resize(s.clicks.len(), false);
                 s.clicks.push(cursor);
-                s.click_join.push(snapped.is_some());
+                s.click_join.push(snapped.is_some() || origin_snap);
                 placed_conic = s.clicks.len() == if s.tool == Tool::ArcSlot { 4 } else { 3 };
             }
             Tool::Rectangle
@@ -3309,7 +3696,7 @@ pub fn overlay(
             | Tool::Centerline => {
                 s.click_join.resize(s.clicks.len(), false);
                 s.clicks.push(cursor);
-                s.click_join.push(snapped.is_some());
+                s.click_join.push(snapped.is_some() || origin_snap);
                 let required = if matches!(
                     s.tool,
                     Tool::Arc
@@ -3522,6 +3909,23 @@ pub fn overlay(
                                             radius: Expr(format!("{radius} mm")),
                                         },
                                     );
+                                    if let Some(member) = s.selected_member.clone() {
+                                        for input in [a, b, s.clicks[2]]
+                                            .into_iter()
+                                            .filter(|point| join_existing(*point))
+                                        {
+                                            let point = add_point(s, input, true);
+                                            s.constraints.push(SketchConstraint {
+                                                id: id(),
+                                                kind: "point_on_circle".into(),
+                                                entities: vec![point, member.clone()],
+                                                value: "0 mm".into(),
+                                                driven: false,
+                                                distance_side: None,
+                                                contact: None,
+                                            });
+                                        }
+                                    }
                                 }
                                 Err(error) => s.placement_error = Some(error.to_string()),
                             }
@@ -3631,6 +4035,20 @@ pub fn overlay(
                                     )),
                                 },
                             );
+                            if join_existing(b)
+                                && let Some(member) = s.selected_member.clone()
+                            {
+                                let point = add_point(s, b, true);
+                                s.constraints.push(SketchConstraint {
+                                    id: id(),
+                                    kind: "point_on_circle".into(),
+                                    entities: vec![point, member],
+                                    value: "0 mm".into(),
+                                    driven: false,
+                                    distance_side: None,
+                                    contact: None,
+                                });
+                            }
                         }
                         Tool::Polygon => {
                             let radius = (b[0] - a[0]).hypot(b[1] - a[1]);
@@ -3652,11 +4070,36 @@ pub fn overlay(
                             for i in 0..keys.len() {
                                 line(s, keys[i].clone(), keys[(i + 1) % keys.len()].clone());
                             }
+                            if join_existing(a) {
+                                let center = add_point(s, a, true);
+                                let guide = id();
+                                s.members.insert(
+                                    guide.clone(),
+                                    SketchMember {
+                                        construction: true,
+                                        curve: SketchCurve::Circle {
+                                            center,
+                                            radius: Expr(format!("{radius} mm")),
+                                        },
+                                    },
+                                );
+                                for point in &keys {
+                                    s.constraints.push(SketchConstraint {
+                                        id: id(),
+                                        kind: "point_on_circle".into(),
+                                        entities: vec![point.clone(), guide.clone()],
+                                        value: "0 mm".into(),
+                                        driven: false,
+                                        distance_side: None,
+                                        contact: None,
+                                    });
+                                }
+                            }
                         }
                         Tool::Arc => {
                             let start = add_point(s, a, join_existing(a));
                             let end = add_point(s, b, join_existing(b));
-                            let through = add_point(s, s.clicks[2], false);
+                            let through = add_point(s, s.clicks[2], join_existing(s.clicks[2]));
                             add_member(
                                 s,
                                 SketchCurve::Arc {
@@ -3685,6 +4128,7 @@ pub fn overlay(
                             );
                         }
                         Tool::Slot | Tool::CenterSlot => {
+                            let input_center = a;
                             let a = if s.tool == Tool::CenterSlot {
                                 [2. * a[0] - b[0], 2. * a[1] - b[1]]
                             } else {
@@ -3732,6 +4176,7 @@ pub fn overlay(
                                         end: k[2].clone(),
                                     },
                                 );
+                                let end_arc = s.selected_member.clone();
                                 line(s, k[2].clone(), k[3].clone());
                                 let m = add_point(
                                     s,
@@ -3746,6 +4191,49 @@ pub fn overlay(
                                         end: k[0].clone(),
                                     },
                                 );
+                                let start_arc = s.selected_member.clone();
+                                if join_existing(a)
+                                    || join_existing(b)
+                                    || (s.tool == Tool::CenterSlot && join_existing(input_center))
+                                {
+                                    let start = add_point(s, a, join_existing(a));
+                                    let end = add_point(s, b, join_existing(b));
+                                    for (point, arc) in
+                                        [(start.clone(), start_arc), (end.clone(), end_arc)]
+                                    {
+                                        if let Some(arc) = arc {
+                                            s.constraints.push(SketchConstraint {
+                                                id: id(),
+                                                kind: "arc_center".into(),
+                                                entities: vec![point, arc],
+                                                value: "0 mm".into(),
+                                                driven: false,
+                                                distance_side: None,
+                                                contact: None,
+                                            });
+                                        }
+                                    }
+                                    if s.tool == Tool::CenterSlot && join_existing(input_center) {
+                                        let center = add_point(s, input_center, true);
+                                        let line = id();
+                                        s.members.insert(
+                                            line.clone(),
+                                            SketchMember {
+                                                construction: true,
+                                                curve: SketchCurve::Line { start, end },
+                                            },
+                                        );
+                                        s.constraints.push(SketchConstraint {
+                                            id: id(),
+                                            kind: "midpoint".into(),
+                                            entities: vec![center, line],
+                                            value: "0 mm".into(),
+                                            driven: false,
+                                            distance_side: None,
+                                            contact: None,
+                                        });
+                                    }
+                                }
                             }
                         }
                         _ => {}
@@ -3758,12 +4246,7 @@ pub fn overlay(
         edited |= !selecting;
     }
     if response.secondary_clicked() && !handle_clicked {
-        selection_click = Some((
-            picked_member
-                .clone()
-                .map(|member| cad_core::sketch_actions::SketchEntity::Member { member }),
-            response.clone(),
-        ));
+        selection_click = Some((picked_entity.clone(), response.clone()));
     }
     if let Some((mut entity, hit)) = selection_click {
         let multiselect =
@@ -3771,6 +4254,7 @@ pub fn overlay(
         let dimension_mode = w.fields.contains_key("smart-dimension-mode");
         let mut converted_model = false;
         if entity.is_none()
+            && crate::sketch_overlay::pick_reference(w)
             && (dimension_mode || multiselect)
             && w.sketch.as_ref().is_some_and(|s| s.edit.is_none())
             && let Some(pointer) = hit.interact_pointer_pos()
@@ -3844,6 +4328,10 @@ pub fn overlay(
         if !preserve_context_pair {
             crate::sketch_ui::select(w, entity, continue_dimension || multiselect);
         }
+        if !picked_entity && let Some(s) = &mut w.sketch {
+            s.pick_candidates.clear();
+            s.pick_index = 0;
+        }
         if w.fields.contains_key("smart-dimension-mode") {
             crate::sketch_ui::selection_changed(w);
             if converted_model && w.sketch.as_ref().is_some_and(|s| s.dimension.is_none()) {
@@ -3872,7 +4360,11 @@ pub fn overlay(
         ui.painter().with_clip_rect(r).text(
             p + egui::vec2(12., 16.),
             egui::Align2::LEFT_TOP,
-            format!("{:.2}, {:.2} mm", cursor[0], cursor[1]),
+            format!(
+                "X {} · Y {}",
+                w.session.visible().settings.format_length(cursor[0]),
+                w.session.visible().settings.format_length(cursor[1])
+            ),
             egui::FontId::monospace(11.),
             blue,
         );

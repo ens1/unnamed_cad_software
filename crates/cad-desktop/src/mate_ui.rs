@@ -1460,8 +1460,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
     if !w.fields.contains_key("mate-editor") {
         return;
     }
-    ui.separator();
-    ui.strong("Mate");
     let doc = w.session.visible().clone();
     let Some(a) = doc.assemblies.get(assembly) else {
         return;
@@ -1472,7 +1470,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
             w.fields.remove("mate-source-invalid");
         } else {
             w.fields.insert("mate-source-invalid".into(), "true".into());
-            ui.colored_label(egui::Color32::from_rgb(180,45,30),"Current mate changes have not been accepted. Check component and geometry references before applying.");
         }
         let old_mate = mate.clone();
         let old_kind = mate.kind.clone();
@@ -1603,10 +1600,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
         }
     } else {
         w.fields.insert("mate-source-invalid".into(), "true".into());
-        ui.colored_label(
-            egui::Color32::from_rgb(180, 45, 30),
-            "Invalid mate source. Correct Advanced Source before applying.",
-        );
     }
     let advanced = egui::CollapsingHeader::new("Advanced Source")
         .show(ui, |ui| {
@@ -1634,21 +1627,20 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
     if let Some(draft) = &w.session.draft {
         if draft.pending {
             ui.small("Updating component placements…");
-        } else if let Some(error) = &draft.error {
-            ui.colored_label(egui::Color32::from_rgb(180, 45, 30), error);
-        } else if let Some(report) = draft
-            .preview_evaluation()
-            .and_then(|e| {
-                e.assemblies.get(&cad_core::configuration::key(
-                    assembly,
-                    w.session
-                        .visible()
-                        .active_configurations
-                        .get(assembly)
-                        .map(String::as_str),
-                ))
-            })
-            .and_then(|a| a.report.as_ref())
+        } else if draft.error.is_none()
+            && let Some(report) = draft
+                .preview_evaluation()
+                .and_then(|e| {
+                    e.assemblies.get(&cad_core::configuration::key(
+                        assembly,
+                        w.session
+                            .visible()
+                            .active_configurations
+                            .get(assembly)
+                            .map(String::as_str),
+                    ))
+                })
+                .and_then(|a| a.report.as_ref())
         {
             ui.small(format!(
                 "{} remaining degrees of freedom",
@@ -1679,20 +1671,4 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
         }
         egui::CollapsingHeader::new("Solved placements / component motion").show(ui,|ui|{for(id,motion)in &evaluated.component_motion{crate::assembly_tools_ui::show_placement(ui,w,assembly,id);ui.small(format!("{} translational / {} rotational motion directions",motion.translation_directions.len(),motion.rotation_directions.len()));}ui.small("Directions describe local infinitesimal motion; coupled components may share a degree of freedom. Input coordinates are solver seeds; solved placements are the current model positions.");});
     }
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(
-                !w.confirm_requested && !w.fields.contains_key("mate-source-invalid"),
-                egui::Button::new("OK"),
-            )
-            .clicked()
-        {
-            w.confirm_tool();
-        }
-        if ui.button("Cancel").clicked() {
-            w.fields.remove("mate-editor");
-            w.fields.remove("mate-source-invalid");
-            w.cancel_tool();
-        }
-    });
 }

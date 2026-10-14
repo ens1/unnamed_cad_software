@@ -199,7 +199,7 @@ impl Default for Finish {
             clearcoat: 0.18,
             clearcoat_roughness: 0.25,
             normal_strength: 0.25,
-            height_mm: 0.02,
+            height_mm: 0.006,
             builtin_bump: BuiltinBump::Brushed,
             anisotropy: 0.45,
             textures: TextureMaps::default(),

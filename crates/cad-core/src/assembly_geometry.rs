@@ -207,6 +207,8 @@ impl Frame {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EvaluatedAssembly {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pattern_guides: BTreeMap<Id, crate::body_editing::PatternGuide>,
     pub version: u32,
     pub placements: BTreeMap<Id, Placement>,
     pub frames: BTreeMap<Id, [Frame; 2]>,

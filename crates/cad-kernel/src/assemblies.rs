@@ -109,7 +109,8 @@ pub(crate) fn build_shapes_report<K: KernelAdapter>(
             .find(|f| f.id == node.node)
             .ok_or_else(|| CadError::Invalid("Missing feature".into()))?;
         if defer_placement
-            && (matches!(feature.operation, Operation::ReferenceBody { .. })
+            && ((matches!(feature.operation, Operation::ReferenceBody { .. })
+                || matches!(&feature.operation, Operation::Pattern { options, .. } if options.requires_placement()))
                 || part
                     .feature_dependencies(feature)
                     .iter()
@@ -187,7 +188,9 @@ fn dependency_closure(doc: &Document, roots: Vec<NodeRef>) -> Result<BTreeSet<No
             .iter()
             .find(|f| f.id == node.node)
             .ok_or_else(|| CadError::Invalid("Mate reference feature is missing".into()))?;
-        if matches!(feature.operation, Operation::ReferenceBody { .. }) {
+        if (matches!(feature.operation, Operation::ReferenceBody { .. })
+            || matches!(&feature.operation, Operation::Pattern { options, .. } if options.requires_placement()))
+        {
             return Err(CadError::Unsupported("Associative mate geometry cannot depend on an in-context Reference Body: its assembly placement feeds back into geometry. Select an independent local face, edge, sketch, or datum".into()));
         }
         pending.extend(part.feature_dependencies(feature));
@@ -418,6 +421,7 @@ impl<K: KernelAdapter> Resolver<'_, K> {
             .transpose()?
             .map(|c| c.overrides)
             .unwrap_or_default();
+        let mut pattern_guides = BTreeMap::new();
         for id in cad_core::component_pattern::order(&assembly)? {
             let pattern = assembly.component_patterns[&id].clone();
             if overrides
@@ -440,32 +444,82 @@ impl<K: KernelAdapter> Resolver<'_, K> {
             context
                 .assemblies
                 .insert(definition.into(), assembly.clone());
-            let frame = if let cad_core::component_pattern::Mode::Circular {
-                axis_reference: Some(reference),
-                ..
-            } = &pattern.mode
-            {
+            let resolve = |reference: &cad_core::component_pattern::AxisReference,
+                           linear: bool|
+             -> Result<Frame> {
                 let instance = assembly.instances.get(&reference.instance).ok_or_else(|| {
-                    CadError::Invalid("Pattern axis component is suppressed or missing".into())
+                    CadError::Invalid("Pattern direction component is suppressed or missing".into())
                 })?;
+                if linear {
+                    cad_core::component_pattern::straight_reference(&reference.geometry)?;
+                }
                 let frame = self.frame(&context, instance, &reference.geometry)?;
                 if matches!(frame.kind, assembly_geometry::FrameKind::Point) {
                     return Err(CadError::Invalid(
-                        "A circular component pattern needs an axis or plane-normal reference"
-                            .into(),
+                        "A component pattern needs an axis reference".into(),
                     ));
                 }
-                Some(frame.transformed(&instance.placement.matrix())?)
-            } else {
-                None
+                frame.transformed(&instance.placement.matrix())
             };
+            let mut frames_for_pattern = cad_core::component_pattern::ResolvedFrames::default();
+            match &pattern.mode {
+                cad_core::component_pattern::Mode::Circular { axis_reference, .. } => {
+                    frames_for_pattern.first = axis_reference
+                        .as_deref()
+                        .map(|r| resolve(r, false))
+                        .transpose()?;
+                }
+                cad_core::component_pattern::Mode::Linear {
+                    direction,
+                    second_direction,
+                    ..
+                } => {
+                    frames_for_pattern.first = direction
+                        .as_ref()
+                        .and_then(|d| d.reference.as_deref())
+                        .map(|r| resolve(r, true))
+                        .transpose()?;
+                    frames_for_pattern.second = second_direction
+                        .as_ref()
+                        .and_then(|d| d.direction.reference.as_deref())
+                        .map(|r| resolve(r, true))
+                        .transpose()?;
+                }
+            }
             cad_core::component_pattern::expand(
                 &context,
                 &mut assembly,
                 &pattern,
                 &overrides,
-                frame.as_ref(),
+                &frames_for_pattern,
             )?;
+            if matches!(
+                pattern.mode,
+                cad_core::component_pattern::Mode::Linear { .. }
+            ) {
+                let origin = pattern
+                    .seeds
+                    .iter()
+                    .find_map(|id| assembly.instances.get(id))
+                    .map(|i| i.placement.translation)
+                    .unwrap_or([0.; 3]);
+                pattern_guides.insert(
+                    pattern.id.clone(),
+                    cad_core::body_editing::PatternGuide {
+                        document: context.id.clone(),
+                        origin_mm: origin,
+                        steps_mm: cad_core::component_pattern::step_vectors(
+                            &context,
+                            definition,
+                            &pattern,
+                            &frames_for_pattern,
+                        )?,
+                        counts: cad_core::component_pattern::counts(
+                            &context, definition, &pattern,
+                        )?,
+                    },
+                );
+            }
             for instance in assembly
                 .instances
                 .values()
@@ -514,6 +568,7 @@ impl<K: KernelAdapter> Resolver<'_, K> {
         self.done.insert(
             key,
             EvaluatedAssembly {
+                pattern_guides,
                 version: assembly_geometry::CONTRACT_VERSION,
                 placements: assembly
                     .instances

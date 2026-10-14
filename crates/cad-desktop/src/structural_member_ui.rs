@@ -1633,8 +1633,59 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                 open: None,
             },
             |ui| {
+                let notes = children
+                    .iter()
+                    .filter(|element| element.role == "structural-member-note")
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let member_items = children
+                    .iter()
+                    .filter(|element| {
+                        element.data["field"]
+                            .as_str()
+                            .is_some_and(|field| field.starts_with("member/"))
+                    })
+                    .collect::<Vec<_>>();
+                let selected = member_items
+                    .iter()
+                    .filter(|element| element.data["json"] == true)
+                    .count();
+                let query = if !member_items.is_empty() {
+                    crate::workspace_controls::reference_filter(
+                        ui,
+                        w,
+                        &group.id,
+                        "sketch entities",
+                        selected,
+                        member_items.len(),
+                    )
+                } else {
+                    Some(String::new())
+                };
+                let mut selected_shown = 0;
                 let mut children = children.into_iter().peekable();
                 while let Some(element) = children.next() {
+                    if element.role == "structural-member-note" {
+                        continue;
+                    }
+                    if element.data["field"]
+                        .as_str()
+                        .is_some_and(|field| field.starts_with("member/"))
+                    {
+                        match &query {
+                            Some(query)
+                                if !query.is_empty()
+                                    && !element.label.to_lowercase().contains(query) =>
+                            {
+                                continue;
+                            }
+                            None if element.data["json"] != true || selected_shown >= 2 => continue,
+                            None => {
+                                selected_shown += 1;
+                            }
+                            _ => {}
+                        }
+                    }
                     if element.role.ends_with("-action") {
                         let mut row = vec![element];
                         while children
@@ -1654,13 +1705,51 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                         render_control(ui, w, &element);
                     }
                 }
+                if !notes.is_empty()
+                    && crate::workspace_controls::disclosure(
+                        ui,
+                        w,
+                        &format!("{}/instructions", group.id),
+                        "Instructions",
+                    )
+                {
+                    for element in notes {
+                        controls::label(
+                            ui,
+                            &element.id,
+                            &element.role,
+                            &["modeling-help"],
+                            &element.label,
+                            &element.state,
+                        );
+                    }
+                }
             },
         );
     }
     true
 }
 pub(crate) fn render_control(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement) {
-    if element.data.get("setter").is_some() {
+    if element.data["field"]
+        .as_str()
+        .is_some_and(|field| field.starts_with("member/"))
+    {
+        let selected = element.data["json"].as_bool().unwrap_or(false);
+        if controls::button(
+            ui,
+            &element.id,
+            &element.role,
+            &["selection-choice"],
+            &element.label,
+            true,
+            selected,
+        )
+        .clicked()
+            && let Err(error) = set_value(w, element, json!(!selected))
+        {
+            w.status = error.to_string();
+        }
+    } else if element.data.get("setter").is_some() {
         crate::ui::semantic_field(ui, w, element);
     } else if element.role.ends_with("-action") {
         let response = controls::button(

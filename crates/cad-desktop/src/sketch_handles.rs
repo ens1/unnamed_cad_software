@@ -475,10 +475,37 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
             .get("background")
             .and_then(|v| crate::ui::color(v))
             .unwrap_or(ui.visuals().window_fill());
+        let allowed = match &entity {
+            SketchEntity::Point { point } => crate::sketch_overlay::pick_point(w, &source, point),
+            SketchEntity::Member { member } => crate::sketch_overlay::pick_member(
+                w,
+                source
+                    .members
+                    .get(member)
+                    .is_some_and(|member| member.construction),
+            ),
+            _ => crate::sketch_overlay::pick_reference(w),
+        };
+        let point_handle = matches!(
+            handle.target,
+            HandleTarget::Point { .. } | HandleTarget::BlockControl { .. }
+        );
+        let wins_pick = !point_handle
+            || w.sketch.as_ref().is_some_and(|s| {
+                s.pick_candidates
+                    .get(s.pick_index)
+                    .is_some_and(|candidate| candidate.entity == entity)
+                    && ui
+                        .input(|input| input.pointer.hover_pos())
+                        .is_some_and(|pointer| pointer.distance(pos) <= 9.)
+            });
+        let interactive = dragging || (allowed && wins_pick);
         let hit = ui.interact(
             egui::Rect::from_center_size(pos, egui::vec2(hit_size, hit_size)).intersect(rect),
             ui.make_persistent_id(("sketch-handle", &handle.id)),
-            if w.fields.contains_key("smart-dimension-mode") {
+            if !interactive {
+                egui::Sense::hover()
+            } else if w.fields.contains_key("smart-dimension-mode") {
                 egui::Sense::click()
             } else {
                 egui::Sense::click_and_drag()
@@ -521,7 +548,7 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
         if movement == Some("constrained") && !locked {
             painter.circle_filled(pos, 1., color);
         }
-        if hit.hovered() {
+        if hit.hovered() && interactive {
             ui.ctx()
                 .set_cursor_icon(if w.fields.contains_key("smart-dimension-mode") {
                     egui::CursorIcon::PointingHand

@@ -90,6 +90,60 @@ pub fn appearance_panel_hosted(w: &Workspace) -> bool {
         .is_some_and(|root| contains(root, &w.layout.components))
 }
 
+/// Native fallback chrome yields to an explicitly composed task panel. User
+/// layouts remain free to place or duplicate semantic confirmation controls.
+pub fn task_controls_hosted(w: &Workspace) -> bool {
+    has_layout_control(w, "property-manager", None)
+        || has_layout_control(w, "apply-action", Some("draft.apply"))
+}
+pub fn confirmation_hosted(w: &Workspace) -> bool {
+    has_layout_control(w, "apply-action", Some("draft.apply"))
+}
+fn has_layout_control(w: &Workspace, wanted_role: &str, wanted_command: Option<&str>) -> bool {
+    fn contains(
+        node: &cad_core::presentation::LayoutNode,
+        components: &BTreeMap<String, cad_core::presentation::Component>,
+        role: &str,
+        command: Option<&str>,
+    ) -> bool {
+        if node.hidden || node.visibility.as_deref() == Some("hidden") {
+            return false;
+        }
+        let component = node.component.as_ref().and_then(|id| components.get(id));
+        let actual_role = node
+            .role
+            .as_deref()
+            .or_else(|| component.map(|c| c.role.as_str()));
+        let actual_command = node
+            .command
+            .as_deref()
+            .or_else(|| component.and_then(|c| c.command.as_deref()));
+        let binding = node
+            .bind
+            .as_deref()
+            .or(node.semantic.as_deref())
+            .or_else(|| component.and_then(|c| c.bind.as_deref()));
+        actual_role == Some(role)
+            || command.is_some() && actual_command == command
+            || role == "property-manager"
+                && binding == Some("workspace.active_operation.parameters")
+            || command == Some("draft.apply")
+                && matches!(binding, Some("draft.apply" | "command:draft.apply"))
+            || node
+                .children
+                .iter()
+                .any(|child| contains(child, components, role, command))
+            || node
+                .template
+                .as_ref()
+                .is_some_and(|template| contains(template, components, role, command))
+    }
+    w.layout
+        .layouts
+        .get(&w.view.active_layout)
+        .is_some_and(|root| contains(root, &w.layout.components, wanted_role, wanted_command))
+}
+
 /// Render the declared hierarchy, rather than giving every leaf an unrelated
 /// window. Parent clipping and scroll offsets therefore apply to all descendants.
 pub fn render(
@@ -364,6 +418,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         w.tool_checkpoint.is_some() || w.sketch.is_some(),
     ));
     elements.extend(crate::selection_ui::semantics(w));
+    elements.extend(crate::viewport::picking_semantics(w));
     elements.extend(crate::part_edges::semantics(w));
     let hover = w.hover_guide.as_ref().filter(|guide| {
         crate::viewport::selection_evaluation(w).is_some_and(|evaluation| {
@@ -415,6 +470,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::structural_member_ui::semantics(w));
     elements.extend(crate::sketch3d_ui::semantics(w));
     elements.extend(crate::fabrication_sources_ui::semantics(w));
+    elements.extend(crate::fabrication_ui::state_semantics(w));
     elements.extend(crate::assembly_tools_ui::semantics(w));
     elements.extend(crate::assembly_welds_ui::semantics(w));
     elements.extend(crate::weld_beads_ui::semantics(w));
@@ -434,6 +490,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::production_ui::row_semantics(w));
     elements.extend(crate::feature_order_ui::semantics(w));
     elements.extend(crate::assembly_motion_ui::semantics(w));
+    elements.extend(crate::component_pattern_ui::semantics(w));
     for element in crate::cad_ui::semantics(w) {
         if let Some(existing) = elements
             .iter_mut()
@@ -484,6 +541,45 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     active_fields(w, &mut elements);
     dimension_fields(w, &mut elements);
     elements.extend(crate::workspace_controls::semantics(w));
+    let reference_groups = elements
+        .iter()
+        .filter(|element| {
+            element.role.ends_with("-group")
+                && matches!(
+                    element.data["group"].as_str(),
+                    Some("paths" | "members" | "selection")
+                )
+        })
+        .map(|element| (element.id.clone(), element.label.clone()))
+        .collect::<Vec<_>>();
+    for (group, label) in reference_groups {
+        elements.extend(crate::workspace_controls::reference_controls(
+            w, &group, &label,
+        ));
+    }
+    let help_groups = elements
+        .iter()
+        .filter(|group| {
+            matches!(
+                group.role.as_str(),
+                "operation-editor-group" | "structural-member-group"
+            ) && elements.iter().any(|element| {
+                matches!(
+                    element.role.as_str(),
+                    "operation-editor-help" | "structural-member-note"
+                ) && element.data["group"] == group.data["group"]
+                    && element.data["feature"] == group.data["feature"]
+            })
+        })
+        .map(|group| format!("{}/instructions", group.id))
+        .collect::<Vec<_>>();
+    for group in help_groups {
+        elements.extend(
+            crate::workspace_controls::reference_controls(w, &group, "Instructions")
+                .into_iter()
+                .take(1),
+        );
+    }
     elements.extend(crate::reference_repair_ui::project(w));
     for element in crate::sketch_relations_ui::semantics(w) {
         if let Some(existing) = elements
@@ -714,6 +810,21 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "assembly-tree",
+        crate::assembly_tree_ui::set_value,
+        crate::assembly_tree_ui::value,
+    );
+    adapters.register(
+        "task-panel-query",
+        crate::workspace_controls::set_query,
+        crate::workspace_controls::query_value,
+    );
+    adapters.register(
+        "component-pattern-editor",
+        crate::component_pattern_ui::set_value,
+        crate::component_pattern_ui::value,
+    );
     adapters.register(
         "document-identity",
         crate::document_identity_ui::set_value,

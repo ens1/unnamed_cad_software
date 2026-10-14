@@ -531,7 +531,10 @@ impl Command {
                 if crate::component_pattern::generated(a).contains(&instance) {
                     return Err(CadError::Invalid("Suppress this driven occurrence in a configuration, or edit/delete its component pattern".into()));
                 }
-                if a.component_patterns.values().any(|p| p.seeds.contains(&instance) || matches!(&p.mode, crate::component_pattern::Mode::Circular { axis_reference: Some(r), .. } if r.instance == instance)) {
+                if a.component_patterns.values().any(|p| {
+                    p.seeds.contains(&instance)
+                        || p.mode.references().iter().any(|r| r.instance == instance)
+                }) {
                     return Err(CadError::Invalid("Update or delete the component patterns using this seed or axis component first".into()));
                 }
                 let removed_mates = a
@@ -706,6 +709,7 @@ impl Command {
                         )
                     })?
                     .clone();
+                if part.features.iter().any(|feature|matches!(&feature.operation,Operation::Pattern {options,..} if options.requires_placement())) {return Err(CadError::Unsupported("Make Unique cannot yet reanchor occurrence-bound part-pattern directions while preserving the original shared definition. Use local sketch/reference-axis directions before making this part unique, or retain the shared definition".into()));}
                 let new_id = id();
                 let mapping: std::collections::BTreeMap<_, _> =
                     part.features.iter().map(|f| (f.id.clone(), id())).collect();
@@ -843,10 +847,7 @@ impl Command {
                 let mut pattern_references = Vec::new();
                 for owner in document.assemblies.values() {
                     for pattern in owner.component_patterns.values() {
-                        if let crate::component_pattern::Mode::Circular {
-                            axis_reference: Some(reference),
-                            ..
-                        } = &pattern.mode
+                        for (index, reference) in pattern.mode.references().into_iter().enumerate()
                         {
                             let Some(component) = owner.instances.get(&reference.instance) else {
                                 continue;
@@ -870,27 +871,30 @@ impl Command {
                                 definition = child.definition.clone();
                             }
                             if reaches {
-                                pattern_references.push((owner.id.clone(), pattern.id.clone()));
+                                pattern_references.push((
+                                    owner.id.clone(),
+                                    pattern.id.clone(),
+                                    index,
+                                ));
                             }
                         }
                     }
                 }
-                for (owner, pattern) in pattern_references {
+                for (owner, pattern, index) in pattern_references {
                     let pattern = document
                         .assemblies
                         .get_mut(&owner)
                         .and_then(|a| a.component_patterns.get_mut(&pattern))
                         .ok_or_else(missing)?;
-                    if let crate::component_pattern::Mode::Circular {
-                        axis_reference: Some(reference),
-                        ..
-                    } = &mut pattern.mode
-                    {
+                    if let Some(reference) = pattern.mode.references_mut().into_iter().nth(index) {
                         let mut json = serde_json::to_value(&reference.geometry)?;
                         rewrite(&mut json, &def, &new_id, &mapping)?;
                         reference.geometry = serde_json::from_value(json)?;
                     }
                 }
+                retarget_part_pattern_occurrence(
+                    document, &assembly, &instance, &def, &new_id, &mapping,
+                )?;
                 retarget_drawing_occurrence(
                     document, &assembly, &instance, &def, &new_id, &mapping,
                 )?;
@@ -911,6 +915,91 @@ impl Command {
         crate::drawing_tables::reconcile_reservations(document)?;
         document.validate()
     }
+}
+/// Direction geometry follows only the saved occurrence being made unique;
+/// sibling paths continue to refer to their shared source and feature IDs.
+fn retarget_part_pattern_occurrence(
+    document: &mut Document,
+    assembly: &str,
+    instance: &str,
+    old: &str,
+    new: &str,
+    mapping: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    let missing = || {
+        CadError::Invalid(
+            "Part-pattern direction source changed while making the occurrence unique".into(),
+        )
+    };
+    fn reaches(document: &Document, path: &[Id], owner: &str, selected: &str) -> bool {
+        let mut definition = document.root.as_str();
+        for key in path {
+            let Some(a) = document.assemblies.get(definition) else {
+                return false;
+            };
+            let alias = a
+                .component_patterns
+                .values()
+                .flat_map(|p| &p.occurrences)
+                .find(|entry| &entry.instance == key && entry.seed == selected);
+            if a.id == owner && (key == selected || alias.is_some()) {
+                return true;
+            }
+            let Some(i) = a.instances.get(key) else {
+                return false;
+            };
+            definition = &i.definition;
+        }
+        false
+    }
+    let mut references = vec![];
+    for (owner, part) in &document.parts {
+        for feature in &part.features {
+            if let Operation::Pattern { options, .. } = &feature.operation {
+                for (slot, direction) in options.direction.iter().map(|d| (0, d)).chain(
+                    options
+                        .second_direction
+                        .iter()
+                        .filter_map(|d| d.direction.as_ref())
+                        .map(|d| (1, d)),
+                ) {
+                    if direction
+                        .occurrence
+                        .as_ref()
+                        .is_some_and(|path| reaches(document, &path.path, assembly, instance))
+                    {
+                        references.push((owner.clone(), feature.id.clone(), slot));
+                    }
+                }
+            }
+        }
+    }
+    let mut identities = mapping.clone();
+    identities.insert(old.into(), new.into());
+    for (owner, feature, slot) in references {
+        let part = document.parts.get_mut(&owner).ok_or_else(missing)?;
+        let feature = part
+            .features
+            .iter_mut()
+            .find(|f| f.id == feature)
+            .ok_or_else(missing)?;
+        let Operation::Pattern { options, .. } = &mut feature.operation else {
+            return Err(missing());
+        };
+        let source = if slot == 0 {
+            options.direction.as_mut()
+        } else {
+            options
+                .second_direction
+                .as_mut()
+                .and_then(|d| d.direction.as_mut())
+        }
+        .ok_or_else(missing)?;
+        let mut axis = serde_json::to_value(&source.axis)?;
+        crate::library::remap_owned_features(&mut axis, &identities, "")?;
+        source.axis = serde_json::from_value(axis)?;
+    }
+    Ok(())
 }
 /// Follow only consuming body inputs; datum/reference/copy inputs do not hide a source.
 fn consuming_closure(part: &Part) -> std::collections::BTreeSet<Id> {

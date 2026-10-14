@@ -1105,33 +1105,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         }
     }
     synchronized(w);
-    if w.fields.contains_key("configuration-source-invalid") {
-        ui.colored_label(egui::Color32::from_rgb(190,55,35),"Current edits have not been accepted. Correct the dependency or source before applying.");
-    }
-    if let Some(draft) = &w.session.draft {
-        if let Some(error) = &draft.error {
-            ui.colored_label(egui::Color32::from_rgb(190, 55, 35), error);
-        } else if draft.pending {
-            ui.weak("Updating configuration preview…");
-        }
-    }
-    ui.separator();
-    ui.horizontal(|ui| {
-        if ui
-            .add_enabled(current_source_is_valid(w), egui::Button::new("OK"))
-            .clicked()
-        {
-            if w.session.draft.is_none() {
-                w.cancel_tool();
-                w.status = "Editor closed".into();
-            } else {
-                w.confirm_tool();
-            }
-        }
-        if ui.button("Cancel").clicked() {
-            w.cancel_tool();
-        }
-    });
 }
 
 pub fn open_owner(w: &mut Workspace, owner: &str, configuration: Option<&str>, tab: &str) {

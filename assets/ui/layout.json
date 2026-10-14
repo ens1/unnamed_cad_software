@@ -80,7 +80,7 @@
                   "use": "dependencies",
                   "grow": 1,
                   "editing": {
-                    "height_logical_px": 142,
+                    "height_logical_px": 38,
                     "grow": 0
                   },
                   "id": "instrument-rail/dependencies/root/2/0/1"

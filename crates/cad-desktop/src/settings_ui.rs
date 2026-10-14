@@ -1055,6 +1055,7 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                         settings::action(w,"settings.presentation");
                                     }
                                     if *id == "application.themes" {
+                                        crate::workspace_controls::confirmation_preview(ui);
                                         let selected = crate::theme_library::selected(w);
                                         if let Some(choice) = crate::theme_library::choices(w).into_iter().find(|choice|choice.id == selected) {
                                             controls::label(ui,"settings:theme-description","settings-description",&[],&choice.description,"ready");

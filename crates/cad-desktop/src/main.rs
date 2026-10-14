@@ -109,7 +109,28 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/43;solver/tcad-native-lm/18";
+const BACKEND: &str = "monstertruck/0.4.1+fc2306852a46;adapter/44;solver/tcad-native-lm/18";
+fn initial_part_context(document: &Document) -> Option<cad_core::Id> {
+    if document.parts.contains_key(&document.root) {
+        return Some(document.root.clone());
+    }
+    let kind = document.properties.get("document_kind").map(String::as_str);
+    let legacy_part = kind.is_none()
+        && document.parts.len() == 1
+        && document
+            .assemblies
+            .get(&document.root)
+            .is_some_and(|assembly| {
+                assembly.instances.len() == 1
+                    && assembly
+                        .instances
+                        .values()
+                        .all(|instance| document.parts.contains_key(&instance.definition))
+            });
+    (kind == Some("part") || legacy_part)
+        .then(|| document.parts.keys().next().cloned())
+        .flatten()
+}
 #[derive(Resource)]
 pub struct Workspace {
     pub session: Session,
@@ -222,7 +243,7 @@ impl Workspace {
             }
         }
         let mut view = PresentationState {
-            active_part: doc.parts.keys().next().cloned(),
+            active_part: initial_part_context(&doc),
             ..Default::default()
         };
         let root = project
@@ -460,6 +481,10 @@ impl Workspace {
             self.confirm_requested = false;
             return;
         }
+        if document_identity_ui::pending_save_as(self) {
+            ui::save_identity_copy(self);
+            return;
+        }
         if document_identity_ui::active(self) && self.session.draft.is_none() {
             let save_as = document_identity_ui::take_after_confirm(self);
             let destination = ui::take_save_as_destination(self);
@@ -673,6 +698,7 @@ impl Workspace {
         display_states_ui::cancel(self);
         materials_ui::cancel(self);
         components_ui::cancel(self);
+        component_pattern_ui::cancel(self);
         assembly_tools_ui::cancel(self);
         assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
@@ -718,7 +744,7 @@ impl Workspace {
             ui_scale: self.application_preferences.ui_scale,
             ..Default::default()
         };
-        self.view.active_part = self.session.committed.parts.keys().next().cloned();
+        self.view.active_part = initial_part_context(&self.session.committed);
         self.view.library_favorites = self.application_preferences.library_favorites.clone();
         self.view.library_recent = self.application_preferences.library_recent.clone();
         self.activate_context(self.view.active_part.clone(), None);
@@ -816,6 +842,7 @@ impl Workspace {
         display_states_ui::cancel(self);
         materials_ui::cancel(self);
         components_ui::cancel(self);
+        component_pattern_ui::cancel(self);
         assembly_tools_ui::cancel(self);
         assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
@@ -897,6 +924,10 @@ impl Workspace {
         }
         if !document_identity_ui::ready_to_confirm(self) {
             self.confirm_requested = false;
+            return;
+        }
+        if document_identity_ui::pending_save_as(self) {
+            ui::save_identity_copy(self);
             return;
         }
         if document_identity_ui::active(self) && self.session.draft.is_none() {

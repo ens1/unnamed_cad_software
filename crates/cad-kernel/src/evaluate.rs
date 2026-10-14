@@ -20,37 +20,6 @@ impl std::io::Write for PreviewByteBudget {
         Ok(())
     }
 }
-fn occurrence_highlight(
-    path: &str,
-    mesh: &MeshData,
-    added: bool,
-    budget: &mut PreviewByteBudget,
-) -> Option<OperationPreviewChange> {
-    #[derive(serde::Serialize)]
-    struct BorrowedChange<'a> {
-        added: Option<&'a MeshData>,
-        removed: Option<&'a MeshData>,
-        representation: PreviewRepresentation,
-        diagnostics: &'a [Diagnostic],
-    }
-    let borrowed = BorrowedChange {
-        added: added.then_some(mesh),
-        removed: (!added).then_some(mesh),
-        representation: PreviewRepresentation::ExactBrep,
-        diagnostics: &[],
-    };
-    let start = budget.remaining;
-    if serde_json::to_writer(&mut *budget, &(path, borrowed)).is_err() {
-        budget.remaining = start;
-        return None;
-    }
-    Some(OperationPreviewChange {
-        added: added.then(|| mesh.clone()),
-        removed: (!added).then(|| mesh.clone()),
-        representation: PreviewRepresentation::ExactBrep,
-        diagnostics: vec![],
-    })
-}
 pub struct Evaluator<K: KernelAdapter = MonstertruckAdapter> {
     pub adapter: K,
     pub shapes: BTreeMap<NodeRef, Shape>,
@@ -193,6 +162,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         self.surface_sets.clear();
         self.history_cache.clear();
         Ok(Some(Evaluation {
+            pattern_guides: BTreeMap::new(),
             identity,
             meshes,
             instances,
@@ -249,6 +219,8 @@ impl<K: KernelAdapter> Evaluator<K> {
             changes: BTreeMap::new(),
             placement_changes_valid: false,
             occurrence_changes: BTreeMap::new(),
+            occurrence_meshes: BTreeMap::new(),
+            baseline_meshes: BTreeMap::new(),
             baseline_instances: Vec::new(),
             diagnostics: Vec::new(),
         };
@@ -363,10 +335,10 @@ impl<K: KernelAdapter> Evaluator<K> {
                 }
             }
         }
-        let mut occurrence_budget = PreviewByteBudget {
+        let mut omitted = Vec::new();
+        let mut baseline_budget = PreviewByteBudget {
             remaining: 16 * 1024 * 1024,
         };
-        let mut omitted = false;
         if evaluated.valid
             && let Some(before_meshes) = baseline_meshes
         {
@@ -413,29 +385,45 @@ impl<K: KernelAdapter> Evaluator<K> {
                 preview.changes.retain(|key, _| retained_keys.contains(key));
                 for (path, instance) in &after {
                     if !before.contains_key(path)
-                        && let Some(mesh) =
-                            evaluated.meshes.get(cad_core::history::mesh_key(instance))
+                        && evaluated
+                            .meshes
+                            .contains_key(cad_core::history::mesh_key(instance))
                     {
-                        if let Some(change) =
-                            occurrence_highlight(path, mesh, true, &mut occurrence_budget)
-                        {
-                            preview.occurrence_changes.insert(path.clone(), change);
-                        } else {
-                            omitted = true;
-                        }
+                        preview.occurrence_meshes.insert(
+                            path.clone(),
+                            OccurrencePreviewMesh {
+                                mesh_key: cad_core::history::mesh_key(instance).into(),
+                                added: true,
+                            },
+                        );
                     }
                 }
                 for (path, instance) in &before {
                     if !after.contains_key(path)
                         && let Some(mesh) = before_meshes.get(cad_core::history::mesh_key(instance))
                     {
-                        if let Some(change) =
-                            occurrence_highlight(path, mesh, false, &mut occurrence_budget)
-                        {
-                            preview.occurrence_changes.insert(path.clone(), change);
-                        } else {
-                            omitted = true;
+                        let mesh_key = cad_core::history::mesh_key(instance).to_owned();
+                        if !preview.baseline_meshes.contains_key(&mesh_key) {
+                            let start = baseline_budget.remaining;
+                            if serde_json::to_writer(&mut baseline_budget, &(&mesh_key, mesh))
+                                .is_err()
+                            {
+                                baseline_budget.remaining = start;
+                                omitted.push(path.clone());
+                                continue;
+                            }
                         }
+                        preview
+                            .baseline_meshes
+                            .entry(mesh_key.clone())
+                            .or_insert_with(|| mesh.clone());
+                        preview.occurrence_meshes.insert(
+                            path.clone(),
+                            OccurrencePreviewMesh {
+                                mesh_key,
+                                added: false,
+                            },
+                        );
                     }
                 }
             }
@@ -446,30 +434,42 @@ impl<K: KernelAdapter> Evaluator<K> {
         let mut budget = PreviewByteBudget {
             remaining: 16 * 1024 * 1024,
         };
-        preview.occurrence_changes.retain(|key, change| {
-            let start = budget.remaining;
-            if serde_json::to_writer(&mut budget, &(key, change)).is_err() {
-                budget.remaining = start;
-                omitted = true;
-                false
-            } else {
-                true
-            }
-        });
         preview.changes.retain(|key, change| {
             let start = budget.remaining;
             if serde_json::to_writer(&mut budget, &(key, change)).is_err() {
                 budget.remaining = start;
-                omitted = true;
+                omitted.push(key.clone());
                 false
             } else {
                 true
             }
         });
-        if omitted {
+        preview.baseline_meshes.retain(|key, mesh| {
+            let start = budget.remaining;
+            if serde_json::to_writer(&mut budget, &(key, mesh)).is_err() {
+                budget.remaining = start;
+                omitted.push(key.clone());
+                false
+            } else {
+                true
+            }
+        });
+        preview.occurrence_meshes.retain(|path, mesh| {
+            let start = budget.remaining;
+            if !mesh.added && !preview.baseline_meshes.contains_key(&mesh.mesh_key)
+                || serde_json::to_writer(&mut budget, &(path, mesh)).is_err()
+            {
+                budget.remaining = start;
+                omitted.push(path.clone());
+                false
+            } else {
+                true
+            }
+        });
+        if !omitted.is_empty() {
             preview.diagnostics.push(crate::operation_preview::warning(
                 request.focus.as_ref(),
-                "Some localized highlights exceed the 16 MiB cumulative display cache bound; their validated model geometry is displayed neutrally",
+                format!("{} display highlight entries were evicted from the 16 MiB unique-geometry cache; validated geometry remains available. Affected mesh/occurrence identities: {}{}", omitted.len(), omitted.iter().take(12).cloned().collect::<Vec<_>>().join(", "), if omitted.len()>12 { " …" } else { "" }),
             ));
         }
         evaluated.operation_preview = Some(Box::new(preview));
@@ -640,6 +640,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                     }
                 }
             }
+            self.adapter.set_assembly_placements(&self.assemblies);
             self.resolve_sketch_definitions(&mut solved)?;
             return Ok(solved);
         }
@@ -648,6 +649,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         self.adapter.clear_weld_joint_previews();
         self.adapter.clear_operation_previews();
         self.adapter.clear_spatial_sketch_inputs();
+        self.adapter.set_assembly_placements(&BTreeMap::new());
         let report =
             crate::assemblies::build_shapes_report(&self.adapter, &solved, root, tolerance, true)?;
         if !report.failures.is_empty() {
@@ -679,6 +681,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         let shapes = report.shapes;
         let assemblies =
             crate::assemblies::solve(&self.adapter, doc, &mut solved, &shapes, root, tolerance)?;
+        self.adapter.set_assembly_placements(&assemblies);
         // Restore base topology provenance after configured reference evaluation and
         // regenerate in-context geometry from the current solved assembly placements.
         let shapes = if solved
@@ -688,7 +691,7 @@ impl<K: KernelAdapter> Evaluator<K> {
             || solved.parts.values().any(|p| {
                 p.features
                     .iter()
-                    .any(|f| matches!(f.operation, cad_core::Operation::ReferenceBody { .. }))
+                    .any(|f| matches!(f.operation, cad_core::Operation::ReferenceBody { .. }) || matches!(&f.operation, cad_core::Operation::Pattern { options, .. } if options.requires_placement()))
             }) {
             let report = crate::assemblies::build_shapes_report(
                 &self.adapter,
@@ -1233,6 +1236,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         let mut sketches = BTreeMap::new();
         let mut spatial_sketches = BTreeMap::new();
         let mut references = BTreeMap::new();
+        let mut pattern_guides = BTreeMap::new();
         let mut reference_curves = BTreeMap::new();
         let mut reference_curve_meshes = BTreeMap::new();
         let mut mold_analyses = BTreeMap::new();
@@ -1243,6 +1247,16 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         let mut history = BTreeMap::new();
         for part in solved.parts.values() {
             self.focused_preview(part, &part.id, tolerance);
+            for feature in part.features.iter().filter(|f| !f.suppressed) {
+                if let Ok(Some(guide)) = self.adapter.pattern_guide(
+                    &solved,
+                    &part.reference(&feature.id),
+                    &feature.operation,
+                    &self.shapes,
+                ) {
+                    pattern_guides.insert(format!("{}::{}", part.id, feature.id), guide);
+                }
+            }
             for (feature, weldment) in self.weldment_output(&solved, &part.id)? {
                 weldments.insert(format!("{}::{feature}", part.id), weldment);
             }
@@ -1309,6 +1323,20 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                         return Err(error);
                     }
                 };
+                for feature in configured_solved.parts[&i.definition]
+                    .features
+                    .iter()
+                    .filter(|f| !f.suppressed)
+                {
+                    if let Ok(Some(guide)) = self.adapter.pattern_guide(
+                        &configured_solved,
+                        &configured_solved.parts[&i.definition].reference(&feature.id),
+                        &feature.operation,
+                        &self.shapes,
+                    ) {
+                        pattern_guides.insert(format!("{key}::{}", feature.id), guide);
+                    }
+                }
                 for (feature, geometry) in self.reference_output(&configured_solved, &i.definition)
                 {
                     references.insert(format!("{key}::{feature}"), geometry);
@@ -1503,6 +1531,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             &self.body_sets,
         )?;
         let mut evaluated = Evaluation {
+            pattern_guides,
             identity,
             meshes,
             instances,
@@ -1593,6 +1622,17 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 )?)?
                 .as_bytes(),
             ),
+            _ if format.starts_with("sheet-metal-dxf:") => {
+                let selection: cad_core::sheet_metal::ExportSelection =
+                    serde_json::from_str(&format["sheet-metal-dxf:".len()..])?;
+                cad_core::persistence::atomic_write(
+                    path,
+                    cad_core::sheet_metal::dxf(&cad_core::sheet_metal::selected_export(
+                        document, &evaluated, &selection,
+                    )?)?
+                    .as_bytes(),
+                )
+            }
             "cutlist" => cad_core::persistence::atomic_write(
                 path,
                 cad_core::production::cut_list_csv(document, &evaluated)?.as_bytes(),

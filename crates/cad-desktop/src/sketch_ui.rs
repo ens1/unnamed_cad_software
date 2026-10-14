@@ -16,6 +16,8 @@ pub struct DimensionEditor {
     pub history_len: usize,
     pub focus_value: bool,
     pub focus_nearby: bool,
+    /// Adapter-owned placement remains fixed while solved geometry moves.
+    pub nearby_anchor: Option<[f32; 2]>,
     /// A first pick offers its size immediately, while retaining the first
     /// reference for a deliberate second pick.
     pub extend_pick: bool,
@@ -436,7 +438,19 @@ fn entity_for(source: &Sketch, element: &presentation::SemanticElement) -> Optio
                 Some(a::ORIGIN) => SketchEntity::Origin,
                 Some(a::X_AXIS) => SketchEntity::XAxis,
                 Some(a::Y_AXIS) => SketchEntity::YAxis,
-                _ => return None,
+                _ => {
+                    let entity: SketchEntity =
+                        serde_json::from_value(element.data.get("entity")?.clone()).ok()?;
+                    match &entity {
+                        SketchEntity::Point { point } if source.points.contains_key(point) => {
+                            entity
+                        }
+                        SketchEntity::Member { member } if source.members.contains_key(member) => {
+                            entity
+                        }
+                        _ => return None,
+                    }
+                }
             }
         }
         _ => return None,
@@ -551,9 +565,9 @@ pub fn smart_dimension(w: &mut Workspace) {
     smart_dimension_mode(w, false);
 }
 fn smart_dimension_mode(w: &mut Workspace, driven: bool) {
-    open_dimension(w, driven, false);
+    open_dimension(w, driven, false, None);
 }
-fn open_dimension(w: &mut Workspace, driven: bool, extend_pick: bool) {
+fn open_dimension(w: &mut Workspace, driven: bool, extend_pick: bool, preferred: Option<&str>) {
     if let Some(editor) = w.sketch.as_mut().and_then(|s| s.dimension.as_mut()) {
         editor.focus_value = true;
         editor.focus_nearby = true;
@@ -632,6 +646,9 @@ fn open_dimension(w: &mut Workspace, driven: bool, extend_pick: bool) {
     );
     match choices {
         Ok(choices) if !choices.is_empty() => {
+            let choice = preferred
+                .and_then(|kind| choices.iter().position(|choice| choice.kind == kind))
+                .unwrap_or(0);
             if let Some(s) = &mut w.sketch {
                 let checkpoint = s
                     .dimension_pick
@@ -641,16 +658,17 @@ fn open_dimension(w: &mut Workspace, driven: bool, extend_pick: bool) {
                 let document = checkpoint.document;
                 let history_len = checkpoint.history_len;
                 s.history.push(source.clone());
-                let constraint = attach_dimension(s, &choices[0], driven);
+                let constraint = attach_dimension(s, &choices[choice], driven);
                 s.dimension = Some(DimensionEditor {
                     choices,
-                    choice: 0,
+                    choice,
                     constraint,
                     source,
                     document,
                     history_len,
                     focus_value: true,
                     focus_nearby: true,
+                    nearby_anchor: None,
                     extend_pick: extend_pick
                         || (s.selection.len() == 1
                             && !matches!(s.selection[0], SketchEntity::Constraint { .. })),
@@ -678,7 +696,49 @@ pub fn selection_changed(w: &mut Workspace) {
     let first_pick = w.sketch.as_ref().is_some_and(|s| {
         s.selection.len() == 1 && !matches!(s.selection[0], SketchEntity::Constraint { .. })
     });
-    open_dimension(w, driven, first_pick);
+    open_dimension(w, driven, first_pick, None);
+}
+
+/// Coordinate intent is explicit: this opens a driving dimension, whereas the
+/// point inspector's Move fields only change solver seeds under existing rules.
+pub fn constrain_coordinate(w: &mut Workspace, point: &str, axis: usize) {
+    if axis > 1
+        || w.sketch
+            .as_ref()
+            .is_none_or(|s| !s.keys.iter().any(|key| key == point))
+    {
+        w.status = "Select a current sketch point to constrain its coordinate".into();
+        return;
+    }
+    if w.sketch.as_ref().is_some_and(|s| {
+        cad_core::sketch_edit::driven_points(&sketch::sketch_definition(s)).contains(point)
+    }) {
+        w.status =
+            "This point follows a sketch operation. Edit its source or operation dimensions".into();
+        return;
+    }
+    if w.sketch
+        .as_ref()
+        .is_some_and(|s| s.dimension.is_some() || s.edit.is_some() || s.drag.is_some())
+    {
+        w.status =
+            "Finish or cancel the current sketch operation before adding a coordinate dimension"
+                .into();
+        return;
+    }
+    select(
+        w,
+        Some(SketchEntity::Point {
+            point: point.into(),
+        }),
+        false,
+    );
+    open_dimension(
+        w,
+        false,
+        false,
+        Some(if axis == 0 { "fix_x" } else { "fix_y" }),
+    );
 }
 pub fn cancel_dimension(w: &mut Workspace) -> bool {
     let checkpoint = w.sketch.as_mut().and_then(|s| {
@@ -739,6 +799,7 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
         ("relations-section", "Dimensions & Relations"),
         ("tool-help", "Tool help"),
         ("member-list", "Sketch members"),
+        ("point-browser", "All sketch points"),
     ].into_iter().map(|(suffix, label)| presentation::SemanticElement {
         id: format!("{}::{suffix}", s.sketch_id),
         role: if suffix == "member-list" { "sketch-member-list" } else { "sketch-secondary-section" }.into(),
@@ -747,6 +808,29 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
         data: serde_json::json!({"sketch":s.sketch_id,"presentation_only":true,"default_collapsed":suffix != "member-list","layout_order":"active-tool-before-secondary-editors"}),
     }).collect::<Vec<_>>();
     let source = sketch::sketch_definition(s);
+    if let Some(point) = s.selected.and_then(|index| s.keys.get(index)) {
+        elements.push(presentation::SemanticElement {
+            id: format!("{}::coordinate-intent", s.sketch_id), role: "sketch-coordinate-intent".into(),
+            label: "Point coordinates".into(), value: None, state: "ready".into(), commands: vec![],
+            relationships: vec![s.sketch_id.clone(), point.clone()],
+            data: serde_json::json!({"sketch":s.sketch_id,"point":point,"move_fields":"solver_seed","driving_fields":"origin_coordinate_dimension","authority":"f64_mm","display_precision":w.session.visible().settings.length_decimal_places,"description":"Move changes the position seed under existing relations; Constrain X or Y saves a driving dimension from the sketch origin."}),
+        });
+        for (command, label, axis) in [
+            ("sketch.constrain-x", "Constrain X", 0),
+            ("sketch.constrain-y", "Constrain Y", 1),
+        ] {
+            let available = s.dimension.is_none()
+                && s.edit.is_none()
+                && s.drag.is_none()
+                && !cad_core::sketch_edit::driven_points(&source).contains(point);
+            elements.push(presentation::SemanticElement {
+                id: format!("{point}::constrain-{axis}"), role: "sketch-relation-action".into(), label: label.into(),
+                value: None, state: if available { "ready" } else { "disabled" }.into(), commands: vec![command.into()],
+                relationships: vec![s.sketch_id.clone(), point.clone()],
+                data: serde_json::json!({"sketch":s.sketch_id,"point":point,"enabled":available,"classes":["modeling-action","compact"],"disabled_reason":"Finish or cancel the current sketch operation first","coordinate_edit_intent":"driving_dimension","preview":"shared_sketch_draft"}),
+            });
+        }
+    }
     for (label, entity) in [
         ("Origin", SketchEntity::Origin),
         ("X Axis", SketchEntity::XAxis),
@@ -820,7 +904,7 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
         relationships: std::iter::once(s.sketch_id.clone())
             .chain(s.selection.iter().map(|entity| entity.key().to_string()))
             .collect(),
-        data: serde_json::json!({"definition":s.definition,"sketch":s.sketch_id,"selection":s.selection,"pending_model_edge":s.dimension_model.as_ref().map(|selected|serde_json::json!({"body":selected.body,"reference":selected.reference,"path":selected.path})),"constraint":constraint,"mode":w.fields.get("smart-dimension-mode"),"unit":constraint.map(|c|a::dimension_unit(&c.kind)),"perpendicular_distance":constraint.is_some_and(|c|c.kind=="point_line_distance"),"current_error":s.error,"shared_draft":true,"requires_current_validation":true,"accepts_second_reference":s.dimension.as_ref().is_some_and(|editor|editor.extend_pick),"completion_label":"Done Dimension","completion_scope":"dimension","commit_command":"sketch.finish","actions":[{"command":"sketch.finish-dimension","label":"Done Dimension","enabled":constraint.is_some() && s.error.is_none(),"disabled_reason":"Enter a valid dimension before finishing"},{"command":"sketch.cancel-dimension","label":"Cancel Dimension","enabled":true}]}),
+        data: serde_json::json!({"definition":s.definition,"sketch":s.sketch_id,"selection":s.selection,"pending_model_edge":s.dimension_model.as_ref().map(|selected|serde_json::json!({"body":selected.body,"reference":selected.reference,"path":selected.path})),"constraint":constraint,"mode":w.fields.get("smart-dimension-mode"),"unit":constraint.map(|c|a::dimension_unit(&c.kind)),"perpendicular_distance":constraint.is_some_and(|c|c.kind=="point_line_distance"),"current_error":s.error,"shared_draft":true,"requires_current_validation":true,"accepts_second_reference":s.dimension.as_ref().is_some_and(|editor|editor.extend_pick),"placement_behavior":"anchor_until_editor_closes","completion_label":"Done Dimension","completion_scope":"dimension","commit_command":"sketch.finish","actions":[{"command":"sketch.finish-dimension","label":"Done Dimension","enabled":constraint.is_some() && s.error.is_none(),"disabled_reason":"Enter a valid dimension before finishing"},{"command":"sketch.cancel-dimension","label":"Cancel Dimension","enabled":true}]}),
     });
     if let Some(constraint) = constraint {
         elements.push(dimension_value_element(w, s, constraint));
@@ -1074,6 +1158,8 @@ pub fn action(w: &mut Workspace, command: &str) {
             | "sketch.cancel"
             | "sketch.finish"
             | "sketch.normal-to"
+            | "sketch.constrain-x"
+            | "sketch.constrain-y"
     ) {
         if let Some(s) = &mut w.sketch {
             s.dimension = None;
@@ -1083,6 +1169,19 @@ pub fn action(w: &mut Workspace, command: &str) {
         w.fields.remove("smart-dimension-mode");
     }
     match command {
+        "sketch.constrain-x" | "sketch.constrain-y" => {
+            let point = w
+                .sketch
+                .as_ref()
+                .and_then(|s| s.selected.and_then(|index| s.keys.get(index)))
+                .cloned();
+            if let Some(point) = point {
+                constrain_coordinate(w, &point, usize::from(command == "sketch.constrain-y"));
+            } else {
+                w.status =
+                    "Select a sketch point or circle center to constrain its coordinate".into();
+            }
+        }
         "sketch.finish-dimension" => finish_dimension(w),
         "sketch.cancel-dimension" => {
             if !cancel_dimension(w) {
@@ -2154,8 +2253,8 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, r: egui::Rect) -> bool 
             selection_ui::open(w, &response, response.rect.right_bottom());
         }
     }
-    if let Some(annotation) = active_annotation {
-        consumed |= nearby_dimension(w, ui, r, annotation);
+    if w.sketch.as_ref().is_some_and(|s| s.dimension.is_some()) {
+        consumed |= nearby_dimension(w, ui, r, active_annotation);
     }
     consumed
 }
@@ -2166,7 +2265,7 @@ fn nearby_dimension(
     w: &mut Workspace,
     ui: &mut egui::Ui,
     viewport: egui::Rect,
-    annotation: egui::Rect,
+    annotation: Option<egui::Rect>,
 ) -> bool {
     use crate::presentation_controls as controls;
     let elements = dimension_semantics(w);
@@ -2184,8 +2283,26 @@ fn nearby_dimension(
     };
     let id = format!("{}::nearby", editor.id);
     let size = egui::vec2(220., 102.).min(viewport.size());
-    let min =
-        (annotation.right_bottom() + egui::vec2(8., 4.)).clamp(viewport.min, viewport.max - size);
+    let anchor = w
+        .sketch
+        .as_ref()
+        .and_then(|s| s.dimension.as_ref())
+        .and_then(|editor| editor.nearby_anchor);
+    let min = anchor
+        .map_or_else(
+            || {
+                annotation.map_or(viewport.center(), |annotation| {
+                    annotation.right_bottom() + egui::vec2(8., 4.)
+                })
+            },
+            |anchor| viewport.min + egui::vec2(anchor[0], anchor[1]),
+        )
+        .clamp(viewport.min, viewport.max - size);
+    if let Some(editor) = w.sketch.as_mut().and_then(|s| s.dimension.as_mut()) {
+        editor
+            .nearby_anchor
+            .get_or_insert([min.x - viewport.left(), min.y - viewport.top()]);
+    }
     let default = egui::Rect::from_min_size(min, size);
     let Some(rect) = controls::overlay_rect_state(
         &id,
