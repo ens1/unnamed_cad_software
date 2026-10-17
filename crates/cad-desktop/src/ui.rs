@@ -20,6 +20,9 @@ pub fn workspace_ui(
     if let Some(public_key) = crate::git_connections_ui::take_clipboard(&mut w) {
         ctx.copy_text(public_key);
     }
+    if let Some(url) = crate::content_repositories_ui::take_clipboard(&mut w) {
+        ctx.copy_text(url);
+    }
     ctx.set_zoom_factor(w.view.ui_scale.clamp(0.75, 1.5));
     let logical_size = ctx.content_rect().size();
     w.presentation_resources.logical_size = [logical_size.x, logical_size.y];

@@ -46,13 +46,14 @@ fn catalog() -> Vec<Material> {
         .map(|catalog| catalog.materials.clone())
         .unwrap_or_default()
 }
-fn library_notice() -> Option<String> {
+fn library_notice() -> Option<(&'static str, String)> {
     match cad_core::material_library::installed_catalog() {
-        Ok(catalog) if catalog.materials.is_empty() => Some(
-            "No engineering material library is enabled. Project materials remain available."
+        Ok(catalog) if catalog.materials.is_empty() => Some((
+            "empty",
+            "No material pack is available. Saved project materials still work. Create a material, import a file, or download a pack."
                 .into(),
-        ),
-        Err(error) => Some(error.to_string()),
+        )),
+        Err(error) => Some(("error", error.to_string())),
         _ => None,
     }
 }
@@ -1215,6 +1216,28 @@ fn action_element(command: &str, label: &str, enabled: bool, reason: &str) -> Se
         data: json!({"enabled":enabled,"disabled_reason":if enabled {""}else{reason},"accessibility_label":label}),
     }
 }
+fn library_actions() -> Vec<SemanticElement> {
+    let mut actions = vec![];
+    if library_notice().is_some() {
+        let mut download = action_element(
+            "content-repositories.download-materials",
+            "Download material pack",
+            true,
+            "",
+        );
+        download.id = "command:materials:download-pack".into();
+        actions.push(download);
+    }
+    let mut manage = action_element(
+        "content-repositories.show-materials",
+        "Manage libraries…",
+        true,
+        "",
+    );
+    manage.id = "command:materials:get-libraries".into();
+    actions.push(manage);
+    actions
+}
 fn actions(w: &Workspace) -> Vec<SemanticElement> {
     let has = selected(w).is_some();
     let edit = editable(w);
@@ -1350,19 +1373,17 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         relationships: vec![],
         data: json!({"transaction":"shared-document-draft","independent_visual_finishes":true,"favorite_scope":"personal-presentation","target":target(w),"configuration":configuration(w)}),
     }];
-    let mut get_libraries = action_element("content-repositories", "Get libraries…", true, "");
-    get_libraries.id = "command:materials:get-libraries".into();
-    elements.push(get_libraries);
-    if let Some(notice) = library_notice() {
+    elements.extend(library_actions());
+    if let Some((state, notice)) = library_notice() {
         elements.push(SemanticElement {
             id: "material:library-notice".into(),
             role: "material-description".into(),
             label: notice,
             value: None,
-            state: "empty".into(),
-            commands: vec![],
+            state: state.into(),
+            commands: vec!["content-repositories.show-materials".into()],
             relationships: vec!["workspace.material-library".into()],
-            data: json!({"source":"content-repositories"}),
+            data: json!({"source":"content-repositories","pack":"materials","project_values_preserved":true}),
         });
     }
     elements.extend(browser_fields(w));
@@ -1641,29 +1662,33 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         }
     });
     section(ui, w, "browser", "Material library", true, |ui, w| {
-        if let Some(notice) = library_notice() {
+        if let Some((state, notice)) = library_notice() {
             controls::label(
                 ui,
                 "material:library-notice",
                 "material-description",
                 &[],
                 &notice,
-                "empty",
+                state,
             );
         }
-        if controls::button(
-            ui,
-            "command:materials:get-libraries",
-            "material-action",
-            &["semantic-control"],
-            "Get libraries…",
-            true,
-            false,
-        )
-        .clicked()
-        {
-            crate::ui::action(w, "content-repositories");
-        }
+        ui.horizontal_wrapped(|ui| {
+            for element in library_actions() {
+                if controls::button(
+                    ui,
+                    &element.id,
+                    &element.role,
+                    &["semantic-control"],
+                    &element.label,
+                    true,
+                    false,
+                )
+                .clicked()
+                {
+                    crate::ui::semantic_action(w, &element, &element.commands[0]);
+                }
+            }
+        });
         for element in browser_fields(w) {
             crate::ui::semantic_field(ui, w, &element);
         }
@@ -1758,7 +1783,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                 "material:no-results",
                 "material-description",
                 &[],
-                "No matching materials. Clear a filter, create a project material, or get a library.",
+                "No matching materials. Clear a filter, create a project material, or import a material file.",
                 "empty",
             );
         }

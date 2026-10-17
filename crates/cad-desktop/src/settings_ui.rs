@@ -898,6 +898,11 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ("settings.theme-load", "Load theme…"),
         ("settings.theme-export", "Export theme…"),
         ("content-repositories", "Get libraries…"),
+        (
+            "content-repositories.download-themes",
+            "Download themes pack",
+        ),
+        ("content-repositories.show-themes", "View theme pack…"),
     ] {
         let available = w.settings.is_some() && (command == "settings.cancel" || !pending);
         elements.push(SemanticElement {
@@ -1123,8 +1128,12 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                         settings::action(w,"settings.presentation");
                                     }
                                     if *id == "application.themes" {
-                                        if controls::button(ui,"command:content-repositories","settings-action",&[],"Get libraries…",!pending,false).clicked() {
-                                            crate::content_repositories_ui::action(w,"content-repositories",None);
+                                        if let Some(notice) = crate::theme_library::fallback_notice(w) {
+                                            controls::label(ui,&notice.id,&notice.role,&[],&notice.label,&notice.state);
+                                        }
+                                        controls::label(ui,"settings:theme-packs","settings-description",&[],"Classic works offline. Download extra themes, load your own, or keep the current theme.","ready");
+                                        for (command,label) in [("content-repositories.download-themes","Download themes pack"),("content-repositories.show-themes","View theme pack…")] {
+                                            if controls::button(ui,&format!("command:{command}"),"settings-action",&[],label,!pending,false).clicked() {crate::content_repositories_ui::action(w,command,None);}
                                         }
                                         crate::workspace_controls::confirmation_preview(ui);
                                         let selected = crate::theme_library::selected(w);

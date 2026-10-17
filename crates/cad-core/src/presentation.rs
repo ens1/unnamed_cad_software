@@ -1211,6 +1211,26 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("repositories.publish", "Publish model to a Git repository"),
     ("git-connections", "Git connections and credentials"),
     ("content-repositories", "Content libraries and repositories"),
+    (
+        "content-repositories.download-profiles",
+        "Download weldment profile pack",
+    ),
+    (
+        "content-repositories.download-textures",
+        "Download texture and finish pack",
+    ),
+    (
+        "content-repositories.download-themes",
+        "Download theme pack",
+    ),
+    (
+        "content-repositories.download-materials",
+        "Download material pack",
+    ),
+    (
+        "content-repositories.download-standard-parts",
+        "Download standard part pack",
+    ),
     ("component.fork", "Fork part or assembly"),
     ("feature-transfer", "Transfer selected features"),
     ("readme.preview", "Update README model preview"),

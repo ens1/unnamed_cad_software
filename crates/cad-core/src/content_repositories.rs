@@ -12,8 +12,10 @@ use std::{
 
 mod git;
 mod operations;
+mod packs;
 mod storage;
 pub use operations::*;
+pub use packs::*;
 
 pub const CONTRACT_VERSION: u32 = 1;
 pub const MANIFEST_FILE: &str = "tcad-library.json";

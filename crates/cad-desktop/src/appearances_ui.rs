@@ -2287,7 +2287,34 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
             "appearance:texture-help",
             "Choose an installed repository image to copy into this project, or import a PNG, JPEG, TIFF or WebP file. Saved images remain usable after a library is removed.",
         );
-        button(ui, w, "appearance.libraries", "Get libraries…", true);
+        ui.horizontal_wrapped(|ui| {
+            pack_button(
+                ui,
+                w,
+                "content-repositories.download-textures",
+                "Download textures pack",
+                "textures-section",
+            );
+            pack_button(
+                ui,
+                w,
+                "content-repositories.show-textures",
+                "View textures pack",
+                "textures-section",
+            );
+            button(ui, w, "appearance.libraries", "Manage libraries…", true);
+        });
+        if cad_core::content_repositories::entries(
+            cad_core::content_repositories::ContentKind::Textures,
+        )
+        .is_empty()
+        {
+            description(
+                ui,
+                "appearance:texture-pack-empty",
+                "No texture pack is installed. Plain finishes and imported project images work offline. Download a pack when you want more finishes and grain maps.",
+            );
+        }
         for (slot, label) in [
             ("height", "Grayscale bump / height"),
             ("base_color", "Color"),
@@ -2360,6 +2387,7 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
             if slot == "height" {
                 if let Some(finish) = w.session.visible().finishes.get(&id)
                     && finish.builtin_bump != cad_core::appearance::BuiltinBump::None
+                    && finish.textures.height.is_none()
                 {
                     description(
                         ui,
@@ -2369,12 +2397,13 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
                             finish.builtin_bump.label()
                         ),
                     );
+                    let can_pin = can_pin_legacy(w);
                     button(
                         ui,
                         w,
                         "appearance.texture.pin-legacy",
                         "Pin legacy map into project",
-                        true,
+                        can_pin,
                     );
                 }
                 field(ui, w, &fields, "/height_mm", "Bump depth (mm)", json!([]));
@@ -2637,7 +2666,95 @@ pub fn lighting_view(ui: &mut egui::Ui, w: &mut Workspace) {
     }
     lighting_controls(ui, w);
 }
+fn pack_button(ui: &mut egui::Ui, w: &mut Workspace, command: &str, label: &str, occurrence: &str) {
+    // One semantic action can appear both beside texture controls and in a
+    // recovery notice. Distinguish native hit targets without changing its
+    // command identity or the user's styling selector.
+    let clicked = ui
+        .push_id(occurrence, |ui| {
+            controls::button(
+                ui,
+                &format!("appearance:{command}"),
+                "appearance-action",
+                &["semantic-control"],
+                label,
+                true,
+                false,
+            )
+            .clicked()
+        })
+        .inner;
+    if clicked {
+        crate::ui::action(w, command);
+    }
+}
+
+fn repository_notice(w: &Workspace) -> Option<SemanticElement> {
+    let info: Value = serde_json::from_str(w.fields.get("appearance-repository-map-info")?).ok()?;
+    let maps = info["maps"].as_array()?;
+    if maps.is_empty() {
+        return None;
+    }
+    let unavailable = maps.iter().any(|map| map["state"] == "unavailable");
+    let label = if unavailable {
+        "Some optional grain images are unavailable. Colors and smooth finishes remain visible. You can keep modeling, or download the textures pack."
+    } else {
+        "Optional grain images are loading. Smooth finishes remain visible and you can keep modeling."
+    };
+    let pack = cad_core::content_repositories::pack("textures").ok()?;
+    Some(SemanticElement {
+        id: "appearance:optional-texture-notice".into(),
+        role: "appearance-library-notice".into(),
+        label: label.into(),
+        value: Some(label.into()),
+        state: "fallback".into(),
+        commands: vec![
+            "content-repositories.download-textures".into(),
+            "content-repositories.show-textures".into(),
+        ],
+        relationships: vec!["workspace.appearance-panel".into()],
+        data: json!({"pack":"textures","repository_url":pack.clone_url,"web_url":pack.web_url,"blocks_modeling":false,"fallback":"smooth-finish","maps":maps,"accessibility_label":label}),
+    })
+}
+
+fn can_pin_legacy(w: &Workspace) -> bool {
+    selected(w)
+        .and_then(|id| w.session.visible().finishes.get(&id))
+        .is_some_and(|finish| {
+            finish.textures.height.is_none()
+                && finish_editable(w, &finish.id)
+                && crate::texture_assets::legacy_entry(finish.builtin_bump).is_ok()
+        })
+}
+
 fn diagnostics(ui: &mut egui::Ui, w: &mut Workspace) {
+    if let Some(notice) = repository_notice(w) {
+        controls::label(
+            ui,
+            &notice.id,
+            &notice.role,
+            &[],
+            &notice.label,
+            &notice.state,
+        );
+        ui.horizontal_wrapped(|ui| {
+            pack_button(
+                ui,
+                w,
+                "content-repositories.download-textures",
+                "Download textures pack",
+                "optional-map-notice",
+            );
+            pack_button(
+                ui,
+                w,
+                "content-repositories.show-textures",
+                "View textures pack",
+                "optional-map-notice",
+            );
+        });
+    }
+
     for (key, error) in w
         .fields
         .iter()
@@ -2692,20 +2809,33 @@ fn diagnostics(ui: &mut egui::Ui, w: &mut Workspace) {
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = vec![library_element(w), source_element(w), assignment_element(w)];
     elements.extend(environment_semantics(w));
+    elements.extend(repository_notice(w));
     for (command, label) in [
-        ("appearance.libraries", "Get libraries…"),
+        (
+            "content-repositories.download-textures",
+            "Download textures pack",
+        ),
+        ("content-repositories.show-textures", "View textures pack"),
+    ] {
+        elements.push(SemanticElement {
+            id: format!("appearance:{command}"),
+            role: "appearance-action".into(),
+            label: label.into(),
+            value: None,
+            state: "ready".into(),
+            commands: vec![command.into()],
+            relationships: vec!["workspace.appearance-panel".into()],
+            data: json!({"enabled":true,"pack":"textures","accessibility_label":label}),
+        });
+    }
+    for (command, label) in [
+        ("appearance.libraries", "Manage libraries…"),
         (
             "appearance.texture.pin-legacy",
             "Pin legacy map into project",
         ),
     ] {
-        let enabled = command == "appearance.libraries"
-            || selected(w)
-                .and_then(|id| w.session.visible().finishes.get(&id))
-                .is_some_and(|finish| {
-                    finish.builtin_bump != cad_core::appearance::BuiltinBump::None
-                        && finish_editable(w, &finish.id)
-                });
+        let enabled = command == "appearance.libraries" || can_pin_legacy(w);
         elements.push(SemanticElement {
             id: format!("command:{command}"),
             role: "appearance-action".into(),
@@ -2715,6 +2845,18 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             commands: vec![command.into()],
             relationships: vec!["workspace.appearance-panel".into()],
             data: json!({"enabled":enabled,"accessibility_label":label}),
+        });
+    }
+    if cad_core::content_repositories::entries(
+        cad_core::content_repositories::ContentKind::Textures,
+    )
+    .is_empty()
+    {
+        elements.push(SemanticElement {
+            id: "appearance:texture-pack-empty".into(), role: "appearance-description".into(),
+            label: "No texture pack is installed. Plain finishes and imported project images work offline. Download a pack when you want more finishes and grain maps.".into(),
+            value: None, state: "empty".into(), commands: vec!["content-repositories.download-textures".into(),"content-repositories.show-textures".into()],
+            relationships: vec!["workspace.appearance-panel".into()], data: json!({"pack":"textures","blocks_modeling":false}),
         });
     }
     elements.extend(target_elements(w));

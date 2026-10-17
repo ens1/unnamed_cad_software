@@ -122,7 +122,7 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
         return false;
     }
     if command == "finish-library.libraries" {
-        crate::ui::action(w, "content-repositories");
+        crate::ui::action(w, "content-repositories.show-textures");
         return true;
     }
     if command == "finish-library.select" {
@@ -376,19 +376,102 @@ fn entry(w: &Workspace, finish: &Finish, catalog: bool) -> SemanticElement {
         data: json!({"key":entry_key,"finish":finish,"catalog":catalog,"favorite":w.view.library_favorites.contains(&preference_key(finish)),"engineering_material_independent":true,"accessibility_label":finish.name,"actions":[{"command":"finish-library.select","enabled":key(w).as_deref()==Some(&entry_key)||crate::appearances_ui::selection_ready(w).is_ok(),"disabled_reason":"Correct retained finish/lighting text before changing selection"}]}),
     }
 }
+fn library_notice() -> Option<SemanticElement> {
+    (cad_core::finish_library::catalog().is_empty()
+        && cad_core::finish_library::catalog_diagnostics().is_empty())
+        .then(|| SemanticElement {
+            id: "appearance:catalog:library-notice".into(),
+            role: "finish-library-description".into(),
+            label: "No texture and finish pack is available. Colors, lighting and saved finishes still work. Download a pack or import your own maps and finishes.".into(),
+            value: None,
+            state: "empty".into(),
+            commands: vec!["content-repositories.show-textures".into()],
+            relationships: vec!["workspace.finish-library".into()],
+            data: json!({"pack":"textures","project_finishes_preserved":true}),
+        })
+}
 fn actions(w: &Workspace) -> Vec<SemanticElement> {
     let has = selected(w).is_some();
-    [("finish-library.assign","Assign selected finish",has&&available(w),"Choose a visual finish and an appearance target"),
-        ("finish-library.add","Add to project",has&&available(w)&&key(w).is_some_and(|key|key.starts_with("catalog:")),"Choose a catalog finish"),
-        ("finish-library.favorite","Favorite",has,"Choose a finish"),
-        ("finish-library.libraries","Get libraries…",true,""),
-        ("finish-library.import","Import finishes…",available(w),"Finish the active operation first"),
-        ("finish-library.export","Export selected…",has,"Choose a finish"),
-        ("finish-library.export-project","Export project finishes…",!w.session.visible().finishes.is_empty(),"The project finish library is empty")]
-        .into_iter().map(|(command,label,mut enabled,mut reason)| {
-            if matches!(command,"finish-library.assign"|"finish-library.add"|"finish-library.import")&&crate::appearances_ui::selection_ready(w).is_err(){enabled=false;reason="Correct retained finish/lighting text before changing selection or assignment";}
-            SemanticElement{id:format!("command:{command}"),role:"finish-library-action".into(),label:label.into(),value:None,state:if enabled{"ready"}else{"disabled"}.into(),commands:vec![command.into()],relationships:vec!["workspace.finish-library".into()],data:json!({"enabled":enabled,"disabled_reason":if enabled{""}else{reason},"accessibility_label":label})}}).collect()
+    let mut items = vec![
+        (
+            "finish-library.assign",
+            "Assign selected finish",
+            has && available(w),
+            "Choose a visual finish and an appearance target",
+        ),
+        (
+            "finish-library.add",
+            "Add to project",
+            has && available(w) && key(w).is_some_and(|key| key.starts_with("catalog:")),
+            "Choose a catalog finish",
+        ),
+        (
+            "finish-library.favorite",
+            "Favorite",
+            has,
+            "Choose a finish",
+        ),
+    ];
+    if cad_core::finish_library::catalog().is_empty() {
+        items.push((
+            "content-repositories.download-textures",
+            "Download texture and finish pack",
+            true,
+            "",
+        ));
+    }
+    items.extend([
+        (
+            "content-repositories.show-textures",
+            "Manage libraries…",
+            true,
+            "",
+        ),
+        (
+            "finish-library.import",
+            "Import finishes…",
+            available(w),
+            "Finish the active operation first",
+        ),
+        (
+            "finish-library.export",
+            "Export selected…",
+            has,
+            "Choose a finish",
+        ),
+        (
+            "finish-library.export-project",
+            "Export project finishes…",
+            !w.session.visible().finishes.is_empty(),
+            "The project finish library is empty",
+        ),
+    ]);
+    items.into_iter().map(|(command, label, mut enabled, mut reason)| {
+        if matches!(command, "finish-library.assign" | "finish-library.add" | "finish-library.import")
+            && crate::appearances_ui::selection_ready(w).is_err()
+        {
+            enabled = false;
+            reason = "Correct retained finish/lighting text before changing selection or assignment";
+        }
+        SemanticElement {
+            id: if command == "content-repositories.show-textures" {
+                "command:finish-library.libraries".into()
+            } else if command.starts_with("content-repositories.") {
+                format!("command:finish-library:{command}")
+            } else {
+                format!("command:{command}")
+            },
+            role: "finish-library-action".into(),
+            label: label.into(),
+            value: None,
+            state: if enabled { "ready" } else { "disabled" }.into(),
+            commands: vec![command.into()],
+            relationships: vec!["workspace.finish-library".into()],
+            data: json!({"enabled":enabled,"disabled_reason":if enabled {""} else {reason},"accessibility_label":label}),
+        }
+    }).collect()
 }
+
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = vec![
         SemanticElement {
@@ -423,6 +506,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         },
     ];
     elements.extend(fields(w));
+    elements.extend(library_notice());
     for (index, error) in cad_core::finish_library::catalog_diagnostics()
         .into_iter()
         .enumerate()
@@ -454,7 +538,11 @@ fn render_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement
     .on_hover_text(element.data["disabled_reason"].as_str().unwrap_or_default())
     .clicked()
     {
-        action(w, &element.commands[0], Some(&element.data));
+        if element.commands[0].starts_with("content-repositories.") {
+            crate::ui::semantic_action(w, element, &element.commands[0]);
+        } else {
+            action(w, &element.commands[0], Some(&element.data));
+        }
     }
 }
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
@@ -483,6 +571,16 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         .unwrap_or(true)
     {
         return;
+    }
+    if let Some(notice) = library_notice() {
+        controls::label(
+            ui,
+            &notice.id,
+            &notice.role,
+            &[],
+            &notice.label,
+            &notice.state,
+        );
     }
     for error in cad_core::finish_library::catalog_diagnostics() {
         controls::label(
@@ -593,7 +691,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             "appearance:catalog:empty",
             "finish-library-description",
             &[],
-            "No matching finishes. Use Get libraries to clone a finish repository, or import a portable finish package.",
+            "No matching finishes. Clear a filter, import a finish package, or download a texture and finish pack.",
             "empty",
         );
     }

@@ -13,11 +13,29 @@ The panel can open during a modeling operation without replacing its draft.
 Library actions save immediately as personal preferences. Settings Cancel does
 not undo a clone, library registration, commit, or update.
 
-1. Choose a source or enter a Git URL/local repository path.
-2. Choose a connection and a new working folder. An empty branch uses the source default.
-3. Click **Clone library**, or **Use an existing local library** for an existing clone.
-4. Enable the library. Its entries appear in their normal profile, appearance,
-   theme, material, and standard-part controls.
+1. Choose a download connection with access to the source repository.
+2. Click **Download … pack** for the content you want. Missing-library screens
+   offer the same action and keep the current modeling draft intact.
+3. The pack is cloned, registered, and enabled. Its entries appear in the normal
+   profile, appearance, theme, material, and standard-part controls.
+
+The default library folder is **`~/TCAD/Libraries`**. Each starter pack has a stable
+subfolder, such as `tcad-weldment-profiles` or `tcad-textures`. The folder is created
+when needed. **Choose folder…** and **Save library folder** set a different location
+for future downloads; existing libraries stay in place. **Show library folder…**
+opens the saved location. Each pack shows its source and destination, with
+**Open repository…** and **Copy Git URL** actions.
+
+An existing matching checkout is reused, including a disabled installation or a
+completed download that was not registered. Downloads do not overwrite an occupied
+folder or silently replace a fork. New transfers use a staging folder under
+`.downloads`; failed or cancelled transfers are retained there. Retry starts a
+fresh transfer. Status and failures remain visible in the pack section.
+
+For other sources, enter a Git URL/local path and a new working folder under
+**Other repositories**, then choose **Clone library**. An empty branch uses the
+source default. **Use an existing local library** registers a clone you already
+have. Enable its registration to make the entries available.
 
 The initial sources are private and require access:
 
@@ -34,6 +52,24 @@ work through the same connection contracts as model repositories. Each installed
 library has a local checkout and a personal registration, outside CAD documents.
 Removing registration retains that folder. Removing a source does not delete
 resources already copied into a saved project.
+
+## Working without a pack
+
+Missing catalogs show a short explanation, the relevant download action, and a
+link to manage libraries. Existing project definitions and custom authoring remain
+available. Structural Member checks for an available profile before completing an
+active sketch. An empty catalog does not become a modeling error.
+
+Missing legacy grain displays the saved finish color and optical response without
+grain. The Appearance panel explains how to download the map or choose another
+image, and ordinary appearance edits remain available. The saved map reference is
+retained. Missing or corrupt images that are already pinned into a project still
+need repair; TCAD does not claim that an incomplete portable asset is valid.
+
+If an active theme checkout disappears, TCAD uses its saved personal snapshot when
+available, otherwise Classic. The theme panel explains the fallback and provides
+download and library controls. No download or pack installation changes the active
+theme or committed model automatically.
 
 ## Own and edit a library
 
@@ -121,12 +157,17 @@ Library controls expose semantic roles `content-library-field`,
 these independently of library definitions.
 
 Registry version 1 lives at `~/.tcad/content-repositories.json`. No credentials enter model files.
+Version 1 folder preferences live at `~/.tcad/content-library-preferences.json`.
+Pack descriptors are versioned application-owned data, separate from the desktop
+renderer; their source URLs, kinds, labels, and folder names also drive the semantic
+download actions.
 
 Saved profiles/materials/hardware retain their copied definitions. Repository
 finish and texture selections copy exact image bytes into project resources.
 Legacy saved built-in map references can resolve the six original stable texture
-IDs after the texture library is installed; a missing legacy image is reported.
-TCAD does not replace it with invented image detail.
+IDs after the texture library is installed; a missing legacy image is reported
+while the finish renders without grain. TCAD does not replace it with invented
+image detail.
 
 ## Validation
 
@@ -136,6 +177,11 @@ On 2026-10-17, `cargo fmt --all --check`, `git diff --check`,
 verified the pinned helper checksum, and verified the macOS bundle signatures.
 The initial integration also passed `cargo check --workspace --lib --bins --locked`.
 Rust reports an existing future-compatibility notice in `proc-macro-error2` 2.0.1.
+
+The pack-download and graceful-fallback update passed the same formatting,
+whitespace, strict workspace Clippy, and signed-package checks on 2026-10-17.
+Static review covered offline reuse, HTTPS/SSH connection scope, occupied folders,
+queued-download cancellation, missing optional assets, and draft preservation.
 
 No code tests, runtime probes, app launches, or manual acceptance sessions were
 performed. Interactive acceptance stays with the user.

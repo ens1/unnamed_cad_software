@@ -50,6 +50,7 @@ pub struct State {
     pub logical_size: [f32; 2],
     pub watch: bool,
     pub diagnostic: Option<String>,
+    pub library_notice: Option<String>,
     pub layout_path: Option<PathBuf>,
     pub theme_path: Option<PathBuf>,
     pub package_path: Option<PathBuf>,
@@ -69,6 +70,7 @@ impl Default for State {
             logical_size: [1440., 900.],
             watch: true,
             diagnostic: None,
+            library_notice: None,
             layout_path: None,
             theme_path: None,
             package_path: None,
@@ -131,6 +133,7 @@ struct Reader {
     bytes: u64,
     repository_boundary: Option<PathBuf>,
     forced_boundary: Option<PathBuf>,
+    library_notice: Option<String>,
 }
 
 fn invalid(message: impl Into<String>) -> CadError {
@@ -714,12 +717,29 @@ fn load_target(target: &Target, reader: &mut Reader) -> Result<Candidate> {
                     .as_deref()
                     .and_then(crate::theme_library::repository_manifest)
                 {
-                    let mut live = reader.file(&path, Reader::package)?;
-                    live.library_id = saved.library_id;
-                    Ok(live)
+                    // The saved self-contained theme is authoritative recovery
+                    // data. An optional checkout can be offline, removed or have
+                    // incomplete edits without making the workspace unusable.
+                    match reader.file(&path, Reader::package) {
+                        Ok(mut live) => {
+                            live.library_id = saved.library_id;
+                            Ok(live)
+                        }
+                        Err(error) => {
+                            reader.library_notice = Some(format!(
+                                "The theme repository is unavailable. Using your saved theme snapshot. {error}"
+                            ));
+                            Ok(saved)
+                        }
+                    }
                 } else {
-                    // The self-contained last-applied snapshot survives a removed
-                    // optional repository and is the recovery presentation.
+                    if saved
+                        .library_id
+                        .as_deref()
+                        .is_some_and(|id| id.starts_with("repository:") || id == "nocturne")
+                    {
+                        reader.library_notice = Some("The theme repository is not installed. Using your saved theme snapshot; your model and edits are unchanged.".into());
+                    }
                     Ok(saved)
                 }
             } else {
@@ -853,6 +873,7 @@ fn install(w: &mut Workspace, candidate: Candidate, paths: BTreeSet<PathBuf>) {
     resources.watched = snapshot(paths);
     resources.pending = None;
     resources.diagnostic = None;
+    resources.library_notice = None;
 }
 
 fn report(w: &mut Workspace, error: impl std::fmt::Display) {
@@ -871,6 +892,7 @@ fn reload(w: &mut Workspace, target: Target) {
     match result {
         Ok(candidate) => {
             install(w, candidate, reader.paths);
+            w.presentation_resources.library_notice = reader.library_notice;
             w.presentation_resources.target = Some(target.clone());
             w.presentation_resources.package_path = match &target {
                 Target::Package { path, .. } => Some(path.clone()),
@@ -1477,6 +1499,11 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ("presentation.import-theme", "Import theme"),
         ("presentation.import-package", "Import presentation package"),
         ("presentation.export-package", "Export presentation package"),
+        (
+            "content-repositories.download-themes",
+            "Download themes pack",
+        ),
+        ("content-repositories.show-themes", "View themes pack"),
     ] {
         elements.push(SemanticElement {
             id: format!("workspace.{command}"),
@@ -1489,6 +1516,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data: serde_json::json!({"accessibility_label": label, "presentation_only": true,"classes":["compact"]}),
         });
     }
+    elements.extend(crate::theme_library::fallback_notice(w));
     elements.push(SemanticElement {
         id: "workspace.presentation.diagnostics".into(), role: "presentation-resource-diagnostics".into(),
         label: "Presentation resource diagnostics".into(), value: w.presentation_resources.diagnostic.clone(),
@@ -1577,6 +1605,19 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         }
         if let Some(message) = &w.presentation_resources.diagnostic {
             ui.label(message);
+        }
+        if let Some(notice) = crate::theme_library::fallback_notice(w) {
+            crate::presentation_controls::label(ui, &notice.id, &notice.role, &[], &notice.label, &notice.state);
+            ui.horizontal_wrapped(|ui| {
+                for (command, label) in [
+                    ("content-repositories.download-themes", "Download themes pack"),
+                    ("content-repositories.show-themes", "View themes pack"),
+                ] {
+                    if crate::presentation_controls::button(ui, &format!("workspace.{command}"), "presentation-resource-action", &["compact"], label, true, false).clicked() {
+                        crate::ui::action(w, command);
+                    }
+                }
+            });
         }
         ui.small("JSON extends composes local resources; CSS @import accepts quoted local paths. Exports flatten inherited resources into a portable package. Invalid changes retain the last usable presentation.");
     });

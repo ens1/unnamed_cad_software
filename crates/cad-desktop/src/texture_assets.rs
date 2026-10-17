@@ -257,7 +257,7 @@ pub(crate) fn legacy_entry(
     match entries.as_slice() {
         [entry] => Ok(entry.clone()),
         [] => Err(CadError::Invalid(format!(
-            "Missing repository texture {id}. Get the texture library, then pin this map into the project, or choose an imported image."
+            "Optional texture {id} is not installed. The finish uses its color and smooth surface. Download the textures pack to restore grain, or import an image."
         ))),
         _ => Err(CadError::Invalid(format!(
             "Multiple libraries provide {id}. Choose the intended repository image and copy it into the project."

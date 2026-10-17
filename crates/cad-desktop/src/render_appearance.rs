@@ -368,27 +368,31 @@ impl Runtime {
         }
         info
     }
-    pub fn diagnostics(&self, doc: &Document, root: &Path, validating: bool) -> Vec<String> {
-        let mut messages = vec![];
-        let builtin = doc
+    /// Optional legacy maps never hold up a modeling transaction. Keep this
+    /// distinct from diagnostics for checksum-pinned project resources, which
+    /// must still validate before an appearance can be applied.
+    fn repository_map_info(&self, doc: &Document) -> serde_json::Value {
+        let kinds = doc
             .finishes
             .values()
             .filter(|finish| finish.textures.height.is_none())
             .map(|finish| finish.builtin_bump)
             .filter(|kind| *kind != BuiltinBump::None)
             .collect::<std::collections::BTreeSet<_>>();
-        for kind in builtin {
-            match self.builtin_height.get(&kind) {
-                Some(TextureState::Pending) | None => messages.push(format!(
-                    "Loading texture legacy repository {}",
-                    kind.label()
-                )),
-                Some(TextureState::Failed(error)) => {
-                    messages.push(format!("Legacy repository map {}: {error}", kind.label()))
-                }
-                Some(TextureState::Loaded(_)) => {}
-            }
-        }
+        let maps = kinds.into_iter().filter_map(|kind| {
+            let (state, detail) = match self.builtin_height.get(&kind) {
+                Some(TextureState::Loaded(_)) => return None,
+                Some(TextureState::Failed(error)) => ("unavailable", Some(error.as_str())),
+                Some(TextureState::Pending) => ("loading", None),
+                None => ("checking", None),
+            };
+            Some(serde_json::json!({"id":kind.repository_entry(),"name":kind.label(),"state":state,"detail":detail}))
+        }).collect::<Vec<_>>();
+        serde_json::json!({"pack":"textures","fallback":"smooth-finish","blocks_modeling":false,"maps":maps})
+    }
+
+    pub fn diagnostics(&self, doc: &Document, root: &Path, validating: bool) -> Vec<String> {
+        let mut messages = vec![];
         let mut used = std::collections::BTreeSet::new();
         for finish in doc.finishes.values() {
             for (slot, (id, srgb)) in [
@@ -794,6 +798,11 @@ pub fn poll_assets(
     w.fields.insert(
         "appearance-environment-render-info".into(),
         info.to_string(),
+    );
+    let repository_maps = runtime.repository_map_info(w.session.visible());
+    w.fields.insert(
+        "appearance-repository-map-info".into(),
+        repository_maps.to_string(),
     );
     w.appearance_diagnostics = runtime.diagnostics(w.session.visible(), &w.root(), validating);
     w.appearance_validation_key = validation_key(&w);

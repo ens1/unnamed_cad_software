@@ -21,10 +21,10 @@ fn catalog() -> Catalog {
         entries: vec![],
     })
 }
-fn library_notice() -> Option<String> {
+fn library_notice() -> Option<(&'static str, String)> {
     match standard_parts::catalog() {
-        Ok(catalog) if catalog.entries.is_empty() => Some("No standard hardware library is enabled. Open Libraries to clone a repository or add your own.".into()),
-        Err(error) => Some(error.to_string()),
+        Ok(catalog) if catalog.entries.is_empty() => Some(("empty", "No standard-parts pack is available. Saved hardware keeps its geometry and material. Download a pack to insert hardware, or make your own part from a sketch.".into())),
+        Err(error) => Some(("error", error.to_string())),
         _ => None,
     }
 }
@@ -170,8 +170,8 @@ pub fn begin(w: &mut Workspace) {
         w.status = "Make the linked assembly unique before inserting hardware".into();
         return;
     }
-    if let Some(notice) = library_notice() {
-        crate::ui::action(w, "content-repositories");
+    if let Some((_, notice)) = library_notice() {
+        crate::ui::action(w, "content-repositories.show-standard-parts");
         w.status = notice;
         return;
     }
@@ -299,21 +299,82 @@ fn field(w: &Workspace, name: &str, label: &str, value: Value, choices: Value) -
         data: json!({"setter":"standard-parts","field":name,"json":value,"editable":available(w),"choices":choices,"accessibility_label":label,"classes":["modeling-field"]}),
     }
 }
+fn library_actions() -> Vec<SemanticElement> {
+    let mut actions = vec![];
+    if library_notice().is_some() {
+        actions.push((
+            "download-pack",
+            "content-repositories.download-standard-parts",
+            "Download standard-parts pack",
+        ));
+    }
+    actions.push((
+        "get-libraries",
+        "content-repositories.show-standard-parts",
+        "Manage libraries…",
+    ));
+    actions
+        .into_iter()
+        .map(|(id, command, label)| SemanticElement {
+            id: format!("command:standard-parts:{id}"),
+            role: "standard-part-action".into(),
+            label: label.into(),
+            value: None,
+            state: "ready".into(),
+            commands: vec![command.into()],
+            relationships: vec!["workspace.standard-parts".into()],
+            data: json!({"enabled":true,"accessibility_label":label}),
+        })
+        .collect()
+}
+fn show_library_actions(ui: &mut egui::Ui, w: &mut Workspace) {
+    ui.horizontal_wrapped(|ui| {
+        for element in library_actions() {
+            if controls::button(
+                ui,
+                &element.id,
+                &element.role,
+                &["semantic-control"],
+                &element.label,
+                true,
+                false,
+            )
+            .clicked()
+            {
+                crate::ui::semantic_action(w, &element, &element.commands[0]);
+            }
+        }
+    });
+}
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let catalog = catalog();
     let family = family(w);
     let entry = entry(w);
-    if let Some(notice) = library_notice() {
-        return vec![SemanticElement {
-            id: "workspace.standard-parts".into(),
-            role: "standard-parts-editor".into(),
-            label: "Standard Hardware".into(),
-            value: Some(notice),
-            state: "empty".into(),
-            commands: vec!["content-repositories".into()],
-            relationships: vec![],
-            data: json!({"renderer":"standard-parts-editor","library_required":true,"actions":[{"command":"content-repositories","label":"Get libraries…","enabled":true}]}),
-        }];
+    if let Some((state, notice)) = library_notice() {
+        let mut elements = vec![
+            SemanticElement {
+                id: "workspace.standard-parts".into(),
+                role: "standard-parts-editor".into(),
+                label: "Standard Hardware".into(),
+                value: Some(notice.clone()),
+                state: state.into(),
+                commands: vec!["content-repositories.show-standard-parts".into()],
+                relationships: vec![],
+                data: json!({"renderer":"standard-parts-editor","library_required_for_new_insertion":true,"saved_geometry_preserved":true,"pack":"standard-parts"}),
+            },
+            SemanticElement {
+                id: "standard-parts:library-notice".into(),
+                role: "standard-part-help".into(),
+                label: notice,
+                value: None,
+                state: state.into(),
+                commands: vec![],
+                relationships: vec!["workspace.standard-parts".into()],
+                data: json!({"pack":"standard-parts","saved_geometry_preserved":true}),
+            },
+        ];
+        elements.extend(library_actions());
+        return elements;
     }
 
     let mut elements=vec![SemanticElement{id:"workspace.standard-parts".into(),role:"standard-parts-editor".into(),label:"Standard Hardware".into(),value:entry.as_ref().map(|entry|entry.id.clone()),state:if w.dialog.as_deref()==Some("standard-parts"){"open"}else{"closed"}.into(),commands:vec!["standard-parts".into()],relationships:owner(w).into_iter().collect(),data:json!({"renderer":"standard-parts-editor","version":standard_parts::CONTRACT_VERSION,"catalog_version":catalog.catalog_version,"native_sketch_geometry":true,"simplified_threads":true,"transaction":"shared-document-draft"})},
@@ -395,6 +456,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         relationships: vec!["workspace.standard-parts".into()],
         data: json!({"enabled":available(w)}),
     });
+    elements.extend(library_actions());
     elements
 }
 pub fn value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
@@ -521,7 +583,7 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
     }
 }
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
-    if let Some(notice) = library_notice() {
+    if let Some((state, notice)) = library_notice() {
         if w.fields.contains_key(TOOL) {
             cad_ui::confirmation(ui, w);
         }
@@ -531,21 +593,9 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             "standard-part-help",
             &[],
             &notice,
-            "empty",
+            state,
         );
-        if controls::button(
-            ui,
-            "command:standard-parts:get-libraries",
-            "standard-part-action",
-            &["semantic-control"],
-            "Get libraries…",
-            true,
-            false,
-        )
-        .clicked()
-        {
-            crate::ui::action(w, "content-repositories");
-        }
+        show_library_actions(ui, w);
         return;
     }
     if !w.fields.contains_key(TOOL) {
@@ -555,6 +605,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         }
     }
     cad_ui::confirmation(ui, w);
+    show_library_actions(ui, w);
     let elements = semantics(w);
     for element in &elements {
         if element.data.get("setter").and_then(Value::as_str) == Some("standard-parts") {

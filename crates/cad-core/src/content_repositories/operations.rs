@@ -14,7 +14,7 @@ fn find(id: &str) -> Result<InstalledRepository> {
         .ok_or_else(|| invalid("The content repository is no longer registered"))
 }
 
-fn mutate_registry(change: impl FnOnce(&mut Registry) -> Result<()>) -> Result<()> {
+pub(super) fn mutate_registry(change: impl FnOnce(&mut Registry) -> Result<()>) -> Result<()> {
     let _guard = REGISTRY_LOCK
         .lock()
         .map_err(|_| invalid("Content library preferences are unavailable"))?;
@@ -42,7 +42,11 @@ fn replace(repository: &InstalledRepository) -> Result<()> {
     })
 }
 
-fn installation(root: &Path, enabled: bool, cancel: &CancelToken) -> Result<InstalledRepository> {
+pub(super) fn installation(
+    root: &Path,
+    enabled: bool,
+    cancel: &CancelToken,
+) -> Result<InstalledRepository> {
     let snapshot = storage::snapshot(root, cancel)?;
     let git = Git::local(&snapshot.root);
     git.validate_root(cancel)?;

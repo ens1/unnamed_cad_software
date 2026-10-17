@@ -11,7 +11,7 @@ use cad_core::{
 };
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     sync::{Mutex, mpsc},
 };
@@ -31,6 +31,14 @@ pub struct State {
     status: String,
     outcome_notice: Option<String>,
     context_revision: u64,
+    library_directory: Option<PathBuf>,
+    ready_repositories: BTreeSet<String>,
+    focused_pack: Option<String>,
+    focus_section: Option<String>,
+    downloading_pack: Option<String>,
+    clipboard: Option<String>,
+    refreshing: bool,
+    queued_download: Option<String>,
 }
 enum Event {
     Progress(String),
@@ -41,22 +49,20 @@ enum Outcome {
         libraries::Registry,
         Vec<String>,
         Option<cad_core::git_connections::GitIdentity>,
+        Option<PathBuf>,
+        BTreeSet<String>,
     ),
+    Directory(PathBuf),
+    Notice(String),
     Changed(String, String),
     Inspected(libraries::RepositoryInspection),
     Update(libraries::UpdateCandidate),
     Publish(libraries::PublishRequest, Option<ConnectionProfile>),
 }
-const SOURCES: [(&str, &str); 5] = [
-    ("Weldment profiles", "tcad-weldment-profiles"),
-    ("Textures and finishes", "tcad-textures"),
-    ("Themes", "tcad-themes"),
-    ("Materials", "tcad-materials"),
-    ("Standard parts", "tcad-standard-parts"),
-];
-const SECTIONS: [(&str, &str); 6] = [
+const SECTIONS: [(&str, &str); 7] = [
+    ("packs", "Optional packs"),
     ("installed", "Installed libraries"),
-    ("add", "Get libraries"),
+    ("add", "Other repositories"),
     ("create", "Create or fork a library"),
     ("update", "Review updates"),
     ("edit", "Edit and save versions"),
@@ -121,21 +127,19 @@ fn destination(w: &Workspace) -> Result<PathBuf> {
     }
     Ok(PathBuf::from(path.trim()))
 }
-fn next_folder(name: &str) -> PathBuf {
-    let base = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join(".tcad/library-checkouts")
-        .join(format!("{}-{}", name, &cad_core::id()[..8]))
+fn next_folder(w: &Workspace, name: &str) -> Result<PathBuf> {
+    let root = w
+        .content_repositories
+        .library_directory
+        .as_ref()
+        .ok_or_else(|| invalid("Choose and save a library folder first"))?;
+    Ok(root.join(format!("{}-{}", name, &cad_core::id()[..8])))
 }
 /// Creating a checkout may create our managed parent, never a user-selected target.
 fn prepare_destination(destination: &std::path::Path) -> Result<()> {
-    let managed = next_folder("unused")
-        .parent()
-        .map(std::path::Path::to_path_buf)
-        .ok_or_else(|| invalid("The managed library folder is unavailable"))?;
-    if destination.parent() == Some(managed.as_path()) {
+    if let Ok(managed) = libraries::library_directory()
+        && destination.parent() == Some(managed.as_path())
+    {
         std::fs::create_dir_all(managed)?;
     }
     Ok(())
@@ -159,6 +163,77 @@ fn status(w: &mut Workspace, message: impl Into<String>) {
     }
     w.content_repositories.status = message;
 }
+pub fn take_clipboard(w: &mut Workspace) -> Option<String> {
+    w.content_repositories.clipboard.take()
+}
+fn open_location(target: impl AsRef<std::ffi::OsStr>) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(target_os = "windows")]
+    let program = "explorer";
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let program = "xdg-open";
+    std::process::Command::new(program).arg(target).spawn()?;
+    Ok(())
+}
+fn show_pack(w: &mut Workspace, id: &str) -> Result<()> {
+    let pack = libraries::pack(id)?;
+    crate::settings::open(w, Some("application.libraries"));
+    if let Some(settings) = &mut w.settings {
+        settings.search.clear();
+    }
+    w.content_repositories.focused_pack = Some(pack.id.into());
+    w.content_repositories.focus_section = Some("packs".into());
+    Ok(())
+}
+fn download_pack(w: &mut Workspace, id: &str) -> Result<()> {
+    show_pack(w, id)?;
+    start_pack_download(w, id)
+}
+fn start_pack_download(w: &mut Workspace, id: &str) -> Result<()> {
+    let pack = libraries::pack(id)?;
+    if !idle(w) {
+        if w.content_repositories.refreshing {
+            w.content_repositories.queued_download = Some(pack.id.into());
+            status(
+                w,
+                format!(
+                    "Reading installed libraries, then downloading {}…",
+                    pack.name
+                ),
+            );
+            return Ok(());
+        }
+        return Err(invalid(
+            "Wait for the current library operation, then use Download pack below",
+        ));
+    }
+    let connection = crate::git_connections_ui::resolve(w, &text(w, "connection"))?;
+    clear_reviews(w);
+    w.content_repositories.outcome_notice = None;
+    submit(
+        w,
+        &format!("Downloading {}…", pack.name),
+        move |cancel, tx| {
+            let repository =
+                libraries::download_pack(pack.id, connection.as_ref(), &cancel, |message| {
+                    let _ = tx.send(Event::Progress(message.into()));
+                })?;
+            Ok(Outcome::Changed(
+                repository.id,
+                format!(
+                    "{} is available at {}. Close Settings to continue your edit.",
+                    pack.name,
+                    repository.root.display()
+                ),
+            ))
+        },
+    );
+    if !idle(w) {
+        w.content_repositories.downloading_pack = Some(pack.id.into());
+    }
+    Ok(())
+}
 fn submit(
     w: &mut Workspace,
     label: &str,
@@ -181,6 +256,7 @@ fn submit(
         return;
     }
     w.content_repositories.initialized = true;
+    w.content_repositories.refreshing = false;
     w.content_repositories.pending = Some(cancel);
     status(w, label);
     std::thread::spawn(move || {
@@ -191,11 +267,25 @@ fn submit(
 fn refresh(w: &mut Workspace) {
     submit(w, "Reading installed libraries…", |cancel, _| {
         let snapshot = libraries::refresh_catalog_with_cancel(&cancel)?;
+        let ready = snapshot
+            .entries
+            .iter()
+            .map(|entry| entry.repository_id.clone())
+            .collect();
         if cancel.is_cancelled() {
             return Err(invalid("Library refresh cancelled"));
         }
         cad_core::finish_library::refresh_catalog();
         let mut notices = snapshot.notices;
+        let directory = match libraries::library_directory() {
+            Ok(directory) => Some(directory),
+            Err(error) => {
+                notices.push(format!(
+                    "Library folder: {error}. Choose and save a folder below."
+                ));
+                None
+            }
+        };
         notices.extend(cad_core::finish_library::catalog_diagnostics());
         if let Err(e) = cad_core::weldment_profiles::installed_catalogs() {
             notices.push(e.to_string());
@@ -213,8 +303,11 @@ fn refresh(w: &mut Workspace) {
             libraries::load_registry()?,
             notices,
             cad_core::git_connections::read_author(None).ok(),
+            directory,
+            ready,
         ))
     });
+    w.content_repositories.refreshing = !idle(w);
 }
 pub fn poll(w: &mut Workspace) {
     if !w.content_repositories.initialized {
@@ -246,24 +339,54 @@ pub fn poll(w: &mut Workspace) {
             Event::Progress(message) => status(w, message),
             Event::Done(result) => {
                 w.content_repositories.pending = None;
+                w.content_repositories.refreshing = false;
+                let downloaded = w.content_repositories.downloading_pack.take();
                 if let Ok(mut slot) = w.content_repositories.receiver.lock() {
                     *slot = None;
                 }
                 match *result {
                     Err(error) => {
+                        w.content_repositories.queued_download = None;
+                        let error = if let Some(pack) = downloaded {
+                            format!(
+                                "Could not install the {pack} pack: {error}. You can keep working without this pack. Check your connection and repository access, then retry."
+                            )
+                        } else {
+                            error
+                        };
                         w.content_repositories.outcome_notice = Some(error.clone());
                         status(w, error);
                     }
-                    Ok(Outcome::Refresh(registry, notices, author)) => {
+                    Ok(Outcome::Refresh(registry, notices, author, directory, ready)) => {
                         w.content_repositories.registry = registry;
                         w.content_repositories.notices = notices;
+                        w.content_repositories.library_directory = directory.clone();
+                        w.content_repositories.ready_repositories = ready;
+                        if !w
+                            .content_repositories
+                            .fields
+                            .contains_key("library-directory")
+                        {
+                            set(
+                                w,
+                                "library-directory",
+                                json!(
+                                    directory
+                                        .as_ref()
+                                        .map(|path| path.to_string_lossy().into_owned())
+                                        .unwrap_or_default()
+                                ),
+                            );
+                        }
                         advance_context(w);
                         if selected(w).is_err() {
                             w.content_repositories.selected.clear();
                             clear_reviews(w);
                         }
-                        if !w.content_repositories.fields.contains_key("destination") {
-                            set(w, "destination", json!(next_folder("library")));
+                        if !w.content_repositories.fields.contains_key("destination")
+                            && let Ok(path) = next_folder(w, "library")
+                        {
+                            set(w, "destination", json!(path));
                         }
                         if let Some(author) = author {
                             for (key, text) in
@@ -287,13 +410,28 @@ pub fn poll(w: &mut Workspace) {
                             for key in ["entry-id", "entry-name", "entry-path"] {
                                 set(w, key, json!(""));
                             }
-                            set(w, "destination", json!(next_folder("library")));
+                            if let Ok(path) = next_folder(w, "library") {
+                                set(w, "destination", json!(path));
+                            }
                         }
                         w.content_repositories.selected = id;
                         clear_reviews(w);
                         w.content_repositories.outcome_notice = Some(message);
                         refresh(w);
                     }
+                    Ok(Outcome::Directory(directory)) => {
+                        w.content_repositories.library_directory = Some(directory.clone());
+                        set(w, "library-directory", json!(directory));
+                        if let Ok(path) = next_folder(w, "library") {
+                            set(w, "destination", json!(path));
+                        }
+                        clear_reviews(w);
+                        status(
+                            w,
+                            "Library folder saved. Existing installations stay in their current folders.",
+                        );
+                    }
+                    Ok(Outcome::Notice(message)) => status(w, message),
                     Ok(Outcome::Inspected(review)) => {
                         advance_context(w);
                         w.content_repositories.inspection = Some(review);
@@ -321,6 +459,9 @@ pub fn poll(w: &mut Workspace) {
     }
     if disconnected && !completed && w.content_repositories.pending.is_some() {
         w.content_repositories.pending = None;
+        w.content_repositories.refreshing = false;
+        w.content_repositories.queued_download = None;
+        w.content_repositories.downloading_pack = None;
         if let Ok(mut slot) = w.content_repositories.receiver.lock() {
             *slot = None;
         }
@@ -328,16 +469,39 @@ pub fn poll(w: &mut Workspace) {
         w.content_repositories.outcome_notice = Some(message.into());
         status(w, message);
     }
+    if idle(w)
+        && let Some(id) = w.content_repositories.queued_download.take()
+        && let Err(error) = start_pack_download(w, &id)
+    {
+        status(w, error.to_string());
+    }
 }
 pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
     if command == "content-repositories" {
         crate::settings::open(w, Some("application.libraries"));
+        if let Some(settings) = &mut w.settings {
+            settings.search.clear();
+        }
+        w.content_repositories.focus_section = Some("packs".into());
         return true;
     }
     let Some(command) = command.strip_prefix("content-repositories.") else {
         return false;
     };
+    if let Some(id) = command.strip_prefix("download-") {
+        if let Err(error) = download_pack(w, id) {
+            status(w, error.to_string());
+        }
+        return true;
+    }
+    if let Some(id) = command.strip_prefix("show-") {
+        if let Err(error) = show_pack(w, id) {
+            status(w, error.to_string());
+        }
+        return true;
+    }
     if command == "cancel" {
+        w.content_repositories.queued_download = None;
         if let Some(cancel) = &w.content_repositories.pending {
             cancel.cancel();
         }
@@ -365,17 +529,60 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                     .and_then(|a| a["index"].as_u64())
                     .ok_or_else(|| invalid("Select a library source"))?
                     as usize;
-                let (_, name) = SOURCES
+                let pack = libraries::packs()
                     .get(index)
                     .ok_or_else(|| invalid("Unknown source"))?;
+                set(w, "url", json!(pack.clone_url));
                 set(
                     w,
-                    "url",
-                    json!(format!("https://github.com/ens1/{name}.git")),
+                    "destination",
+                    json!(next_folder(w, pack.directory_name)?),
                 );
-                set(w, "destination", json!(next_folder(name)));
                 set(w, "branch", json!(""));
                 clear_reviews(w);
+            }
+            "pack-repository" | "pack-copy-url" => {
+                let id = args
+                    .and_then(|args| args["pack"].as_str())
+                    .ok_or_else(|| invalid("Choose a pack"))?;
+                let pack = libraries::pack(id)?;
+                if command == "pack-repository" {
+                    open_location(pack.web_url)?;
+                } else {
+                    w.content_repositories.clipboard = Some(pack.clone_url.into());
+                    status(w, "Repository URL copied");
+                }
+            }
+            "library-folder" => {
+                let mut dialog =
+                    rfd::FileDialog::new().set_title("Choose the folder for future TCAD libraries");
+                if let Some(directory) = &w.content_repositories.library_directory {
+                    dialog = dialog.set_directory(directory);
+                }
+                if let Some(directory) = dialog.pick_folder() {
+                    set(w, "library-directory", json!(directory));
+                }
+            }
+            "save-library-folder" => {
+                let directory = PathBuf::from(text(w, "library-directory"));
+                submit(w, "Saving library folder…", move |_, _| {
+                    Ok(Outcome::Directory(libraries::set_library_directory(
+                        &directory,
+                    )?))
+                });
+            }
+            "open-library-folder" => {
+                let directory = w
+                    .content_repositories
+                    .library_directory
+                    .clone()
+                    .ok_or_else(|| invalid("Save a library folder first"))?;
+                // Showing the folder is an explicit user action. Create it lazily.
+                submit(w, "Opening library folder…", move |_, _| {
+                    std::fs::create_dir_all(&directory)?;
+                    open_location(&directory)?;
+                    Ok(Outcome::Notice(format!("Opened {}", directory.display())))
+                });
             }
             "select" => {
                 let id = args
@@ -390,6 +597,7 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                     .cloned()
                     .ok_or_else(|| invalid("The selected library is no longer installed"))?;
                 w.content_repositories.selected = repository.id;
+                w.content_repositories.focus_section = Some("installed".into());
                 clear_reviews(w);
                 set(w, "publish-url", json!(""));
                 set(w, "publish-branch", json!(repository.branch));
@@ -500,7 +708,7 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
             }
             "inspect-update" => {
                 let repository = selected(w)?;
-                let destination = next_folder("update");
+                let destination = next_folder(w, "update")?;
                 let connection = crate::git_connections_ui::resolve(w, &text(w, "connection"))?;
                 w.content_repositories.update = None;
                 submit(
@@ -661,13 +869,7 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
             }
             "files" => {
                 let root = selected(w)?.root;
-                #[cfg(target_os = "macos")]
-                let program = "open";
-                #[cfg(target_os = "windows")]
-                let program = "explorer";
-                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-                let program = "xdg-open";
-                std::process::Command::new(program).arg(root).spawn()?;
+                open_location(root)?;
             }
             "review-publish" => {
                 let id = selected(w)?.id;
@@ -834,6 +1036,148 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data: json!({"group":group}),
         });
     }
+    out.push(info("packs", "help", "Packs are optional. Classic, plain finishes, and your saved model definitions work without downloads. Install only what you need; no pack changes an active model or theme."));
+    out.push(info("packs", "status", &w.content_repositories.status));
+    if let Some(notice) = &w.content_repositories.outcome_notice {
+        out.push(info("packs", "last-result", notice));
+    }
+    if !available {
+        out.push(button(
+            "packs",
+            "cancel",
+            "content-repositories.cancel",
+            "Cancel operation",
+            json!({}),
+            true,
+        ));
+    }
+    out.push(field(
+        w,
+        "packs",
+        "library-directory",
+        "Library folder",
+        None,
+    ));
+    out.push(info("packs", "saved-folder", format!("Downloads use: {}. Changing this folder affects future downloads only; existing libraries stay where they are.", w.content_repositories.library_directory.as_ref().map(|path|path.display().to_string()).unwrap_or_else(|| "Choose and save a folder".into()))));
+    for (command, label) in [
+        ("library-folder", "Choose folder…"),
+        ("save-library-folder", "Save library folder"),
+        ("open-library-folder", "Show library folder…"),
+    ] {
+        out.push(button(
+            "packs",
+            command,
+            &format!("content-repositories.{command}"),
+            label,
+            json!({}),
+            available,
+        ));
+    }
+    out.push(field(
+        w,
+        "packs",
+        "connection",
+        "Download connection",
+        Some(crate::git_connections_ui::choices(w)),
+    ));
+    out.push(button(
+        "packs",
+        "connection",
+        "git-connections",
+        "Manage connections…",
+        json!({}),
+        available,
+    ));
+    out.push(info("packs", "access", "The TCAD pack repositories are private. Use an account with access, or add your own repository below. If a download fails, you can keep working and retry later."));
+    let mut packs = libraries::packs().iter().collect::<Vec<_>>();
+    packs.sort_by_key(|pack| w.content_repositories.focused_pack.as_deref() != Some(pack.id));
+    for pack in packs {
+        let installed = libraries::matching_pack_repository(pack, &w.content_repositories.registry);
+        let ready = installed.is_some_and(|repository| {
+            repository.enabled
+                && w.content_repositories
+                    .ready_repositories
+                    .contains(&repository.id)
+        });
+        let state = if w.content_repositories.downloading_pack.as_deref() == Some(pack.id) {
+            "Downloading…"
+        } else if ready {
+            "Installed"
+        } else if installed.is_some_and(|repository| !repository.enabled) {
+            "Disabled"
+        } else if installed.is_some() {
+            "Local copy needs attention"
+        } else {
+            "Not installed"
+        };
+        let destination = installed
+            .map(|repository| repository.root.clone())
+            .or_else(|| {
+                w.content_repositories
+                    .library_directory
+                    .as_ref()
+                    .map(|path| path.join(pack.directory_name))
+            });
+        let mut description = info(
+            "packs",
+            &format!("pack-{}", pack.id),
+            format!(
+                "{} · {}\n{}\nRepository: {}\nFolder: {}",
+                pack.name,
+                state,
+                pack.description,
+                pack.clone_url,
+                destination
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "Choose a library folder".into())
+            ),
+        );
+        description.state = if ready { "available" } else { "notice" }.into();
+        description.data["pack"] = json!(pack.id);
+        description.data["repository_url"] = json!(pack.clone_url);
+        description.data["directory"] = json!(destination);
+        description.data["available"] = json!(ready);
+        out.push(description);
+        let label = if ready {
+            "Manage installed library…".to_owned()
+        } else if installed.is_some_and(|repository| !repository.enabled) {
+            format!("Download or enable {} pack", pack.name)
+        } else {
+            pack.button_label.to_owned()
+        };
+        let command = if ready {
+            "content-repositories.select".to_owned()
+        } else {
+            format!("content-repositories.download-{}", pack.id)
+        };
+        let arguments = if ready {
+            json!({"id":installed.map(|repository|&repository.id)})
+        } else {
+            json!({"pack":pack.id})
+        };
+        out.push(button(
+            "packs",
+            &format!("download-{}", pack.id),
+            &command,
+            &label,
+            arguments,
+            available && (ready || w.content_repositories.library_directory.is_some()),
+        ));
+        for (command, label) in [
+            ("pack-repository", "Open repository…"),
+            ("pack-copy-url", "Copy Git URL"),
+        ] {
+            out.push(button(
+                "packs",
+                &format!("{command}-{}", pack.id),
+                &format!("content-repositories.{command}"),
+                label,
+                json!({"pack":pack.id}),
+                available,
+            ));
+        }
+    }
     out.push(info("installed","help","Libraries are personal. Changes save immediately; Settings Cancel does not undo them. Models keep copied definitions and textures."));
     if w.content_repositories.registry.repositories.is_empty() {
         out.push(info("installed","empty","No libraries installed. TCAD includes only the default theme and a plain aluminum appearance."));
@@ -907,17 +1251,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             available,
         ));
     }
-    for (index, (label, _)) in SOURCES.iter().enumerate() {
-        out.push(button(
-            "add",
-            &format!("source-{index}"),
-            "content-repositories.source",
-            &format!("Use TCAD {label} source"),
-            json!({"index":index}),
-            available,
-        ));
-    }
-    out.push(info("add","sources","These private repos need an account with access. You can use any Git host or local Git path. Nothing downloads until you click Clone."));
+    out.push(info("add","sources","Use any supported Git host or local Git path for your own libraries. Nothing downloads until you click Clone."));
     for (key, label) in [
         ("url", "Git URL or local repository path"),
         ("branch", "Branch (blank uses default)"),
@@ -925,20 +1259,10 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     ] {
         out.push(field(w, "add", key, label, None));
     }
-    out.push(field(
-        w,
+    out.push(info(
         "add",
         "connection",
-        "Git connection",
-        Some(crate::git_connections_ui::choices(w)),
-    ));
-    out.push(button(
-        "add",
-        "connection",
-        "git-connections",
-        "Manage connections…",
-        json!({}),
-        available,
+        "Uses the Download connection selected above.",
     ));
     for (command, label) in [
         ("folder", "Choose parent folder…"),
@@ -1120,22 +1444,8 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             available && value(w, "publish-confirmed") == true,
         ));
     }
-    out.push(info("installed", "status", &w.content_repositories.status));
     for (index, notice) in w.content_repositories.notices.iter().enumerate() {
         out.push(info("installed", &format!("notice-{index}"), notice));
-    }
-    if !available {
-        out.push(button(
-            "installed",
-            "cancel",
-            "content-repositories.cancel",
-            "Cancel operation",
-            json!({}),
-            true,
-        ));
-    }
-    if let Some(notice) = &w.content_repositories.outcome_notice {
-        out.push(info("installed", "last-result", notice));
     }
     out.insert(0, SemanticElement {
         id: "workspace.content-repositories".into(), role: "content-repositories-editor".into(),
@@ -1198,6 +1508,7 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, incoming: Value) 
         "entry-name",
         "entry-path",
         "publish-url",
+        "library-directory",
     ];
     if !FIELDS.contains(&key)
         || if key == "publish-confirmed" {
@@ -1225,6 +1536,7 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, incoming: Value) 
     Ok(())
 }
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
+    let focus = w.content_repositories.focus_section.take();
     let snapshot = semantics(w);
     for (group, label) in SECTIONS {
         controls::inspector_section(
@@ -1235,8 +1547,11 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                 classes: &["repository-section"],
                 label,
                 state: "ready",
-                collapse: Some(matches!(group, "installed" | "add")),
-                open: None,
+                collapse: Some(matches!(group, "packs")),
+                open: focus
+                    .as_deref()
+                    .filter(|focused| *focused == group)
+                    .map(|_| true),
             },
             |ui| {
                 for element in snapshot.iter().filter(|e| e.data["group"] == group) {

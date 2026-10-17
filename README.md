@@ -47,9 +47,14 @@ Profile catalogs, image maps, extra themes, finish presets, materials, and hardw
 are optional Git repositories. Nothing downloads automatically.
 
 Use **Workspace → Content Libraries**, also available in Settings, to clone,
-register, create, fork, enable, or update a library. The panel accepts any supported
-Git host and uses your saved Git connections. Models keep copied definitions and
-pinned image bytes when their source library changes or is removed.
+register, create, fork, enable, or update a library. **Download … pack** installs a
+starter library in **`~/TCAD/Libraries`**; you can change this folder in the panel.
+Each pack shows its repository link and local folder. Missing-library screens
+offer the matching download action. The panel accepts any supported Git host and
+uses your saved Git connections. Models keep copied definitions and pinned image
+bytes when their source library changes or is removed. Missing optional grain
+falls back to the saved finish without texture; missing theme checkouts use their
+saved snapshot or Classic.
 
 The initial libraries are private: [profiles](https://github.com/ens1/tcad-weldment-profiles),
 [textures and finishes](https://github.com/ens1/tcad-textures),
@@ -91,7 +96,7 @@ backend. Interactive acceptance remains with the user.
 - **Drawings** now supports direct paper selection and dragging, view/title-cell resize handles, dimension/leader handles, native-reference Smart Dimension, and explicit attachment repair. Parent-aligned views, grid/snap guides, cursor-centered pinch, paper pan and Fit Sheet use the same compact, themeable controls. Split production tables continue onto real PDF/DXF pages. See [paper editing](docs/drawing-paper-interaction.md).
 - **BOM / Production** provides parts-only, top-level and indented BOMs, configurable columns, material/finish data and equivalent-stock cut-list grouping. Source-bound item numbers and automatic cut-list balloons remain linked across configurations and ownership changes. Saved report options drive CSV exports; drawing table CSV preserves its configured content/order/numbering. See [production workflows](docs/drawing-production.md).
 - **Design → Component libraries** links local projects using exact pinned source snapshots. Check for updates and preview them explicitly; make an instance unique before editing a linked definition. Source resources remain available offline.
-- **Materials / Appearance** provides 60 sourced engineering catalog entries and 80 independent visual finish presets, portable local libraries, personal favorites, project/configuration assignments and native face finishes. New-document material and finish defaults retain independent portable snapshots, including pinned custom texture files. Linked component materials, finishes and texture records remain pinned. See [materials](docs/material-library.md) and [catalog CSV](docs/material-csv.md).
+- **Materials / Appearance** supports optional catalogs with 60 sourced engineering materials and 80 independent visual finish presets, portable local libraries, personal favorites, project/configuration assignments and native face finishes. Install the material and texture packs to use those catalogs. New-document material and finish defaults retain independent portable snapshots, including pinned custom texture files. Linked component materials, finishes and texture records remain pinned. See [materials](docs/material-library.md) and [catalog CSV](docs/material-csv.md).
 - **Assembly Display States** saves occurrence visibility and finishes, independently of mechanical positions, with optional drawing associations and shared PDF/DXF ghost line rendering. See [display states](docs/display-states.md).
 - **Model Properties** edits common and custom document/part/assembly fields, configured inheritance and their BOM/title-block associations. See [properties](docs/model-properties.md).
 - **Standard Hardware** inserts 32 sourced M3–M16 washer, nut and screw envelopes, made from editable sketches and ordinary features. Threads are explicitly simplified. See [hardware](docs/standard-hardware.md).

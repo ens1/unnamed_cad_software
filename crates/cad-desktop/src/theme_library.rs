@@ -185,7 +185,12 @@ pub fn choices(w: &Workspace) -> Vec<Choice> {
     );
     let selected = selected(w);
     if !choices.iter().any(|choice| choice.id == selected) {
-        choices.push(Choice { id: selected, name: "Current / custom presentation".into(), description: "The active project or custom layout and styling. Load a portable presentation package to add it to the library.".into() });
+        let missing_pack = selected.starts_with("repository:") || selected == "nocturne";
+        choices.push(Choice {
+            id: selected,
+            name: if missing_pack { "Saved theme · pack unavailable" } else { "Current / custom presentation" }.into(),
+            description: if missing_pack { "Your saved theme remains usable without its optional repository. Reconnect the library to edit or update its source." } else { "The active project or custom layout and styling. Load a portable presentation package to add it to the library." }.into(),
+        });
     }
     choices
 }
@@ -195,6 +200,36 @@ pub(crate) fn repository_manifest(id: &str) -> Option<PathBuf> {
         .into_iter()
         .find(|entry| format!("repository:{}:{}", entry.repository_id, entry.entry.id) == id)
         .map(|entry| entry.path)
+}
+
+/// A missing optional theme is advisory. Its already-applied layout and the
+/// self-contained personal snapshot stay usable; no CAD draft is replaced.
+pub fn fallback_notice(w: &Workspace) -> Option<cad_core::presentation::SemanticElement> {
+    let selected = selected(w);
+    let missing = (selected.starts_with("repository:") || selected == "nocturne")
+        && !w
+            .presentation_resources
+            .library
+            .entries
+            .iter()
+            .any(|entry| entry.choice.id == selected);
+    let message = w.presentation_resources.library_notice.clone().or_else(|| missing.then(|| "The active theme's repository is not installed. Your current layout remains usable. Reconnect its library, or download another theme pack.".into()))?;
+    let pack = cad_core::content_repositories::pack("themes").ok()?;
+    Some(cad_core::presentation::SemanticElement {
+        id: "workspace.presentation.library-notice".into(),
+        role: "presentation-library-notice".into(),
+        label: message.clone(),
+        value: Some(message),
+        state: "fallback".into(),
+        commands: vec![
+            "content-repositories.download-themes".into(),
+            "content-repositories.show-themes".into(),
+            "content-repositories".into(),
+            "presentation.reset".into(),
+        ],
+        relationships: vec!["workspace.presentation.diagnostics".into()],
+        data: serde_json::json!({"pack":"themes","selected_theme":selected,"repository_url":pack.clone_url,"web_url":pack.web_url,"fallback":"saved-presentation","blocks_modeling":false,"presentation_only":true}),
+    })
 }
 
 pub fn selected(w: &Workspace) -> String {
@@ -219,7 +254,16 @@ fn bundled(id: &str) -> Result<resources::Candidate> {
 }
 
 pub fn select(w: &mut Workspace, id: &str) -> Result<()> {
-    if id == "custom" && selected(w) == id {
+    if selected(w) == id
+        && (id == "custom"
+            || (id.starts_with("repository:") || id == "nocturne")
+                && !w
+                    .presentation_resources
+                    .library
+                    .entries
+                    .iter()
+                    .any(|entry| entry.choice.id == id))
+    {
         return Ok(());
     }
     let (mut candidate, manifest) = if id == "classic" {

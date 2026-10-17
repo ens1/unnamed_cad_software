@@ -34,10 +34,10 @@ fn invalid(message: &str) -> CadError {
 fn catalogs() -> Vec<Arc<Catalog>> {
     cad_core::weldment_profiles::installed_catalogs().unwrap_or_default()
 }
-fn library_notice() -> Option<String> {
+fn library_notice() -> Option<(&'static str, String)> {
     match cad_core::weldment_profiles::installed_catalogs() {
-        Ok(catalogs) if catalogs.iter().all(|catalog| catalog.profiles.is_empty()) => Some("No weldment profile library is enabled. Open Libraries to clone a profile repository or add your own.".into()),
-        Err(error) => Some(error.to_string()),
+        Ok(catalogs) if catalogs.iter().all(|catalog| catalog.profiles.is_empty()) => Some(("empty", "No weldment profile pack is available. Saved members keep their profiles. Download a pack, or use a sketched section with a path.".into())),
+        Err(error) => Some(("error", error.to_string())),
         _ => None,
     }
 }
@@ -223,6 +223,13 @@ pub fn is_deferred(name: &str) -> bool {
 /// Preserve selected sketch-member identities across the existing sketch's
 /// validated confirmation, then open the ordinary structural feature draft.
 pub fn begin(w: &mut Workspace) {
+    // Check personal content before confirming a sketch: opening the library
+    // manager must not commit or discard the user's modeling draft.
+    if let Some((_, notice)) = library_notice() {
+        crate::ui::action(w, "content-repositories.show-profiles");
+        w.status = notice;
+        return;
+    }
     let Some(pending) = pending(w) else {
         w.status = "Create a layout sketch in a part first".into();
         return;
@@ -283,9 +290,9 @@ fn begin_pending(w: &mut Workspace, pending: Pending) {
         .iter()
         .find(|catalog| !catalog.profiles.is_empty())
     else {
-        crate::ui::action(w, "content-repositories");
-        w.status = library_notice().unwrap_or_else(|| {
-            "No weldment profile library is enabled. Use Get libraries to add one.".into()
+        crate::ui::action(w, "content-repositories.show-profiles");
+        w.status = library_notice().map(|(_, notice)| notice).unwrap_or_else(|| {
+            "No weldment profile pack is installed or enabled. Download a pack or add your own library.".into()
         });
         return;
     };
@@ -653,14 +660,43 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ));
     }
     out.push(group(w, &owner, "profile", "Pre-made profile"));
-    if let Some(notice) = library_notice() {
-        out.push(note(
+    if let Some((state, notice)) = library_notice() {
+        let mut element = note(
             w,
             &owner,
             "profile",
             "library-notice",
-            &format!("{notice} This member retains its saved profile."),
+            &format!("{notice} This member's saved profile remains editable."),
+        );
+        // Keep missing-content information visible, outside collapsed instructions.
+        element.role = "structural-member-library-notice".into();
+        element.state = state.into();
+        out.push(element);
+        out.push(action_element(
+            w,
+            &owner,
+            "profile",
+            "download-profiles",
+            "Download weldment profile pack",
+            true,
         ));
+    } else if !libraries
+        .iter()
+        .any(|catalog| catalog.id == profile.catalog_id)
+    {
+        let mut element = note(
+            w,
+            &owner,
+            "profile",
+            "library-notice",
+            &format!(
+                "{} is not available. This member uses its saved profile. Manage libraries to add its source repository.",
+                profile.catalog_name
+            ),
+        );
+        element.role = "structural-member-library-notice".into();
+        element.state = "saved".into();
+        out.push(element);
     }
 
     let mut collections = entries
@@ -783,7 +819,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         &owner,
         "profile",
         "import",
-        "Get libraries…",
+        "Manage libraries…",
         true,
     ));
     out.push(action_element(
@@ -792,7 +828,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         "profile",
         "export",
         "Export profile library…",
-        true,
+        libraries
+            .iter()
+            .any(|catalog| catalog.id == profile.catalog_id),
     ));
     out.push(group(w, &owner, "placement", "Locate profile"));
     let locating = locators(w, section, profile, anchor.as_ref());
@@ -1438,6 +1476,10 @@ pub fn action(w: &mut Workspace, command: &str, payload: &Value) -> bool {
                     })?;
                 select_profile(w, &catalog.id, entry)
             }
+            "download-profiles" => {
+                crate::ui::action(w, "content-repositories.download-profiles");
+                Ok(())
+            }
             "import" => import_library(w),
             "export" => export_library(w),
             "restore-profile" => restore_profile(w),
@@ -1527,7 +1569,7 @@ fn restore_profile(w: &mut Workspace) -> Result<()> {
     Ok(())
 }
 fn import_library(w: &mut Workspace) -> Result<()> {
-    crate::ui::action(w, "content-repositories");
+    crate::ui::action(w, "content-repositories.show-profiles");
     Ok(())
 }
 fn export_library(w: &mut Workspace) -> Result<()> {

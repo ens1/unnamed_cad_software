@@ -35,7 +35,7 @@ Repeated personal-default validation retains at most 1024 process-local successf
 
 **Application → Themes** provides a picker for **Classic · Orange**, installed
 repository themes, and imported packages. Classic is the only bundled theme.
-Use **Get libraries…** to clone a theme repository or register your own checkout;
+Use **Download theme pack** or **View theme pack…** to install a theme repository;
 the optional starter theme repository contains **Nocturne · Violet**. Picking a theme previews its whole
 layout and styling immediately. **Load theme…** accepts a presentation manifest,
 CSS stylesheet, or JSON theme; a stylesheet keeps the current layout. Imported
@@ -47,10 +47,16 @@ directly from their checkout. Valid layout/CSS saves reload when external
 presentation watching is enabled; their imports must stay inside the repository.
 Apply retains that live source and also saves a self-contained recovery snapshot.
 Removing a theme repository therefore does not remove the last-applied theme.
+If its checkout is missing, the picker identifies the saved snapshot fallback;
+Classic remains available if the snapshot cannot be loaded.
 
 **Content libraries** manages optional weldment profiles, textures, finishes,
 themes, engineering materials, and standard parts through ordinary Git
-repositories. Clone a URL, register a checkout, create or fork a library, inspect
+repositories. **Download … pack** installs a starter pack under `~/TCAD/Libraries`.
+Choose and save a different library folder for future downloads without moving
+existing checkouts. Packs show their source URL, local folder, and installation
+status, with actions to open the repository or copy its Git URL.
+Clone a URL, register a checkout, create or fork a library, inspect
 updates, then apply the chosen revision. Library operations are personal data
 management actions and are immediate; Settings Cancel does not undo them.
 Model insertions copy source definitions and required bytes into the model draft,
