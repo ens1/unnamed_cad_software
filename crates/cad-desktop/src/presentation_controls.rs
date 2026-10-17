@@ -3,14 +3,135 @@
 //! The frame snapshot contains presentation resources only. Controls never acquire
 //! document or transaction access through it: their caller still owns commands.
 use bevy_egui::egui::{self, Color32, FontId, Response, Stroke};
-use cad_core::presentation::{StyleTarget, Theme};
+use cad_core::presentation::{StyleNode, StyleTarget, Theme};
 use std::{cell::RefCell, collections::BTreeMap};
 
-#[derive(Clone, Default)]
+const MAX_RESOLVED_STYLES: usize = 4096;
+const MAX_RESOLVED_STYLE_BYTES: usize = 16 * 1024 * 1024;
+struct ResolvedStyle {
+    properties: BTreeMap<String, String>,
+    bytes: usize,
+    used: u64,
+}
+#[derive(Default)]
+struct ResolvedStyles {
+    entries: BTreeMap<StyleTarget, ResolvedStyle>,
+    bytes: usize,
+    clock: u64,
+}
+impl ResolvedStyles {
+    fn stamp(&mut self) -> u64 {
+        if self.clock == u64::MAX {
+            // A cache may be discarded at any time; do not wrap recency.
+            *self = Self::default();
+        }
+        self.clock += 1;
+        self.clock
+    }
+    fn get(&mut self, target: &StyleTarget) -> Option<BTreeMap<String, String>> {
+        let used = self.stamp();
+        let entry = self.entries.get_mut(target)?;
+        entry.used = used;
+        Some(entry.properties.clone())
+    }
+    fn insert(&mut self, target: StyleTarget, properties: &BTreeMap<String, String>) {
+        let bytes = resolved_style_storage(&target, properties);
+        if bytes > MAX_RESOLVED_STYLE_BYTES {
+            return;
+        }
+        let used = self.stamp();
+        while self.entries.len() >= MAX_RESOLVED_STYLES
+            || self.bytes.saturating_add(bytes) > MAX_RESOLVED_STYLE_BYTES
+        {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(target, _)| target.clone())
+            else {
+                break;
+            };
+            if let Some(entry) = self.entries.remove(&oldest) {
+                self.bytes -= entry.bytes;
+            }
+        }
+        if let Some(previous) = self.entries.insert(
+            target,
+            ResolvedStyle {
+                properties: properties.clone(),
+                bytes,
+                used,
+            },
+        ) {
+            self.bytes -= previous.bytes;
+        }
+        self.bytes += bytes;
+    }
+}
+fn string_map_storage(values: &BTreeMap<String, String>) -> usize {
+    values.iter().fold(0usize, |bytes, (key, value)| {
+        bytes
+            .saturating_add(key.capacity())
+            .saturating_add(value.capacity())
+            // Include owned string headers and an allowance for map nodes.
+            .saturating_add(256)
+    })
+}
+fn style_node_storage(node: &StyleNode) -> usize {
+    let mut bytes = node
+        .id
+        .capacity()
+        .saturating_add(node.role.capacity())
+        .saturating_add(string_map_storage(&node.attributes));
+    for values in [&node.classes, &node.states] {
+        bytes = bytes.saturating_add(
+            values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<String>()),
+        );
+        for value in values {
+            bytes = bytes.saturating_add(value.capacity());
+        }
+    }
+    bytes
+}
+fn resolved_style_storage(target: &StyleTarget, properties: &BTreeMap<String, String>) -> usize {
+    // Bound retained key/value capacities as well as entry count. The latter
+    // also bounds the cache's B-tree structure independently of text lengths.
+    let mut bytes = std::mem::size_of::<StyleTarget>()
+        .saturating_add(std::mem::size_of::<ResolvedStyle>())
+        .saturating_add(256)
+        .saturating_add(
+            target
+                .ancestors
+                .capacity()
+                .saturating_mul(std::mem::size_of::<StyleNode>()),
+        )
+        .saturating_add(style_node_storage(&target.node))
+        .saturating_add(string_map_storage(properties));
+    for ancestor in &target.ancestors {
+        bytes = bytes.saturating_add(style_node_storage(ancestor));
+    }
+    bytes
+}
+fn same_theme(first: &Theme, second: &Theme) -> bool {
+    first.schema_version == second.schema_version
+        && first.variables == second.variables
+        && first.rules.len() == second.rules.len()
+        && first
+            .rules
+            .iter()
+            .zip(&second.rules)
+            .all(|(first, second)| {
+                first.selector == second.selector && first.properties == second.properties
+            })
+}
+#[derive(Default)]
 struct FrameStyles {
     theme: Theme,
     layout: String,
     target: Option<StyleTarget>,
+    resolved: ResolvedStyles,
 }
 thread_local! {
     static STYLES: RefCell<FrameStyles> = RefCell::new(FrameStyles::default());
@@ -18,11 +139,15 @@ thread_local! {
 
 pub fn begin_frame(theme: &Theme, layout: &str) {
     STYLES.with(|snapshot| {
-        *snapshot.borrow_mut() = FrameStyles {
-            theme: theme.clone(),
-            layout: layout.into(),
-            target: None,
-        };
+        let mut snapshot = snapshot.borrow_mut();
+        // Compare complete source content once per frame. A theme edit, rule
+        // reorder or layout change invalidates every resolved property map.
+        if snapshot.layout != layout || !same_theme(&snapshot.theme, theme) {
+            snapshot.theme = theme.clone();
+            snapshot.layout = layout.into();
+            snapshot.resolved = ResolvedStyles::default();
+        }
+        snapshot.target = None;
     });
 }
 
@@ -50,7 +175,7 @@ pub fn with_target<R>(
 
 pub fn properties(id: &str, role: &str, classes: &[&str], state: &str) -> BTreeMap<String, String> {
     STYLES.with(|snapshot| {
-        let snapshot = snapshot.borrow();
+        let mut snapshot = snapshot.borrow_mut();
         let parent = snapshot.target.clone().unwrap_or_else(|| {
             cad_core::presentation::Region {
                 id: "workspace".into(),
@@ -89,7 +214,16 @@ pub fn properties(id: &str, role: &str, classes: &[&str], state: &str) -> BTreeM
                 state,
             )
         };
-        snapshot.theme.properties_for(&target)
+        // The complete final target includes each ancestor's attributes and
+        // interaction states. Identical IDs in different layout scopes cannot
+        // share an inherited style accidentally. Relative lengths remain text
+        // and are resolved against the current UI dimensions by their caller.
+        if let Some(properties) = snapshot.resolved.get(&target) {
+            return properties;
+        }
+        let properties = snapshot.theme.properties_for(&target);
+        snapshot.resolved.insert(target, &properties);
+        properties
     })
 }
 

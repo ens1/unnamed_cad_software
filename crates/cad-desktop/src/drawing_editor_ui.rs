@@ -2447,7 +2447,94 @@ fn live(w: &Workspace, element: &SemanticElement) -> Result<SemanticElement> {
     }
     Ok(fresh)
 }
+fn sheet_control_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
+    let transient = element.data.get("transient").and_then(Value::as_str);
+    let pointer = element.data.get("pointer").and_then(Value::as_str);
+    let key = match transient {
+        Some("sheet" | "section" | "projection" | "scale") => {
+            format!("context/{}", transient?)
+        }
+        None if matches!(
+            pointer,
+            Some(
+                "/name"
+                    | "/definition"
+                    | "/paper_mm/0"
+                    | "/paper_mm/1"
+                    | "/exploded_view"
+                    | "/display_state"
+            )
+        ) =>
+        {
+            pointer?.trim_start_matches('/').into()
+        }
+        _ => return None,
+    };
+    if !crate::drawing_ui::is_workspace(w)
+        || w.settings.is_some()
+        || element.data["contract"] != CONTRACT
+        || element.data["setter"] != "drawing-editor"
+        || element.data["document"] != w.session.visible().id
+        || element.data["editor"] != json!(w.fields.get(GENERATION))
+    {
+        return None;
+    }
+    let sheet = active_sheet(w)?;
+    if element.data["sheet_id"] != sheet.id
+        || element.id != format!("drawing-editor:{}/{key}", sheet.id)
+    {
+        return None;
+    }
+    let section = section(w, &sheet);
+    if transient == Some("sheet") {
+        return Some(json!(sheet.id));
+    }
+    if transient == Some("section") {
+        return Some(json!(section));
+    }
+    if matches!(
+        section.as_str(),
+        "views" | "format" | "dimensions" | "annotations" | "tables"
+    ) {
+        return None;
+    }
+    // These fields are always present in sheet controls and have fixed source
+    // addresses. Dynamic rows, conditional fields and mutations retain `live`.
+    match transient {
+        Some("projection") => {
+            let views = view_keys(&sheet);
+            Some(json!(if views == ["front", "top", "right"] {
+                "standard"
+            } else if views == ["front", "top", "right", "isometric"] {
+                "standard-isometric"
+            } else if views == ["front"] {
+                "front"
+            } else {
+                "custom"
+            }))
+        }
+        Some("scale") => Some(json!(
+            sheet
+                .view_layouts
+                .get("front")
+                .and_then(|layout| layout.scale)
+        )),
+        None => match pointer? {
+            "/name" => Some(json!(sheet.name)),
+            "/definition" => Some(json!(sheet.definition)),
+            "/paper_mm/0" => Some(json!(sheet.paper_mm[0])),
+            "/paper_mm/1" => Some(json!(sheet.paper_mm[1])),
+            "/exploded_view" => Some(json!(sheet.exploded_view)),
+            "/display_state" => Some(json!(sheet.display_state)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
 pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
+    if let Some(value) = sheet_control_value(w, element) {
+        return Some(value);
+    }
     let element = live(w, element).ok()?;
     if element.data.get("transient").is_some() {
         return Some(element.data["json"].clone());

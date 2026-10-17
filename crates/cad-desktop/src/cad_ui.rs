@@ -609,6 +609,7 @@ pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
         }
         "viewport.normal-sketch" => sketch::normal_to(w),
         "selection.measure" => measure(w),
+        "file.export-pdf" => ui::export_format(w, "pdf", "drawing.pdf"),
         "file.export-drawing-dxf" => ui::export_format(w, "drawing-dxf", "drawing.dxf"),
         _ => return false,
     }

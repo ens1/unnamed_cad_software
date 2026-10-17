@@ -962,8 +962,20 @@ fn end_capture(w: &mut Workspace, state: &mut State) {
 fn identity(w: &Workspace) -> Value {
     json!({"contract":"tcad.drawing-interaction","version":interaction::CONTRACT_VERSION,"document":w.session.visible().id,"identity":w.session.identity(),"sheet":w.fields.get("drawing-preview"),"page":page(w),"editor":w.fields.get("drawing-editor-generation")})
 }
+struct SemanticContext<'a> {
+    workspace: &'a Workspace,
+    identity: Value,
+}
+impl<'a> SemanticContext<'a> {
+    fn new(workspace: &'a Workspace) -> Self {
+        Self {
+            workspace,
+            identity: identity(workspace),
+        }
+    }
+}
 fn field(
-    w: &Workspace,
+    context: &SemanticContext<'_>,
     key: &str,
     label: &str,
     value: Value,
@@ -971,7 +983,8 @@ fn field(
     unit: Option<&str>,
     choices: Vec<Value>,
 ) -> SemanticElement {
-    let mut data = identity(w);
+    let w = context.workspace;
+    let mut data = context.identity.clone();
     data["setter"] = json!("drawing-interaction");
     data["field"] = json!(key);
     data["value_type"] = json!(kind);
@@ -992,8 +1005,14 @@ fn field(
         data,
     }
 }
-fn command(w: &Workspace, key: &str, label: &str, enabled: bool) -> SemanticElement {
-    let mut data = identity(w);
+fn command(
+    context: &SemanticContext<'_>,
+    key: &str,
+    label: &str,
+    enabled: bool,
+) -> SemanticElement {
+    let w = context.workspace;
+    let mut data = context.identity.clone();
     data["enabled"] = json!(enabled && w.settings.is_none());
     data["actions"] = json!([{"command":key,"label":label,"enabled":enabled && w.settings.is_none(),"arguments":data.clone()}]);
     data["accessibility_label"] = json!(label);
@@ -1046,7 +1065,8 @@ fn supports_leader(source: &Drawing, target: &Target) -> bool {
         false
     }
 }
-fn selected_commands(w: &Workspace, state: &State) -> Vec<SemanticElement> {
+fn selected_commands(context: &SemanticContext<'_>, state: &State) -> Vec<SemanticElement> {
+    let w = context.workspace;
     let mut out = vec![];
     let Some(target) = selected(state) else {
         return out;
@@ -1070,7 +1090,7 @@ fn selected_commands(w: &Workspace, state: &State) -> Vec<SemanticElement> {
     for handle in handles {
         if let HandleKind::Anchor { slot } = &handle.kind {
             let mut element = command(
-                w,
+                context,
                 "drawing.interact-reattach",
                 &format!("Reattach {slot:?}"),
                 enabled,
@@ -1083,7 +1103,7 @@ fn selected_commands(w: &Workspace, state: &State) -> Vec<SemanticElement> {
     }
     if supports_curve(&source, target) {
         let mut element = command(
-            w,
+            context,
             "drawing.interact-reattach-curve",
             "Reattach Circle",
             enabled,
@@ -1093,7 +1113,7 @@ fn selected_commands(w: &Workspace, state: &State) -> Vec<SemanticElement> {
     }
     if supports_leader(&source, target) {
         out.push(command(
-            w,
+            context,
             "drawing.interact-leader-bend",
             "Add Leader Elbow",
             enabled,
@@ -1104,11 +1124,11 @@ fn selected_commands(w: &Workspace, state: &State) -> Vec<SemanticElement> {
         &source,
         &state.cohort,
         Some(target),
-        identity(w),
+        context.identity.clone(),
         enabled && state.errors.is_empty(),
     ));
     out.push(command(
-        w,
+        context,
         "drawing.interact-clear-selection",
         "Clear paper selection",
         enabled,
@@ -1119,19 +1139,22 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     if !crate::drawing_ui::is_workspace(w) {
         return vec![];
     }
+    // One source fingerprint per publication, rather than one full-document
+    // serialization for every control, item and handle in the sheet.
+    let context = SemanticContext::new(w);
     let state = &w.drawing_interaction;
     let selection = selected(state);
     let mut out = vec![
-        command(w, "drawing.interact-select", "Select", !active(w)),
+        command(&context, "drawing.interact-select", "Select", !active(w)),
         command(
-            w,
+            &context,
             "drawing.interact-dimension",
             "Smart Dimension",
             !active(w),
         ),
-        command(w, "drawing.interact-fit", "Fit Sheet", !active(w)),
+        command(&context, "drawing.interact-fit", "Fit Sheet", !active(w)),
         field(
-            w,
+            &context,
             "snap",
             "Snap",
             json!(state.snapping),
@@ -1140,7 +1163,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             vec![],
         ),
         field(
-            w,
+            &context,
             "grid",
             "Grid",
             json!(state.grid),
@@ -1149,7 +1172,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             vec![],
         ),
         field(
-            w,
+            &context,
             "grid-mm",
             "Grid spacing",
             json!(if state.grid_mm == 0. {
@@ -1162,7 +1185,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             vec![],
         ),
         field(
-            w,
+            &context,
             "annotation-spacing",
             "Copy / stack spacing",
             json!(annotation_spacing(state)),
@@ -1171,7 +1194,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             vec![],
         ),
         field(
-            w,
+            &context,
             "dimension-mode",
             "Dimension",
             json!(state.dimension_mode),
@@ -1200,13 +1223,13 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             state: "ready".into(),
             commands: vec![],
             relationships: vec![],
-            data: identity(w),
+            data: context.identity.clone(),
         });
     }
     if let Some(cache) = &state.cache {
-        out.push(field(w,"page","Page",json!(page(w)),"integer",None,(0..cad_core::drawing_tables::page_count(&cache.source)).map(|p|json!({"label":if p==0{"Model sheet".into()}else{format!("Continuation {p}")},"value":p})).collect()));
+        out.push(field(&context,"page","Page",json!(page(w)),"integer",None,(0..cad_core::drawing_tables::page_count(&cache.source)).map(|p|json!({"label":if p==0{"Model sheet".into()}else{format!("Continuation {p}")},"value":p})).collect()));
         for target in &cache.scene.targets {
-            let mut data = identity(w);
+            let mut data = context.identity.clone();
             data["target"] = json!(target.target);
             data["bounds_mm"] = json!(target.bounds_mm);
             data["handles"] = json!(target.handles);
@@ -1234,7 +1257,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 relationships: vec![cache.source.id.clone()],
                 data,
             });
-            let mut data = identity(w);
+            let mut data = context.identity.clone();
             data["target"] = json!(target.target);
             data["enabled"] = json!(state.capture.is_none());
             out.push(SemanticElement {
@@ -1261,7 +1284,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 data,
             });
             for handle in &target.handles {
-                let mut data = identity(w);
+                let mut data = context.identity.clone();
                 data["target"] = json!(target.target);
                 data["handle"] = json!(handle);
                 data["paper_units"] = json!("mm");
@@ -1291,7 +1314,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             }
         }
     }
-    let mut data = identity(w);
+    let mut data = context.identity.clone();
     data["cohort"] = json!(state.cohort);
     data["primary"] = json!(selected(state));
     out.push(SemanticElement {
@@ -1305,7 +1328,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         data,
     });
     for (viewport, (message, status)) in &state.statuses {
-        let mut data = identity(w);
+        let mut data = context.identity.clone();
         data["viewport"] = json!(viewport);
         data["classes"] = json!(["viewport-overlay", "paper-status"]);
         data["diagnostics"] = json!(if status == "error" {
@@ -1325,7 +1348,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         });
     }
     for (index, guide) in state.guides.iter().enumerate() {
-        let mut data = identity(w);
+        let mut data = context.identity.clone();
         data["points_mm"] = json!(guide);
         data["paper_units"] = json!("mm");
         out.push(SemanticElement {
@@ -1340,7 +1363,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         });
     }
     if let Tool::Dimension { first: Some(first) } = &state.tool {
-        let mut data = identity(w);
+        let mut data = context.identity.clone();
         data["reference"] = json!(first.point);
         data["point_mm"] = json!(first.paper_mm);
         data["view"] = json!(first.view);
@@ -1356,7 +1379,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data,
         });
     }
-    out.extend(selected_commands(w, state));
+    out.extend(selected_commands(&context, state));
     for element in &mut out {
         if let Some(command) = element.commands.first() {
             let mut arguments = element.data.clone();
@@ -1383,11 +1406,30 @@ fn verify(w: &Workspace, data: &Value) -> Result<()> {
     Ok(())
 }
 pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
+    if !crate::drawing_ui::is_workspace(w) || element.data["setter"] != "drawing-interaction" {
+        return None;
+    }
+    let key = element.data["field"].as_str()?;
+    if element.id != format!("drawing-interaction:{key}") {
+        return None;
+    }
     verify(w, &element.data).ok()?;
-    semantics(w)
-        .into_iter()
-        .find(|e| e.id == element.id)
-        .map(|e| e.data["json"].clone())
+    // Reads stay live between controls in the same frame. Rebuilding semantics
+    // here would serialize the document for every paper item for every field.
+    let state = &w.drawing_interaction;
+    match key {
+        "snap" => Some(json!(state.snapping)),
+        "grid" => Some(json!(state.grid)),
+        "grid-mm" => Some(json!(if state.grid_mm == 0. {
+            1.
+        } else {
+            state.grid_mm
+        })),
+        "annotation-spacing" => Some(json!(annotation_spacing(state))),
+        "dimension-mode" => Some(json!(state.dimension_mode)),
+        "page" if state.cache.is_some() => Some(json!(page(w))),
+        _ => None,
+    }
 }
 pub fn field_is_invalid(w: &Workspace, e: &SemanticElement) -> bool {
     e.data["setter"] == "drawing-interaction" && w.drawing_interaction.errors.contains_key(&e.id)
@@ -2505,10 +2547,14 @@ pub fn frame(
         }
     }
     if state.context_target.is_some() && state.capture.is_none() {
-        let mut commands = selected_commands(w, &state);
-        commands.insert(0, command(w, "drawing.interact-select", "Select", true));
+        let context = SemanticContext::new(w);
+        let mut commands = selected_commands(&context, &state);
+        commands.insert(
+            0,
+            command(&context, "drawing.interact-select", "Select", true),
+        );
         commands.push(command(
-            w,
+            &context,
             "drawing.interact-dimension",
             "Smart Dimension",
             page(w) == 0,

@@ -804,8 +804,11 @@ pub fn build(
                         body: edge.body.clone(),
                         instance_path: instance.path.clone(),
                     };
-                    if let Ok(circle) = drawing::circular(doc, evaluation, source, &curve_reference)
-                    {
+                    // This edge and occurrence are already resolved from the
+                    // current displayed mesh. Looking the same reference up
+                    // again scans every edge and canonicalizes its ancestry
+                    // for each candidate in each view.
+                    if let Ok(circle) = drawing::circular_carrier(curve, instance.matrix) {
                         let paper = projection.paper_point(view, circle.center)?;
                         scene.references.push(ReferenceCandidate {
                             id: format!(

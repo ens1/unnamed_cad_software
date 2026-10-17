@@ -1772,16 +1772,24 @@ pub fn circular(
                     "Circular model-edge dimensions require exact rational curve data".into(),
                 )
             })?;
-            let mut circle = conic_circle(curve)?;
-            circle.center = transform(circle.center, place.matrix);
-            circle.start = transform(circle.start, place.matrix);
-            let n = Vector3::from(circle.normal);
-            circle.normal = std::array::from_fn(|i| {
-                place.matrix[i][0] * n.x + place.matrix[i][1] * n.y + place.matrix[i][2] * n.z
-            });
-            Ok(circle)
+            circular_carrier(curve, place.matrix)
         }
     }
+}
+/// Recognize an exact carrier already obtained from the represented evaluation.
+/// Candidate generation can use its known edge/placement directly; saved
+/// references still go through `circular` and its unique provenance lookup.
+pub(crate) fn circular_carrier(
+    curve: &crate::sketch_edit::Curve3,
+    matrix: [[f64; 4]; 4],
+) -> Result<CircularGeometry> {
+    let mut circle = conic_circle(curve)?;
+    circle.center = transform(circle.center, matrix);
+    circle.start = transform(circle.start, matrix);
+    let n = Vector3::from(circle.normal);
+    circle.normal =
+        std::array::from_fn(|i| matrix[i][0] * n.x + matrix[i][1] * n.y + matrix[i][2] * n.z);
+    Ok(circle)
 }
 fn reference_definition(reference: &CurveReference) -> String {
     match reference {

@@ -110,7 +110,7 @@ const INHERITED: &[&str] = &[
     "cursor",
     "accent-color",
 ];
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StyleNode {
     pub id: String,
     pub role: String,
@@ -118,7 +118,7 @@ pub struct StyleNode {
     pub attributes: BTreeMap<String, String>,
     pub states: Vec<String>,
 }
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StyleTarget {
     pub node: StyleNode,
     /// Outermost ancestor first; the immediate parent is last.
@@ -188,17 +188,143 @@ struct Selector {
     combinators: Vec<Combinator>,
     specificity: (usize, usize, usize),
 }
-type SelectorCache = Mutex<BTreeMap<String, Arc<Vec<Selector>>>>;
+const MAX_CACHED_SELECTOR_LISTS: usize = 4096;
+const MAX_CACHED_SELECTOR_BYTES: usize = 16 * 1024 * 1024;
+struct CachedSelectors {
+    selectors: Arc<Vec<Selector>>,
+    bytes: usize,
+    used: u64,
+}
+#[derive(Default)]
+struct SelectorCache {
+    entries: BTreeMap<String, CachedSelectors>,
+    bytes: usize,
+    clock: u64,
+}
+impl SelectorCache {
+    fn stamp(&mut self) -> u64 {
+        if self.clock == u64::MAX {
+            // Preserve recency if the clock ever rolls over. Ties are ordered
+            // by the exact source key, just like eviction below.
+            let mut order: Vec<_> = self
+                .entries
+                .iter()
+                .map(|(source, entry)| (entry.used, source.clone()))
+                .collect();
+            order.sort_unstable();
+            for (index, (_, source)) in order.iter().enumerate() {
+                self.entries.get_mut(source).unwrap().used = index as u64;
+            }
+            self.clock = order.len() as u64;
+        }
+        self.clock += 1;
+        self.clock
+    }
+    fn get(&mut self, source: &str) -> Option<Arc<Vec<Selector>>> {
+        let used = self.stamp();
+        let entry = self.entries.get_mut(source)?;
+        entry.used = used;
+        Some(entry.selectors.clone())
+    }
+    fn insert(&mut self, source: &str, selectors: Arc<Vec<Selector>>) -> Arc<Vec<Selector>> {
+        // Another caller may have compiled this list while the lock was free.
+        if let Some(existing) = self.get(source) {
+            return existing;
+        }
+        let source = source.to_owned();
+        let bytes = selector_storage(&source, &selectors);
+        if bytes > MAX_CACHED_SELECTOR_BYTES {
+            return selectors;
+        }
+        while self.entries.len() >= MAX_CACHED_SELECTOR_LISTS
+            || self.bytes.saturating_add(bytes) > MAX_CACHED_SELECTOR_BYTES
+        {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.used)
+                .map(|(source, _)| source.clone())
+            else {
+                break;
+            };
+            if let Some(entry) = self.entries.remove(&oldest) {
+                self.bytes -= entry.bytes;
+            }
+        }
+        let used = self.stamp();
+        self.bytes += bytes;
+        self.entries.insert(
+            source,
+            CachedSelectors {
+                selectors: selectors.clone(),
+                bytes,
+                used,
+            },
+        );
+        selectors
+    }
+}
+fn selector_storage(source: &String, selectors: &Arc<Vec<Selector>>) -> usize {
+    // Charge allocated payload capacities, not just source text: compounds and
+    // conditions can cost more than their CSS spelling. B-tree node overhead
+    // is separately bounded by the entry cap. Borrowers retain their own Arc.
+    let mut bytes = source
+        .capacity()
+        .saturating_add(std::mem::size_of::<String>())
+        .saturating_add(std::mem::size_of::<CachedSelectors>())
+        .saturating_add(std::mem::size_of::<Vec<Selector>>() + 2 * std::mem::size_of::<usize>())
+        .saturating_add(
+            selectors
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Selector>()),
+        );
+    for selector in selectors.iter() {
+        bytes = bytes
+            .saturating_add(
+                selector
+                    .compounds
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Vec<Condition>>()),
+            )
+            .saturating_add(
+                selector
+                    .combinators
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Combinator>()),
+            );
+        for compound in &selector.compounds {
+            bytes = bytes.saturating_add(
+                compound
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Condition>()),
+            );
+            for condition in compound {
+                let text = match condition {
+                    Condition::Id(value)
+                    | Condition::Role(value)
+                    | Condition::Class(value)
+                    | Condition::State(value) => value.capacity(),
+                    Condition::Attribute(key, comparison) => key.capacity().saturating_add(
+                        comparison.as_ref().map_or(0, |(_, value)| value.capacity()),
+                    ),
+                    Condition::Root => 0,
+                };
+                bytes = bytes.saturating_add(text);
+            }
+        }
+    }
+    bytes
+}
 fn compiled_selectors(source: &str) -> Result<Arc<Vec<Selector>>> {
-    static CACHE: OnceLock<SelectorCache> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<SelectorCache>> = OnceLock::new();
     if source.len() > 16_384 {
         return Err(invalid("Selector list exceeds 16384 bytes"));
     }
-    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
-    if let Ok(entries) = cache.lock()
+    let cache = CACHE.get_or_init(|| Mutex::new(SelectorCache::default()));
+    if let Ok(mut entries) = cache.lock()
         && let Some(selectors) = entries.get(source)
     {
-        return Ok(selectors.clone());
+        return Ok(selectors);
     }
     let parts = split_top_level(source, ',')?;
     if parts.len() > 64 {
@@ -211,12 +337,7 @@ fn compiled_selectors(source: &str) -> Result<Arc<Vec<Selector>>> {
             .collect::<Result<Vec<_>>>()?,
     );
     if let Ok(mut entries) = cache.lock() {
-        if entries.len() >= 128
-            && let Some(oldest) = entries.keys().next().cloned()
-        {
-            entries.remove(&oldest);
-        }
-        entries.insert(source.into(), selectors.clone());
+        return Ok(entries.insert(source, selectors));
     }
     Ok(selectors)
 }
