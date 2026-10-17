@@ -253,8 +253,14 @@ pub(crate) fn record_history(
     scope: &std::collections::BTreeSet<cad_core::NodeRef>,
     context: crate::revolution::Combination<'_>,
 ) -> Result<()> {
+    const MAX_SOURCE_BYTES: usize = 64 * 1024 * 1024;
+    let mut remaining = context.generated.remaining_storage()?;
     let mut origins = HashMap::new();
-    let mut ancestry_bytes = 0usize;
+    let mut source_cache = std::collections::BTreeMap::new();
+    let mut canonical = std::collections::BTreeMap::new();
+    let mut sources = Vec::<(std::sync::Arc<str>, serde_json::Value)>::new();
+    let mut source_bytes = MAX_SOURCE_BYTES;
+    let mut work = 0usize;
     for descriptor in output
         .faces
         .iter()
@@ -267,16 +273,7 @@ pub(crate) fn record_history(
             .map(|(id, _, _)| id)
             .chain(descriptor.planes.iter().flatten())
         {
-            if let Some(origin) = origins.get(id) {
-                let origin: &cad_core::TopologyRef = origin;
-                ancestry_bytes = ancestry_bytes
-                    .saturating_add(origin.role.len().saturating_mul(12).saturating_add(1024));
-                if ancestry_bytes > 64 * 1024 * 1024 {
-                    return Err(unsupported(
-                        "native partition ancestry exceeds its bounded serialization budget",
-                    ));
-                }
-            }
+            spend(&mut work, 1)?;
             if origins.contains_key(id) {
                 continue;
             }
@@ -293,17 +290,45 @@ pub(crate) fn record_history(
                         "a native partition contributor has no current source-face ancestry",
                     )
                 })?;
-            ancestry_bytes = ancestry_bytes
-                .saturating_add(origin.role.len().saturating_mul(12).saturating_add(1024));
-            if ancestry_bytes > 64 * 1024 * 1024 {
-                return Err(unsupported(
-                    "native partition ancestry exceeds its bounded serialization budget",
-                ));
-            }
-            origins.insert(*id, origin);
+            let identity = (
+                origin.producer.clone(),
+                origin.role.clone(),
+                origin.topology.clone(),
+            );
+            let index = if let Some(index) = source_cache.get(&identity) {
+                *index
+            } else {
+                // The source grammar is now a deduplicated closure. Charge each
+                // retained input once, not twelve copies for every occurrence
+                // in each wall, plane, cap and edge descriptor.
+                source_bytes = source_bytes
+                    .checked_sub(origin.role.len().saturating_add(256))
+                    .ok_or_else(|| unsupported("native partition source cache exceeds 64 MiB"))?;
+                spend(&mut work, origin.role.len().div_ceil(64))?;
+                let value = crate::adapter::construction_reference(&origin)?;
+                let encoded = crate::adapter::bounded_history_key(&value, MAX_SOURCE_BYTES)?;
+                let index = if let Some(index) = canonical.get(encoded.as_str()) {
+                    *index
+                } else {
+                    // Keep one normalized value plus its canonical ordering key.
+                    source_bytes = source_bytes
+                        .checked_sub(encoded.len().saturating_mul(2).saturating_add(256))
+                        .ok_or_else(|| {
+                            unsupported("native partition source cache exceeds 64 MiB")
+                        })?;
+                    let index = sources.len();
+                    let key = std::sync::Arc::<str>::from(encoded);
+                    canonical.insert(key.clone(), index);
+                    sources.push((key, value));
+                    index
+                };
+                source_cache.insert(identity, index);
+                index
+            };
+            origins.insert(*id, index);
         }
     }
-    let resolve = |tag: &Descriptor| -> Result<_> {
+    let mut resolve = |tag: &Descriptor| -> Result<_> {
         // Keep recursive construction ancestry once in the canonical source
         // table. Purpose fields contain indices, never escaped copies of the
         // complete ancestry tree from every previous Boolean.
@@ -313,23 +338,21 @@ pub(crate) fn record_history(
             .map(|(id, _, _)| *id)
             .chain(tag.planes.iter().flatten().copied())
             .collect::<HashSet<_>>();
+        spend(&mut work, ids.len())?;
         let mut table = std::collections::BTreeMap::new();
-        let mut keys = HashMap::new();
         for id in ids {
-            let source = &origins[&id];
-            let key = serde_json::to_string(&crate::adapter::construction_reference(source)?)?;
-            table.entry(key.clone()).or_insert_with(|| source.clone());
-            keys.insert(id, key);
+            let index = origins[&id];
+            table.insert(sources[index].0.as_ref(), index);
         }
         let indices = table
-            .keys()
+            .values()
             .enumerate()
-            .map(|(i, key)| (key.as_str(), i))
+            .map(|(i, index)| (*index, i))
             .collect::<HashMap<_, _>>();
         let mut elements = tag
             .elements
             .iter()
-            .map(|(id, interval, endpoint)| (indices[keys[id].as_str()], *interval, *endpoint))
+            .map(|(id, interval, endpoint)| (indices[&origins[id]], *interval, *endpoint))
             .collect::<Vec<_>>();
         elements.sort_unstable();
         elements.dedup();
@@ -339,33 +362,41 @@ pub(crate) fn record_history(
             .map(|level| {
                 let mut indices = level
                     .iter()
-                    .map(|id| indices[keys[id].as_str()])
+                    .map(|id| indices[&origins[id]])
                     .collect::<Vec<_>>();
                 indices.sort_unstable();
                 indices.dedup();
                 indices
             })
             .collect::<Vec<_>>();
+        let sources = table
+            .into_values()
+            .map(|index| {
+                spend(&mut work, sources[index].0.len().div_ceil(64))?;
+                Ok(sources[index].1.clone())
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok((
-            table.into_values().collect::<Vec<_>>(),
+            sources,
             serde_json::json!({
                 "operation":"prismatic_boolean","constructor":tag.kind,
                 "source_table":"canonical_construction_sources","intervals":elements,"planes":planes,
             }),
         ))
     };
+    // Publish the partition atomically only after its actual reference strings
+    // and carrier keys fit the existing aggregate history budget. Each closure
+    // retains the existing 16 MiB, traversal and ancestry-depth bounds.
+    let mut pending = crate::adapter::TopologyHistory::default();
     for (face, tag) in &output.faces {
         let (sources, purpose) = resolve(tag)?;
-        context
-            .generated
-            .tool_face(context.owner, face, &sources, &purpose)?;
+        pending.partition_face(context.owner, face, sources, &purpose, &mut remaining)?;
     }
     for (edge, tag) in &output.edges {
         let (sources, purpose) = resolve(tag)?;
-        context
-            .generated
-            .tool_edge(context.owner, edge, &sources, &purpose)?;
+        pending.partition_edge(context.owner, edge, sources, &purpose, &mut remaining)?;
     }
+    context.generated.merge(pending);
     Ok(())
 }
 fn vertex(

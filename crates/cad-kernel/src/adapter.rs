@@ -209,7 +209,117 @@ pub(crate) struct TopologyHistory {
 pub(crate) fn construction_reference(reference: &TopologyRef) -> Result<serde_json::Value> {
     cad_core::provenance::normalized_reference(reference)
 }
+
+/// Partition callers have already normalized and ordered their unique sources.
+/// Retain the same construction grammar as constructed_face/constructed_edge.
+fn partition_reference(
+    owner: &NodeRef,
+    sources: Vec<serde_json::Value>,
+    purpose: &serde_json::Value,
+    topology: &str,
+) -> Result<TopologyRef> {
+    Ok(TopologyRef {
+        producer: owner.clone(),
+        role: format!(
+            "construction:{}",
+            serde_json::to_string(&cad_core::provenance::construction_payload(
+                serde_json::json!({"sources":sources,"purpose":purpose,"topology":topology})
+            )?)?
+        ),
+        topology: topology.into(),
+        signature: None,
+    })
+}
+
+/// Bound the actual serialized key before allocating it, rather than estimating
+/// the expansion of a self-contained source closure from its ancestry depth.
+pub(crate) fn bounded_history_key(value: &impl serde::Serialize, limit: usize) -> Result<String> {
+    struct Buffer {
+        bytes: Vec<u8>,
+        limit: usize,
+    }
+    impl std::io::Write for Buffer {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.bytes.len().saturating_add(bytes.len()) > self.limit {
+                return Err(std::io::Error::other(
+                    "Topology history serialization budget",
+                ));
+            }
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut buffer = Buffer {
+        bytes: vec![],
+        limit,
+    };
+    serde_json::to_writer(&mut buffer, value).map_err(|_| budget_error())?;
+    String::from_utf8(buffer.bytes).map_err(|_| err("Topology history serialization is not UTF-8"))
+}
+
 impl TopologyHistory {
+    pub(crate) fn remaining_storage(&self) -> Result<usize> {
+        MAX_HISTORY_BYTES
+            .checked_sub(history_size(self))
+            .ok_or_else(budget_error)
+    }
+
+    /// Charge the two stored reference copies and each distinct carrier key.
+    /// `remaining` starts at the destination history's remaining storage, so a
+    /// privately staged partition cannot exceed the aggregate publication limit.
+    pub(crate) fn partition_face(
+        &mut self,
+        owner: &NodeRef,
+        face: &Face,
+        sources: Vec<serde_json::Value>,
+        purpose: &serde_json::Value,
+        remaining: &mut usize,
+    ) -> Result<()> {
+        let reference = partition_reference(owner, sources, purpose, "face")?;
+        let carrier = bounded_history_key(&face.surface(), MAX_HISTORY_BYTES)?;
+        let bytes = reference.role.len().saturating_add(256).saturating_mul(2)
+            + if self.generated_surfaces.contains_key(&carrier) {
+                0
+            } else {
+                carrier.len().saturating_add(256)
+            };
+        *remaining = remaining.checked_sub(bytes).ok_or_else(budget_error)?;
+        self.faces.insert(face.id(), reference.clone());
+        self.generated_surfaces
+            .entry(carrier)
+            .or_default()
+            .push(reference);
+        Ok(())
+    }
+
+    pub(crate) fn partition_edge(
+        &mut self,
+        owner: &NodeRef,
+        edge: &Edge,
+        sources: Vec<serde_json::Value>,
+        purpose: &serde_json::Value,
+        remaining: &mut usize,
+    ) -> Result<()> {
+        let reference = partition_reference(owner, sources, purpose, "edge")?;
+        let carrier = bounded_history_key(&edge.curve(), MAX_HISTORY_BYTES)?;
+        let bytes = reference.role.len().saturating_add(256).saturating_mul(2)
+            + if self.generated_curves.contains_key(&carrier) {
+                0
+            } else {
+                carrier.len().saturating_add(256)
+            };
+        *remaining = remaining.checked_sub(bytes).ok_or_else(budget_error)?;
+        self.edges.insert(edge.id(), reference.clone());
+        self.generated_curves
+            .entry(carrier)
+            .or_default()
+            .push(reference);
+        Ok(())
+    }
+
     pub(crate) fn inherit_face(&mut self, face: FaceId, reference: TopologyRef) {
         self.faces.insert(face, reference);
     }
