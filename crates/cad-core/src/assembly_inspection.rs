@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub const CONTRACT_VERSION: u32 = 1;
 /// Disposable evaluated results evolve independently of saved inspection intent.
-pub const REPORT_VERSION: u32 = 2;
+pub const REPORT_VERSION: u32 = 3;
 pub const MAX_TARGETS: usize = 64;
 pub const MAX_INSPECTIONS: usize = 32;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -79,9 +79,12 @@ pub enum InterferenceStatus {
     NotRequested,
     /// Conservative carrier hulls or exact native supporting planes strictly separate.
     SeparatedNativeHulls,
-    /// Complete native carriers lie on opposite sides of a common plane, and
-    /// exact trimmed native boundaries supply a shared point. No volume overlaps.
+    /// Complete native carrier domains have disjoint interiors, and exact
+    /// trimmed boundaries supply a shared point. No volume overlaps.
     TouchingNativeBoundaries,
+    /// Native domain bounds establish a contact band within modeling tolerance.
+    /// This does not establish exact touching or strictly disjoint interiors.
+    ContactWithinModelTolerance,
     /// Complete native support proofs exclude overlapping interiors, but no
     /// exact shared boundary witness or strict separation was established.
     DisjointNativeInteriors,
@@ -97,6 +100,9 @@ impl InterferenceStatus {
             Self::NotRequested => "Native interference not requested",
             Self::SeparatedNativeHulls => "Native separation confirmed",
             Self::TouchingNativeBoundaries => "Native contact confirmed; no volume overlaps",
+            Self::ContactWithinModelTolerance => {
+                "Contact within model tolerance; exact clearance unresolved"
+            }
             Self::DisjointNativeInteriors => "No volume overlaps; contact or gap unresolved",
             Self::ValidatedCommonSolid => "Native volume overlap confirmed",
             Self::NoCommonSolidReturned => {
@@ -137,8 +143,28 @@ pub struct Pair {
     /// imply zero engineering clearance.
     /// Otherwise no native minimum-clearance certificate is supplied.
     pub engineering_clearance_mm: Option<f64>,
+    /// Certified contact band normal to the separating carrier (radial for a
+    /// cylinder). Bounds possible gap/overlap within the modeling tolerance;
+    /// this is not an exact clearance or a minimum separating translation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_residual_bound_mm: Option<f64>,
     pub boundary_distance: Option<BoundaryDistance>,
     pub diagnostics: Vec<String>,
+}
+impl Pair {
+    pub fn description(&self) -> String {
+        let mut description = self.interference.label().to_owned();
+        if let Some(bound) = self.contact_residual_bound_mm {
+            description.push_str(&format!(" · contact band ≤ {bound:.9} mm"));
+        }
+        if let Some(distance) = &self.boundary_distance {
+            description.push_str(&format!(
+                " · {:.6} mm approximate boundary distance",
+                distance.distance_mm
+            ));
+        }
+        description
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Report {
@@ -326,7 +352,7 @@ pub fn semantic_fields(
                     crate::occurrence_names::path_from(doc, owner, &target.path)
                         .unwrap_or_else(|| "Missing occurrence".into())
                 };
-                output.push(SemanticElement{id:format!("{}::{}",definition.id,pair.id),role:"inspection-pair".into(),label:format!("{} ↔ {}",name(&pair.first),name(&pair.second)),value:Some(pair.boundary_distance.as_ref().map_or_else(||pair.interference.label().into(),|d|format!("{} · {:.6} mm approximate boundary distance",pair.interference.label(),d.distance_mm))),state:if matches!(pair.interference,InterferenceStatus::Unavailable|InterferenceStatus::DisjointNativeInteriors)||!pair.diagnostics.is_empty(){"uncertain".into()}else{state.into()},commands:vec!["assembly.inspection-highlight".into(),"assembly.inspection-select-first".into(),"assembly.inspection-select-second".into()],relationships:vec![definition.id.clone()],data:serde_json::json!({"target":pair_target,"result":pair,"assembled_occurrences":true,"clearance_error_bound":null})});
+                output.push(SemanticElement{id:format!("{}::{}",definition.id,pair.id),role:"inspection-pair".into(),label:format!("{} ↔ {}",name(&pair.first),name(&pair.second)),value:Some(pair.description()),state:if matches!(pair.interference,InterferenceStatus::Unavailable|InterferenceStatus::DisjointNativeInteriors)||!pair.diagnostics.is_empty(){"uncertain".into()}else{state.into()},commands:vec!["assembly.inspection-highlight".into(),"assembly.inspection-select-first".into(),"assembly.inspection-select-second".into()],relationships:vec![definition.id.clone()],data:serde_json::json!({"target":pair_target,"result":pair,"assembled_occurrences":true,"clearance_error_bound":null})});
             }
         }
     }

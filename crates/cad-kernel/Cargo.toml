@@ -12,5 +12,7 @@ sha2.workspace = true
 monstertruck = { git = "https://github.com/ens1/monstertruck.git", rev = "6dba41312cccaa67ae146ef869b8380ddf8411d8", default-features = false, features = ["modeling", "meshing", "solid", "step", "assembly"] }
 nalgebra.workspace = true
 num-bigint = "=0.4.8"
+num-rational = "=0.4.2"
+num-traits = "=0.2.19"
 robust = "=1.2.0"
 step-p21 = "=0.1.1"

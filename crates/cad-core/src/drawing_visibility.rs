@@ -7,6 +7,9 @@ use crate::{CadError, Drawing, Result, protocol::MeshData, sketch_edit::Curve3};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod native;
+pub use native::NativeTrace;
+
 type Point = [f64; 3];
 type Triangle = [Point; 3];
 type Bounds = [[f64; 2]; 2];
@@ -46,6 +49,22 @@ pub fn mode_for(sheet: &Drawing, view: &str) -> DisplayMode {
         .copied()
         .unwrap_or_default()
 }
+/// Visibility authority is independent of whether hidden strokes are displayed.
+/// Display tessellation is an explicit opt-in, never a native-mode fallback.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GeometryMode {
+    #[default]
+    Native,
+    DisplayMesh,
+}
+pub fn geometry_for(sheet: &Drawing, view: &str) -> GeometryMode {
+    sheet
+        .view_visibility_geometry
+        .get(view)
+        .copied()
+        .unwrap_or_default()
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(tag = "method", rename_all = "snake_case")]
 pub enum Fidelity {
@@ -53,6 +72,10 @@ pub enum Fidelity {
     Wireframe,
     NativePlanar {
         tolerance_mm: f64,
+    },
+    NativeSurfaces {
+        tolerance_mm: f64,
+        curve_output_tolerance_mm: f64,
     },
     Tessellated {
         chord_tolerance_mm: f64,
@@ -62,6 +85,38 @@ pub enum Fidelity {
         chord_tolerance_mm: f64,
     },
 }
+
+pub(crate) enum Projection {
+    Native(native::ProjectedScene),
+    DisplayMesh(ProjectedScene),
+}
+impl Projection {
+    pub fn fidelity(&self) -> Fidelity {
+        match self {
+            Self::Native(scene) => scene.fidelity(),
+            Self::DisplayMesh(scene) => scene.fidelity(),
+        }
+    }
+    pub fn split(&mut self, curve: &Curve3, source_faces: &[usize]) -> Result<Vec<Piece>> {
+        match self {
+            Self::Native(scene) => scene.split(curve, source_faces),
+            Self::DisplayMesh(scene) => scene.split(curve, source_faces),
+        }
+    }
+    pub fn native(&mut self) -> Option<&mut native::ProjectedScene> {
+        match self {
+            Self::Native(scene) => Some(scene),
+            Self::DisplayMesh(_) => None,
+        }
+    }
+    pub fn sampled_silhouettes(&mut self) -> Vec<([Point; 2], bool)> {
+        match self {
+            Self::Native(_) => vec![],
+            Self::DisplayMesh(scene) => std::mem::take(&mut scene.silhouettes),
+        }
+    }
+}
+pub(crate) use native::Scene as NativeScene;
 impl Fidelity {
     pub fn approximate(&self) -> bool {
         matches!(

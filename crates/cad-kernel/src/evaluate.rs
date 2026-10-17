@@ -832,6 +832,7 @@ impl<K: KernelAdapter> Evaluator<K> {
             let has_geometry = !m.positions.is_empty();
             let offset = all.positions.len() as u32;
             let index_offset = all.indices.len();
+            let face_offset = all.faces.len();
             all.positions.extend(m.positions);
             all.normals.extend(m.normals);
             all.indices
@@ -840,7 +841,12 @@ impl<K: KernelAdapter> Evaluator<K> {
                 f.start += index_offset;
                 f
             }));
-            all.edges.extend(m.edges);
+            all.edges.extend(m.edges.into_iter().map(|mut edge| {
+                if let Some(geometry) = &mut edge.native_geometry {
+                    geometry.face += face_offset;
+                }
+                edge
+            }));
             all.volume_mm3 += m.volume_mm3;
             for axis in 0..3 {
                 if has_geometry {

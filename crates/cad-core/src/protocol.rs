@@ -50,6 +50,12 @@ pub struct FaceRange {
     pub body_kind: BodyKind,
     #[serde(default)]
     pub plane: Option<crate::Plane>,
+    /// Native trimmed carrier for drawing visibility. Absence requires an
+    /// explicit unsupported diagnostic in native visibility mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_geometry: Option<crate::drawing_geometry::FaceGeometry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_geometry_error: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +71,13 @@ pub struct EdgeData {
     /// Exact curve representation for projection; display points are never source geometry.
     #[serde(default)]
     pub curve: Option<crate::sketch_edit::Curve3>,
+    /// Exact source locus when a boundary is carried in a native face's UV
+    /// domain rather than by an explicit three-dimensional rational curve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_geometry: Option<crate::drawing_geometry::EdgeGeometry>,
+    /// Original homogeneous spatial curve for native reference-curve drawing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_spatial_geometry: Option<crate::drawing_geometry::Curve3>,
     #[serde(default)]
     pub faces: Vec<TopologyRef>,
     #[serde(default)]

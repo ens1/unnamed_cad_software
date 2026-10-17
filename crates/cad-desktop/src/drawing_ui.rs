@@ -998,7 +998,7 @@ pub fn workspace_semantics(w: &Workspace) -> Vec<cad_core::presentation::Semanti
             id: format!("{}:construction-info", paper.id), role: "drawing-source-info".into(), label: "Drawing information".into(),
             value: Some(format!("Source revision {}", paper.source_info.revision)), state: "ready".into(), commands: vec![],
             relationships: vec![paper.source_info.document.clone(), paper.id.clone()],
-            data: json!({"contract":"tcad.drawing-render-information","version":1,"source":paper.source_info,"view_fidelity":paper.view_fidelity,"display_state":paper.display_state,"diagnostics":paper.diagnostics,"production_vectors_include_debug_metadata":false}),
+            data: json!({"contract":"tcad.drawing-render-information","version":2,"source":paper.source_info,"view_fidelity":paper.view_fidelity,"display_state":paper.display_state,"diagnostics":paper.diagnostics,"native_trace_count":paper.native_traces.len(),"native_output_error_mm":paper.native_traces.iter().map(|trace|trace.geometry.max_error_mm).reduce(f64::max),"production_vectors_include_debug_metadata":false}),
         });
         if let Some(display) = &paper.display_state {
             out.push(SemanticElement {

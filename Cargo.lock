@@ -2224,6 +2224,8 @@ name = "cad-core"
 version = "0.1.0"
 dependencies = [
  "nalgebra",
+ "num-rational",
+ "num-traits",
  "png",
  "serde",
  "serde_json",
@@ -2258,6 +2260,8 @@ dependencies = [
  "monstertruck",
  "nalgebra",
  "num-bigint",
+ "num-rational",
+ "num-traits",
  "robust",
  "serde",
  "serde_json",

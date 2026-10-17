@@ -1078,7 +1078,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+6dba41312ccc;adapter/46;solver/tcad-native-lm/18"
+        "monstertruck/0.4.1+6dba41312ccc;adapter/47;solver/tcad-native-lm/18"
     }
     fn configure_tolerances(&self, modeling: &cad_core::tolerance::Modeling) -> Result<()> {
         modeling.validate()?;
@@ -2478,6 +2478,7 @@ impl KernelAdapter for MonstertruckAdapter {
                 .get(producer)
                 .ok_or_else(|| err("Reference curve construction history is missing"))?;
             let mut point_count = 0usize;
+            let mut drawing_budget = crate::drawing_geometry::Budget::default();
             if let Some(spatial) = spatial {
                 for point in spatial.solved.points.values() {
                     for (axis, value) in point.iter().enumerate() {
@@ -2525,6 +2526,12 @@ impl KernelAdapter for MonstertruckAdapter {
                     points,
                     reference,
                     curve: exact_curve(&curve),
+                    native_geometry: None,
+                    native_spatial_geometry: crate::drawing_geometry::curve3(
+                        &curve,
+                        &mut drawing_budget,
+                    )
+                    .ok(),
                     faces: vec![],
                     body: Some(producer.clone()),
                     native: None,
@@ -2563,6 +2570,7 @@ impl KernelAdapter for MonstertruckAdapter {
         };
         let mut native_vertices = std::collections::HashMap::new();
         let mut boundary_token = 0u32;
+        let mut drawing_budget = crate::drawing_geometry::Budget::default();
         // Optional selection metadata must never invalidate otherwise supported
         // geometry. Preflight the native boundary graph before allocating it.
         let selection_cache = shells.len() <= 65_536
@@ -2582,12 +2590,60 @@ impl KernelAdapter for MonstertruckAdapter {
                 mesh.bounds[0][axis] = mesh.bounds[0][axis].min(b[0][axis]);
                 mesh.bounds[1][axis] = mesh.bounds[1][axis].max(b[1][axis]);
             }
-            let tess = crate::native_trims::triangulate(
-                shell,
-                self.modeling_tolerances().linear_mm,
-                tolerance,
-            )?;
-            for (face, tri_face) in shell.iter().zip(&tess.faces) {
+            let native_shell =
+                crate::native_trims::shell(shell, self.modeling_tolerances().linear_mm)?;
+            let tess = crate::native_trims::triangulate_native(&native_shell, tolerance);
+            let mut drawing_edges = std::collections::HashMap::new();
+            for ((face, tri_face), native_face) in
+                shell.iter().zip(&tess.faces).zip(native_shell.faces())
+            {
+                let (native_geometry, native_geometry_error) = match crate::drawing_geometry::face(
+                    native_face,
+                    &mut drawing_budget,
+                    self.modeling_tolerances().linear_mm,
+                ) {
+                    Ok(geometry) => {
+                        // Prefer an exact planar lift when an edge belongs to
+                        // several native carriers. This preserves the same
+                        // authoritative boundary while allowing exact rational
+                        // projected-coincidence proofs for rims and box edges.
+                        let planar = matches!(
+                            &geometry.carrier,
+                            cad_core::drawing_geometry::Carrier::Plane { .. }
+                        );
+                        for (wire, trims) in
+                            face.absolute_boundaries().iter().zip(native_face.trims())
+                        {
+                            for (edge, trim) in wire.iter().zip(trims) {
+                                let preferred = drawing_edges.get(&edge.id()).is_none_or(
+                                    |previous: &cad_core::drawing_geometry::EdgeGeometry| {
+                                        planar
+                                            && previous.face < mesh.faces.len()
+                                            && !matches!(
+                                                mesh.faces[previous.face]
+                                                    .native_geometry
+                                                    .as_ref()
+                                                    .map(|g| &g.carrier),
+                                                Some(cad_core::drawing_geometry::Carrier::Plane { .. })
+                                            )
+                                    },
+                                );
+                                if let Some(trim) = trim
+                                    && preferred
+                                    && let Ok(geometry) = crate::drawing_geometry::edge(
+                                        trim,
+                                        mesh.faces.len(),
+                                        &mut drawing_budget,
+                                    )
+                                {
+                                    drawing_edges.insert(edge.id(), geometry);
+                                }
+                            }
+                        }
+                        (Some(geometry), None)
+                    }
+                    Err(error) => (None, Some(error.to_string())),
+                };
                 let mut poly = tri_face
                     .surface
                     .clone()
@@ -2687,6 +2743,8 @@ impl KernelAdapter for MonstertruckAdapter {
                     }
                 }
                 mesh.faces.push(FaceRange {
+                    native_geometry,
+                    native_geometry_error,
                     body: Some(producer.clone()),
                     body_kind: if solid_volume {
                         cad_core::protocol::BodyKind::Solid
@@ -2789,6 +2847,12 @@ impl KernelAdapter for MonstertruckAdapter {
                     body: Some(producer.clone()),
                     points,
                     curve: exact_curve(&c),
+                    native_geometry: drawing_edges.remove(&edge.id()),
+                    native_spatial_geometry: crate::drawing_geometry::curve3(
+                        &c,
+                        &mut drawing_budget,
+                    )
+                    .ok(),
                     native,
                     center: edge_center(&c),
                     faces,

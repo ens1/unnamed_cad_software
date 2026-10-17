@@ -1,5 +1,9 @@
 # Release review geometry follow-up — October 17, 2026
 
+Later work on native curved visibility and the remaining common contact domains
+is recorded in [the next geometry follow-up](native-visibility-and-contact.md).
+The notes below describe the earlier implementation checkpoint.
+
 This implements the three geometry tasks separated from the
 [non-kernel fixes](fixes.md). It records source changes, not a new test drive.
 Implementation commit: `a0a0cbd` on `codex/modeling-workflow-reliability`.

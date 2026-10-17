@@ -136,6 +136,12 @@ fn line_display_choices() -> Vec<Value> {
         ("wireframe", "Wireframe"),
     ])
 }
+fn visibility_geometry_choices() -> Vec<Value> {
+    choices(&[
+        ("native", "Native surfaces · model tolerance"),
+        ("display_mesh", "Display mesh · approximate"),
+    ])
+}
 
 pub(crate) struct Fields<'a> {
     pub(crate) w: &'a Workspace,
@@ -837,6 +843,24 @@ fn sheet_fields(f: &mut Fields<'_>) {
             options,
         );
     }
+    let geometry = views
+        .iter()
+        .filter(|key| key.as_str() != "section-z")
+        .map(|key| cad_core::drawing_visibility::geometry_for(f.sheet, key))
+        .collect::<Vec<_>>();
+    if let Some(first) = geometry.first() {
+        let same = geometry.iter().all(|mode| mode == first);
+        let mut options = visibility_geometry_choices();
+        if !same {
+            options.push(choice("Mixed · edit individual views", "mixed"));
+        }
+        f.transient(
+            "visibility-geometry",
+            "Visibility geometry (all views)",
+            if same { json!(first) } else { json!("mixed") },
+            options,
+        );
+    }
     f.note(
         "projection-convention",
         "Third-angle projection · Top above Front, Right beside Front",
@@ -955,6 +979,17 @@ fn view_fields(f: &mut Fields<'_>) {
             if let Some(element) = f.out.last_mut() {
                 element.data["default_json"] =
                     json!(cad_core::drawing_visibility::DisplayMode::Wireframe);
+            }
+            f.emit(
+                &format!("/view_visibility_geometry/{}", escape(key)),
+                "Visibility geometry",
+                json!(cad_core::drawing_visibility::geometry_for(f.sheet, key)),
+                visibility_geometry_choices(),
+                None,
+            );
+            if let Some(element) = f.out.last_mut() {
+                element.data["default_json"] =
+                    json!(cad_core::drawing_visibility::GeometryMode::Native);
             }
         } else {
             f.note(
@@ -2847,6 +2882,23 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
                     .filter(|key| key != "section-z")
                 {
                     sheet.view_display_modes.insert(key, mode);
+                }
+                validate_definition(&sheet)?;
+                publish(w, sheet);
+            }
+            "visibility-geometry" => {
+                if value.as_str() == Some("mixed") {
+                    w.fields.insert("drawing-section".into(), "views".into());
+                    return Ok(());
+                }
+                let mode: cad_core::drawing_visibility::GeometryMode =
+                    serde_json::from_value(value)?;
+                let mut sheet = active_sheet(w).ok_or_else(|| invalid("Select a sheet"))?;
+                for key in view_keys(&sheet)
+                    .into_iter()
+                    .filter(|key| key != "section-z")
+                {
+                    sheet.view_visibility_geometry.insert(key, mode);
                 }
                 validate_definition(&sheet)?;
                 publish(w, sheet);

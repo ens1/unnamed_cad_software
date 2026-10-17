@@ -664,6 +664,8 @@ fn interference(
     let mut separated_count = 0;
     let mut disjoint_count = 0;
     let mut touching_count = 0;
+    let mut tolerance_count = 0;
+    let mut contact_band_mm = 0.0f64;
     let mut incomplete = false;
     let mut volumes = Vec::new();
     'body_pairs: for a in first {
@@ -687,7 +689,9 @@ fn interference(
                 continue;
             }
             let contact = match (&a.contact, &b.contact) {
-                (Some(a), Some(b)) => native_contact::classify(a, b, &mut budget.contact),
+                (Some(a), Some(b)) => {
+                    native_contact::classify(a, b, &mut budget.contact, linear_mm)
+                }
                 _ => Ok(native_contact::Classification::Unresolved),
             };
             match contact {
@@ -701,6 +705,11 @@ fn interference(
                 }
                 Ok(native_contact::Classification::DisjointInteriors) => {
                     disjoint_count += 1;
+                    continue;
+                }
+                Ok(native_contact::Classification::ContactWithinTolerance { band_mm }) => {
+                    tolerance_count += 1;
+                    contact_band_mm = contact_band_mm.max(band_mm);
                     continue;
                 }
                 Ok(native_contact::Classification::Unresolved) => {}
@@ -788,8 +797,13 @@ fn interference(
         }
     } else if separated_count == first.len() * second.len() {
         pair.interference = InterferenceStatus::SeparatedNativeHulls;
-    } else if separated_count + touching_count + disjoint_count == first.len() * second.len() {
-        if touching_count > 0 {
+    } else if separated_count + touching_count + disjoint_count + tolerance_count
+        == first.len() * second.len()
+    {
+        if tolerance_count > 0 {
+            pair.interference = InterferenceStatus::ContactWithinModelTolerance;
+            pair.contact_residual_bound_mm = Some(contact_band_mm);
+        } else if touching_count > 0 {
             pair.interference = InterferenceStatus::TouchingNativeBoundaries;
             pair.engineering_clearance_mm = Some(0.);
         } else {
@@ -1083,6 +1097,7 @@ pub(crate) fn evaluate<K: KernelAdapter>(
                     common_solid_results: 0,
                     approximate_common_volume_mm3: None,
                     engineering_clearance_mm: None,
+                    contact_residual_bound_mm: None,
                     boundary_distance: None,
                     diagnostics: vec![],
                 };

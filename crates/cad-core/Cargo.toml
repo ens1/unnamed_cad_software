@@ -14,3 +14,5 @@ nalgebra.workspace = true
 ttf-parser = "=0.25.1"
 unicode-general-category = "=1.1.0"
 png = "=0.18.1"
+num-rational = "=0.4.2"
+num-traits = "=0.2.19"

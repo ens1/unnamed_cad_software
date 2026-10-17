@@ -472,6 +472,8 @@ fn mesh(
         body: Some(owner.clone()),
         body_kind: BodyKind::Solid,
         plane: None,
+        native_geometry: None,
+        native_geometry_error: Some("Operation preview contains display triangles only".into()),
     });
     mesh.volume_mm3 = signed_volume.abs();
     Ok(Some(mesh))

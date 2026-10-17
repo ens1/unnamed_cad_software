@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod symbols;
 pub use symbols::*;
 
-pub const CONTRACT_VERSION: u32 = 11;
-pub const FORMAT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 12;
+pub const FORMAT_VERSION: u32 = 4;
 const TITLE_CELL_PADDING_MM: f64 = 1.;
 const TITLE_LABEL_SCALE: f64 = 0.65;
 const TITLE_LINE_HEIGHT: f64 = 1.35;
@@ -193,6 +193,8 @@ pub struct SheetTemplate {
     pub view_layouts: BTreeMap<String, ViewLayout>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub view_display_modes: BTreeMap<String, crate::drawing_visibility::DisplayMode>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub view_visibility_geometry: BTreeMap<String, crate::drawing_visibility::GeometryMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub title_block: BTreeMap<String, String>,
 }
@@ -551,6 +553,10 @@ pub struct Sheet {
     pub name: String,
     pub paper_mm: [f64; 2],
     pub primitives: Vec<Primitive>,
+    /// Native implicit/parameter carriers and certified model-space error bounds
+    /// retained separately from their finite paper rendering.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_traces: Vec<NativeTraceBinding>,
     pub views: BTreeMap<String, ViewLayout>,
     #[serde(default)]
     pub projections: BTreeMap<String, ViewProjection>,
@@ -565,6 +571,13 @@ pub struct Sheet {
     /// Preview-only diagnostics; production export still rejects these source errors.
     #[serde(default)]
     pub diagnostics: BTreeMap<Id, String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NativeTraceBinding {
+    pub view: String,
+    /// Half-open range into the paper primitive array, including hidden strokes.
+    pub primitive_range: [usize; 2],
+    pub geometry: crate::drawing_visibility::NativeTrace,
 }
 #[derive(Clone)]
 struct Placement {
@@ -962,6 +975,7 @@ pub fn new_sheet(doc: &Document, definition: &str, name: String) -> Result<Drawi
             })
             .into_iter()
             .collect(),
+        view_visibility_geometry: BTreeMap::new(),
         exploded_view: None,
         display_state: None,
     };
@@ -1097,12 +1111,19 @@ pub fn set_views(sheet: &mut Drawing, views: Vec<String>) -> Result<()> {
         ));
     }
     let convention = sheet.view_display_modes.values().next().copied();
+    let geometry = sheet.view_visibility_geometry.values().next().copied();
     for key in &views {
         if !sheet.views.contains(key)
             && key != "section-z"
             && let Some(mode) = convention
         {
             sheet.view_display_modes.insert(key.clone(), mode);
+        }
+        if !sheet.views.contains(key)
+            && key != "section-z"
+            && let Some(mode) = geometry
+        {
+            sheet.view_visibility_geometry.insert(key.clone(), mode);
         }
     }
     sheet.views = views;
@@ -1111,6 +1132,9 @@ pub fn set_views(sheet: &mut Drawing, views: Vec<String>) -> Result<()> {
         .retain(|key, _| sheet.views.contains(key));
     sheet
         .view_display_modes
+        .retain(|key, _| sheet.views.contains(key));
+    sheet
+        .view_visibility_geometry
         .retain(|key, _| sheet.views.contains(key));
     Ok(())
 }
@@ -1125,6 +1149,7 @@ impl SheetTemplate {
             annotations: sheet.annotations.clone(),
             view_layouts: sheet.view_layouts.clone(),
             view_display_modes: sheet.view_display_modes.clone(),
+            view_visibility_geometry: sheet.view_visibility_geometry.clone(),
             title_block: sheet.title_block.clone(),
         }
     }
@@ -1151,6 +1176,7 @@ impl SheetTemplate {
             format: Some(self.format.clone()),
             view_layouts: self.view_layouts.clone(),
             view_display_modes: self.view_display_modes.clone(),
+            view_visibility_geometry: self.view_visibility_geometry.clone(),
             exploded_view: None,
             display_state: None,
         };
@@ -1165,6 +1191,7 @@ impl SheetTemplate {
         sheet.annotations = self.annotations.clone();
         sheet.view_layouts = self.view_layouts.clone();
         sheet.view_display_modes = self.view_display_modes.clone();
+        sheet.view_visibility_geometry = self.view_visibility_geometry.clone();
         sheet.title_block = self.title_block.clone();
         let mut format = self.format.clone();
         refresh_format_ids(&mut format);
@@ -1941,6 +1968,7 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
     if sheet
         .view_display_modes
         .keys()
+        .chain(sheet.view_visibility_geometry.keys())
         .any(|key| !views.contains(key))
     {
         return Err(invalid(
@@ -2391,6 +2419,79 @@ fn emit_projected_curve(
         });
     }
     Ok(())
+}
+struct TraceView<'a> {
+    view: &'a View,
+    mode: crate::drawing_visibility::DisplayMode,
+    clip: bool,
+    tolerance_mm: f64,
+}
+impl TraceView<'_> {
+    fn emit(
+        &self,
+        out: &mut Vec<Primitive>,
+        bindings: &mut Vec<NativeTraceBinding>,
+        storage_units: &mut usize,
+        trace: crate::drawing_visibility::NativeTrace,
+    ) -> Result<()> {
+        if !trace.max_error_mm.is_finite()
+            || trace.max_error_mm < 0.
+            || trace.max_error_mm > self.tolerance_mm
+            || trace.points.len() < 2
+            || trace.points.iter().flatten().any(|p| !p.is_finite())
+        {
+            return Err(invalid(
+                "Native drawing trace has no valid curve-output error certificate",
+            ));
+        }
+        // Bound the entire sheet, not each view independently. Include the
+        // paper copy of each point and binding/primitive allocation overhead.
+        *storage_units = storage_units
+            .saturating_add(trace.storage_units())
+            .saturating_add(trace.points.len().saturating_mul(4))
+            .saturating_add(64);
+        if *storage_units > 8_000_000 {
+            return Err(invalid(
+                "Native drawing output exceeds the bounded sheet storage budget; reduce the displayed scope or split the views across sheets",
+            ));
+        }
+        let start = out.len();
+        if !trace.collapsed_projection
+            && (!trace.hidden
+                || self.mode != crate::drawing_visibility::DisplayMode::HiddenLinesRemoved)
+        {
+            let points = trace
+                .points
+                .iter()
+                .map(|p| self.view.screen(*p))
+                .collect::<Result<Vec<_>>>()?;
+            let mut append = |points| {
+                out.push(if trace.hidden {
+                    Primitive::HiddenPolyline { points }
+                } else {
+                    Primitive::Polyline {
+                        points,
+                        dashed: trace.ghost,
+                    }
+                })
+            };
+            if self.clip {
+                for pair in points.windows(2) {
+                    if let Some([a, b]) = clipped_segment(pair[0], pair[1], self.view) {
+                        append(vec![a, b]);
+                    }
+                }
+            } else {
+                append(points);
+            }
+        }
+        bindings.push(NativeTraceBinding {
+            view: self.view.name.clone(),
+            primitive_range: [start, out.len()],
+            geometry: trace,
+        });
+        Ok(())
+    }
 }
 /// Display/print tessellation only. DXF retains the exact projected rational curve.
 pub fn display_curve(curve: &crate::sketch_edit::Curve2) -> Result<Vec<[f64; 2]>> {
@@ -3704,6 +3805,7 @@ pub fn sheets(doc: &Document, e: &Evaluation) -> Result<Vec<Sheet>> {
                 })
                 .into_iter()
                 .collect(),
+            view_visibility_geometry: BTreeMap::new(),
             exploded_view: None,
             display_state: None,
         }]
@@ -3873,6 +3975,7 @@ fn build_continuation_sheet(
         name: page_definition.name.clone(),
         paper_mm: sheet.paper_mm,
         primitives: format_geometry(doc, &page_definition)?,
+        native_traces: vec![],
         views: BTreeMap::new(),
         projections: BTreeMap::new(),
         view_fidelity: BTreeMap::new(),
@@ -3969,6 +4072,7 @@ fn build_sheet_mode(
         name: sheet.name.clone(),
         paper_mm: sheet.paper_mm,
         primitives: vec![],
+        native_traces: vec![],
         views: BTreeMap::new(),
         projections: BTreeMap::new(),
         view_fidelity: BTreeMap::new(),
@@ -4014,15 +4118,24 @@ fn build_sheet_mode(
     let mut world = Vec::new();
     let mut curves = Vec::new();
     let mut triangles = Vec::new();
+    let mut surface_extents = Vec::new();
     let mut line_dashes = Vec::new();
     let mut triangle_dashes = Vec::new();
-    let visibility_requested = view_keys(sheet).iter().any(|key| {
-        key != "section-z"
-            && crate::drawing_visibility::mode_for(sheet, key)
-                != crate::drawing_visibility::DisplayMode::Wireframe
-    });
+    let visibility_requested = |geometry| {
+        view_keys(sheet).iter().any(|key| {
+            key != "section-z"
+                && crate::drawing_visibility::mode_for(sheet, key)
+                    != crate::drawing_visibility::DisplayMode::Wireframe
+                && crate::drawing_visibility::geometry_for(sheet, key) == geometry
+        })
+    };
+    let sampled_requested =
+        visibility_requested(crate::drawing_visibility::GeometryMode::DisplayMesh);
+    let native_requested = visibility_requested(crate::drawing_visibility::GeometryMode::Native);
     let mut visibility_scene = crate::drawing_visibility::Scene::default();
+    let mut native_scene = crate::drawing_visibility::NativeScene::default();
     let mut source_faces = Vec::new();
+    let mut native_storage_units = 0usize;
     for displayed in &instances {
         if displayed.effect.visibility == Some(crate::display_states::Visibility::Hidden) {
             continue;
@@ -4039,13 +4152,29 @@ fn build_sheet_mode(
         let Some(mesh) = e.meshes.get(&key) else {
             continue;
         };
-        if visibility_requested {
+        if !mesh.positions.is_empty()
+            && mesh.bounds.iter().flatten().all(|value| value.is_finite())
+            && (0..3).all(|axis| mesh.bounds[0][axis] <= mesh.bounds[1][axis])
+        {
+            // Native conservative bounds keep view fitting independent of
+            // display tessellation and include outlines between source edges.
+            surface_extents.extend((0..8).map(|corner| {
+                transform(
+                    std::array::from_fn(|axis| mesh.bounds[(corner >> axis) & 1][axis]),
+                    instance.matrix,
+                )
+            }));
+        }
+        if sampled_requested {
             source_faces.extend(visibility_scene.add_mesh(
                 mesh,
                 instance.matrix,
                 ghost,
                 e.accuracy.modeling.linear_mm,
             )?);
+        }
+        if native_requested {
+            native_scene.add_mesh(mesh, instance.matrix, ghost, e.accuracy.modeling.linear_mm)?;
         }
         for edge in &mesh.edges {
             line_dashes.push(ghost);
@@ -4229,7 +4358,7 @@ fn build_sheet_mode(
             // Curved silhouettes can extend beyond native edges. Both layout
             // and classified views include these surface extents, so switching
             // line modes preserves view scale and dimension origins.
-            .chain(triangles.iter().flatten().filter(|_| name != "section-z"))
+            .chain(surface_extents.iter().filter(|_| name != "section-z"))
         {
             let p = project(name, *p)?;
             for i in 0..2 {
@@ -4520,9 +4649,27 @@ fn build_sheet_mode(
         );
         let layout_invalid = result.diagnostics.contains_key(&view_id(sheet, name));
         let mode = crate::drawing_visibility::mode_for(sheet, name);
+        let geometry = crate::drawing_visibility::geometry_for(sheet, name);
+        let trace_view = TraceView {
+            view: &view,
+            mode,
+            clip: name == "detail-front" || layout_invalid,
+            tolerance_mm: e.accuracy.display_mm.max(e.accuracy.modeling.linear_mm),
+        };
         let mut occlusion =
             if name != "section-z" && mode != crate::drawing_visibility::DisplayMode::Wireframe {
-                Some(visibility_scene.project(name, e.accuracy)?)
+                Some(match geometry {
+                    crate::drawing_visibility::GeometryMode::Native => {
+                        crate::drawing_visibility::Projection::Native(
+                            native_scene.project(name, e.accuracy)?,
+                        )
+                    }
+                    crate::drawing_visibility::GeometryMode::DisplayMesh => {
+                        crate::drawing_visibility::Projection::DisplayMesh(
+                            visibility_scene.project(name, e.accuracy)?,
+                        )
+                    }
+                })
             } else {
                 None
             };
@@ -4538,6 +4685,13 @@ fn build_sheet_mode(
         };
         if occlusion.is_some() {
             note = match &visibility {
+                crate::drawing_visibility::Fidelity::NativeSurfaces {
+                    tolerance_mm,
+                    curve_output_tolerance_mm,
+                } => format!(
+                    "{}; native surface visibility at {tolerance_mm:.8} mm; curve output bounded by {curve_output_tolerance_mm:.6} mm; native definitions retained",
+                    mode.label()
+                ),
                 crate::drawing_visibility::Fidelity::Tessellated {
                     chord_tolerance_mm, ..
                 } => format!(
@@ -4549,7 +4703,9 @@ fn build_sheet_mode(
                     mode.label()
                 ),
             };
-            if curves.iter().any(Option::is_none) {
+            if geometry == crate::drawing_visibility::GeometryMode::DisplayMesh
+                && curves.iter().any(Option::is_none)
+            {
                 note.push_str("; unsupported edge carriers sampled");
             }
             if name == "detail-front" {
@@ -4563,7 +4719,9 @@ fn build_sheet_mode(
             name.clone(),
             ViewFidelity {
                 approximate: visibility.approximate()
-                    || curves.iter().any(Option::is_none)
+                    || ((occlusion.is_none()
+                        || geometry == crate::drawing_visibility::GeometryMode::DisplayMesh)
+                        && curves.iter().any(Option::is_none))
                     || name == "detail-front"
                     || layout_invalid,
                 hidden_line_removal: mode
@@ -4663,6 +4821,17 @@ fn build_sheet_mode(
             .zip(view_dashes)
             .enumerate()
         {
+            if let Some(native) = occlusion.as_mut().and_then(|scene| scene.native()) {
+                for trace in native.split_native(index)? {
+                    trace_view.emit(
+                        out,
+                        &mut result.native_traces,
+                        &mut native_storage_units,
+                        trace,
+                    )?;
+                }
+                continue;
+            }
             let edge_curves = curve.map_or_else(
                 || {
                     line.windows(2)
@@ -4698,7 +4867,17 @@ fn build_sheet_mode(
             }
         }
         if let Some(scene) = &mut occlusion {
-            for (points, ghost) in std::mem::take(&mut scene.silhouettes) {
+            if let Some(native) = scene.native() {
+                for trace in native.silhouettes()? {
+                    trace_view.emit(
+                        out,
+                        &mut result.native_traces,
+                        &mut native_storage_units,
+                        trace,
+                    )?;
+                }
+            }
+            for (points, ghost) in scene.sampled_silhouettes() {
                 let curve = crate::drawing_visibility::line_curve(points);
                 let pieces = if ghost {
                     vec![crate::drawing_visibility::Piece {
@@ -4972,7 +5151,7 @@ pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation
         out.push(crate::presentation::SemanticElement {id:sheet.id.clone(),role:"drawing-sheet".into(),label:sheet.name.clone(),value:Some(format!("Sheet {} / {}",index+1,doc.drawings.len())),state:state.into(),commands,relationships:vec![sheet.definition.clone()].into_iter().chain(sheet.exploded_view.iter().cloned()).collect(),data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"sheet":sheet,"paper_units":"mm","template_contract":"tcad.drawing-sheet-template","template_version":FORMAT_VERSION})});
         out.push(crate::presentation::SemanticElement {id:format!("{}::format",sheet.id),role:"drawing-sheet-format".into(),label:"Sheet format and linked title block".into(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-format-load".into(),"drawing.sheet-template-save".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing-sheet-format","version":FORMAT_VERSION,"sheet_id":sheet.id,"format":sheet.format,"paper_units":"mm","vectors":format_geometry(doc,sheet).ok()})});
         for key in view_keys(sheet) {
-            out.push(crate::presentation::SemanticElement {id:view_id(sheet,&key),role:"drawing-view".into(),label:key.clone(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-preview".into()],relationships:vec![sheet.id.clone()].into_iter().chain(sheet.view_layouts.get(&key).and_then(|layout|layout.alignment.as_ref()).map(|alignment|view_id(sheet,&alignment.parent))).collect(),data:serde_json::json!({"sheet_id":sheet.id,"view_key":key,"layout":sheet.view_layouts.get(&key),"display_mode":crate::drawing_visibility::mode_for(sheet,&key),"paper_units":"mm","identity_scope":"sheet","exploded_view":sheet.exploded_view})});
+            out.push(crate::presentation::SemanticElement {id:view_id(sheet,&key),role:"drawing-view".into(),label:key.clone(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-preview".into()],relationships:vec![sheet.id.clone()].into_iter().chain(sheet.view_layouts.get(&key).and_then(|layout|layout.alignment.as_ref()).map(|alignment|view_id(sheet,&alignment.parent))).collect(),data:serde_json::json!({"sheet_id":sheet.id,"view_key":key,"layout":sheet.view_layouts.get(&key),"display_mode":crate::drawing_visibility::mode_for(sheet,&key),"visibility_geometry":crate::drawing_visibility::geometry_for(sheet,&key),"paper_units":"mm","identity_scope":"sheet","exploded_view":sheet.exploded_view})});
         }
         for cell in sheet
             .format

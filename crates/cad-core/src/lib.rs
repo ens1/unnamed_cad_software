@@ -21,6 +21,7 @@ pub mod drawing;
 pub mod drawing_dimension_groups;
 pub mod drawing_display_states;
 pub mod drawing_gdt;
+pub mod drawing_geometry;
 pub mod drawing_interaction;
 pub mod drawing_layout;
 pub mod drawing_revision;

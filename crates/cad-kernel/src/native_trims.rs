@@ -147,19 +147,24 @@ pub(crate) fn validate_shape(shape: &crate::adapter::Shape, linear_mm: f64) -> R
     Ok(())
 }
 
-pub(crate) fn triangulate(
-    source: &Shell,
-    linear_mm: f64,
+pub(crate) fn triangulate_native(
+    source: &NativeShell,
     display_mm: f64,
-) -> Result<CompressedShell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>>> {
-    let trimmed = Compressed::from(&shell(source, linear_mm)?);
-    Ok(robust_trimmed_cshell_triangulation_with(
-        &trimmed,
+) -> CompressedShell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>> {
+    triangulate_compressed(&Compressed::from(source), display_mm)
+}
+
+fn triangulate_compressed(
+    trimmed: &Compressed,
+    display_mm: f64,
+) -> CompressedShell<Point3, PolylineCurve<Point3>, Option<PolygonMesh>> {
+    robust_trimmed_cshell_triangulation_with(
+        trimmed,
         TessellationOptions {
             tolerance: display_mm,
             ..Default::default()
         },
-    ))
+    )
 }
 
 fn branch_contains(

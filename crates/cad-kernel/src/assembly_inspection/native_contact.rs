@@ -11,6 +11,9 @@ use monstertruck::modeling::*;
 use num_bigint::{BigInt, Sign};
 use std::cmp::Ordering;
 
+mod analytic;
+mod radial;
+
 const MAX_WORK: usize = 4_000_000;
 const MAX_CONTROLS: usize = 262_144;
 const MAX_BEZIER_DEPTH: usize = 24;
@@ -218,7 +221,8 @@ impl Sides {
 struct NativeFace {
     face: Face,
     bound: Option<Enclosure>,
-    exact_planar_boundary: bool,
+    planar_region: Option<PlanarRegion>,
+    parameter_regions: Option<Vec<Vec<NativeCurve>>>,
 }
 pub(super) struct Body {
     faces: Vec<NativeFace>,
@@ -229,30 +233,31 @@ impl Body {
         let mut faces = Vec::new();
         let mut supports = Vec::new();
         for face in solid.face_iter() {
-            let exact_planar_boundary = if let Surface::Plane(plane) = face.surface() {
+            let surface = face.surface();
+            let parameter_regions = parameter_regions(face, budget)?;
+            let planar_region = if let Surface::Plane(plane) = surface {
                 if let Some(support) = Support::new(plane)? {
-                    let exact = boundary_on_plane(face, &support, budget)?;
+                    let region = planar_region(face, &support, budget)?;
                     supports.push(support);
-                    exact
+                    region
                 } else {
-                    false
+                    None
                 }
             } else {
-                true
+                None
+            };
+            let bound = match surface {
+                // Plane and unbounded line-revolution extents come from the
+                // authoritative face-local UV loops below, not independently
+                // rounded 3D edge controls.
+                Surface::Plane(_) | Surface::RevolutionSurface(_) => None,
+                _ => crate::native_bounds::face(face).ok(),
             };
             faces.push(NativeFace {
                 face: face.clone(),
-                // Plane enclosures built only from 3D edge hulls are valid for
-                // this exact predicate only after exact carrier membership.
-                // Native trim admission alone allows a modeling residual.
-                // A line-revolution axial hull likewise depends on its trims;
-                // keep that carrier on the Boolean path until an exact native
-                // parameter-domain certificate is available here.
-                bound: (exact_planar_boundary
-                    && !matches!(face.surface(), Surface::RevolutionSurface(_)))
-                .then(|| crate::native_bounds::face(face).ok())
-                .flatten(),
-                exact_planar_boundary,
+                bound,
+                planar_region,
+                parameter_regions,
             });
         }
         Ok(Self { faces, supports })
@@ -275,53 +280,59 @@ impl Body {
     fn sides(&self, support: &Support, budget: &mut Budget) -> Result<Option<Sides>> {
         let mut result = Sides::default();
         for face in &self.faces {
-            if !face.exact_planar_boundary {
-                return Ok(None);
-            }
-            let mut bounded = Sides::default();
-            if let Some(bound) = &face.bound {
-                for point in bound.points() {
-                    bounded.add(support.sign(&Homogeneous::point(*point)?, budget)?);
-                    if bounded.straddles() {
-                        break;
-                    }
-                }
-                if !bounded.straddles() {
-                    result.merge(bounded);
-                    if result.straddles() {
-                        return Ok(Some(result));
-                    }
-                    continue;
-                }
-            }
-            // Outward interval boxes can straddle an exactly tangent plane.
-            // Only the original stored coefficients may resolve that equality.
-            let Some(points) = face_controls(&face.face, budget)? else {
+            let Some(sides) = face_sides(face, support, budget)? else {
                 return Ok(None);
             };
-            for point in points {
-                result.add(support.sign(&point, budget)?);
-                if result.straddles() {
-                    return Ok(Some(result));
-                }
+            result.merge(sides);
+            if result.straddles() {
+                return Ok(Some(result));
             }
         }
         Ok(Some(result))
     }
 }
-
-fn boundary_on_plane(face: &Face, support: &Support, budget: &mut Budget) -> Result<bool> {
-    for edge in face.edge_iter() {
-        let Some(curve) = native_curve(&edge.oriented_curve(), budget)? else {
-            return Ok(false);
-        };
-        for control in &curve.controls {
-            if support.sign(control, budget)? != Ordering::Equal {
-                return Ok(false);
+fn face_sides(face: &NativeFace, support: &Support, budget: &mut Budget) -> Result<Option<Sides>> {
+    let mut result = Sides::default();
+    if let Some(bound) = &face.bound {
+        for point in bound.points() {
+            result.add(support.sign(&Homogeneous::point(*point)?, budget)?);
+            if result.straddles() {
+                break;
             }
         }
+        if !result.straddles() {
+            return Ok(Some(result));
+        }
     }
-    Ok(true)
+    if let Some(sides) = analytic::sides(face, support, budget)? {
+        return Ok(Some(sides));
+    }
+    let points = if matches!(face.face.surface(), Surface::Plane(_)) {
+        let Some(region) = &face.planar_region else {
+            return Ok(None);
+        };
+        if !region.closed {
+            return Ok(None);
+        }
+        region
+            .curves
+            .iter()
+            .flat_map(|curve| curve.controls.iter().cloned())
+            .collect()
+    } else {
+        let Some(points) = face_controls(&face.face, budget)? else {
+            return Ok(None);
+        };
+        points
+    };
+    result = Sides::default();
+    for point in points {
+        result.add(support.sign(&point, budget)?);
+        if result.straddles() {
+            break;
+        }
+    }
+    Ok(Some(result))
 }
 
 fn admit_count(count: usize, budget: &mut Budget) -> Result<()> {
@@ -380,6 +391,7 @@ struct NativeCurve {
     clamped: bool,
     bezier: bool,
     line: bool,
+    knots: Option<Vec<f64>>,
 }
 fn native_curve(curve: &Curve, budget: &mut Budget) -> Result<Option<NativeCurve>> {
     let (controls, clamped, bezier, line) = match curve {
@@ -484,12 +496,23 @@ fn native_curve(curve: &Curve, budget: &mut Budget) -> Result<Option<NativeCurve
         }
         _ => return Ok(None),
     };
+    let knots = match curve {
+        Curve::BsplineCurve(curve) => Some(curve.knot_vector().to_vec()),
+        Curve::NurbsCurve(curve) => Some(curve.knot_vector().to_vec()),
+        Curve::ParameterCurve(curve) => match curve.curve() {
+            Curve2D::BsplineCurve(curve) => Some(curve.knot_vector().to_vec()),
+            Curve2D::NurbsCurve(curve) => Some(curve.knot_vector().to_vec()),
+            _ => None,
+        },
+        _ => None,
+    };
     admit_count(controls.len(), budget)?;
     Ok(Some(NativeCurve {
         controls,
         clamped,
         bezier,
         line,
+        knots,
     }))
 }
 
@@ -553,7 +576,18 @@ fn locate(
         if !curve.clamped {
             return Ok(Location::Unresolved);
         }
-        let mut stack = vec![(curve.controls.clone(), 0usize)];
+        let spans = if curve.bezier {
+            vec![curve.controls.clone()]
+        } else {
+            let Some(spans) = radial::native_spans(curve, budget)? else {
+                return Ok(Location::Unresolved);
+            };
+            spans
+        };
+        let mut stack = spans
+            .into_iter()
+            .map(|controls| (controls, 0usize))
+            .collect::<Vec<_>>();
         while let Some((controls, depth)) = stack.pop() {
             budget.spend(controls.len().saturating_mul(2))?;
             let a = &controls[0];
@@ -567,7 +601,7 @@ fn locate(
                         .all(|p| p.compare(point, axis) == Ordering::Greater)
             });
             if !curve.line && !outside {
-                if !curve.bezier || depth == MAX_BEZIER_DEPTH || controls.len() > 65 {
+                if depth == MAX_BEZIER_DEPTH || controls.len() > 65 {
                     return Ok(Location::Unresolved);
                 }
                 budget.spend(controls.len().saturating_mul(controls.len()))?;
@@ -615,9 +649,185 @@ fn locate(
     })
 }
 
+#[derive(Clone)]
 struct PlanarRegion {
     curves: Vec<NativeCurve>,
     closed: bool,
+}
+fn closed_loop(curves: &[NativeCurve], budget: &mut Budget) -> Result<bool> {
+    if curves.is_empty() || curves.iter().any(|curve| !curve.clamped) {
+        return Ok(false);
+    }
+    for (a, b) in curves
+        .iter()
+        .zip(curves.iter().cycle().skip(1))
+        .take(curves.len())
+    {
+        budget.spend(3)?;
+        if (0..3)
+            .any(|axis| a.controls.last().unwrap().compare(&b.controls[0], axis) != Ordering::Equal)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+fn generator_controls<'a>(
+    face: &'a NativeFace,
+    generator: usize,
+    budget: &mut Budget,
+) -> Result<Option<Vec<&'a Homogeneous>>> {
+    let Some(regions) = &face.parameter_regions else {
+        return Ok(None);
+    };
+    let mut open = Vec::new();
+    for (index, region) in regions.iter().enumerate() {
+        if !closed_loop(region, budget)? {
+            open.push(index);
+        }
+    }
+    if !open.is_empty() {
+        if open.len() != 2 {
+            return Ok(None);
+        }
+        // A native full-period ring is open in unwrapped UV. Two opposite
+        // monotone angular paths at distinct fixed generator parameters bound
+        // a finite periodic band. We only use its generator hull and enclose
+        // ALL real angles, so the binary64 angular period introduces no error
+        // in these support bounds. No virtual seam becomes a contact witness.
+        let angle = 1 - generator;
+        let tau = Exact::new(std::f64::consts::TAU)?;
+        let mut ends = Vec::new();
+        for index in open {
+            let region = &regions[index];
+            if region.is_empty() || region.iter().any(|curve| !curve.clamped) {
+                return Ok(None);
+            }
+            let first = &region[0].controls[0];
+            let last = region.last().unwrap().controls.last().unwrap();
+            let direction = last.compare(first, angle);
+            let mut previous = first;
+            for curve in region {
+                let degree_one = curve.line
+                    || curve
+                        .knots
+                        .as_ref()
+                        .is_some_and(|knots| knots.len() == curve.controls.len() + 2);
+                if !degree_one
+                    || (0..2).any(|i| previous.compare(&curve.controls[0], i) != Ordering::Equal)
+                {
+                    return Ok(None);
+                }
+                for control in &curve.controls {
+                    budget.spend(8)?;
+                    let step = control.compare(previous, angle);
+                    if control.compare(first, generator) != Ordering::Equal
+                        || (step != Ordering::Equal && step != direction)
+                    {
+                        return Ok(None);
+                    }
+                    previous = control;
+                }
+            }
+            let delta = last.0[angle]
+                .mul(&first.0[3])
+                .sub(&first.0[angle].mul(&last.0[3]));
+            let period = tau.mul(&first.0[3]).mul(&last.0[3]);
+            if delta.sub(&period).sign() != Ordering::Equal
+                && delta.add(&period).sign() != Ordering::Equal
+            {
+                return Ok(None);
+            }
+            ends.push((first, last));
+        }
+        if ends[0].0.compare(ends[1].1, angle) != Ordering::Equal
+            || ends[0].1.compare(ends[1].0, angle) != Ordering::Equal
+            || ends[0].0.compare(ends[1].0, generator) == Ordering::Equal
+        {
+            return Ok(None);
+        }
+    }
+    Ok(Some(
+        regions
+            .iter()
+            .flatten()
+            .flat_map(|curve| &curve.controls)
+            .collect(),
+    ))
+}
+fn parameter_regions(face: &Face, budget: &mut Budget) -> Result<Option<Vec<Vec<NativeCurve>>>> {
+    let surface = face.surface();
+    let mut result = Vec::new();
+    for wire in face.boundaries() {
+        let mut curves = Vec::new();
+        for edge in wire {
+            budget.spend(1)?;
+            let Some(trim) = edge.oriented_curve().exact_parameter_boundary_2d(&surface) else {
+                return Ok(None);
+            };
+            let Some(curve) = uv_curve(trim.curve(), budget)? else {
+                return Ok(None);
+            };
+            curves.push(curve);
+        }
+        if curves.is_empty() {
+            return Ok(None);
+        }
+        result.push(curves);
+    }
+    Ok((!result.is_empty()).then_some(result))
+}
+fn uv_curve(curve: &Curve2D, budget: &mut Budget) -> Result<Option<NativeCurve>> {
+    let plane = Plane::new(
+        Point3::origin(),
+        Point3::new(1., 0., 0.),
+        Point3::new(0., 1., 0.),
+    );
+    native_curve(
+        &Curve::ParameterCurve(ParameterCurve::new(
+            curve.clone(),
+            Box::new(Surface::Plane(plane)),
+        )),
+        budget,
+    )
+}
+fn planar_region(
+    face: &Face,
+    support: &Support,
+    budget: &mut Budget,
+) -> Result<Option<PlanarRegion>> {
+    let mut curves = Vec::new();
+    let mut closed = true;
+    let surface = face.surface();
+    for wire in face.boundaries() {
+        let mut contour = Vec::new();
+        for edge in wire {
+            let source = edge.oriented_curve();
+            // Use the same face-local domain as native admission, meshing and
+            // STEP exchange. Only a missing UV carrier falls back to an exactly
+            // coplanar 3D curve; no modeling residual decides a halfspace sign.
+            let curve = if let Some(trim) = source.exact_parameter_boundary_2d(&surface) {
+                native_curve(&Curve::ParameterCurve(trim), budget)?
+            } else {
+                let native = native_curve(&source, budget)?;
+                let mut on_plane = native.is_some();
+                if let Some(curve) = &native {
+                    for point in &curve.controls {
+                        if support.sign(point, budget)? != Ordering::Equal {
+                            on_plane = false;
+                            break;
+                        }
+                    }
+                }
+                if on_plane { native } else { None }
+            };
+            let Some(curve) = curve else { return Ok(None) };
+            contour.push(curve);
+        }
+        closed &= closed_loop(&contour, budget)?;
+        curves.extend(contour);
+    }
+    Ok((!curves.is_empty()).then_some(PlanarRegion { curves, closed }))
 }
 fn planar_regions(
     body: &Body,
@@ -629,58 +839,10 @@ fn planar_regions(
         let Surface::Plane(plane) = face.face.surface() else {
             continue;
         };
-        if !support.contains_plane(plane, budget)? {
-            continue;
-        }
-        let mut curves = Vec::new();
-        let mut closed = true;
-        for wire in face.face.boundaries() {
-            let mut contour: Vec<NativeCurve> = Vec::new();
-            for edge in wire {
-                let Some(curve) = native_curve(&edge.oriented_curve(), budget)? else {
-                    closed = false;
-                    continue;
-                };
-                if !curve.clamped {
-                    closed = false;
-                    continue;
-                }
-                let mut planar = true;
-                for point in &curve.controls {
-                    if support.sign(point, budget)? != Ordering::Equal {
-                        planar = false;
-                        break;
-                    }
-                }
-                if !planar {
-                    closed = false;
-                    continue;
-                }
-                contour.push(curve);
-            }
-            // A loop accepted within model tolerance is not automatically an
-            // exactly closed carrier loop. Do not assign a winding number to
-            // gaps between independently rounded native endpoints.
-            for (a, b) in contour
-                .iter()
-                .zip(contour.iter().cycle().skip(1))
-                .take(contour.len())
-            {
-                budget.spend(3)?;
-                if (0..3).any(|axis| {
-                    a.controls.last().unwrap().compare(&b.controls[0], axis) != Ordering::Equal
-                }) {
-                    closed = false;
-                    break;
-                }
-            }
-            if contour.is_empty() {
-                closed = false;
-            }
-            curves.extend(contour);
-        }
-        if !curves.is_empty() {
-            regions.push(PlanarRegion { curves, closed });
+        if support.contains_plane(plane, budget)?
+            && let Some(region) = &face.planar_region
+        {
+            regions.push(region.clone());
         }
     }
     Ok(regions)
@@ -725,9 +887,15 @@ pub(super) enum Classification {
     Separated,
     Touching,
     DisjointInteriors,
+    ContactWithinTolerance { band_mm: f64 },
     Unresolved,
 }
-pub(super) fn classify(first: &Body, second: &Body, budget: &mut Budget) -> Result<Classification> {
+pub(super) fn classify(
+    first: &Body,
+    second: &Body,
+    budget: &mut Budget,
+    linear_mm: f64,
+) -> Result<Classification> {
     let mut disjoint_interiors = false;
     for support in first.supports.iter().chain(&second.supports) {
         budget.spend(1)?;
@@ -751,9 +919,17 @@ pub(super) fn classify(first: &Body, second: &Body, budget: &mut Budget) -> Resu
             return Ok(Classification::Separated);
         }
         disjoint_interiors = true;
-        if touching(first, second, support, budget)? {
+        if touching(first, second, support, budget)?
+            || radial::close_witness(first, second, 0., budget)?
+        {
             return Ok(Classification::Touching);
         }
+    }
+    if let Some(result) = radial::planar_band(first, second, budget, linear_mm)? {
+        return Ok(result);
+    }
+    if let Some(result) = radial::classify(first, second, budget, linear_mm)? {
+        return Ok(result);
     }
     Ok(if disjoint_interiors {
         Classification::DisjointInteriors
