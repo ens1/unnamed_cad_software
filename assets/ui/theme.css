@@ -1,15 +1,18 @@
-/* TCAD portable style contract v1. Edit or import this file in Layout and theme. */
+/* TCAD portable style contract v1. This is the authoritative bundled Classic
+   theme. Edit or import it in Layout and theme; JSON packages remain supported. */
 :root {
   --panel: #F4F1E9;
   --ink: #191919;
   --active: #FF5A00;
-  --valid: #2DAA45;
+  --active-text: #A33900;
+  --valid: #237536;
   --spacing: 4px;
-  --reference: #0087BE;
+  --reference: #006C98;
+  --focus: #006C98;
   --font-size: 11px;
   --control-height: 24px;
   --target-size: 24px;
-  --warning: #B37400;
+  --warning: #855600;
   --error: #AD392B;
   --workspace: #D5D9DF;
   --section-background: transparent;
@@ -30,7 +33,7 @@
 [role=sketch3d-member].construction { color: #9178A5; }
 [role=sketch3d-member][state=selected], [role=sketch3d-handle][state=selected],
 [role=sketch3d-point-handle][state=selected] { color: var(--active); stroke-width: 3px; }
-[role=sketch3d-tool][state=selected] { background: var(--active); color: #FFFFFF; }
+[role=sketch3d-tool][state=selected] { background: var(--active); color: var(--ink); }
 
 /* Sketch commands are controls, distinct from descriptive text in the inspector.
    Target their semantic roles to resize or restyle them independently. */
@@ -189,7 +192,7 @@
 }
 
 [role=command-tab][state=selected], .toolbar-control[state=selected] {
-  color: var(--active);
+  color: var(--active-text);
   background: #FFE3D2;
   border: 1px solid #FF5A00;
 }
@@ -200,6 +203,8 @@
   padding: 3px 6px;
   border: none;
 }
+
+[role=menu-action] { text-align: left; }
 
 [role=apply-action] {
   background: var(--active);
@@ -283,7 +288,7 @@
 [role=sketch-constraint][state=dependent] { color: var(--warning); }
 
 .feature-tree-row[state=selected], [role=history-station][state=selected] {
-  color: var(--active);
+  color: var(--active-text);
   background: #FFE3D2;
 }
 
@@ -381,7 +386,7 @@
 
 [role=appearance-tab][state=selected], [role=appearance-target][state=selected] {
   background: #FFE3D2;
-  color: var(--active);
+  color: var(--active-text);
   border: 1px solid var(--active);
 }
 
@@ -419,7 +424,7 @@
 }
 [role=workspace-action][state=selected], [role=sketch-feedback-filter][state=selected],
 [role=sketch-annotation-toggle][state=selected], [role=sketch-dimension-mode][state=selected] {
-  color: var(--active);
+  color: var(--active-text);
   background: #FFE3D2;
 }
 [role=sketch-constraint], [role=edge-selection-item], [role=reference-repair-input],
@@ -431,7 +436,7 @@
 }
 [role=sketch-constraint][state=selected], [role=edge-selection-item][state=selected],
 [role=reference-repair-input][state=selected] {
-  color: var(--active);
+  color: var(--active-text);
   background: #FFE3D2;
 }
 [role=sketch-constraint][state=unsatisfied], [role=reference-repair-failure][state=invalid] {
@@ -478,7 +483,7 @@
   padding: 2px 4px;
 }
 [role=repair-input][state=selected] {
-  color: var(--active);
+  color: var(--active-text);
   background: #FFE3D2;
 }
 [role=repair-summary], [role=repair-message] {
@@ -680,7 +685,7 @@
 }
 [role=material-library-entry][state=selected], [role=finish-library-entry][state=selected] {
   background: var(--active);
-  color: var(--panel);
+  color: var(--ink);
 }
 [role=material-field], [role=finish-library-field] {
   display: flex;
@@ -742,7 +747,7 @@
   min-target-size: 24px;
   border-radius: 3px;
 }
-[role=sketch-issue][state=selected] { color: var(--accent); }
+[role=sketch-issue][state=selected] { color: var(--active-text); }
 
 /* Inspector hierarchy is presentation-only. These roles remain independently
    movable, collapsible and styleable in user compositions. */
@@ -793,4 +798,43 @@
 
 [role=feature-tree-group].reference-geometry [role=inspector-section-heading] {
   color: #47596C;
+}
+
+/* Task workflow styling previously lived only in the JSON copy. */
+[role=task-header] {
+  font-size: 13px;
+  font-weight: bold;
+  padding: 2px 0px;
+}
+[role=task-status] {
+  height: 24px;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+[role=task-status][state=required] { color: var(--ink); }
+[role=task-status][state=invalid] { color: var(--error); }
+[role=task-section-toggle], [role=task-reference-toggle] {
+  width: 100%;
+  text-align: left;
+  height: 24px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  border: 1px solid #C7C4BD;
+  text-overflow: ellipsis;
+  font-size: 11px;
+}
+[role=task-diagnostics] {
+  font-size: 10px;
+  font-family: monospace;
+  max-height: 240px;
+  overflow: auto;
+}
+[role=confirmation-group] [role=inspector-section-heading] { display: none; }
+[role=status-message] { text-overflow: ellipsis; max-width: 100%; }
+
+/* Native controls publish focus independently of hover and selection. Keep a
+   visible ring on flat and selected controls without changing hit geometry. */
+:focus, :focus[state=selected], :focus[state=active], :focus[state=pressed] {
+  border: 2px solid var(--focus);
 }

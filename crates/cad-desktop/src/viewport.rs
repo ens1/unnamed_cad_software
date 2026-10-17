@@ -1685,6 +1685,16 @@ pub fn sync_scene(
 ) {
     let selection_source = selection_evaluation(&w)
         .map(|evaluation| {
+            let fabrication_input = crate::fabrication_sources_ui::input_body(&w);
+            let edge_input = crate::selection_ui::edge_feature(&w).and_then(|feature| {
+                crate::selection_ui::edge_selection(&feature).map(|(body, _)| body.clone())
+            });
+            // Only input-body editors use the occurrence to change the meshes
+            // being picked. An ordinary geometry click also records this path;
+            // treating that as a new source would erase the click next frame
+            // and leave only the whole-component highlight behind.
+            let occurrence_scope = (fabrication_input.is_some() || edge_input.is_some())
+                .then_some((&w.edge_selection_path, &w.view.active_instance));
             serde_json::to_string(&(
                 &evaluation.identity,
                 display_instances(&w, evaluation)
@@ -1692,12 +1702,10 @@ pub fn sync_scene(
                     .map(|instance| (&instance.path, &instance.matrix))
                     .collect::<Vec<_>>(),
                 &w.view.history_cursor,
-                crate::fabrication_sources_ui::input_body(&w),
+                fabrication_input,
                 part_pattern_input(&w),
-                crate::selection_ui::edge_feature(&w).and_then(|feature| {
-                    crate::selection_ui::edge_selection(&feature).map(|(body, _)| body.clone())
-                }),
-                &w.edge_selection_path,
+                edge_input,
+                occurrence_scope,
             ))
             .unwrap_or_default()
         })

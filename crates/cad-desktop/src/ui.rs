@@ -2699,10 +2699,26 @@ pub(crate) fn choose_save_destination(w: &mut Workspace) -> Option<std::path::Pa
         .chars()
         .map(|c| if "/\\:*?\"<>|".contains(c) { '_' } else { c })
         .collect::<String>();
-    let path = rfd::FileDialog::new()
+    let suggested_directory = w
+        .fields
+        .get("document-identity-save-as-path")
+        .map(std::path::PathBuf::from)
+        .or_else(|| w.project.clone())
+        .map(|path| cad_core::persistence::project_root(&path))
+        .and_then(|root| root.parent().map(std::path::Path::to_path_buf))
+        .or_else(crate::document_identity_ui::default_save_directory);
+    let mut dialog = rfd::FileDialog::new()
         .set_title("Save TCAD project folder")
-        .set_file_name(format!("{name}.tcad"))
-        .save_file()?;
+        .set_file_name(format!("{name}.tcad"));
+    // A new Projects directory may not exist until the first save. Start the
+    // native picker at its nearest existing parent without creating empty folders.
+    if let Some(directory) = suggested_directory
+        .as_deref()
+        .and_then(|path| path.ancestors().find(|ancestor| ancestor.is_dir()))
+    {
+        dialog = dialog.set_directory(directory);
+    }
+    let path = dialog.save_file()?;
     // Every copy owns its parts/resources directory. Two manifests in one
     // shared root would otherwise overwrite the original part files on Save As.
     let path = if path.file_name().and_then(|name| name.to_str()) == Some("project.json") {

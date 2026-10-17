@@ -23,6 +23,17 @@ pub fn pending_save_as(w: &Workspace) -> bool {
 pub fn take_after_confirm(w: &mut Workspace) -> bool {
     w.fields.remove(SAVE_AS).is_some_and(|mode| mode == "true")
 }
+
+/// Finder and other desktop launchers may start the app at the filesystem root.
+/// New projects belong in the user's workspace, independently of that launch path.
+pub(crate) fn default_save_directory() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .filter(|home| home.is_absolute() && home.parent().is_some() && home.is_dir())
+        .map(|home| home.join("TCAD/Projects"))
+}
+
 pub fn begin_save_as(w: &mut Workspace) {
     if !available(w) {
         w.status = "Apply or cancel the active operation before naming a Save As copy".into();
@@ -50,7 +61,7 @@ pub fn begin_save_as(w: &mut Workspace) {
             .and_then(|path| path.parent())
             .and_then(|path| path.parent())
             .map(std::path::Path::to_path_buf)
-            .or_else(|| std::env::current_dir().ok());
+            .or_else(default_save_directory);
         if let Some(parent) = parent {
             w.fields
                 .entry("document-identity-save-as-path".into())

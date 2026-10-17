@@ -346,8 +346,22 @@ pub fn icon_button(
     };
     let natural =
         galley.size() + egui::vec2(pad[1] + pad[3] + icon_size + icon_gap, pad[0] + pad[2]);
+    // A popup's first, invisible pass measures its content. Resolving a
+    // percentage here would turn egui's provisional area width into the final
+    // menu width (600 px by default). Relative widths have no established
+    // containing width yet, so measure the label; the visible pass then fills
+    // the measured popup. Explicit pixel widths still participate in sizing.
+    let intrinsic_menu_width = ui.is_sizing_pass()
+        && egui::containers::menu::is_in_menu(ui)
+        && props
+            .get("width")
+            .is_some_and(|value| value.trim().ends_with('%'));
     let mut visual = egui::vec2(
-        length(&props, "width", ui.available_width(), natural.x),
+        if intrinsic_menu_width {
+            natural.x
+        } else {
+            length(&props, "width", ui.available_width(), natural.x)
+        },
         length(
             &props,
             "height",

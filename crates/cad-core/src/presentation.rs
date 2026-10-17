@@ -1655,7 +1655,14 @@ pub fn default_layout() -> LayoutDocument {
     serde_json::from_str(include_str!("../../../assets/ui/layout.json")).expect("bundled layout")
 }
 pub fn default_theme() -> Theme {
-    serde_json::from_str(include_str!("../../../assets/ui/theme.json")).expect("bundled theme")
+    // One source serves both the bundled workspace and editable imports. Cache
+    // parsing so asking for the fallback never reparses the complete stylesheet.
+    static CLASSIC: std::sync::OnceLock<Theme> = std::sync::OnceLock::new();
+    CLASSIC
+        .get_or_init(|| {
+            Theme::from_css(include_str!("../../../assets/ui/theme.css")).expect("bundled theme")
+        })
+        .clone()
 }
 pub fn definition_name(doc: &Document, id: &str) -> String {
     doc.parts
