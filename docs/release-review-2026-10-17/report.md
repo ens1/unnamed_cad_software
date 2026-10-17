@@ -1,5 +1,8 @@
 # Release usability review — October 17, 2026
 
+Later source fixes are recorded in [the implementation follow-up](fixes.md).
+The observations and acceptance limits below describe the completed test drive.
+
 **Hold the release.** The review session is complete. Five projects, drawings and
 exports are saved for review. One-action Publish generated and pushed the
 pedestal source/PDF/DXF/BOM/STEP to a local review repository.
@@ -418,7 +421,7 @@ remain unexercised.
 
 ## Findings
 
-| Finding | Current state |
+| Finding | State at the end of the test drive |
 | --- | --- |
 | RR-01 Edit popup size | Corrected; compact four-item popup observed in rebuilt app |
 | RR-02 Library-list movement | Open usability follow-up |

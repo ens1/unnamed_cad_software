@@ -85,3 +85,29 @@ This matrix is retained for future review. It does not mark whole scenarios pass
 4. **Use theme packs:** download/clone, select an installed theme, explain the saved fallback when its repository is unavailable.
 
 These are future clip ideas, not delivered tutorials or active recording instructions. The user stopped and deferred recording during this session. The recorder check and failed task capture are described in the recording index.
+
+## T4/T5/T7 implementation after the review
+
+- **T4:** The native top menu and command-tab rows now have horizontal overflow
+  scrolling. Document titles use a bounded width, retain their full hover label,
+  and no longer push commands arbitrarily far away. On wide workspaces the menu
+  actions remain at the far end; a smaller workspace can scroll to every native
+  menu, tab, Search, Publish and Size action. User-defined compositions retain
+  their own placement and the existing semantic command identities.
+- **T5:** Settings replaces the category sidebar with a compact category picker
+  when the sidebar would leave less than 320 logical pixels for preferences.
+  Category actions and staged preference behavior are unchanged. The preference
+  body supports both-axis scrolling with bounded normal text wrapping; footer
+  actions wrap instead of overflowing a narrow dialog. Existing themed dialog
+  dimensions remain supported.
+- **T7:** A live repository candidate now passes the same complete layout,
+  renderer-property and contextual style validation before it can replace the
+  self-contained personal snapshot. A parseable but invalid candidate falls back
+  to that saved snapshot and provides a notice. Both source sets remain watched,
+  so repairing the repository can restore its live theme on reload. Invalid
+  saved snapshots still retain the currently usable presentation.
+
+These are implementation changes, not runtime acceptance results. This follow-up
+did not run code tests, assertion probes or UI checks. The resize/scale and invalid
+repository scenarios in the deferred coverage matrix still need interactive
+acceptance on the rebuilt application.
