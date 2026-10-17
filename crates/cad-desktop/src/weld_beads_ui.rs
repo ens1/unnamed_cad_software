@@ -354,7 +354,6 @@ pub(crate) fn action(w: &mut Workspace, command: &str, data: Option<&serde_json:
             }
             Some("butt") => {
                 definition.profile = Profile::Butt;
-                definition.supports.clear();
                 submit_joint(w, definition, part)?;
                 w.status =
                     "Butt / miter profile selected; native contact is being evaluated".into();

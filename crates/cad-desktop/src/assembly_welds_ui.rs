@@ -855,10 +855,79 @@ fn live_field(w: &Workspace, element: &SemanticElement) -> Result<SemanticElemen
     Ok(fresh)
 }
 pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
-    live_field(w, element).ok()?;
-    editable(&parsed(w).ok()?)
-        .pointer(element.data["pointer"].as_str()?)
-        .cloned()
+    // Reading one field must not rebuild every geometry choice and joint preview.
+    // Mutations still use live_field; reads retain its identity and applicability
+    // checks, including invalid/disabled drafts whose current values remain visible.
+    if element.role != "assembly-weld-field"
+        || element.data["setter"] != "assembly-weld"
+        || element.data["contract"] != "tcad.presentation.assembly-weld-editor"
+        || element.data["version"] != 1
+        || !w.fields.contains_key(EDITOR)
+        || w.fields.contains_key("assembly-weld-deletion")
+    {
+        return None;
+    }
+    let pointer = element.data["pointer"].as_str()?;
+    if element.id != identity(w, pointer.trim_start_matches('/')) {
+        return None;
+    }
+    let fresh = metadata(w);
+    if ["document", "assembly", "weld", "editor", "source_revision"]
+        .into_iter()
+        .any(|key| fresh[key] != element.data[key])
+        || !source_is_current(w)
+    {
+        return None;
+    }
+    // source_is_current proved that the editor JSON equals this authored source.
+    let source = w
+        .session
+        .visible()
+        .assemblies
+        .get(editor_owner(w)?)?
+        .weld_beads
+        .get(w.fields.get(EDITOR)?)?;
+    Some(match pointer {
+        "/name" => json!(source.name),
+        "/suppressed" => json!(source.suppressed),
+        "/seam" => json!(source.seam),
+        "/profile" => json!(source.profile),
+        "/size" => json!(source.size),
+        "/reinforcement" => json!(source.reinforcement),
+        "/pattern" => json!(source.pattern),
+        "/start_offset" => json!(source.start_offset),
+        "/end_offset" => json!(source.end_offset),
+        "/finish" => json!(source.finish),
+        "/material" => json!(source.material),
+        "/pattern/length" | "/pattern/gap" => {
+            let Pattern::Intermittent { length, gap } = &source.pattern else {
+                return None;
+            };
+            json!(if pointer == "/pattern/length" {
+                length
+            } else {
+                gap
+            })
+        }
+        "/direction/0" | "/direction/1" | "/direction/2" | "/roll"
+            if !matches!(source.seam, SeamSource::ModelEdge { .. })
+                && source.supports.is_empty() =>
+        {
+            match pointer {
+                "/direction/0" => json!(source.direction[0]),
+                "/direction/1" => json!(source.direction[1]),
+                "/direction/2" => json!(source.direction[2]),
+                _ => json!(source.roll),
+            }
+        }
+        _ => {
+            let index = pointer.strip_prefix("/supports/")?.parse::<usize>().ok()?;
+            if pointer != format!("/supports/{index}") {
+                return None;
+            }
+            json!(source.supports.get(index)?)
+        }
+    })
 }
 pub fn field_is_invalid(w: &Workspace, element: &SemanticElement) -> bool {
     element.data["setter"].as_str() == Some("assembly-weld")
