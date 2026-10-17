@@ -2,6 +2,14 @@
 
 TCAD's original code is WTFPL. Dependencies retain their own licenses. This catalog covers the locked Cargo graph, including dependencies used only on other platforms and build tooling. License files supplied by each locked dependency are copied below. Git dependencies also record their exact source revision.
 
+The macOS application also bundles **GitHub CLI 2.83.2** (`tcad-gh`), from
+[`cli/cli` revision 560ea94fc7d63ab1f56ca47713599be5e8966fd3](https://github.com/cli/cli/tree/560ea94fc7d63ab1f56ca47713599be5e8966fd3).
+Its [MIT license](third-party-licenses/github-cli-2.83.2/LICENSE),
+[Go runtime license](third-party-licenses/github-cli-2.83.2/GO-LICENSE),
+and [module inventory and retained notices](third-party-licenses/github-cli-2.83.2/modules.json)
+are distributed with the bundle. See its [package record](third-party-licenses/github-cli-2.83.2/PACKAGE.txt)
+for archive pins and notice generation.
+
 | Dependency | Version | Declared license | Notices |
 |---|---|---|---|
 | Inflector | 0.11.4 | BSD-2-Clause | [PACKAGE.txt](third-party-licenses/Inflector-0.11.4/PACKAGE.txt) |

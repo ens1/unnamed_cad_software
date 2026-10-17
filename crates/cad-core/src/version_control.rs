@@ -14,7 +14,12 @@ pub trait VersionControl {
 pub struct Git;
 impl VersionControl for Git {
     fn command(&self, root: &Path, args: &[&str]) -> Result<String> {
-        let output = Command::new("git")
+        // Scope the helper to GitHub without changing the user's Git configuration.
+        // Other forges continue to use their configured credential helpers.
+        let mut command = crate::forge::GitHub::discover()
+            .and_then(|github| github.git_command())
+            .unwrap_or_else(|_| Command::new("git"));
+        let output = command
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
             .arg("-C")
@@ -24,9 +29,9 @@ impl VersionControl for Git {
         if output.status.success() {
             Ok(String::from_utf8_lossy(&output.stdout).into())
         } else {
-            Err(CadError::Invalid(
-                String::from_utf8_lossy(&output.stderr).into(),
-            ))
+            Err(CadError::Invalid(crate::forge::sanitize_diagnostic(
+                &String::from_utf8_lossy(&output.stderr),
+            )))
         }
     }
 }
@@ -359,7 +364,7 @@ pub fn execute(root: &Path, operation: &GitOperation) -> Result<GitReport> {
         )?,
     };
     Ok(GitReport {
-        output,
+        output: crate::forge::sanitize_diagnostic(&output),
         branch: Git
             .command(root, &["symbolic-ref", "--short", "HEAD"])
             .unwrap_or_else(|_| "Detached revision".into())
@@ -380,7 +385,7 @@ pub fn execute(root: &Path, operation: &GitOperation) -> Result<GitReport> {
             )
             .unwrap_or_default(),
         branches: Git.command(root, &["branch", "--list"])?,
-        remotes: Git.command(root, &["remote", "-v"])?,
+        remotes: crate::forge::sanitize_diagnostic(&Git.command(root, &["remote", "-v"])?),
         checkout_changed,
         merge_committed: merge_committed || matches!(operation, GitOperation::CommitMerge { .. }),
         recovery: merge_recovery::inspect(root)?,

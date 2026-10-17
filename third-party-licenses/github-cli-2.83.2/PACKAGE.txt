@@ -1,0 +1,24 @@
+GitHub CLI 2.83.2
+Source: https://github.com/cli/cli
+Revision: 560ea94fc7d63ab1f56ca47713599be5e8966fd3
+License: MIT
+Runtime: Go 1.25.5 (GO-LICENSE)
+Packaged executable: TCAD.app/Contents/MacOS/tcad-gh
+
+Official release: https://github.com/cli/cli/releases/tag/v2.83.2
+Checksums: https://github.com/cli/cli/releases/download/v2.83.2/gh_2.83.2_checksums.txt
+macOS arm64 archive SHA-256:
+ba3e0396ebbc8da17256144ddda503e4e79c8b502166335569f8390d6b75fa8d
+macOS amd64 archive SHA-256:
+6f1712519ccc768946791dc97da407bf188582345b73fef3d604d050ebf6f614
+
+scripts/package-macos.sh verifies the selected archive before extraction and
+ad-hoc signs the helper as nested application code. No unversioned host helper
+is copied into the packaged application.
+
+modules.json inventories the embedded Go dependency versions and checksums.
+modules/ retains their supplied license, notice, copyright and author files.
+Regenerate with scripts/collect-github-cli-notices.py and the extracted official
+helper binary. The script reads build metadata without executing the helper,
+downloads checksum-verified Go module source, and copies its notices. It does
+not run tests or dependency code.

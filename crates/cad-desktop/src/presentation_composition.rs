@@ -392,6 +392,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::component_fork_ui::semantics(w));
     elements.extend(crate::feature_transfer_ui::semantics(w));
     elements.extend(crate::git_ui::semantics(w));
+    elements.extend(crate::repositories_ui::semantics(w));
     elements.extend(crate::assembly_tree_ui::semantics(w));
     if let Some(sketch) = &w.sketch {
         elements.retain(|element| {
@@ -833,6 +834,11 @@ fn value_adapters() -> ValueAdapters {
         "git-ui",
         crate::git_ui::set_value,
         crate::git_ui::current_value,
+    );
+    adapters.register(
+        "repositories",
+        crate::repositories_ui::set_value,
+        crate::repositories_ui::current_value,
     );
     adapters.register(
         "assembly-tree",

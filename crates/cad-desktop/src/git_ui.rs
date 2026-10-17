@@ -722,6 +722,8 @@ pub fn set_value(
 }
 fn version_elements(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = vec![
+        action_element(w, "repositories", "Accounts and repositories…", json!({})),
+        action_element(w, "repositories.publish", "Publish this model…", json!({})),
         value_element(w, "message", "Commit message", "", None),
         action_element(w, "git.commit", "Save and commit", json!({})),
         value_element(w, "branch", "Branch name", "", None),
@@ -898,7 +900,9 @@ fn show_element(ui: &mut egui::Ui, w: &mut Workspace, element: SemanticElement) 
     .clicked()
     {
         let args = element.data["actions"][0]["arguments"].clone();
-        action(w, &element.commands[0], Some(&args));
+        if !crate::repositories_ui::action(w, &element.commands[0], Some(&args)) {
+            action(w, &element.commands[0], Some(&args));
+        }
     }
 }
 pub fn versions(ui: &mut egui::Ui, w: &mut Workspace) {

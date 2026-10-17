@@ -23,13 +23,18 @@ The worker executable must sit beside the desktop executable. `TCAD_WORKER` can 
 The macOS bundle contains `TCAD` (desktop), `tcad-worker` (geometry), and `tcad-cli` (command line). These names must remain distinct even on case-insensitive filesystems.
 `./scripts/package-macos.sh` builds a fresh bundle, ad-hoc signs its nested executables and completed resources, verifies the signatures, then replaces `dist/TCAD.app`. A failed build or signature check preserves the existing package. Fresh executable files prevent invalid cached code-signature pages when rebuilding on macOS.
 
-## Native kernel foundation
+## Git collaboration
 
 The 2026-10-16 [Git collaboration update](docs/git-collaboration.md) adds reviewed
 branches and merges, part/assembly forks, controlled component updates, selected
 feature transfer, and generated README model previews. Formatting, strict
 workspace linting, locked compilation and signed macOS packaging passed.
-Interactive acceptance remains with the user.
+Interactive acceptance remains with the user. **Workspace → Repositories and
+Accounts** adds browser sign-in, repository browsing and creation, model downloads,
+and reviewed publishing. New repositories default to private. The Mac bundle
+includes the pinned GitHub sign-in helper; no separate GitHub CLI install is needed.
+
+## Native kernel foundation
 
 The 2026-10-14 [kernel foundation update](docs/kernel-foundation-2026-10-14.md)
 adds connected tangent line/arc cap fillets and chamfers, uniform shells of

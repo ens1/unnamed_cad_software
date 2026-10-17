@@ -734,6 +734,9 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     });
     registry.register("manufacturing-editor", |ui, w, _| manufacturing(ui, w));
     registry.register("versions-editor", |ui, w, _| versions(ui, w));
+    registry.register("repositories-editor", |ui, w, _| {
+        crate::repositories_ui::show(ui, w)
+    });
     registry.register("feature-transfer-editor", |ui, w, _| {
         crate::feature_transfer_ui::show(ui, w)
     });
@@ -977,6 +980,10 @@ pub(crate) fn semantic_element(
     }
 }
 pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
+    if matches!(command, "repositories.cancel" | "repositories.auth-browser") {
+        crate::repositories_ui::action(w, command, Some(&element.data));
+        return;
+    }
     if crate::git_ui::busy(w) {
         w.status = "Wait for the Git operation to finish".into();
         return;
@@ -994,7 +1001,8 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         w.status = "Apply or cancel Settings before using another command".into();
         return;
     }
-    if crate::component_fork_ui::action(w, command, Some(&element.data))
+    if crate::repositories_ui::action(w, command, Some(&element.data))
+        || crate::component_fork_ui::action(w, command, Some(&element.data))
         || crate::git_ui::action(w, command, Some(&element.data))
         || crate::feature_transfer_ui::action(w, command, Some(&element.data))
         || crate::readme_preview_ui::action(w, command)
@@ -2133,6 +2141,10 @@ fn reference_repair_blocks(w: &mut Workspace, command: &str) -> bool {
 }
 
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if matches!(cmd, "repositories.cancel" | "repositories.auth-browser") {
+        crate::repositories_ui::action(w, cmd, None);
+        return;
+    }
     if crate::git_ui::busy(w) {
         w.status = "Wait for the Git operation to finish".into();
         return;
@@ -2165,7 +2177,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         w.status = "Apply or cancel Settings before using another command".into();
         return;
     }
-    if crate::workspace_controls::action(w, cmd)
+    if crate::repositories_ui::action(w, cmd, None)
+        || crate::workspace_controls::action(w, cmd)
         || crate::component_fork_ui::action(w, cmd, None)
         || crate::git_ui::action(w, cmd, None)
         || crate::feature_transfer_ui::action(w, cmd, None)
@@ -3489,6 +3502,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "assembly" => "Assembly",
             "configurations" => "Configurations and Equations",
             "versions" => "Design versions",
+            "repositories" => "Repositories and Accounts",
             "feature-transfer" => "Transfer Selected Features",
             "materials" => "Engineering Materials",
             "appearances" => "Appearance · Colors and Textures",
@@ -3642,6 +3656,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 "assembly" => assembly_editor(ui, w),
                 "component-insert" => crate::components_ui::show(ui, w),
                 "versions" => versions(ui, w),
+                "repositories" => crate::repositories_ui::show(ui, w),
                 "feature-transfer" => crate::feature_transfer_ui::show(ui, w),
                 "bom" => bom(ui, w),
                 "materials" => materials(ui, w),
