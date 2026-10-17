@@ -297,12 +297,18 @@ semantic controls through `component-fork`, `feature-transfer`, `git-ui`, and
 
 ## Validation
 
-On 2026-10-17, the forge-neutral repository and connection update passed workspace
-format checking, strict Clippy for all libraries and executables, whitespace
-checking, and package-script syntax checking. This includes the new SSH
-passphrase helper. No tests, live credential operations, repository transfers,
-app launches, or manual acceptance checks were run. The implementation retains
-the existing dependency future-compatibility warning noted below.
+On 2026-10-17, forge-neutral repository and connection checkpoint `c437165` passed:
+
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --lib --bins --locked -- -D warnings`
+- `git diff --check` and `sh -n scripts/package-macos.sh`
+- `scripts/package-macos.sh`: locked workspace build, property-list linting,
+  pinned GitHub helper checksum, and strict signatures for all five bundled
+  executables and the completed `dist/TCAD.app`.
+
+No tests, live credential operations, repository transfers, app launches, or
+manual acceptance checks were run. The implementation retains the existing
+dependency future-compatibility warning noted below.
 
 On 2026-10-16, implementation checkpoint `14a0dcc` passed:
 
