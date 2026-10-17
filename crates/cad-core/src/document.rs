@@ -1218,6 +1218,10 @@ pub struct Document {
     #[serde(default)]
     pub libraries: BTreeMap<Id, crate::library::ComponentLink>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub component_forks: BTreeMap<Id, crate::component_fork::Lineage>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub feature_transfers: BTreeMap<Id, crate::feature_transfer::Receipt>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub active_configurations: BTreeMap<Id, Id>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sensors: BTreeMap<Id, crate::sensors::Definition>,
@@ -1250,6 +1254,8 @@ impl Document {
         )
     }
     pub fn validate(&self) -> Result<()> {
+        crate::component_fork::validate(self)?;
+        crate::feature_transfer::validate(self)?;
         for origin in self
             .parts
             .values()
@@ -1721,6 +1727,8 @@ impl Document {
             comments: vec![],
             properties: BTreeMap::new(),
             libraries: BTreeMap::new(),
+            component_forks: BTreeMap::new(),
+            feature_transfers: BTreeMap::new(),
             active_configurations: BTreeMap::new(),
             sensors: BTreeMap::new(),
             tolerance_stacks: BTreeMap::new(),

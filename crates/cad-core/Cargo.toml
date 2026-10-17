@@ -13,3 +13,4 @@ sha2.workspace = true
 nalgebra.workspace = true
 ttf-parser = "=0.25.1"
 unicode-general-category = "=1.1.0"
+png = "=0.18.1"

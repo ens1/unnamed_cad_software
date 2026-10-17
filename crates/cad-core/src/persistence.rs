@@ -98,6 +98,9 @@ impl ProjectStore for FileStore {
         Ok(manifest.document)
     }
     fn save(&self, path: &Path, doc: &Document) -> Result<()> {
+        if crate::release::is_release_source(path) {
+            return Err(CadError::Invalid("Released source is read-only. Use Save As to create a working copy outside the release folder".into()));
+        }
         doc.validate()?;
         let root = project_root(path);
         fs::create_dir_all(&root)?;

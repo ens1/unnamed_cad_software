@@ -4,7 +4,6 @@ use cad_core::{
     commands::Command,
     persistence::{FileStore, ProjectStore},
     presentation::{Region, SemanticElement},
-    version_control::{Git, VersionControl},
     *,
 };
 use egui::{Color32, RichText, Stroke};
@@ -735,6 +734,12 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     });
     registry.register("manufacturing-editor", |ui, w, _| manufacturing(ui, w));
     registry.register("versions-editor", |ui, w, _| versions(ui, w));
+    registry.register("feature-transfer-editor", |ui, w, _| {
+        crate::feature_transfer_ui::show(ui, w)
+    });
+    registry.register("component-fork-editor", |ui, w, _| {
+        crate::component_fork_ui::show(ui, w)
+    });
     registry.register("review-editor", |ui, w, _| comments(ui, w));
     registry.register("bom-view", |ui, w, _| bom(ui, w));
     registry.register("presentation-editor", |ui, w, _| presentation_editor(ui, w));
@@ -972,6 +977,10 @@ pub(crate) fn semantic_element(
     }
 }
 pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
+    if crate::git_ui::busy(w) {
+        w.status = "Wait for the Git operation to finish".into();
+        return;
+    }
     if crate::drawing_interaction_ui::active(w)
         && !matches!(command, "draft.cancel" | "operation.cancel" | "tool.cancel")
     {
@@ -983,6 +992,13 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
     }
     if w.settings.is_some() {
         w.status = "Apply or cancel Settings before using another command".into();
+        return;
+    }
+    if crate::component_fork_ui::action(w, command, Some(&element.data))
+        || crate::git_ui::action(w, command, Some(&element.data))
+        || crate::feature_transfer_ui::action(w, command, Some(&element.data))
+        || crate::readme_preview_ui::action(w, command)
+    {
         return;
     }
     if crate::document_identity_ui::semantic_action(w, command, &element.data) {
@@ -1549,6 +1565,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 let key = format!("presentation-field:{}:{editor_generation}", element.id);
                 let keep_invalid_text = w.fields.contains_key(&buffer_error_key)
                     || crate::assembly_tools_ui::field_is_invalid(w, element)
+                    || crate::component_fork_ui::field_is_invalid(w, element)
                     || crate::properties_ui::field_is_invalid(w, element)
                     || crate::sensors_ui::field_is_invalid(w, element)
                     || crate::appearances_ui::field_is_invalid(w, element)
@@ -1702,6 +1719,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         crate::materials_ui::field_error(w, element, error.clone());
         crate::components_ui::field_error(w, element, error.clone());
         crate::assembly_tools_ui::field_error(w, element, error.clone());
+        crate::component_fork_ui::field_error(w, element, error.clone());
         crate::assembly_welds_ui::field_error(w, element, error.clone());
         crate::operation_editor_ui::field_error(w, element, error.clone());
         crate::structural_member_ui::field_error(w, element, error.clone());
@@ -1726,6 +1744,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::materials_ui::field_error(w, element, None);
                 crate::components_ui::field_error(w, element, None);
                 crate::assembly_tools_ui::field_error(w, element, None);
+                crate::component_fork_ui::field_error(w, element, None);
                 crate::assembly_welds_ui::field_error(w, element, None);
                 crate::appearances_ui::field_error(w, element, None);
                 crate::operation_editor_ui::field_error(w, element, None);
@@ -1748,6 +1767,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 crate::materials_ui::field_error(w, element, Some(error.to_string()));
                 crate::components_ui::field_error(w, element, Some(error.to_string()));
                 crate::assembly_tools_ui::field_error(w, element, Some(error.to_string()));
+                crate::component_fork_ui::field_error(w, element, Some(error.to_string()));
                 crate::assembly_welds_ui::field_error(w, element, Some(error.to_string()));
                 w.status = error.to_string();
                 crate::appearances_ui::field_error(w, element, Some(error.to_string()));
@@ -2113,6 +2133,10 @@ fn reference_repair_blocks(w: &mut Workspace, command: &str) -> bool {
 }
 
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if crate::git_ui::busy(w) {
+        w.status = "Wait for the Git operation to finish".into();
+        return;
+    }
     if w.settings.is_none() && !crate::drawing_interaction_ui::active(w) {
         if cmd == "drawings" {
             crate::drawing_ui::open_workspace(w);
@@ -2142,6 +2166,10 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         return;
     }
     if crate::workspace_controls::action(w, cmd)
+        || crate::component_fork_ui::action(w, cmd, None)
+        || crate::git_ui::action(w, cmd, None)
+        || crate::feature_transfer_ui::action(w, cmd, None)
+        || crate::readme_preview_ui::action(w, cmd)
         || crate::sketch3d_ui::action(w, cmd, None)
         || crate::document_identity_ui::action(w, cmd)
         || crate::sketch_overlay::action(w, cmd)
@@ -2482,7 +2510,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         "presentation" => w.open_editor("presentation"),
         "versions" => {
             w.open_editor("versions");
-            git(w, &["status", "--short"]);
+            crate::git_ui::action(w, "git.refresh", None);
         }
         "bom" | "materials" | "drawings" | "manufacturing" | "comments" | "controls"
         | "commands" => w.open_editor(cmd),
@@ -2503,7 +2531,11 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         _ => w.status = format!("Unknown command: {cmd}"),
     }
 }
-fn save(w: &mut Workspace, choose: bool) -> bool {
+pub(crate) fn save(w: &mut Workspace, choose: bool) -> bool {
+    if crate::git_ui::busy(w) {
+        w.status = "Wait for the Git operation to finish before saving".into();
+        return false;
+    }
     if (choose || w.project.is_none())
         && w.settings.is_none()
         && w.sketch.is_none()
@@ -2607,6 +2639,19 @@ pub(crate) fn save_now(w: &mut Workspace, choose: bool) -> bool {
     false
 }
 fn save_committed_to(w: &mut Workspace, path: std::path::PathBuf) -> bool {
+    if crate::git_ui::busy(w) {
+        w.status = "Wait for the Git operation to finish before saving".into();
+        return false;
+    }
+    if crate::git_ui::recovery_pending(w) && cad_core::persistence::project_root(&path) == w.root()
+    {
+        w.status = "Finish merge recovery in Versions, or use Save As in a new folder".into();
+        return false;
+    }
+    if cad_core::release::is_release_source(&path) {
+        w.status = "Use Save As in a new folder to edit released source".into();
+        return false;
+    }
     if path.exists() {
         match FileStore.load(&path) {
             Ok(on_disk) if on_disk.fingerprint() != w.saved_source => {
@@ -2634,7 +2679,11 @@ fn save_committed_to(w: &mut Workspace, path: std::path::PathBuf) -> bool {
     match result {
         Ok(()) => {
             let saved_path = path.display().to_string();
+            let project_changed = w.project.as_ref() != Some(&path);
             w.project = Some(path);
+            if project_changed {
+                crate::git_ui::reset(w);
+            }
             w.rendered_key.clear();
             w.saved_source = w.session.committed.fingerprint();
             w.status = if w.session.draft.is_some() {
@@ -3390,18 +3439,6 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
     w.view.active_node = Some(feature.id.clone());
     feature_dialog(w, Some(feature));
 }
-fn git(w: &mut Workspace, args: &[&str]) {
-    if w.project.is_none() {
-        w.status = "Save the project before using Git".into();
-        return;
-    }
-    w.jobs.submit(crate::background::Job::Git {
-        root: w.root(),
-        args: args.iter().map(|s| s.to_string()).collect(),
-    });
-    w.status = "Git operation running".into();
-}
-
 fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
     if w.dialog.is_none() && w.sketch.is_some() {
         w.open_editor("sketch");
@@ -3452,6 +3489,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "assembly" => "Assembly",
             "configurations" => "Configurations and Equations",
             "versions" => "Design versions",
+            "feature-transfer" => "Transfer Selected Features",
             "materials" => "Engineering Materials",
             "appearances" => "Appearance · Colors and Textures",
             "drawings" => "Drawings",
@@ -3604,6 +3642,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 "assembly" => assembly_editor(ui, w),
                 "component-insert" => crate::components_ui::show(ui, w),
                 "versions" => versions(ui, w),
+                "feature-transfer" => crate::feature_transfer_ui::show(ui, w),
                 "bom" => bom(ui, w),
                 "materials" => materials(ui, w),
                 "properties" => crate::properties_ui::show(ui, w),
@@ -3975,6 +4014,10 @@ fn presentation_editor(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::presentation_resources::show(ui, w);
 }
 fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
+    if w.component_fork.is_some() {
+        crate::component_fork_ui::show(ui, w);
+        return;
+    }
     if crate::assembly_tools_ui::active(w) {
         crate::assembly_tools_ui::show(ui, w);
         return;
@@ -4249,11 +4292,12 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
                                 w.isolate();
                             }
                         }
-                        if ui.button("Make unique").clicked() {
-                            w.dispatch(Command::MakeUnique {
-                                assembly: assembly_id.clone(),
-                                instance: i.id.clone(),
-                            });
+                        if ui.button("Fork / Make independent").clicked() {
+                            let paths = cad_core::component_fork::occurrence_paths(&doc, &assembly_id, &i.id);
+                            match paths {
+                                Ok(paths) if paths.len() == 1 => crate::component_fork_ui::begin(w, &i.definition, cad_core::component_fork::Target::Occurrence { path: paths[0].clone() }),
+                                _ => w.status = "Select the specific occurrence in the assembly tree, then use Fork Part or Assembly".into(),
+                            }
                         }
                         if ui.button("Duplicate shared").clicked() {
                             let mut clone = i.clone();
@@ -4489,207 +4533,12 @@ fn comments(ui: &mut egui::Ui, w: &mut Workspace) {
     });
 }
 fn library_editor(ui: &mut egui::Ui, w: &mut Workspace) {
-    ui.label("Component references retain the exact source revision and resource bytes. Updates enter a preview; linked definitions stay immutable. Make an instance unique to edit its geometry independently.");
-    if ui.button("Link local component project…").clicked()
-        && let Some(source) = rfd::FileDialog::new()
-            .add_filter("TCAD project", &["json"])
-            .pick_file()
-    {
-        let mut document = w.session.visible().clone();
-        match cad_core::library::link(&mut document, &w.root(), &source, None, None) {
-            Ok(_) => {
-                match cad_core::library::replace_command(w.session.visible(), document, &w.root()) {
-                    Ok(command) => w.dispatch(command),
-                    Err(e) => w.status = e.to_string(),
-                }
-            }
-            Err(e) => w.status = e.to_string(),
-        }
-    }
-    let links = w
-        .session
-        .visible()
-        .libraries
-        .values()
-        .cloned()
-        .collect::<Vec<_>>();
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        for link in links {
-            ui.push_id(&link.id, |ui| {
-                ui.separator();
-                ui.strong(&link.name);
-                ui.small(format!(
-                    "Source revision {} · {}",
-                    link.source_revision,
-                    &link.source_sha256[..link.source_sha256.len().min(16)]
-                ));
-                ui.small(&link.source_path);
-                if let Some(element) = cad_core::library::semantic(w.session.visible())
-                    .into_iter()
-                    .find(|element| element.relationships.contains(&link.id))
-                {
-                    crate::presentation_controls::label(
-                        ui,
-                        &element.id,
-                        &element.role,
-                        &[],
-                        &element.state,
-                        element.value.as_deref().unwrap_or_default(),
-                    );
-                }
-                ui.horizontal(|ui| {
-                    if ui.button("Check update").clicked() {
-                        w.status = match cad_core::library::available_update(&link, &w.root()) {
-                            Ok(Some((revision, _))) => {
-                                format!("{} has source revision {revision} available", link.name)
-                            }
-                            Ok(None) => "The exact source snapshot is current".into(),
-                            Err(e) => e.to_string(),
-                        };
-                    }
-                    if ui.button("Preview update").clicked() {
-                        let mut document = w.session.visible().clone();
-                        match cad_core::library::link(
-                            &mut document,
-                            &w.root(),
-                            std::path::Path::new(&link.source_path),
-                            None,
-                            Some(&link.id),
-                        ) {
-                            Ok(_) => match cad_core::library::replace_command(
-                                w.session.visible(),
-                                document,
-                                &w.root(),
-                            ) {
-                                Ok(command) => w.dispatch(command),
-                                Err(e) => w.status = e.to_string(),
-                            },
-                            Err(e) => w.status = e.to_string(),
-                        }
-                    }
-                    if ui.button("Locate source…").clicked()
-                        && let Some(source) = rfd::FileDialog::new()
-                            .add_filter("TCAD project", &["json"])
-                            .pick_file()
-                    {
-                        let mut document = w.session.visible().clone();
-                        match cad_core::library::link(
-                            &mut document,
-                            &w.root(),
-                            &source,
-                            None,
-                            Some(&link.id),
-                        ) {
-                            Ok(_) => match cad_core::library::replace_command(
-                                w.session.visible(),
-                                document,
-                                &w.root(),
-                            ) {
-                                Ok(command) => w.dispatch(command),
-                                Err(e) => w.status = e.to_string(),
-                            },
-                            Err(e) => w.status = e.to_string(),
-                        }
-                    }
-                });
-            });
-        }
-    });
+    crate::git_ui::libraries(ui, w);
 }
 fn versions(ui: &mut egui::Ui, w: &mut Workspace) {
-    ui.label("Local Git repositories work without an account. Commit the saved, committed design; use branches for alternatives.");
-    ui.horizontal_wrapped(|ui| {
-        if ui.button("Initialize repository").clicked() {
-            git(w, &["init"]);
-        }
-        if ui.button("Status").clicked() {
-            git(w, &["status", "--short"]);
-        }
-        if ui.button("History").clicked() {
-            git(
-                w,
-                &["log", "-20", "--date=short", "--format=%h  %ad  %an  %s"],
-            );
-        }
-        if ui.button("Branches").clicked() {
-            git(w, &["branch", "--list"]);
-        }
-        if ui.button("Fetch remotes").clicked() {
-            git(w, &["fetch", "--all"]);
-        }
-        if ui.button("Push current branch").clicked() {
-            git(w, &["push"]);
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.text_edit_singleline(&mut w.commit_message);
-        if ui.button("Save and commit").clicked() {
-            let saved = save(w, false);
-            if saved && !w.commit_message.trim().is_empty() && w.project.is_some() {
-                let message = w.commit_message.clone();
-                let manifest = w
-                    .project
-                    .as_ref()
-                    .filter(|p| p.extension().is_some_and(|e| e == "json"))
-                    .and_then(|p| p.file_name())
-                    .and_then(|p| p.to_str())
-                    .unwrap_or("project.json")
-                    .to_string();
-                w.jobs.submit(crate::background::Job::Commit {
-                    root: w.root(),
-                    manifest,
-                    message,
-                });
-                w.status = "Saving design commit".into();
-            }
-        }
-    });
-    ui.horizontal(|ui|{ui.text_edit_singleline(&mut w.branch_name);if ui.button("Create branch").clicked(){let branch=w.branch_name.clone();git(w,&["branch","--",&branch]);}
-if ui.button("Switch branch / revision").clicked(){if w.session.draft.is_some()||w.saved_source!=w.session.committed.fingerprint(){w.status="Save committed changes and apply or cancel the draft before switching revisions".into();}else{let branch=w.branch_name.clone();match Git.command(&w.root(),&["switch","--",&branch]){Ok(text)=>{w.git_text=text;if let Some(path)=w.project.clone(){match FileStore.load(&path){Ok(d)=>w.replace(d,Some(path)),Err(e)=>w.status=e.to_string()}}},Err(e)=>w.status=e.to_string()}}}
-if ui.button("Compare revision").clicked(){let revision=w.branch_name.clone();let root=crate::recovery_directory().join("comparisons").join(cad_core::id());match cad_core::version_control::snapshot_resources(&w.root(),&revision,&root){Ok(d)=>compare(w,d,root),Err(e)=>w.status=e.to_string()}}});
-    ui.horizontal(|ui| {
-        if ui.button("Compare project…").clicked()
-            && let Some(path) = rfd::FileDialog::new()
-                .add_filter("TCAD project", &["json"])
-                .pick_file()
-        {
-            match FileStore.load(&path) {
-                Ok(d) => compare(w, d, cad_core::persistence::project_root(&path)),
-                Err(e) => w.status = e.to_string(),
-            }
-        }
-        if ui.button("Clear comparison").clicked() {
-            w.compare = None;
-            w.compare_document = None;
-            w.rendered_key.clear();
-        }
-    });
-    if let Some(d) = &w.compare_document {
-        ui.label(format!("Blue geometry: {} revision {}", d.name, d.revision));
-        if let Ok(changes) = cad_core::version_control::diff(d, &w.session.committed) {
-            egui::ScrollArea::vertical()
-                .id_salt("semantic-diff")
-                .max_height(180.)
-                .show(ui, |ui| {
-                    for c in changes {
-                        ui.small(&c.path);
-                        ui.monospace(format!(
-                            "{} → {}",
-                            c.before.map(|v| v.to_string()).unwrap_or("∅".into()),
-                            c.after.map(|v| v.to_string()).unwrap_or("∅".into())
-                        ));
-                    }
-                });
-        }
-    }
-    egui::ScrollArea::both()
-        .id_salt("git-output")
-        .max_height(220.)
-        .show(ui, |ui| {
-            ui.monospace(&w.git_text);
-        });
+    crate::git_ui::versions(ui, w);
 }
-fn compare(w: &mut Workspace, d: Document, root: PathBuf) {
+pub(crate) fn compare(w: &mut Workspace, d: Document, root: PathBuf) {
     let identity = RequestIdentity {
         protocol: PROTOCOL_VERSION,
         generation: w.session.generation,

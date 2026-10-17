@@ -85,6 +85,8 @@ pub struct Preferences {
     pub watch_presentation_files: bool,
     pub recovery_enabled: bool,
     pub recovery_interval_seconds: u64,
+    /// Generate a saved-model README preview before a TCAD Git commit.
+    pub readme_preview_on_commit: bool,
     pub default_model: ModelSettings,
     /// Portable engineering snapshot copied into new documents, outside project identity scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -109,6 +111,7 @@ impl Default for Preferences {
             watch_presentation_files: true,
             recovery_enabled: true,
             recovery_interval_seconds: 2,
+            readme_preview_on_commit: false,
             default_model: ModelSettings::default(),
             default_material: None,
             default_finish: None,

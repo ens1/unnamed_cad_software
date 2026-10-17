@@ -388,6 +388,10 @@ impl Registry {
 /// One snapshot supplies the native workspace, binding catalog and user templates.
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = cad_core::presentation::project(&w.session, w.view.active_part.as_deref());
+    elements.extend(crate::readme_preview_ui::semantics(w));
+    elements.extend(crate::component_fork_ui::semantics(w));
+    elements.extend(crate::feature_transfer_ui::semantics(w));
+    elements.extend(crate::git_ui::semantics(w));
     elements.extend(crate::assembly_tree_ui::semantics(w));
     if let Some(sketch) = &w.sketch {
         elements.retain(|element| {
@@ -810,6 +814,26 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
 
 fn value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "readme-preview",
+        crate::readme_preview_ui::set_value,
+        crate::readme_preview_ui::current_value,
+    );
+    adapters.register(
+        "component-fork",
+        crate::component_fork_ui::set_value,
+        crate::component_fork_ui::current_value,
+    );
+    adapters.register(
+        "feature-transfer",
+        crate::feature_transfer_ui::set_value,
+        crate::feature_transfer_ui::current_value,
+    );
+    adapters.register(
+        "git-ui",
+        crate::git_ui::set_value,
+        crate::git_ui::current_value,
+    );
     adapters.register(
         "assembly-tree",
         crate::assembly_tree_ui::set_value,

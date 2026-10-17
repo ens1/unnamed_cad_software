@@ -16,6 +16,16 @@ pub struct ReleaseManifest {
     pub accuracy: crate::tolerance::Accuracy,
     pub artifacts: BTreeMap<String, String>,
 }
+/// A released source snapshot is opened for inspection. Save As creates working source elsewhere.
+pub fn is_release_source(path: &Path) -> bool {
+    let root = crate::persistence::project_root(path);
+    root.file_name().is_some_and(|name| name == "source")
+        && root
+            .parent()
+            .and_then(|parent| std::fs::read(parent.join("release.json")).ok())
+            .and_then(|bytes| serde_json::from_slice::<ReleaseManifest>(&bytes).ok())
+            .is_some()
+}
 /// Immutable local release folder: source, exchange files and a hash manifest.
 pub fn create(
     service: &mut impl GeometryService,

@@ -12,6 +12,7 @@ mod body_inventory;
 mod cad_ui;
 mod camera_views_ui;
 mod command_palette;
+mod component_fork_ui;
 mod component_pattern_ui;
 mod components_ui;
 mod configuration_ui;
@@ -35,7 +36,9 @@ mod exploded_views_ui;
 mod fabrication_sources_ui;
 mod fabrication_ui;
 mod feature_order_ui;
+mod feature_transfer_ui;
 mod finish_library_ui;
+mod git_ui;
 mod graph_ui;
 mod history;
 mod holes_ui;
@@ -55,6 +58,7 @@ mod presentation_resources;
 mod production_ui;
 mod properties_ui;
 mod quantity_display;
+mod readme_preview_ui;
 mod reference_curves_ui;
 mod reference_repair_ui;
 mod reference_ui;
@@ -144,6 +148,10 @@ pub struct Workspace {
     pub reference_repair: Option<reference_repair_ui::State>,
     pub assembly_motion: Option<assembly_motion_ui::State>,
     pub assembly_copy: Option<assembly_copy_ui::State>,
+    pub component_fork: Option<component_fork_ui::State>,
+    pub feature_transfer: Option<feature_transfer_ui::State>,
+    pub git_ui: git_ui::State,
+    pub readme_preview: readme_preview_ui::State,
     pub sketch_analysis: sketch_analysis_ui::State,
     pub drawing_interaction: drawing_interaction_ui::State,
     pub drawing_worker: drawing_interaction_ui::PaperWorker,
@@ -192,8 +200,6 @@ pub struct Workspace {
     pub viewport_size: [u32; 2],
     pub viewport_pixels_per_point: f32,
     pub git_text: String,
-    pub commit_message: String,
-    pub branch_name: String,
     pub before_isolation: Option<PresentationState>,
     pub sketch: Option<sketch::EditingSketch>,
     pub sketch3d: Option<sketch3d_ui::State>,
@@ -299,6 +305,10 @@ impl Workspace {
             reference_repair: None,
             assembly_motion: None,
             assembly_copy: None,
+            component_fork: None,
+            feature_transfer: None,
+            git_ui: Default::default(),
+            readme_preview: Default::default(),
             sketch_analysis: sketch_analysis_ui::State::default(),
             drawing_interaction: drawing_interaction_ui::State::default(),
             drawing_worker: drawing_interaction_ui::PaperWorker::new(),
@@ -344,8 +354,6 @@ impl Workspace {
             viewport_size: [1000, 800],
             viewport_pixels_per_point: 1.,
             git_text: String::new(),
-            commit_message: String::new(),
-            branch_name: String::new(),
             before_isolation: None,
             sketch: None,
             sketch3d: None,
@@ -368,6 +376,8 @@ impl Workspace {
             compare_document: None,
             compare_worker: worker::WorkerClient::new(),
         };
+        workspace.readme_preview.include_on_commit =
+            workspace.application_preferences.readme_preview_on_commit;
         crate::presentation_resources::initialize(&mut workspace, reset);
         if !reset {
             workspace.presentation_resources.watch =
@@ -447,6 +457,10 @@ impl Workspace {
         navigation::stop(self);
     }
     pub fn dispatch(&mut self, c: cad_core::commands::Command) {
+        if git_ui::busy(self) {
+            self.status = "Wait for the Git operation to finish before editing".into();
+            return;
+        }
         if drawing_interaction_ui::active(self) {
             self.status =
                 "Finish or cancel the current paper gesture before changing source".into();
@@ -472,6 +486,13 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if !component_fork_ui::current_source_is_valid(self)
+            || !feature_transfer_ui::ready_to_confirm(self)
+        {
+            self.status = "Resolve the fork or feature transfer before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !sketch3d_ui::ready_to_confirm(self) {
             return;
         }
@@ -651,6 +672,8 @@ impl Workspace {
         match self.session.apply() {
             Ok(()) => {
                 sketch3d_ui::cancel(self);
+                component_fork_ui::finish(self);
+                feature_transfer_ui::cancel(self);
                 let save_as = document_identity_ui::take_after_confirm(self);
                 let destination = ui::take_save_as_destination(self);
                 assembly_tools_ui::cancel(self);
@@ -690,6 +713,9 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        git_ui::cancel_preview(self);
+        component_fork_ui::cancel(self);
+        feature_transfer_ui::cancel(self);
         sketch3d_ui::cancel(self);
         quantity_display::clear_errors(self);
         document_identity_ui::cancel(self);
@@ -737,10 +763,15 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn replace(&mut self, d: Document, path: Option<PathBuf>) {
+        if git_ui::busy(self) {
+            self.status = "Wait for Git to finish before opening another project".into();
+            return;
+        }
         settings::cancel(self);
         self.cancel();
         self.session = Session::new(d, BACKEND);
         self.project = path;
+        git_ui::reset(self);
         let navigation = self.view.navigation.clone();
         self.view = PresentationState {
             navigation,
@@ -834,6 +865,9 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        git_ui::cancel_preview(self);
+        component_fork_ui::cancel(self);
+        feature_transfer_ui::cancel(self);
         sketch3d_ui::cancel(self);
         quantity_display::clear_errors(self);
         document_identity_ui::cancel(self);
@@ -917,6 +951,13 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn confirm_tool(&mut self) {
+        if !component_fork_ui::current_source_is_valid(self)
+            || !feature_transfer_ui::ready_to_confirm(self)
+        {
+            self.status = "Resolve the fork or feature transfer before applying".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !sketch3d_ui::ready_to_confirm(self) {
             return;
         }
@@ -1263,6 +1304,9 @@ fn setup(
     render_appearance::setup(&mut commands, &mut images, &mut appearance);
 }
 fn poll_workers(mut w: ResMut<Workspace>) {
+    git_ui::poll(&mut w);
+    feature_transfer_ui::poll(&mut w);
+    readme_preview_ui::poll(&mut w);
     sketch3d_ui::poll(&mut w);
     sketch_analysis_ui::poll(&mut w);
     assembly_motion_ui::poll(&mut w);

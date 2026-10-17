@@ -23,6 +23,8 @@ struct Expected {
     materials: BTreeMap<Id, String>,
     finishes: BTreeMap<Id, String>,
     resources: BTreeMap<Id, crate::Resource>,
+    component_forks: BTreeMap<Id, crate::component_fork::Lineage>,
+    feature_transfers: BTreeMap<Id, crate::feature_transfer::Receipt>,
 }
 fn invalid(message: impl ToString) -> CadError {
     CadError::Invalid(format!("Component snapshot: {}", message.to_string()))
@@ -65,6 +67,9 @@ fn expected(document: &Document, link: &ComponentLink, json: &str) -> Result<Exp
             "The linked source definition does not match its namespaced snapshot identity",
         ));
     }
+    if link.definition_closure {
+        super::retain_definition_closure(&mut namespaced, &link.definition)?;
+    }
     let mut definitions = digest_map(namespaced.parts.iter())?;
     definitions.extend(digest_map(namespaced.assemblies.iter())?);
     for resource in namespaced.resources.values_mut() {
@@ -79,6 +84,8 @@ fn expected(document: &Document, link: &ComponentLink, json: &str) -> Result<Exp
         materials: digest_map(namespaced.materials.iter())?,
         finishes: digest_map(namespaced.finishes.iter())?,
         resources: namespaced.resources,
+        component_forks: namespaced.component_forks,
+        feature_transfers: namespaced.feature_transfers,
     })
 }
 fn matches_expected(
@@ -87,6 +94,20 @@ fn matches_expected(
     expected: &Expected,
     require_maps: bool,
 ) -> Result<()> {
+    for (id, lineage) in &expected.component_forks {
+        if document.component_forks.get(id) != Some(lineage) {
+            return Err(invalid(
+                "Linked fork ancestry differs from its original source snapshot",
+            ));
+        }
+    }
+    for (id, receipt) in &expected.feature_transfers {
+        if document.feature_transfers.get(id) != Some(receipt) {
+            return Err(invalid(
+                "Linked feature transfer history differs from its original source snapshot",
+            ));
+        }
+    }
     if link.pinned_definitions != expected.definitions {
         return Err(invalid(
             "Pinned component definitions do not match the verified source snapshot",
@@ -159,6 +180,25 @@ fn read_snapshot(document: &Document, link: &ComponentLink, root: &Path) -> Resu
     }
     String::from_utf8(bytes).map_err(|_| invalid("The saved source snapshot is not UTF-8 JSON"))
 }
+/// Recover exact upstream source identity and its source-to-local correspondence.
+/// Forking a linked component must use this evidence rather than treating the
+/// namespaced host copy as an unrelated upstream design.
+pub fn verified_source(
+    document: &Document,
+    root: &Path,
+    link_id: &str,
+) -> Result<(Document, BTreeMap<Id, Id>)> {
+    let link = document
+        .libraries
+        .get(link_id)
+        .ok_or_else(|| invalid("Unknown component link"))?;
+    let json = read_snapshot(document, link, root)?;
+    let expected = expected(document, link, &json)?;
+    matches_expected(document, link, &expected, true)?;
+    let source: Document = serde_json::from_str(&json)?;
+    let (_, mapping) = namespace_snapshot(&source, &link.id)?;
+    Ok((source, mapping))
+}
 /// Populate legacy optional evidence only when the exact original snapshot and
 /// all current imported definitions agree. Unavailable evidence stays read-only.
 pub fn hydrate_pins(document: &mut Document, root: &Path) -> Vec<Id> {
@@ -194,6 +234,9 @@ fn valid_hash(hash: &str) -> bool {
     hash.len() == 64 && hash.bytes().all(|c| c.is_ascii_hexdigit())
 }
 pub(super) fn validate_link_record(document: &Document, link: &ComponentLink) -> Result<()> {
+    if let Some(git) = &link.git_source {
+        git.validate()?;
+    }
     fn valid_id(id: &str) -> bool {
         !id.is_empty()
             && id.len() <= 256
@@ -364,6 +407,29 @@ fn unchanged_links(before: &Document, after: &Document, allowed: &BTreeSet<Id>) 
         if serde_json::to_value(link)? != serde_json::to_value(next)? {
             return Err(invalid(
                 "Linked-source pin evidence can change only through an explicit verified component update",
+            ));
+        }
+        for definition in link.pinned_definitions.keys() {
+            if before.component_forks.get(definition) != after.component_forks.get(definition) {
+                return Err(invalid(
+                    "Linked fork ancestry can change only through an explicit component update",
+                ));
+            }
+        }
+        let receipts = |document: &Document| {
+            document
+                .feature_transfers
+                .iter()
+                .filter(|(_, receipt)| {
+                    link.pinned_definitions
+                        .contains_key(&receipt.target_definition)
+                })
+                .map(|(id, receipt)| (id.clone(), receipt.clone()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        if receipts(before) != receipts(after) {
+            return Err(invalid(
+                "Linked feature transfer history can change only through an explicit component update",
             ));
         }
         if before.resources.get(&link.snapshot_resource)

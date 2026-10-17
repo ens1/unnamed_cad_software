@@ -21,6 +21,7 @@ fn run() -> Result<()> {
         let identity = match &request {
             WorkerRequest::DisplayMesh { request } => Some(request.identity.clone()),
             WorkerRequest::AnalyzeSketch { identity, .. }
+            | WorkerRequest::ReadmePreview { identity, .. }
             | WorkerRequest::SolveSketch3d { identity, .. }
             | WorkerRequest::ManipulateAssembly { identity, .. }
             | WorkerRequest::Evaluate { identity, .. }
@@ -30,6 +31,24 @@ fn run() -> Result<()> {
             WorkerRequest::Shutdown => break,
         };
         let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match request {
+            WorkerRequest::ReadmePreview {
+                identity,
+                document,
+                project_root,
+                display_tolerance_mm,
+            } => {
+                let evaluation = evaluator.evaluate(
+                    identity.clone(),
+                    &document,
+                    std::path::Path::new(&project_root),
+                    display_tolerance_mm,
+                )?;
+                let preview = cad_core::readme_preview::build(&document, &evaluation)?;
+                Ok(WorkerResponse::ReadmePreview {
+                    identity,
+                    preview: Box::new(preview),
+                })
+            }
             WorkerRequest::DisplayMesh { request } => display
                 .mesh(*request, evaluator.fingerprint())
                 .map(|output| WorkerResponse::DisplayMesh {

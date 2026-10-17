@@ -1004,6 +1004,11 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if !crate::component_fork_ui::current_source_is_valid(w)
+        || !crate::feature_transfer_ui::current_source_is_valid(w)
+    {
+        return Some("Resolve the fork or feature transfer before applying");
+    }
     if !crate::sketch3d_ui::current_source_is_valid(w) {
         return Some("Finish the current 3D sketch gesture and correct its fields before applying");
     }
@@ -1258,6 +1263,8 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Manufacturing…", "manufacturing"),
                 ("Drawings…", "drawings"),
                 ("Component Libraries…", "libraries"),
+                ("Fork Part or Assembly…", "component.fork"),
+                ("Transfer Selected Features…", "feature-transfer"),
                 ("Bill of Materials…", "bom"),
                 ("Navigation Settings…", "controls"),
             ] {
@@ -1271,6 +1278,7 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
             for (label, command) in [
                 ("Layout and Theme…", "presentation"),
                 ("Versions…", "versions"),
+                ("Update README Preview", "readme.preview"),
                 ("Review Comments…", "comments"),
                 ("Rebuild  F5", "document.rebuild"),
                 ("Source Definitions…", "source"),

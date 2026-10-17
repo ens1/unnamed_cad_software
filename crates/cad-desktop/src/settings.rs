@@ -274,6 +274,7 @@ pub fn apply(w: &mut Workspace, close: bool) {
         crate::theme_library::finish_selected(w, save);
     }
     w.application_preferences = preferences.clone();
+    w.readme_preview.include_on_commit = preferences.readme_preview_on_commit;
     preview_application(w, &preferences);
     if model_changed {
         w.requested = Some(w.session.identity());

@@ -5,7 +5,7 @@ TCAD's document and command schemas are the product boundary. No Bevy, egui, cgm
 | Contract | Current implementation | Replacement responsibility |
 |---|---|---|
 | Document + commands | `cad-core` JSON DTOs | Preserve stable IDs, units, graph semantics, explicit schema migrations |
-| Geometry service | Framed protocol v1 | Preserve request identity, cancellation, diagnostics, backend identity, derived mesh contracts |
+| Geometry service | Framed protocol v3 | Preserve request identity, cancellation, diagnostics, backend identity, derived mesh contracts |
 | Operation/mesh adapter | Monstertruck 0.4.1, adapter 22 | Implement operations, exact B-rep validation, reference reconstruction, tessellation and disposable localized operation previews; report unsupported cases |
 | Constraint solver | Native scaled damped SVD solver v12 | Record solver identity, report convergence, residual and degrees of freedom |
 | Sketch handles | Application-owned handle and drag-target contracts v2 | Preserve stable targets, f64 plane coordinates, engineering constraints and explicit unsupported capability errors |
@@ -201,3 +201,8 @@ Topology source closure v1 stores complete readable descriptors in a canonical D
 Native body-count v1 and fabrication source-label v1 are optional display metadata. Counts describe native solid/surface containers, not shell or output-feature counts. Labels retain original source references and do not participate in manufacturing identity. Presentation state adds typed sketch/reference visibility and independent X-ray/entity-snap settings; semantic actions and renderer-prefixed CSS preserve user-defined placement and styling. Camera/overlay decisions use disposable display data and never become modeling intent. See [workflow fixes](usability-reliability-fixes-2026-10-12.md).
 
 Weldment placement v3 and portable profile catalog v1 separate stock source from presentation and native construction. Catalog-backed groups pin a complete application-owned section snapshot, instantiate ordinary local sketches and retain signed placement in the rolled section frame. Source matching permits local-ID remapping while detecting changed geometry or constraints. The guided Structural Member editor shares the same draft, persistent worker, current-result Apply and checkpoint Cancel as the custom section/path editor. Catalog rows in cut lists carry lightweight source provenance independently of solved dimensional measurements. See [structural member profiles](structural-member-profiles.md).
+
+
+## Git collaboration contracts
+
+Fork planning and selected-feature transfer operate on application-owned source definitions. Fork records preserve one source definition and identity correspondence; transfer receipts retain reviewed item bases. No kernel objects, widget state or event logs enter these records. Pinned local/Git components use verified portable snapshots; updates produce ordinary validated drafts. Typed Git operations run in background jobs and reject stale UI results. Project commits retain unrelated staging, and full branch merges preserve clean non-CAD changes. README previews run in the persistent geometry worker and publish only when the saved source still matches. See [Git collaboration](git-collaboration.md) for workflows and limits.

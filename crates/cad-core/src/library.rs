@@ -6,13 +6,13 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 mod snapshot_integrity;
 pub use snapshot_integrity::{
     SnapshotProof, finish_is_pinned, hydrate_pins, material_is_pinned, replace_command, semantic,
-    validate_replacement, validate_verified_replacement,
+    validate_replacement, validate_verified_replacement, verified_source,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -31,9 +31,42 @@ pub struct ComponentLink {
     pub pinned_materials: Option<BTreeMap<Id, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_finishes: Option<BTreeMap<Id, String>>,
+    /// An immutable commit and an explicit update channel. Fetch never changes this pin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_source: Option<GitSource>,
+    /// New links import only the selected definition's dependency closure.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub definition_closure: bool,
     /// Runtime source availability, never part of authoritative hashes.
     #[serde(skip)]
     pub pin_diagnostic: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GitSource {
+    pub remote: String,
+    #[serde(default)]
+    pub project_path: String,
+    pub commit: String,
+    pub update_ref: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<Id>,
+}
+impl GitSource {
+    pub fn validate(&self) -> Result<()> {
+        crate::version_control::validate_remote(&self.remote)?;
+        safe_join(Path::new("."), &self.project_path)?;
+        if !matches!(self.commit.len(), 40 | 64)
+            || !self.commit.bytes().all(|b| b.is_ascii_hexdigit())
+            || self.update_ref.trim().is_empty()
+            || self.update_ref.starts_with('-')
+            || self.update_ref.chars().any(char::is_control)
+        {
+            return Err(CadError::Invalid(
+                "Git component sources require an exact commit and a valid update reference".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 fn hash(bytes: impl AsRef<[u8]>) -> String {
     format!("{:x}", Sha256::digest(bytes.as_ref()))
@@ -58,6 +91,13 @@ fn source_path(root: &Path, path: &str) -> PathBuf {
     }
 }
 pub fn available_update(link: &ComponentLink, root: &Path) -> Result<Option<(u64, String)>> {
+    if let Some(git) = &link.git_source {
+        let repository = git_repository(root, &git.remote, false)?;
+        let source =
+            crate::version_control::snapshot_at(&repository, &git.update_ref, &git.project_path)?;
+        return Ok((source.fingerprint() != link.source_sha256)
+            .then(|| (source.revision, source.fingerprint())));
+    }
     let source = FileStore.load(&source_path(root, &link.source_path))?;
     Ok((source.fingerprint() != link.source_sha256)
         .then(|| (source.revision, source.fingerprint())))
@@ -238,9 +278,117 @@ pub(crate) fn namespace_snapshot(
     // Scene camera bookmarks are not part of a component's mechanical closure.
     // The verified original snapshot digest still covers their authored bytes.
     json["camera_views"] = serde_json::json!({});
+    // Fork ancestry names the original source. Only its local targets are namespaced.
+    let lineage = json
+        .as_object_mut()
+        .and_then(|object| object.remove("component_forks"));
+    let transfers = json
+        .as_object_mut()
+        .and_then(|object| object.remove("feature_transfers"));
     remap_source(&mut json, &mapping, "")?;
+    if let Some(serde_json::Value::Object(records)) = lineage {
+        let mut remapped = serde_json::Map::new();
+        for (definition, mut record) in records {
+            let target = mapping.get(&definition).unwrap_or(&definition).clone();
+            record["definition"] = serde_json::Value::String(target.clone());
+            if let Some(correspondence) = record
+                .get_mut("correspondence")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                for value in correspondence.values_mut() {
+                    if let Some(mapped) = value.as_str().and_then(|id| mapping.get(id)) {
+                        *value = serde_json::Value::String(mapped.clone());
+                    }
+                }
+            }
+            remapped.insert(target, record);
+        }
+        json["component_forks"] = serde_json::Value::Object(remapped);
+    }
+    if let Some(serde_json::Value::Object(records)) = transfers {
+        let mut remapped = serde_json::Map::new();
+        for (receipt, mut record) in records {
+            if let Some(target) = record["target_definition"]
+                .as_str()
+                .and_then(|id| mapping.get(id))
+            {
+                record["target_definition"] = serde_json::Value::String(target.clone());
+            }
+            if let Some(correspondence) = record
+                .get_mut("correspondence")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                for value in correspondence.values_mut() {
+                    if let Some(mapped) = value.as_str().and_then(|id| mapping.get(id)) {
+                        *value = serde_json::Value::String(mapped.clone());
+                    }
+                }
+            }
+            remapped.insert(mapped(link_id, &receipt), record);
+        }
+        json["feature_transfers"] = serde_json::Value::Object(remapped);
+    }
     let imported: Document = serde_json::from_value(json)?;
     Ok((imported, mapping))
+}
+
+/// Retain the selected component and all referenced component definitions. This
+/// deliberately retains shared material/resource catalogs and the full source
+/// snapshot, so imported components remain reproducible offline.
+pub(super) fn retain_definition_closure(document: &mut Document, definition: &str) -> Result<()> {
+    let ids = document
+        .parts
+        .keys()
+        .chain(document.assemblies.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if !ids.contains(definition) {
+        return Err(CadError::Invalid("Unknown component definition".into()));
+    }
+    let mut pending = vec![definition.to_string()];
+    let mut retained = BTreeSet::new();
+    while let Some(current) = pending.pop() {
+        if !retained.insert(current.clone()) {
+            continue;
+        }
+        let value = if let Some(part) = document.parts.get(&current) {
+            serde_json::to_value(part)?
+        } else {
+            serde_json::to_value(&document.assemblies[&current])?
+        };
+        // Source references also occur in expressions and encoded provenance.
+        // Conservatively retaining a literal match is safe; missing a dependency is not.
+        let text = serde_json::to_string(&value)?;
+        pending.extend(
+            ids.iter()
+                .filter(|id| !retained.contains(*id) && text.contains(id.as_str()))
+                .cloned(),
+        );
+    }
+    document.parts.retain(|id, _| retained.contains(id));
+    document.assemblies.retain(|id, _| retained.contains(id));
+    document
+        .active_configurations
+        .retain(|id, _| retained.contains(id));
+    let mut json = serde_json::to_value(&*document)?;
+    if let Some(records) = json
+        .get_mut("component_forks")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        records.retain(|id, _| retained.contains(id));
+    }
+    if let Some(records) = json
+        .get_mut("feature_transfers")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        records.retain(|_, record| {
+            record["target_definition"]
+                .as_str()
+                .is_some_and(|id| retained.contains(id))
+        });
+    }
+    *document = serde_json::from_value(json)?;
+    Ok(())
 }
 
 /// Copies a complete source snapshot, preserving its dependency closure and immutable resource bytes.
@@ -254,6 +402,42 @@ pub fn link(
 ) -> Result<Id> {
     let source = source_path(root, &source.to_string_lossy());
     let src = FileStore.load(&source)?;
+    let label = source
+        .strip_prefix(root)
+        .unwrap_or(&source)
+        .to_string_lossy()
+        .to_string();
+    let mut candidate = doc.clone();
+    let id = link_snapshot(
+        &mut candidate,
+        root,
+        &project_root(&source),
+        &label,
+        &src,
+        definition,
+        update,
+        None,
+    )?;
+    *doc = candidate;
+    Ok(id)
+}
+#[allow(clippy::too_many_arguments)]
+fn link_snapshot(
+    doc: &mut Document,
+    root: &Path,
+    source_root: &Path,
+    source_label: &str,
+    src: &Document,
+    definition: Option<&str>,
+    update: Option<&str>,
+    git_source: Option<GitSource>,
+) -> Result<Id> {
+    if crate::release::is_release_source(root) {
+        return Err(CadError::Invalid(
+            "This is a released source snapshot. Use Save As before linking or updating components"
+                .into(),
+        ));
+    }
     let old = update
         .map(|id| {
             doc.libraries
@@ -273,6 +457,14 @@ pub fn link(
         .map(str::to_string)
         .or_else(|| old.as_ref().map(|l| l.source_definition.clone()))
         .unwrap_or_else(|| src.root.clone());
+    if old
+        .as_ref()
+        .is_some_and(|old| old.source_definition != source_definition)
+    {
+        return Err(CadError::Invalid(
+            "A component update must retain the source component identity".into(),
+        ));
+    }
     if !src.parts.contains_key(&source_definition)
         && !src.assemblies.contains_key(&source_definition)
     {
@@ -281,10 +473,13 @@ pub fn link(
         ));
     }
     let link_id = old.as_ref().map(|l| l.id.clone()).unwrap_or_else(id);
-    let (mut imported, mapping) = namespace_snapshot(&src, &link_id)?;
-    let source_root = project_root(&source);
+    let (mut imported, mapping) = namespace_snapshot(src, &link_id)?;
+    let definition_closure = old.as_ref().is_none_or(|old| old.definition_closure);
+    if definition_closure {
+        retain_definition_closure(&mut imported, &mapping[&source_definition])?;
+    }
     for resource in imported.resources.values_mut() {
-        let bytes = std::fs::read(safe_join(&source_root, &resource.path)?)?;
+        let bytes = std::fs::read(safe_join(source_root, &resource.path)?)?;
         if hash(&bytes) != resource.sha256 {
             return Err(CadError::Invalid(
                 "The component resource changed since its source revision".into(),
@@ -301,7 +496,12 @@ pub fn link(
         for definition in old.pinned_definitions.keys() {
             doc.parts.remove(definition);
             doc.assemblies.remove(definition);
+            doc.component_forks.remove(definition);
         }
+        doc.feature_transfers.retain(|_, record| {
+            !old.pinned_definitions
+                .contains_key(&record.target_definition)
+        });
     }
     // Definition selections are host state. Preserve existing host choices on an
     // explicit update; adopt source selections only for newly linked definitions.
@@ -341,7 +541,9 @@ pub fn link(
     doc.materials.extend(imported.materials);
     doc.finishes.extend(imported.finishes);
     doc.resources.extend(imported.resources);
-    let bytes = serde_json::to_vec_pretty(&src)?;
+    doc.component_forks.extend(imported.component_forks);
+    doc.feature_transfers.extend(imported.feature_transfers);
+    let bytes = serde_json::to_vec_pretty(src)?;
     let sha = hash(&bytes);
     let snapshot = mapped(&link_id, "source-snapshot");
     let path = format!("libraries/{sha}.json");
@@ -356,13 +558,27 @@ pub fn link(
         },
     );
     let definition = mapping[&source_definition].clone();
-    let name = crate::presentation::definition_name(&src, &source_definition);
+    let selected_configuration = git_source
+        .as_ref()
+        .and_then(|git| git.configuration.as_ref())
+        .map(|configuration| {
+            if !crate::configuration::exists(src, &source_definition, configuration) {
+                return Err(CadError::Invalid(
+                    "The selected source configuration does not exist".into(),
+                ));
+            }
+            mapping.get(configuration).cloned().ok_or_else(|| {
+                CadError::Invalid("The source configuration has no imported identity".into())
+            })
+        })
+        .transpose()?;
+    let name = crate::presentation::definition_name(src, &source_definition);
     doc.libraries.insert(
         link_id.clone(),
         ComponentLink {
             id: link_id.clone(),
             name: name.clone(),
-            source_path: source.to_string_lossy().into(),
+            source_path: source_label.into(),
             source_document: src.id.clone(),
             source_definition,
             source_revision: src.revision,
@@ -372,6 +588,8 @@ pub fn link(
             pinned_definitions: pins,
             pinned_materials: Some(pinned_materials),
             pinned_finishes: Some(pinned_finishes),
+            git_source,
+            definition_closure,
             pin_diagnostic: None,
         },
     );
@@ -390,7 +608,7 @@ pub fn link(
                 definition,
                 placement: Default::default(),
                 finish: None,
-                configuration: None,
+                configuration: selected_configuration,
                 fixed,
                 translation_expressions: None,
             },
@@ -537,6 +755,7 @@ fn remap_source_inner(
             | "instance"
             | "relative_to"
             | "sketch"
+            | "block"
             | "outputs"
             | "profile_order"
             | "path"
@@ -949,4 +1168,317 @@ fn remap_role(
         }
         _ => Err(CadError::Unsupported("Ambiguous legacy hole-intersection provenance cannot be safely remapped; reselect this reference".into())),
     }
+}
+
+/// A portable forge reference. The selected revision resolves to an immutable commit before import.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GitLinkRequest {
+    pub remote: String,
+    #[serde(default)]
+    pub project_path: String,
+    pub revision: String,
+    pub update_ref: String,
+    pub definition: Option<Id>,
+    pub configuration: Option<Id>,
+}
+fn git_repository(root: &Path, remote: &str, fetch: bool) -> Result<PathBuf> {
+    use crate::version_control::{Git, VersionControl};
+    crate::version_control::validate_remote(remote)?;
+    let _ = crate::version_control::exclude_project_caches(root);
+    let cache = root.join(".tcad-cache/git");
+    let repository = cache.join(hash(remote));
+    std::fs::create_dir_all(&cache)?;
+    if !repository.exists() {
+        if !fetch {
+            return Err(CadError::Invalid("This Git source is not cached. Fetch the source to check updates; the saved component remains available offline".into()));
+        }
+        Git.command(
+            &cache,
+            &[
+                "clone",
+                "--bare",
+                "--no-hardlinks",
+                "--",
+                remote,
+                repository
+                    .to_str()
+                    .ok_or_else(|| CadError::Invalid("Invalid cache path".into()))?,
+            ],
+        )?;
+    } else {
+        let origin = Git.command(&repository, &["remote", "get-url", "origin"])?;
+        if origin.trim() != remote {
+            return Err(CadError::Invalid(
+                "The cached Git repository does not match its recorded source".into(),
+            ));
+        }
+        if fetch {
+            Git.command(
+                &repository,
+                &[
+                    "fetch",
+                    "--prune",
+                    "origin",
+                    "+refs/heads/*:refs/heads/*",
+                    "+refs/tags/*:refs/tags/*",
+                ],
+            )?;
+        }
+    }
+    Ok(repository)
+}
+/// Import a part or assembly at an exact Git commit. The host document changes only on success.
+pub fn link_git(
+    doc: &mut Document,
+    root: &Path,
+    request: &GitLinkRequest,
+    update: Option<&str>,
+) -> Result<Id> {
+    let repository = git_repository(root, &request.remote, true)?;
+    let commit = crate::version_control::resolve_commit(&repository, &request.revision)?;
+    let destination = root.join(".tcad-cache/git-snapshots").join(id());
+    let result = (|| {
+        let source = crate::version_control::snapshot_resources_at(
+            &repository,
+            &commit,
+            &request.project_path,
+            &destination,
+        )?;
+        let git = GitSource {
+            remote: request.remote.clone(),
+            project_path: request.project_path.clone(),
+            commit,
+            update_ref: request.update_ref.clone(),
+            configuration: request.configuration.clone(),
+        };
+        git.validate()?;
+        let mut candidate = doc.clone();
+        let linked = link_snapshot(
+            &mut candidate,
+            root,
+            &destination,
+            &request.remote,
+            &source,
+            request.definition.as_deref(),
+            update,
+            Some(git),
+        )?;
+        *doc = candidate;
+        Ok(linked)
+    })();
+    let _ = std::fs::remove_dir_all(destination);
+    result
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AffectedOccurrence {
+    pub assembly: Id,
+    pub instance: Id,
+    pub name: String,
+    pub definition: Id,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComponentUpdateImpact {
+    pub source_before: String,
+    pub source_after: String,
+    pub changed_definitions: Vec<Id>,
+    pub affected_assemblies: Vec<Id>,
+    pub occurrences: Vec<AffectedOccurrence>,
+    pub mates: Vec<Id>,
+    pub drawings: Vec<Id>,
+    pub bom_rows: Vec<String>,
+    pub changes: Vec<crate::version_control::SemanticChange>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComponentUpdatePlan {
+    pub base_fingerprint: String,
+    pub link: Id,
+    pub document: Document,
+    pub impact: ComponentUpdateImpact,
+}
+pub fn update_impact(
+    before: &Document,
+    after: &Document,
+    link: &str,
+) -> Result<ComponentUpdateImpact> {
+    let old = before
+        .libraries
+        .get(link)
+        .ok_or_else(|| CadError::Invalid("Unknown component link".into()))?;
+    let new = after
+        .libraries
+        .get(link)
+        .ok_or_else(|| CadError::Invalid("Updated component link is missing".into()))?;
+    let keys = old
+        .pinned_definitions
+        .keys()
+        .chain(new.pinned_definitions.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let changed_definitions = keys
+        .into_iter()
+        .filter(|id| old.pinned_definitions.get(id) != new.pinned_definitions.get(id))
+        .collect::<Vec<_>>();
+    let mut affected = changed_definitions.iter().cloned().collect::<BTreeSet<_>>();
+    // Material and finish changes affect their consuming components even without geometry edits.
+    if old.pinned_materials != new.pinned_materials || old.pinned_finishes != new.pinned_finishes {
+        affected.extend(new.pinned_definitions.keys().cloned());
+    }
+    loop {
+        let previous = affected.len();
+        for assembly in before.assemblies.values().chain(after.assemblies.values()) {
+            if assembly
+                .instances
+                .values()
+                .any(|instance| affected.contains(&instance.definition))
+            {
+                affected.insert(assembly.id.clone());
+            }
+        }
+        if previous == affected.len() {
+            break;
+        }
+    }
+    let mut occurrences = BTreeMap::new();
+    let mut mates = BTreeSet::new();
+    for assembly in before.assemblies.values().chain(after.assemblies.values()) {
+        let instance_ids = assembly
+            .instances
+            .values()
+            .filter(|instance| affected.contains(&instance.definition))
+            .map(|instance| {
+                occurrences.insert(
+                    (assembly.id.clone(), instance.id.clone()),
+                    AffectedOccurrence {
+                        assembly: assembly.id.clone(),
+                        instance: instance.id.clone(),
+                        name: instance.name.clone(),
+                        definition: instance.definition.clone(),
+                    },
+                );
+                instance.id.clone()
+            })
+            .collect::<BTreeSet<_>>();
+        mates.extend(
+            assembly
+                .mates
+                .iter()
+                .filter(|mate| {
+                    instance_ids.contains(&mate.first) || instance_ids.contains(&mate.second)
+                })
+                .map(|mate| mate.id.clone()),
+        );
+    }
+    let drawings = before
+        .drawings
+        .iter()
+        .chain(&after.drawings)
+        .filter(|drawing| affected.contains(&drawing.definition))
+        .map(|drawing| drawing.id.clone())
+        .collect::<BTreeSet<_>>();
+    let old_rows = crate::bom::rows(before, &Default::default())?
+        .into_iter()
+        .map(|row| (row.key.clone(), row))
+        .collect::<BTreeMap<_, _>>();
+    let new_rows = crate::bom::rows(after, &Default::default())?
+        .into_iter()
+        .map(|row| (row.key.clone(), row))
+        .collect::<BTreeMap<_, _>>();
+    let bom_rows = old_rows
+        .keys()
+        .chain(new_rows.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|key| old_rows.get(key) != new_rows.get(key))
+        .collect();
+    let label = |link: &ComponentLink| {
+        link.git_source
+            .as_ref()
+            .map(|git| git.commit.clone())
+            .unwrap_or_else(|| {
+                format!(
+                    "revision {} · {}",
+                    link.source_revision,
+                    &link.source_sha256[..12]
+                )
+            })
+    };
+    Ok(ComponentUpdateImpact {
+        source_before: label(old),
+        source_after: label(new),
+        changed_definitions,
+        affected_assemblies: affected
+            .iter()
+            .filter(|id| before.assemblies.contains_key(*id) || after.assemblies.contains_key(*id))
+            .cloned()
+            .collect(),
+        occurrences: occurrences.into_values().collect(),
+        mates: mates.into_iter().collect(),
+        drawings: drawings.into_iter().collect(),
+        bom_rows,
+        changes: crate::version_control::diff(before, after)?,
+    })
+}
+/// Prepare an update for the common validated draft/Apply flow. Never applies it to committed state.
+pub fn prepare_update(
+    doc: &Document,
+    root: &Path,
+    link: &str,
+    revision: Option<&str>,
+) -> Result<ComponentUpdatePlan> {
+    let source = doc
+        .libraries
+        .get(link)
+        .ok_or_else(|| CadError::Invalid("Unknown component link".into()))?;
+    let mut document = doc.clone();
+    if let Some(git) = &source.git_source {
+        link_git(
+            &mut document,
+            root,
+            &GitLinkRequest {
+                remote: git.remote.clone(),
+                project_path: git.project_path.clone(),
+                revision: revision.unwrap_or(&git.update_ref).into(),
+                update_ref: git.update_ref.clone(),
+                definition: Some(source.source_definition.clone()),
+                configuration: git.configuration.clone(),
+            },
+            Some(link),
+        )?;
+    } else {
+        self::link(
+            &mut document,
+            root,
+            Path::new(&source.source_path),
+            None,
+            Some(link),
+        )?;
+    }
+    let impact = update_impact(doc, &document, link)?;
+    Ok(ComponentUpdatePlan {
+        base_fingerprint: doc.fingerprint(),
+        link: link.into(),
+        document,
+        impact,
+    })
+}
+/// Fetching changes the local repository cache only. No assembly reference is moved.
+pub fn check_update(
+    link: &ComponentLink,
+    root: &Path,
+    fetch: bool,
+) -> Result<Option<(u64, String)>> {
+    if let Some(git) = &link.git_source {
+        git_repository(root, &git.remote, fetch)?;
+    }
+    available_update(link, root)
+}
+
+/// Fetch and inspect source definitions without importing or updating any host component.
+pub fn inspect_git_source(root: &Path, request: &GitLinkRequest) -> Result<(Document, String)> {
+    let repository = git_repository(root, &request.remote, true)?;
+    let commit = crate::version_control::resolve_commit(&repository, &request.revision)?;
+    let document =
+        crate::version_control::snapshot_at(&repository, &commit, &request.project_path)?;
+    Ok((document, commit))
 }

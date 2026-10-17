@@ -20,6 +20,40 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Action {
+    /// Fork a part or assembly using a versioned fork intent JSON file.
+    Fork {
+        project: PathBuf,
+        intent: PathBuf,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Review or apply selected features; unrelated source features remain unchanged.
+    TransferFeatures {
+        project: PathBuf,
+        source: PathBuf,
+        request: PathBuf,
+        #[arg(long)]
+        revision: Option<String>,
+        #[arg(long)]
+        base: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Preview or accept a component pinned to an exact Git revision.
+    LinkGit {
+        project: PathBuf,
+        request: PathBuf,
+        #[arg(long)]
+        update: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
+    /// Generate the marked interactive README preview from the saved model.
+    ReadmePreview {
+        project: PathBuf,
+        #[arg(long = "display-tolerance", visible_alias = "tolerance")]
+        tolerance: Option<f64>,
+    },
     New {
         path: PathBuf,
         #[arg(long, default_value = "Untitled assembly")]
@@ -185,10 +219,186 @@ fn checked(
     }
     Ok(evaluation)
 }
+fn save_reviewed(
+    project: &std::path::Path,
+    starting: &Document,
+    candidate: &Document,
+) -> Result<()> {
+    if FileStore.load(project)?.fingerprint() != starting.fingerprint() {
+        return Err(CadError::Invalid(
+            "The saved project changed during this operation; review the change again".into(),
+        ));
+    }
+    FileStore.save(project, candidate)
+}
+fn manifest_name(project: &std::path::Path) -> Result<&str> {
+    if project
+        .extension()
+        .is_some_and(|extension| extension == "json")
+    {
+        project
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| CadError::Invalid("The project filename must use UTF-8".into()))
+    } else {
+        Ok("project.json")
+    }
+}
+fn writable_source(project: &std::path::Path, apply: bool) -> Result<()> {
+    if apply && cad_core::release::is_release_source(project) {
+        return Err(CadError::Invalid(
+            "Save a working copy before editing released source".into(),
+        ));
+    }
+    Ok(())
+}
 fn run() -> Result<()> {
     let args = Args::parse();
     let mut evaluator = Evaluator::default();
     match args.command {
+        Action::Fork {
+            project,
+            intent,
+            apply,
+        } => {
+            writable_source(&project, apply)?;
+            let document = FileStore.load(&project)?;
+            let intent: cad_core::component_fork::Intent =
+                serde_json::from_slice(&std::fs::read(intent)?)?;
+            let plan = cad_core::component_fork::plan_with_resources(
+                &document,
+                &intent,
+                &project_root(&project),
+            )?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({"definition":plan.definition,"copied":plan.copied,"reused":plan.reused,"notices":plan.notices,"apply_requested":apply})
+                )?
+            );
+            if apply {
+                let mut candidate = plan.document;
+                checked(&mut evaluator, &candidate, &project_root(&project), None)?;
+                candidate.revision = document.revision + 1;
+                save_reviewed(&project, &document, &candidate)?;
+                println!("Fork saved as revision {}", candidate.revision);
+            }
+        }
+        Action::TransferFeatures {
+            project,
+            source,
+            request,
+            revision,
+            base,
+            apply,
+        } => {
+            writable_source(&project, apply)?;
+            let target = FileStore.load(&project)?;
+            let request: cad_core::feature_transfer::Request =
+                serde_json::from_slice(&std::fs::read(request)?)?;
+            let source_root = project_root(&source);
+            let manifest = manifest_name(&source)?;
+            let revision = revision
+                .as_deref()
+                .map(|revision| cad_core::version_control::resolve_commit(&source_root, revision))
+                .transpose()?;
+            let source_document = if let Some(revision) = &revision {
+                cad_core::version_control::snapshot_manifest(&source_root, revision, manifest)?
+            } else {
+                FileStore.load(&source)?
+            };
+            let base = base
+                .as_ref()
+                .map(|revision| {
+                    cad_core::version_control::snapshot_manifest(&source_root, revision, manifest)
+                })
+                .transpose()?;
+            let plan = cad_core::feature_transfer::prepare(
+                &source_document,
+                base.as_ref(),
+                &target,
+                &request,
+            )?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({"items":plan.items,"conflicts":plan.conflicts,"diagnostics":plan.diagnostics,"ready":plan.candidate.is_some(),"apply_requested":apply})
+                )?
+            );
+            if apply {
+                let mut candidate = plan.document(&target)?;
+                let root = project_root(&project);
+                if let Some(revision) = revision {
+                    let staging = std::env::temp_dir()
+                        .join(format!("tcad-feature-transfer-{}", cad_core::id()));
+                    let result = (|| -> Result<()> {
+                        for resource in &plan.resources {
+                            cad_core::version_control::snapshot_resource(
+                                &source_root,
+                                &revision,
+                                &resource.source,
+                                &staging,
+                            )?;
+                        }
+                        cad_core::feature_transfer::materialize(&plan, &staging, &root)
+                    })();
+                    let _ = std::fs::remove_dir_all(&staging);
+                    result?;
+                } else {
+                    cad_core::feature_transfer::materialize(&plan, &source_root, &root)?;
+                }
+                checked(&mut evaluator, &candidate, &root, None)?;
+                candidate.revision = target.revision + 1;
+                save_reviewed(&project, &target, &candidate)?;
+                println!("Selected features saved as revision {}", candidate.revision);
+            }
+        }
+        Action::LinkGit {
+            project,
+            request,
+            update,
+            apply,
+        } => {
+            writable_source(&project, apply)?;
+            let source = FileStore.load(&project)?;
+            let mut candidate = source.clone();
+            let request: cad_core::library::GitLinkRequest =
+                serde_json::from_slice(&std::fs::read(request)?)?;
+            let root = project_root(&project);
+            let link =
+                cad_core::library::link_git(&mut candidate, &root, &request, update.as_deref())?;
+            let changes = cad_core::version_control::diff(&source, &candidate)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &serde_json::json!({"link":link,"changes":changes,"apply_requested":apply})
+                )?
+            );
+            if apply {
+                checked(&mut evaluator, &candidate, &root, None)?;
+                candidate.revision = source.revision + 1;
+                save_reviewed(&project, &source, &candidate)?;
+                println!(
+                    "Pinned Git component saved as revision {}",
+                    candidate.revision
+                );
+            }
+        }
+        Action::ReadmePreview { project, tolerance } => {
+            let document = FileStore.load(&project)?;
+            let evaluation = checked(
+                &mut evaluator,
+                &document,
+                &project_root(&project),
+                tolerance,
+            )?;
+            let preview = cad_core::readme_preview::build(&document, &evaluation)?;
+            cad_core::readme_preview::write(&project, &document, &preview)?;
+            println!(
+                "Updated README model preview: {} triangles, source {}",
+                preview.metadata.triangles, preview.metadata.source_sha256
+            );
+        }
         Action::New { path, name, sample } => {
             if path.exists() {
                 return Err(CadError::Invalid("Destination already exists".into()));

@@ -2224,6 +2224,7 @@ name = "cad-core"
 version = "0.1.0"
 dependencies = [
  "nalgebra",
+ "png",
  "serde",
  "serde_json",
  "sha2",

@@ -97,6 +97,7 @@ fn request_id(r: &WorkerRequest) -> Option<RequestIdentity> {
     match r {
         WorkerRequest::DisplayMesh { request } => Some(request.identity.clone()),
         WorkerRequest::AnalyzeSketch { identity, .. }
+        | WorkerRequest::ReadmePreview { identity, .. }
         | WorkerRequest::SolveSketch3d { identity, .. }
         | WorkerRequest::ManipulateAssembly { identity, .. }
         | WorkerRequest::Evaluate { identity, .. }
