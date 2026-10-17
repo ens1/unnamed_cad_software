@@ -225,9 +225,17 @@ pub(crate) fn clear_edge_pick(w: &mut Workspace) {
     }
 }
 
-/// Resolve only the current native cache, on one output body and occurrence.
-/// A last-valid display fallback is useful while rebuilding but cannot author a set.
-fn expansion(w: &Workspace, mode: SetMode) -> cad_core::Result<Vec<viewport::Selection>> {
+struct ExpansionContext<'a> {
+    pick: &'a viewport::Selection,
+    body: &'a cad_core::NodeRef,
+    evaluation: &'a cad_core::protocol::Evaluation,
+    instance: &'a cad_core::PlacedPart,
+}
+
+/// Menu availability checks only the current source context. Traversing native
+/// incidence and resolving legacy provenance belong to the explicit set action,
+/// not every frame that displays the ordinary selection menu.
+fn expansion_context(w: &Workspace, mode: SetMode) -> cad_core::Result<ExpansionContext<'_>> {
     if w.view.history_cursor.is_some() || w.sketch.is_some() {
         return Err(cad_core::CadError::Invalid(
             "Finish sketch editing and return to Latest before selecting model edge sets".into(),
@@ -236,6 +244,16 @@ fn expansion(w: &Workspace, mode: SetMode) -> cad_core::Result<Vec<viewport::Sel
     let pick = w.selected.as_ref().ok_or_else(|| {
         cad_core::CadError::Invalid("Select a face or edge on the model first".into())
     })?;
+    let topology = if mode == SetMode::FaceBoundary {
+        "face"
+    } else {
+        "edge"
+    };
+    if pick.reference.topology != topology {
+        return Err(cad_core::CadError::Invalid(format!(
+            "Select a current native {topology} on this body"
+        )));
+    }
     let body = pick.body.as_ref().ok_or_else(|| {
         cad_core::CadError::Invalid("This selection has no evaluated body owner".into())
     })?;
@@ -273,6 +291,23 @@ fn expansion(w: &Workspace, mode: SetMode) -> cad_core::Result<Vec<viewport::Sel
             "The selected component occurrence is ambiguous".into(),
         ));
     }
+    Ok(ExpansionContext {
+        pick,
+        body,
+        evaluation,
+        instance,
+    })
+}
+
+/// Resolve only the current native cache, on one output body and occurrence.
+/// A last-valid display fallback is useful while rebuilding but cannot author a set.
+fn expansion(w: &Workspace, mode: SetMode) -> cad_core::Result<Vec<viewport::Selection>> {
+    let ExpansionContext {
+        pick,
+        body,
+        evaluation,
+        instance,
+    } = expansion_context(w, mode)?;
     let candidates = viewport::selection_meshes(w, evaluation, instance)
         .into_iter()
         .filter(|mesh| {
@@ -352,11 +387,11 @@ fn set_descriptors(
         _ => return vec![],
     };
     modes.iter().map(|mode| {
-        let result = if current(w).as_ref() == Some(target) { expansion(w,*mode) } else { Err(cad_core::CadError::Invalid("Select this geometry again to expand its selection".into())) };
+        let result = if current(w).as_ref() == Some(target) { expansion_context(w,*mode).map(|_| ()) } else { Err(cad_core::CadError::Invalid("Select this geometry again to expand its selection".into())) };
         let command = format!("selection.set-{}",mode.suffix());
         cad_core::presentation::SemanticElement {
             id:command.clone(), role:"selection-action".into(), label:mode.label().into(),
-            value:Some(match &result { Ok(edges)=>format!("{} native edges on this body occurrence",edges.len()),Err(error)=>error.to_string() }),
+            value:Some(match &result { Ok(())=>"Resolve this set from current native topology; ambiguous or branching sets are rejected".into(),Err(error)=>error.to_string() }),
             state:if result.is_ok() {"ready"} else {"disabled"}.into(), commands:vec![command],
             relationships:vec![body.node.clone()],
             data:serde_json::json!({"contract":"tcad.presentation.selection-sets","version":selection_sets::CONTRACT_VERSION,"group":"Selection","target":target,"mode":mode,"input_body":body,"occurrence_path":path,"native_incidence":true,"current_evaluation_required":true,"classes":["menu-item","selection-action"]}),
@@ -883,10 +918,10 @@ fn edge_set_controls(
     body: &cad_core::NodeRef,
 ) -> Vec<cad_core::presentation::SemanticElement> {
     [SetMode::FaceBoundary,SetMode::ClosedLoop,SetMode::TangentChain].into_iter().map(|mode| {
-        let result = if w.selected.as_ref().is_some_and(|pick|pick.body.as_ref()==Some(body) && edge_occurrence(w,&pick.path)) { expansion(w,mode) } else { Err(cad_core::CadError::Invalid("Select a face or edge on this feature's input body".into())) };
+        let result = if w.selected.as_ref().is_some_and(|pick|pick.body.as_ref()==Some(body) && edge_occurrence(w,&pick.path)) { expansion_context(w,mode).map(|_| ()) } else { Err(cad_core::CadError::Invalid("Select a face or edge on this feature's input body".into())) };
         let command=format!("selection.edge-set-{}/{feature}",mode.suffix());
         cad_core::presentation::SemanticElement {
-            id:command.clone(),role:"edge-selection-action".into(),label:mode.label().into(),value:Some(match &result { Ok(edges)=>format!("Add {} native edges",edges.len()),Err(error)=>error.to_string() }),
+            id:command.clone(),role:"edge-selection-action".into(),label:mode.label().into(),value:Some(match &result { Ok(())=>"Resolve and add the current native edge set; ambiguous or branching sets are rejected".into(),Err(error)=>error.to_string() }),
             state:if result.is_ok() {"ready"} else {"disabled"}.into(),commands:vec![command],relationships:vec![feature.into(),body.node.clone()],
             data:serde_json::json!({"presentation_control":true,"contract":"tcad.presentation.selection-sets","version":selection_sets::CONTRACT_VERSION,"feature":feature,"input_body":body,"mode":mode,"shared_draft":true,"classes":["property-control","selection-set"]}),
         }
