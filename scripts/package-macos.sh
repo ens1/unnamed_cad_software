@@ -26,6 +26,7 @@ cp target/debug/tcad-desktop "$TCAD_APP/Contents/MacOS/TCAD"
 cp target/debug/tcad-worker "$TCAD_APP/Contents/MacOS/tcad-worker"
 # Keep executable names distinct on case-insensitive macOS filesystems.
 cp target/debug/tcad "$TCAD_APP/Contents/MacOS/tcad-cli"
+cp target/debug/tcad-git-askpass "$TCAD_APP/Contents/MacOS/tcad-git-askpass"
 # Pin the browser sign-in helper independently of TCAD's forge contract. Never
 # depend on Finder's PATH or copy an unversioned executable from the build host.
 TCAD_GH_VERSION=2.83.2
@@ -78,10 +79,13 @@ codesign --force --sign - --timestamp=none --identifier local.tcad.cli \
     "$TCAD_APP/Contents/MacOS/tcad-cli"
 codesign --force --sign - --timestamp=none --identifier local.tcad.github-helper \
     "$TCAD_APP/Contents/MacOS/tcad-gh"
+codesign --force --sign - --timestamp=none --identifier local.tcad.git-askpass \
+    "$TCAD_APP/Contents/MacOS/tcad-git-askpass"
 codesign --force --sign - --timestamp=none "$TCAD_APP"
 codesign --verify --strict "$TCAD_APP/Contents/MacOS/tcad-worker"
 codesign --verify --strict "$TCAD_APP/Contents/MacOS/tcad-cli"
 codesign --verify --strict "$TCAD_APP/Contents/MacOS/tcad-gh"
+codesign --verify --strict "$TCAD_APP/Contents/MacOS/tcad-git-askpass"
 codesign --verify --deep --strict "$TCAD_APP"
 # Keep the prior bundle until the replacement is built, signed and verified.
 if [ -e "$TCAD_DEST" ] || [ -L "$TCAD_DEST" ]; then

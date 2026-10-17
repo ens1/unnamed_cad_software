@@ -393,6 +393,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::feature_transfer_ui::semantics(w));
     elements.extend(crate::git_ui::semantics(w));
     elements.extend(crate::repositories_ui::semantics(w));
+    elements.extend(crate::git_connections_ui::semantics(w));
     elements.extend(crate::assembly_tree_ui::semantics(w));
     if let Some(sketch) = &w.sketch {
         elements.retain(|element| {
@@ -760,7 +761,10 @@ impl ValueAdapters {
         value: serde_json::Value,
     ) -> cad_core::Result<()> {
         if w.settings.is_some()
-            && element.data.get("setter").and_then(|value| value.as_str()) != Some("settings")
+            && !matches!(
+                element.data.get("setter").and_then(|value| value.as_str()),
+                Some("settings" | "git-connections")
+            )
         {
             return Err(cad_core::CadError::Invalid(
                 "Close Settings before editing another field".into(),
@@ -839,6 +843,11 @@ fn value_adapters() -> ValueAdapters {
         "repositories",
         crate::repositories_ui::set_value,
         crate::repositories_ui::current_value,
+    );
+    adapters.register(
+        "git-connections",
+        crate::git_connections_ui::set_value,
+        crate::git_connections_ui::current_value,
     );
     adapters.register(
         "assembly-tree",

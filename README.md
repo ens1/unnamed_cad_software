@@ -20,19 +20,25 @@ From a terminal:
 
 The worker executable must sit beside the desktop executable. `TCAD_WORKER` can select another compatible worker. The toolchain is pinned in `rust-toolchain.toml`; the dependency graph is pinned in `Cargo.lock`. Windows and Linux use the same source and native windowing dependencies. The current adapter 45 / solver 18 [kernel foundation update](docs/kernel-foundation-2026-10-14.md) was formatted, compiled, strictly linted and packaged with verified macOS signatures on 2026-10-14. The earlier [P1](docs/usability-p1-fixes.md) and [P2](docs/usability-p2-fixes.md) usability fixes remain included. Other platforms and interactive acceptance remain unverified.
 
-The macOS bundle contains `TCAD` (desktop), `tcad-worker` (geometry), and `tcad-cli` (command line). These names must remain distinct even on case-insensitive filesystems.
+The macOS bundle contains `TCAD` (desktop), `tcad-worker` (geometry), and `tcad-cli` (command line), plus `tcad-gh` and `tcad-git-askpass` for account and key operations. These names must remain distinct even on case-insensitive filesystems.
 `./scripts/package-macos.sh` builds a fresh bundle, ad-hoc signs its nested executables and completed resources, verifies the signatures, then replaces `dist/TCAD.app`. A failed build or signature check preserves the existing package. Fresh executable files prevent invalid cached code-signature pages when rebuilding on macOS.
 
 ## Git collaboration
 
-The 2026-10-16 [Git collaboration update](docs/git-collaboration.md) adds reviewed
-branches and merges, part/assembly forks, controlled component updates, selected
-feature transfer, and generated README model previews. Formatting, strict
-workspace linting, locked compilation and signed macOS packaging passed.
-Interactive acceptance remains with the user. **Workspace → Repositories and
-Accounts** adds browser sign-in, repository browsing and creation, model downloads,
-and reviewed publishing. New repositories default to private. The Mac bundle
-includes the pinned GitHub sign-in helper; no separate GitHub CLI install is needed.
+**Workspace → Git Repositories** opens models from any supported Git URL or a
+local folder, creates local repositories, and publishes saved models. HTTPS,
+SSH, and local Git repositories work without a GitHub account. **Settings → Git
+connections** manages HTTPS credentials and SSH keys; existing Git credentials
+remain the default. GitHub sign-in, hosted browsing, and hosted repository creation
+are optional. New hosted repositories default to private. For a generic Git URL,
+TCAD asks you to check destination access before publishing because Git does not
+report repository visibility.
+
+**Versions** provides commits, branches, comparisons, merges, fetch, and push.
+Part/assembly forks, controlled component updates, selected feature transfer, and
+README model previews use the same native files. See [Git collaboration](docs/git-collaboration.md)
+for steps, current limits, and recorded build checks. No live account or UI
+acceptance checks were run; interactive acceptance remains with the user.
 
 ## Native kernel foundation
 

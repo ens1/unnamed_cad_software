@@ -1,8 +1,9 @@
-//! Bounded, forge-neutral model transfer with a GitHub transport adapter.
+//! Bounded, forge-neutral model transfer with optional forge-specific publication guards.
 //! Remote checkouts are new directories. The source model is never changed.
 use crate::{
     CadError, Document, Id, Result,
     forge::{CancelToken, GitHub},
+    git_connections::{self, ConnectionProfile, RepositoryAddress, Transport},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -72,9 +73,10 @@ pub struct PublishRequest {
     pub source_manifest: PathBuf,
     pub expected_fingerprint: String,
     pub clone_url: String,
-    pub expected_private: bool,
-    pub expected_repository_id: String,
-    pub expected_login: String,
+    /// Set only after the user reviews this exact address and visibility limits.
+    pub remote_reviewed: bool,
+    /// Extra identity and privacy checks for an explicit GitHub connection.
+    pub github_guard: Option<GitHubPublishGuard>,
     pub destination: PathBuf,
     pub branch: Option<String>,
     /// Empty only when publishing the first model into an empty repository.
@@ -82,6 +84,33 @@ pub struct PublishRequest {
     pub commit_message: String,
     pub author: GitAuthor,
     pub expected_remote_commit: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GitHubPublishGuard {
+    pub expected_private: bool,
+    pub expected_repository_id: String,
+    pub expected_login: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RemoteBranch {
+    pub name: String,
+    pub commit: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RemoteRepository {
+    pub clone_url: String,
+    pub default_branch: Option<String>,
+    pub branches: Vec<RemoteBranch>,
+    pub empty: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LocalRepository {
+    pub root: PathBuf,
+    pub branch: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,6 +140,7 @@ impl From<&PublishRequest> for PublishSourceRequest {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PublishResult {
+    pub pushed: bool,
     pub root: PathBuf,
     pub manifest: PathBuf,
     pub branch: String,
@@ -308,7 +338,7 @@ fn snapshot(path: &Path, cancel: &CancelToken) -> Result<Snapshot> {
         let metadata = fs::metadata(&path)?;
         if metadata.len() > MAX_RESOURCE {
             return Err(invalid(format!(
-                "{} is larger than GitHub's 100 MiB file limit",
+                "{} is larger than the supported 100 MiB file limit",
                 resource.path
             )));
         }
@@ -464,7 +494,11 @@ pub fn discover(root: &Path, cancel: &CancelToken) -> Result<Discovery> {
 }
 
 pub fn open_model(entry: &ModelEntry) -> Result<Document> {
-    let snapshot = snapshot(&entry.manifest, &CancelToken::default())?;
+    open_model_with_cancel(entry, &CancelToken::default())
+}
+
+pub fn open_model_with_cancel(entry: &ModelEntry, cancel: &CancelToken) -> Result<Document> {
+    let snapshot = snapshot(&entry.manifest, cancel)?;
     if snapshot.document.id != entry.document_id
         || snapshot.document.fingerprint() != entry.fingerprint
     {
@@ -529,7 +563,7 @@ fn preflight_source(request: &PublishSourceRequest, cancel: &CancelToken) -> Res
         ));
     }
     add_presentation_files(&mut source)?;
-    let preview = readme_artifacts(&source, cancel)?;
+    let preview = readme_artifacts(&source, cancel, false)?;
     let mut bytes = 0;
     for path in source.files.union(&preview.files) {
         check_cancel(cancel)?;
@@ -642,12 +676,13 @@ fn reserve_destination(destination: &Path) -> Result<PathBuf> {
     Ok(destination)
 }
 
-fn secure_git(forge: &GitHub, root: Option<&Path>) -> Result<Command> {
-    let mut command = forge.git_command()?;
-    command.env("GIT_CONFIG_NOSYSTEM", "1").env(
-        "GIT_CONFIG_GLOBAL",
-        if cfg!(windows) { "NUL" } else { "/dev/null" },
-    );
+struct GitTransport<'a> {
+    address: Option<&'a RepositoryAddress>,
+    connection: Option<&'a ConnectionProfile>,
+}
+
+fn secure_git(transport: &GitTransport<'_>, root: Option<&Path>) -> Result<Command> {
+    let mut command = Command::new("git");
     for name in [
         "GIT_CONFIG",
         "GIT_CONFIG_COUNT",
@@ -662,6 +697,15 @@ fn secure_git(forge: &GitHub, root: Option<&Path>) -> Result<Command> {
         "GIT_ASKPASS",
         "SSH_ASKPASS",
         "GIT_CONFIG_PARAMETERS",
+        "GIT_TRACE",
+        "GIT_TRACE_CURL",
+        "GIT_CURL_VERBOSE",
+        "GIT_TRACE_PACKET",
+        "GIT_TRACE_SETUP",
+        "GIT_TRACE_PERFORMANCE",
+        "GIT_TRACE2",
+        "GIT_TRACE2_EVENT",
+        "GIT_TRACE2_PERF",
     ] {
         command.env_remove(name);
     }
@@ -689,6 +733,10 @@ fn secure_git(forge: &GitHub, root: Option<&Path>) -> Result<Command> {
         "-c",
         "protocol.https.allow=always",
         "-c",
+        "protocol.ssh.allow=always",
+        "-c",
+        "protocol.file.allow=always",
+        "-c",
         "http.followRedirects=false",
         "-c",
         "submodule.recurse=false",
@@ -699,6 +747,9 @@ fn secure_git(forge: &GitHub, root: Option<&Path>) -> Result<Command> {
         "-c",
         "tag.gpgSign=false",
     ]);
+    if let Some(address) = transport.address {
+        git_connections::configure_git(&mut command, address, transport.connection)?;
+    }
     if let Some(root) = root {
         command.arg("-C").arg(root);
     }
@@ -747,8 +798,8 @@ fn process(
                 if count == 0 {
                     break;
                 }
-                if bytes.len() < MAX_OUTPUT {
-                    bytes.extend_from_slice(&buffer[..count.min(MAX_OUTPUT - bytes.len())]);
+                if bytes.len() <= MAX_OUTPUT {
+                    bytes.extend_from_slice(&buffer[..count.min(MAX_OUTPUT + 1 - bytes.len())]);
                 }
             }
             let _ = sender.send((stdout, bytes));
@@ -816,6 +867,11 @@ fn process(
         if let Some(status) = status
             && received == 2
         {
+            if stdout.len() > MAX_OUTPUT || stderr.len() > MAX_OUTPUT {
+                return Err(invalid(
+                    "Git output exceeds the supported limit. Narrow the repository or operation before retrying",
+                ));
+            }
             return Ok(ProcessOutput {
                 stdout: String::from_utf8_lossy(&stdout).into(),
                 stderr: String::from_utf8_lossy(&stderr).into(),
@@ -831,13 +887,13 @@ fn process(
 }
 
 fn git(
-    forge: &GitHub,
+    transport: &GitTransport<'_>,
     root: Option<&Path>,
     args: &[&str],
     cancel: &CancelToken,
     progress: &mut impl FnMut(&str),
 ) -> Result<String> {
-    let mut command = secure_git(forge, root)?;
+    let mut command = secure_git(transport, root)?;
     command.args(args);
     let output = process(command, cancel, Duration::from_secs(300), progress)?;
     if output.success {
@@ -855,19 +911,81 @@ struct RemoteTip {
     commit: Option<String>,
 }
 
-fn remote_tip(
-    forge: &GitHub,
+/// Read the exact advertised branch heads without cloning or changing a model.
+pub fn inspect_remote(
     url: &str,
-    requested: Option<&str>,
+    connection: Option<&ConnectionProfile>,
+    cancel: &CancelToken,
+    mut progress: impl FnMut(&str),
+) -> Result<RemoteRepository> {
+    let address = RepositoryAddress::parse(url)?;
+    let transport = GitTransport {
+        address: Some(&address),
+        connection,
+    };
+    inspect_remote_with(&transport, &address.git_url, cancel, &mut progress)
+}
+
+/// A user's Git URL aliases must not silently change a reviewed upload target.
+/// Resolve aliases without contacting the remote, then require the reviewed URL.
+fn verify_transport_address(
+    transport: &GitTransport<'_>,
+    root: Option<&Path>,
+    push: bool,
     cancel: &CancelToken,
     progress: &mut impl FnMut(&str),
-) -> Result<RemoteTip> {
-    github_name(url)?;
-    if let Some(branch) = requested {
-        branch_name(branch)?;
+) -> Result<()> {
+    let Some(address) = transport.address else {
+        return Ok(());
+    };
+    let args = if root.is_some() {
+        if push {
+            vec!["remote", "get-url", "--push", "--all", "origin"]
+        } else {
+            vec!["remote", "get-url", "--all", "origin"]
+        }
+    } else {
+        vec!["ls-remote", "--get-url", "--", address.git_url.as_str()]
+    };
+    let resolved = git(transport, root, &args, cancel, progress)?;
+    let values = resolved.lines().collect::<Vec<_>>();
+    if values.len() != 1 {
+        return Err(invalid(
+            "Git configuration adds more than one destination. Choose one repository address before transferring the model",
+        ));
     }
+    let actual = RepositoryAddress::parse(values[0])?;
+    // Keychain uses one entry for the default HTTPS port. Its adapter may
+    // remove an explicit :443, which does not change the reviewed endpoint.
+    let default_https_port_only = actual.transport == Transport::Https
+        && address.transport == Transport::Https
+        && actual.host == address.host
+        && actual.user == address.user
+        && actual.path == address.path
+        && actual.effective_port() == Some(443)
+        && address.effective_port() == Some(443)
+        && matches!(
+            (actual.port, address.port),
+            (Some(443), None) | (None, Some(443))
+        );
+    if actual.git_url != address.git_url && !default_https_port_only {
+        return Err(invalid(format!(
+            "Git redirects this address to {}. Enter that address in the repository panel and review it before transferring the model",
+            actual.git_url
+        )));
+    }
+    Ok(())
+}
+
+fn inspect_remote_with(
+    transport: &GitTransport<'_>,
+    url: &str,
+    cancel: &CancelToken,
+    progress: &mut impl FnMut(&str),
+) -> Result<RemoteRepository> {
+    verify_transport_address(transport, None, false, cancel, progress)?;
     let output = git(
-        forge,
+        transport,
         None,
         &["ls-remote", "--symref", "--", url, "HEAD", "refs/heads/*"],
         cancel,
@@ -880,6 +998,7 @@ fn remote_tip(
             .strip_prefix("ref: refs/heads/")
             .and_then(|text| text.strip_suffix("\tHEAD"))
         {
+            branch_name(branch)?;
             default = Some(branch.to_owned());
             continue;
         }
@@ -891,51 +1010,172 @@ fn remote_tip(
             heads.insert(branch.to_owned(), hash.to_owned());
         }
     }
+    let empty = heads.is_empty();
+    Ok(RemoteRepository {
+        clone_url: url.into(),
+        default_branch: default,
+        empty,
+        branches: heads
+            .into_iter()
+            .map(|(name, commit)| RemoteBranch { name, commit })
+            .collect(),
+    })
+}
+
+fn remote_tip(
+    transport: &GitTransport<'_>,
+    url: &str,
+    requested: Option<&str>,
+    cancel: &CancelToken,
+    progress: &mut impl FnMut(&str),
+) -> Result<RemoteTip> {
+    if let Some(branch) = requested {
+        branch_name(branch)?;
+    }
+    let remote = inspect_remote_with(transport, url, cancel, progress)?;
     let branch = requested
         .map(str::to_owned)
-        .or(default)
-        .or_else(|| heads.keys().next().cloned())
+        .or(remote.default_branch)
+        .or_else(|| remote.branches.first().map(|branch| branch.name.clone()))
         .unwrap_or_else(|| "main".into());
-    if !heads.is_empty() && !heads.contains_key(&branch) {
+    let commit = remote
+        .branches
+        .into_iter()
+        .find(|head| head.name == branch)
+        .map(|head| head.commit);
+    if !remote.empty && commit.is_none() {
         return Err(invalid(
             "The selected remote branch does not exist. Refresh the repository and choose an existing branch",
         ));
     }
-    Ok(RemoteTip {
-        commit: heads.remove(&branch),
-        branch,
+    Ok(RemoteTip { branch, commit })
+}
+
+/// Keep the user's credential configuration, but never execute content filters
+/// while copying a model from a newly opened repository.
+fn disable_transfer_filters(
+    transport: &GitTransport<'_>,
+    root: &Path,
+    cancel: &CancelToken,
+    progress: &mut impl FnMut(&str),
+) -> Result<()> {
+    let mut command = secure_git(transport, Some(root))?;
+    command.args([
+        "config",
+        "--null",
+        "--name-only",
+        "--get-regexp",
+        "^filter\\..*\\.(clean|smudge|process|required)$",
+    ]);
+    let output = process(command, cancel, Duration::from_secs(30), progress)?;
+    if !output.success && !output.stderr.trim().is_empty() {
+        return Err(invalid(format!(
+            "Could not inspect Git content filters: {}",
+            redact(&output.stderr)
+        )));
+    }
+    for name in output.stdout.split('\0').filter(|value| !value.is_empty()) {
+        if !name.starts_with("filter.") || name.chars().any(char::is_control) {
+            return Err(invalid("Git returned an invalid content-filter setting"));
+        }
+        let value = if name.ends_with(".required") {
+            "false"
+        } else {
+            ""
+        };
+        git(
+            transport,
+            Some(root),
+            &["config", "--local", "--replace-all", name, value],
+            cancel,
+            progress,
+        )?;
+    }
+    Ok(())
+}
+
+/// Create an empty local repository. No account or network is used.
+pub fn initialize_local_repository(
+    destination: &Path,
+    branch: &str,
+    cancel: &CancelToken,
+    mut progress: impl FnMut(&str),
+) -> Result<LocalRepository> {
+    branch_name(branch)?;
+    check_cancel(cancel)?;
+    let root = reserve_destination(destination)?;
+    let transport = GitTransport {
+        address: None,
+        connection: None,
+    };
+    checkout(
+        &transport,
+        &root,
+        None,
+        &RemoteTip {
+            branch: branch.into(),
+            commit: None,
+        },
+        cancel,
+        &mut progress,
+    )
+    .map_err(|error| {
+        invalid(format!(
+            "{error}. Local repository folder retained at {}",
+            root.display()
+        ))
+    })?;
+    git_connections::bind_reviewed_connection(&root, None).map_err(|error| {
+        invalid(format!(
+            "{error}. Local repository retained at {}",
+            root.display()
+        ))
+    })?;
+    Ok(LocalRepository {
+        root,
+        branch: branch.into(),
     })
 }
 
 fn checkout(
-    forge: &GitHub,
+    transport: &GitTransport<'_>,
     destination: &Path,
-    url: &str,
+    url: Option<&str>,
     tip: &RemoteTip,
     cancel: &CancelToken,
     progress: &mut impl FnMut(&str),
 ) -> Result<()> {
     progress("Creating a new local repository");
-    git(
-        forge,
-        Some(destination),
-        &["init", "--initial-branch", &tip.branch],
-        cancel,
-        progress,
-    )?;
-    fs::create_dir(destination.join(".git/tcad-empty-hooks"))?;
-    git(
-        forge,
-        Some(destination),
-        &["remote", "add", "origin", url],
-        cancel,
-        progress,
-    )?;
+    let mut init_args = vec!["init", "--initial-branch", &tip.branch];
     if let Some(commit) = &tip.commit {
+        // Match the inspected repository instead of inheriting a different
+        // object-format default from the user's Git configuration.
+        init_args.push(if commit.len() == 64 {
+            "--object-format=sha256"
+        } else {
+            "--object-format=sha1"
+        });
+    }
+    git(transport, Some(destination), &init_args, cancel, progress)?;
+    fs::create_dir(destination.join(".git/tcad-empty-hooks"))?;
+    if let Some(url) = url {
+        git(
+            transport,
+            Some(destination),
+            &["remote", "add", "origin", url],
+            cancel,
+            progress,
+        )?;
+    }
+    // A conditional user config can become active only after origin is set.
+    // Inspect filters after that point, before materializing any remote files.
+    disable_transfer_filters(transport, destination, cancel, progress)?;
+    if let Some(commit) = &tip.commit {
+        verify_transport_address(transport, Some(destination), false, cancel, progress)?;
         progress("Downloading the selected branch");
         let reference = format!("refs/heads/{}", tip.branch);
         git(
-            forge,
+            transport,
             Some(destination),
             &[
                 "fetch",
@@ -949,7 +1189,7 @@ fn checkout(
             progress,
         )?;
         let actual = git(
-            forge,
+            transport,
             Some(destination),
             &["rev-parse", "FETCH_HEAD^{commit}"],
             cancel,
@@ -961,21 +1201,21 @@ fn checkout(
             ));
         }
         git(
-            forge,
+            transport,
             Some(destination),
             &["update-ref", &reference, commit],
             cancel,
             progress,
         )?;
         git(
-            forge,
+            transport,
             Some(destination),
             &["read-tree", "--reset", "-u", "HEAD"],
             cancel,
             progress,
         )?;
         git(
-            forge,
+            transport,
             Some(destination),
             &[
                 "update-ref",
@@ -986,14 +1226,14 @@ fn checkout(
             progress,
         )?;
         git(
-            forge,
+            transport,
             Some(destination),
             &["config", &format!("branch.{}.remote", tip.branch), "origin"],
             cancel,
             progress,
         )?;
         git(
-            forge,
+            transport,
             Some(destination),
             &[
                 "config",
@@ -1007,7 +1247,7 @@ fn checkout(
     // Persist the security settings for later normal TCAD Git operations. Hooks
     // and submodules received from a remote are never activated by opening it.
     git(
-        forge,
+        transport,
         Some(destination),
         &[
             "config",
@@ -1024,7 +1264,7 @@ fn checkout(
         ("fetch.recurseSubmodules", "false"),
     ] {
         git(
-            forge,
+            transport,
             Some(destination),
             &["config", key, value],
             cancel,
@@ -1041,13 +1281,18 @@ fn checkout(
 
 pub fn clone_repository(
     request: &CloneRequest,
-    forge: &GitHub,
+    connection: Option<&ConnectionProfile>,
     cancel: &CancelToken,
     mut progress: impl FnMut(&str),
 ) -> Result<CloneResult> {
+    let address = RepositoryAddress::parse(&request.clone_url)?;
+    let transport = &GitTransport {
+        address: Some(&address),
+        connection,
+    };
     let tip = remote_tip(
-        forge,
-        &request.clone_url,
+        transport,
+        &address.git_url,
         request.branch.as_deref(),
         cancel,
         &mut progress,
@@ -1064,28 +1309,14 @@ pub fn clone_repository(
     let root = reserve_destination(&request.destination)?;
     let result = (|| {
         checkout(
-            forge,
+            transport,
             &root,
-            &request.clone_url,
+            Some(&address.git_url),
             &tip,
             cancel,
             &mut progress,
         )?;
-        if let Ok(account) = forge.account(cancel)
-            && let Some(login) = account.login
-        {
-            let email = account
-                .user_id
-                .map(|id| format!("{id}+{login}@users.noreply.github.com"))
-                .unwrap_or_else(|| format!("{login}@users.noreply.github.com"));
-            configure_author(
-                forge,
-                &root,
-                &GitAuthor { name: login, email },
-                cancel,
-                &mut progress,
-            )?;
-        }
+        git_connections::bind_reviewed_connection(&root, connection)?;
         progress("Finding TCAD models and verifying their resources");
         let discovery = discover(&root, cancel)?;
         Ok(CloneResult {
@@ -1204,7 +1435,11 @@ struct ReadmeArtifacts {
     notices: Vec<String>,
 }
 
-fn readme_artifacts(source: &Snapshot, cancel: &CancelToken) -> Result<ReadmeArtifacts> {
+fn readme_artifacts(
+    source: &Snapshot,
+    cancel: &CancelToken,
+    github_preview: bool,
+) -> Result<ReadmeArtifacts> {
     let mut result = ReadmeArtifacts {
         markdown: format!(
             "# {}\n\nTCAD model. Open the JSON project manifest in TCAD to edit it.\n",
@@ -1239,7 +1474,7 @@ fn readme_artifacts(source: &Snapshot, cancel: &CancelToken) -> Result<ReadmeArt
     // Build this section from verified preview assets. Never copy unrelated
     // prose, absolute links or host paths from the source repository's README.
     result.markdown.push_str(&format!("\n{}\n\n### Model preview\n\nGenerated from saved model `{}`. Coordinates are in millimeters.\n\n", crate::readme_preview::START, &metadata.source_sha256[..16]));
-    if metadata.inline {
+    if github_preview && metadata.inline {
         let ascii = String::from_utf8(read_bounded(&stl, 180_000)?)
             .map_err(|_| invalid("The inline STL preview is not UTF-8"))?;
         if ascii.contains("```") {
@@ -1253,7 +1488,7 @@ fn readme_artifacts(source: &Snapshot, cancel: &CancelToken) -> Result<ReadmeArt
         result.markdown.push_str(&ascii);
         result.markdown.push_str("```\n\n");
     } else {
-        result.markdown.push_str("[![Model preview](previews/model.png)](previews/model.stl)\n\nOpen the preview to rotate and zoom in GitHub's STL viewer.\n\n");
+        result.markdown.push_str("[![Model preview](previews/model.png)](previews/model.stl)\n\nDownload the STL preview to open it in a 3D viewer.\n\n");
     }
     result.markdown.push_str("[Download model preview](previews/model.stl) · [Preview source record](previews/model-preview.json)\n\nThis is a generated display mesh. Use the native TCAD files for editing and manufacturing.\n\n");
     result.markdown.push_str(crate::readme_preview::END);
@@ -1275,8 +1510,9 @@ fn preview_readme(
     destination: &Path,
     cancel: &CancelToken,
     notices: &mut Vec<String>,
+    github_preview: bool,
 ) -> Result<BTreeSet<String>> {
-    let generated = readme_artifacts(source, cancel)?;
+    let generated = readme_artifacts(source, cancel, github_preview)?;
     for name in &generated.files {
         if !source.files.contains(name) {
             copy_new_file(
@@ -1294,6 +1530,7 @@ fn preview_readme(
             files: BTreeSet::new(),
         },
         cancel,
+        github_preview,
     )?;
     if !files.is_empty() && verified.files != files {
         return Err(invalid(
@@ -1327,7 +1564,7 @@ fn author_valid(author: &GitAuthor) -> Result<()> {
 }
 
 fn configure_author(
-    forge: &GitHub,
+    transport: &GitTransport<'_>,
     root: &Path,
     author: &GitAuthor,
     cancel: &CancelToken,
@@ -1336,7 +1573,7 @@ fn configure_author(
     author_valid(author)?;
     for (key, value) in [("user.name", &author.name), ("user.email", &author.email)] {
         git(
-            forge,
+            transport,
             Some(root),
             &["config", "--local", key, value],
             cancel,
@@ -1346,17 +1583,26 @@ fn configure_author(
     Ok(())
 }
 
-fn verify_remote(request: &PublishRequest, forge: &GitHub, cancel: &CancelToken) -> Result<()> {
-    if request.expected_login.is_empty()
-        || forge.account(cancel)?.login.as_deref() != Some(request.expected_login.as_str())
+fn verify_remote(request: &PublishRequest, cancel: &CancelToken) -> Result<()> {
+    if !request.remote_reviewed {
+        return Err(invalid(
+            "Review the repository address, branch and visibility before publishing",
+        ));
+    }
+    RepositoryAddress::parse(&request.clone_url)?;
+    let Some(guard) = &request.github_guard else {
+        return Ok(());
+    };
+    let forge = GitHub::discover()?;
+    if guard.expected_login.is_empty()
+        || forge.account(cancel)?.login.as_deref() != Some(guard.expected_login.as_str())
     {
         return Err(invalid(
             "The signed-in account changed. Review publishing again before uploading the saved local copy",
         ));
     }
     let repository = forge.repository(&github_name(&request.clone_url)?, cancel)?;
-    if repository.id != request.expected_repository_id
-        || repository.private != request.expected_private
+    if repository.id != guard.expected_repository_id || repository.private != guard.expected_private
     {
         return Err(invalid(
             "The repository identity or visibility changed. Review the publish destination again",
@@ -1371,7 +1617,7 @@ fn verify_remote(request: &PublishRequest, forge: &GitHub, cancel: &CancelToken)
 }
 
 fn verify_staged_bytes(
-    forge: &GitHub,
+    transport: &GitTransport<'_>,
     root: &Path,
     paths: &BTreeSet<String>,
     cancel: &CancelToken,
@@ -1380,7 +1626,7 @@ fn verify_staged_bytes(
     for batch in paths.iter().collect::<Vec<_>>().chunks(128) {
         let mut args = vec!["--literal-pathspecs", "ls-files", "--stage", "-z", "--"];
         args.extend(batch.iter().map(|path| path.as_str()));
-        let staged = git(forge, Some(root), &args, cancel, progress)?;
+        let staged = git(transport, Some(root), &args, cancel, progress)?;
         let mut objects = BTreeMap::new();
         for entry in staged.split('\0').filter(|entry| !entry.is_empty()) {
             let (metadata, path) = entry
@@ -1396,7 +1642,7 @@ fn verify_staged_bytes(
         }
         let mut args = vec!["hash-object", "--no-filters", "--"];
         args.extend(batch.iter().map(|path| path.as_str()));
-        let raw = git(forge, Some(root), &args, cancel, progress)?;
+        let raw = git(transport, Some(root), &args, cancel, progress)?;
         let hashes = raw.lines().collect::<Vec<_>>();
         if hashes.len() != batch.len() {
             return Err(invalid("Git could not verify every staged model file"));
@@ -1416,9 +1662,53 @@ fn verify_staged_bytes(
 /// repositories receive a new model folder and keep every existing file/history.
 pub fn publish_model(
     request: &PublishRequest,
-    forge: &GitHub,
+    connection: Option<&ConnectionProfile>,
+    cancel: &CancelToken,
+    progress: impl FnMut(&str),
+) -> Result<PublishResult> {
+    let address = RepositoryAddress::parse(&request.clone_url)?;
+    let transport = GitTransport {
+        address: Some(&address),
+        connection,
+    };
+    let mut normalized = request.clone();
+    normalized.clone_url = address.git_url.clone();
+    publish_model_inner(&normalized, &transport, cancel, progress, true)
+}
+
+/// Copy the saved model into a new local repository with its first version.
+/// This never changes the source model and never contacts a remote.
+pub fn create_local_model_repository(
+    request: &PublishSourceRequest,
+    cancel: &CancelToken,
+    progress: impl FnMut(&str),
+) -> Result<PublishResult> {
+    let transport = GitTransport {
+        address: None,
+        connection: None,
+    };
+    let publish = PublishRequest {
+        source_manifest: request.source_manifest.clone(),
+        expected_fingerprint: request.expected_fingerprint.clone(),
+        clone_url: String::new(),
+        remote_reviewed: false,
+        github_guard: None,
+        destination: request.destination.clone(),
+        branch: request.branch.clone(),
+        folder: request.folder.clone(),
+        commit_message: request.commit_message.clone(),
+        author: request.author.clone(),
+        expected_remote_commit: None,
+    };
+    publish_model_inner(&publish, &transport, cancel, progress, false)
+}
+
+fn publish_model_inner(
+    request: &PublishRequest,
+    transport: &GitTransport<'_>,
     cancel: &CancelToken,
     mut progress: impl FnMut(&str),
+    remote: bool,
 ) -> Result<PublishResult> {
     let folder = if request.folder.is_empty() {
         PathBuf::new()
@@ -1427,22 +1717,30 @@ pub fn publish_model(
     };
     progress("Verifying the saved model and its resource files");
     let source = preflight_source(&PublishSourceRequest::from(request), cancel)?;
-    verify_remote(request, forge, cancel)?;
-    let tip = remote_tip(
-        forge,
-        &request.clone_url,
-        request.branch.as_deref(),
-        cancel,
-        &mut progress,
-    )?;
-    if let Some(expected) = &request.expected_remote_commit {
-        commit_hash(expected)?;
-        if tip.commit.as_ref() != Some(expected) {
+    let tip = if remote {
+        verify_remote(request, cancel)?;
+        let tip = remote_tip(
+            transport,
+            &request.clone_url,
+            request.branch.as_deref(),
+            cancel,
+            &mut progress,
+        )?;
+        if let Some(expected) = &request.expected_remote_commit {
+            commit_hash(expected)?;
+        }
+        if tip.commit != request.expected_remote_commit {
             return Err(invalid(
-                "The remote branch changed. Refresh before publishing",
+                "The remote branch changed. Refresh and review publishing again",
             ));
         }
-    }
+        tip
+    } else {
+        RemoteTip {
+            branch: request.branch.clone().unwrap_or_else(|| "main".into()),
+            commit: None,
+        }
+    };
     if tip.commit.is_some() && folder.as_os_str().is_empty() {
         return Err(invalid(
             "Choose a new model folder when publishing into an existing repository",
@@ -1452,9 +1750,9 @@ pub fn publish_model(
     let root = reserve_destination(&request.destination)?;
     let result = (|| {
         checkout(
-            forge,
+            transport,
             &root,
-            &request.clone_url,
+            remote.then_some(request.clone_url.as_str()),
             &tip,
             cancel,
             &mut progress,
@@ -1513,7 +1811,13 @@ pub fn publish_model(
         }
         let mut notices = Vec::new();
         let mut published_files = source.files.clone();
-        published_files.extend(preview_readme(&source, &destination, cancel, &mut notices)?);
+        published_files.extend(preview_readme(
+            &source,
+            &destination,
+            cancel,
+            &mut notices,
+            request.github_guard.is_some(),
+        )?);
         let published_paths = published_files
             .iter()
             .map(|path| folder.join(path).to_string_lossy().replace('\\', "/"))
@@ -1522,10 +1826,10 @@ pub fn publish_model(
         for paths in published_paths.iter().collect::<Vec<_>>().chunks(128) {
             let mut args = vec!["--literal-pathspecs", "add", "--force", "--"];
             args.extend(paths.iter().map(|path| path.as_str()));
-            git(forge, Some(&root), &args, cancel, &mut progress)?;
+            git(transport, Some(&root), &args, cancel, &mut progress)?;
         }
         let staged = git(
-            forge,
+            transport,
             Some(&root),
             &["diff", "--cached", "--name-only", "-z"],
             cancel,
@@ -1541,9 +1845,9 @@ pub fn publish_model(
                 "The publish checkout has unexpected staged files. No commit or upload was made; inspect the retained copy",
             ));
         }
-        verify_staged_bytes(forge, &root, &published_paths, cancel, &mut progress)?;
-        configure_author(forge, &root, &request.author, cancel, &mut progress)?;
-        let mut command = secure_git(forge, Some(&root))?;
+        verify_staged_bytes(transport, &root, &published_paths, cancel, &mut progress)?;
+        configure_author(transport, &root, &request.author, cancel, &mut progress)?;
+        let mut command = secure_git(transport, Some(&root))?;
         command
             .env_remove("GIT_AUTHOR_DATE")
             .env_remove("GIT_COMMITTER_DATE")
@@ -1560,7 +1864,7 @@ pub fn publish_model(
             )));
         }
         let commit = git(
-            forge,
+            transport,
             Some(&root),
             &["rev-parse", "HEAD"],
             cancel,
@@ -1568,32 +1872,49 @@ pub fn publish_model(
         )?
         .trim()
         .to_string();
-        verify_remote(request, forge, cancel)?;
-        if snapshot(&request.source_manifest, cancel)?
-            .document
-            .fingerprint()
-            != request.expected_fingerprint
-        {
-            return Err(invalid(
-                "The source model changed before upload. The copied version is kept locally; review before pushing it",
-            ));
+        git_connections::bind_reviewed_connection(&root, transport.connection)?;
+        if remote {
+            verify_remote(request, cancel)?;
+            let current = remote_tip(
+                transport,
+                &request.clone_url,
+                Some(&tip.branch),
+                cancel,
+                &mut progress,
+            )?;
+            if current.commit != tip.commit {
+                return Err(invalid(
+                    "The remote branch changed before upload. Review the retained local version before pushing",
+                ));
+            }
+            if snapshot(&request.source_manifest, cancel)?
+                .document
+                .fingerprint()
+                != request.expected_fingerprint
+            {
+                return Err(invalid(
+                    "The source model changed before upload. The copied version is kept locally; review before pushing it",
+                ));
+            }
+            verify_transport_address(transport, Some(&root), true, cancel, &mut progress)?;
+            progress("Publishing the model to the reviewed repository");
+            let reference = format!("HEAD:refs/heads/{}", tip.branch);
+            git(
+                transport,
+                Some(&root),
+                &[
+                    "push",
+                    "--porcelain",
+                    "--set-upstream",
+                    "origin",
+                    &reference,
+                ],
+                cancel,
+                &mut progress,
+            )?;
         }
-        progress("Publishing the model to GitHub");
-        let reference = format!("HEAD:refs/heads/{}", tip.branch);
-        git(
-            forge,
-            Some(&root),
-            &[
-                "push",
-                "--porcelain",
-                "--set-upstream",
-                "origin",
-                &reference,
-            ],
-            cancel,
-            &mut progress,
-        )?;
         Ok(PublishResult {
+            pushed: remote,
             root: root.clone(),
             manifest,
             branch: tip.branch,
@@ -1601,5 +1922,10 @@ pub fn publish_model(
             notices,
         })
     })();
-    result.map_err(|error: CadError| invalid(format!("{error}. Recovery copy retained at {}. Your original model is unchanged. If upload was interrupted, refresh GitHub before retrying because the remote may already contain the commit", root.display())))
+    result.map_err(|error: CadError| {
+        let upload_notice = if remote {
+            " If upload was interrupted, refresh the remote before retrying because it may already contain the commit."
+        } else { "" };
+        invalid(format!("{error}. Recovery copy retained at {}. Your original model is unchanged.{upload_notice}", root.display()))
+    })
 }

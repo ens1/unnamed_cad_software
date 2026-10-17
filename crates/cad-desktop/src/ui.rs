@@ -17,6 +17,9 @@ pub fn workspace_ui(
     _main_thread: bevy::ecs::system::NonSendMarker,
 ) -> bevy::prelude::Result {
     let ctx = contexts.ctx_mut()?;
+    if let Some(public_key) = crate::git_connections_ui::take_clipboard(&mut w) {
+        ctx.copy_text(public_key);
+    }
     ctx.set_zoom_factor(w.view.ui_scale.clamp(0.75, 1.5));
     let logical_size = ctx.content_rect().size();
     w.presentation_resources.logical_size = [logical_size.x, logical_size.y];
@@ -737,6 +740,26 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     registry.register("repositories-editor", |ui, w, _| {
         crate::repositories_ui::show(ui, w)
     });
+    registry.register("git-connections-editor", |ui, w, _| {
+        crate::git_connections_ui::show(ui, w)
+    });
+    registry.register("git-connection-secret", |ui, w, context| {
+        let binding = context
+            .layout
+            .binding_for_in(&w.view.active_layout, context.region);
+        let bound = binding.as_ref().and_then(|binding| binding.bind.as_deref());
+        for element in context.semantics.iter().filter(|element| {
+            element.role == "git-connection-secret" && bound.is_none_or(|id| id == element.id)
+        }) {
+            if let Some(label) = binding.as_ref().and_then(|binding| binding.label.as_ref()) {
+                let mut presented = element.clone();
+                presented.label.clone_from(label);
+                crate::git_connections_ui::secret_control(ui, w, &presented);
+            } else {
+                crate::git_connections_ui::secret_control(ui, w, element);
+            }
+        }
+    });
     registry.register("feature-transfer-editor", |ui, w, _| {
         crate::feature_transfer_ui::show(ui, w)
     });
@@ -980,6 +1003,10 @@ pub(crate) fn semantic_element(
     }
 }
 pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
+    if command == "git-connections" || command.starts_with("git-connections.") {
+        crate::git_connections_ui::action(w, command, Some(&element.data));
+        return;
+    }
     if matches!(command, "repositories.cancel" | "repositories.auth-browser") {
         crate::repositories_ui::action(w, command, Some(&element.data));
         return;
@@ -1288,6 +1315,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                         | "assembly-weld"
                         | "assembly-copy"
                         | "assembly-group"
+                        | "repositories"
+                        | "git-connections"
                 )
         }) {
         element.role.as_str()
@@ -2141,6 +2170,10 @@ fn reference_repair_blocks(w: &mut Workspace, command: &str) -> bool {
 }
 
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if cmd == "git-connections" || cmd.starts_with("git-connections.") {
+        crate::git_connections_ui::action(w, cmd, None);
+        return;
+    }
     if matches!(cmd, "repositories.cancel" | "repositories.auth-browser") {
         crate::repositories_ui::action(w, cmd, None);
         return;
@@ -3502,7 +3535,8 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "assembly" => "Assembly",
             "configurations" => "Configurations and Equations",
             "versions" => "Design versions",
-            "repositories" => "Repositories and Accounts",
+            "repositories" => "Git Repositories",
+            "git-connections" => "Git Connections",
             "feature-transfer" => "Transfer Selected Features",
             "materials" => "Engineering Materials",
             "appearances" => "Appearance · Colors and Textures",
@@ -3657,6 +3691,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 "component-insert" => crate::components_ui::show(ui, w),
                 "versions" => versions(ui, w),
                 "repositories" => crate::repositories_ui::show(ui, w),
+                "git-connections" => crate::git_connections_ui::show(ui, w),
                 "feature-transfer" => crate::feature_transfer_ui::show(ui, w),
                 "bom" => bom(ui, w),
                 "materials" => materials(ui, w),

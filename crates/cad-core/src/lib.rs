@@ -33,6 +33,7 @@ pub mod feature_order;
 pub mod feature_transfer;
 pub mod finish_library;
 pub mod forge;
+pub mod git_connections;
 pub mod history;
 pub mod holes;
 pub mod inspection;

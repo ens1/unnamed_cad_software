@@ -1,10 +1,11 @@
-//! Account and repository workflow over application-owned forge and model contracts.
+//! Git-first repository workflow with optional forge conveniences.
 //! Network work runs away from the model thread. Credentials never enter UI state.
 use crate::{Workspace, presentation_controls as controls};
 use bevy_egui::egui;
 use cad_core::{
     CadError, Document, Id, Result,
     forge::{self, CancelToken, GitHub},
+    git_connections::{ConnectionProfile, RepositoryAddress},
     presentation::SemanticElement,
     repository_models::{self as models, GitAuthor, ModelEntry},
 };
@@ -72,12 +73,16 @@ struct Checkout {
 enum Destination {
     New(forge::CreateRepository),
     Existing(forge::Repository),
+    Git(String),
+    Local,
 }
 #[derive(Clone)]
 struct PublishReview {
     context: Context,
-    account: String,
+    account: Option<String>,
     destination: Destination,
+    connection: Option<ConnectionProfile>,
+    remote_commit: Option<String>,
     local: PathBuf,
     branch: Option<String>,
     folder: String,
@@ -100,17 +105,23 @@ impl PublishReview {
             author: self.author.clone(),
         })
     }
-    fn private(&self) -> bool {
+    fn private(&self) -> Option<bool> {
         match &self.destination {
-            Destination::New(request) => request.private,
-            Destination::Existing(repository) => repository.private,
+            Destination::New(request) => Some(request.private),
+            Destination::Existing(repository) => Some(repository.private),
+            Destination::Git(_) | Destination::Local => None,
         }
     }
     fn name(&self) -> String {
         match &self.destination {
             Destination::New(request) => format!("{}/{}", request.owner, request.name),
             Destination::Existing(repository) => repository.full_name.clone(),
+            Destination::Git(url) => url.clone(),
+            Destination::Local => "Local repository".into(),
         }
+    }
+    fn disclosure_needed(&self) -> bool {
+        !matches!(self.destination, Destination::Local) && self.private() != Some(true)
     }
 }
 enum Event {
@@ -129,6 +140,8 @@ enum Outcome {
     Opened(Box<Document>, PathBuf),
     Reviewed(Box<PublishReview>),
     Published(models::PublishResult),
+    Author(GitAuthor, bool),
+    Initialized(PathBuf, String),
 }
 
 fn invalid(message: impl Into<String>) -> CadError {
@@ -142,21 +155,18 @@ fn value(w: &Workspace, key: &str) -> Value {
         .unwrap_or_else(|| match key {
             "new-private" => json!(true),
             "public-confirmed" => json!(false),
-            "publish-mode" => json!("new"),
+            "publish-mode" => json!("url"),
             "publish-message" => json!("Publish TCAD model"),
-            "publish-folder" => json!(if text(w, "publish-mode") == "existing" {
+            "publish-folder" => json!(if matches!(
+                text(w, "publish-mode").as_str(),
+                "existing" | "url"
+            ) {
                 "model"
             } else {
                 ""
             }),
-            "author-name" => json!(
-                w.repositories
-                    .account
-                    .as_ref()
-                    .and_then(|account| account.display_name.as_deref())
-                    .or_else(|| login(w))
-                    .unwrap_or_default()
-            ),
+            "author-name" | "author-email" => json!(""),
+            "local-branch" => json!("main"),
             "account" => json!(
                 login(w)
                     .or_else(|| w
@@ -172,17 +182,6 @@ fn value(w: &Workspace, key: &str) -> Value {
                     .unwrap_or_default()
             ),
             "new-owner" => json!(login(w).unwrap_or_default()),
-            "author-email" => json!(
-                login(w)
-                    .map(|login| w
-                        .repositories
-                        .account
-                        .as_ref()
-                        .and_then(|account| account.user_id)
-                        .map(|id| format!("{id}+{login}@users.noreply.github.com"))
-                        .unwrap_or_else(|| format!("{login}@users.noreply.github.com")))
-                    .unwrap_or_default()
-            ),
             _ => json!(""),
         })
 }
@@ -197,6 +196,20 @@ fn login(w: &Workspace) -> Option<&str> {
         .account
         .as_ref()
         .and_then(|account| account.login.as_deref())
+}
+fn select_repository(w: &mut Workspace, repository: forge::Repository) {
+    w.repositories
+        .fields
+        .insert("clone-url".into(), json!(repository.clone_url));
+    w.repositories
+        .fields
+        .insert("clone-connection".into(), json!("github"));
+    w.repositories.fields.remove("clone-branch");
+    w.repositories.selected = Some(repository);
+    w.repositories.review = None;
+    w.repositories
+        .fields
+        .insert("public-confirmed".into(), json!(false));
 }
 fn idle(w: &Workspace) -> bool {
     w.repositories.pending.is_none()
@@ -243,6 +256,7 @@ fn submit(
 }
 fn safe_to_leave(w: &Workspace) -> Result<()> {
     if crate::git_ui::busy(w)
+        || crate::drawing_interaction_ui::active(w)
         || w.settings.is_some()
         || w.tool_checkpoint.is_some()
         || w.sketch.is_some()
@@ -333,7 +347,7 @@ pub fn poll(w: &mut Workspace) {
             Event::Created(repository) => {
                 notice(w, format!("Created {} ({}) on GitHub. This repository remains available even if publishing is cancelled or fails.", repository.full_name, privacy(repository.private)));
                 w.repositories.fields.insert("publish-mode".into(), json!("existing"));
-                w.repositories.selected = Some(repository);
+                select_repository(w, repository);
             }
             Event::Finished(result) => {
                 if let Ok(mut slot) = w.repositories.receiver.lock() { *slot = None; }
@@ -354,8 +368,8 @@ pub fn poll(w: &mut Workspace) {
                         w.repositories.selected = None;
                         w.repositories.review = None;
                         w.repositories.create_review = None;
-                        for key in ["account", "new-owner", "author-name", "author-email", "browse-owner"] { w.repositories.fields.remove(key); }
-                        set_status(w, signed_in.map(|login| format!("Signed in as {login}")).unwrap_or_else(|| "Not signed in. Local models still work.".into()));
+                        for key in ["account", "new-owner", "browse-owner"] { w.repositories.fields.remove(key); }
+                        set_status(w, signed_in.map(|login| format!("GitHub: signed in as {login}")).unwrap_or_else(|| "GitHub is not connected. Git URLs and local repositories remain available.".into()));
                     }
                     Ok(Outcome::Owners(page, append)) => {
                         if !append { w.repositories.owners.clear(); }
@@ -371,15 +385,13 @@ pub fn poll(w: &mut Workspace) {
                     }
                     Ok(Outcome::Repository(repository)) => {
                         set_status(w, format!("Selected {} · {}", repository.full_name, privacy(repository.private)));
-                        w.repositories.selected = Some(repository);
-                        w.repositories.review = None;
-                        w.repositories.fields.insert("public-confirmed".into(), json!(false));
+                        select_repository(w, repository);
                     }
                     Ok(Outcome::Created(repository)) => {
                         let message = format!("Created {} · {}. Select Download repository to create a local working copy, or publish your saved model into it.", repository.full_name, privacy(repository.private));
                         notice(w, message.clone());
                         set_status(w, message);
-                        w.repositories.selected = Some(repository);
+                        select_repository(w, repository);
                         w.repositories.create_review = None;
                         w.repositories.review = None;
                         w.repositories.fields.insert("publish-mode".into(),json!("existing"));
@@ -406,7 +418,7 @@ pub fn poll(w: &mut Workspace) {
                         } else { set_status(w, "The model changed. Save it and review the destination again."); }
                     }
                     Ok(Outcome::Published(published)) => {
-                        let message = format!("Published commit {} on {}. Working copy: {}", published.commit, published.branch, published.manifest.display());
+                        let message = format!("{} commit {} on {}. Working copy: {}", if published.pushed { "Published" } else { "Saved local" }, published.commit, published.branch, published.manifest.display());
                         for note in published.notices { notice(w, note); }
                         notice(w, message.clone());
                         set_status(w, message);
@@ -414,6 +426,24 @@ pub fn poll(w: &mut Workspace) {
                         w.repositories.fields.insert("published-path".into(), json!(published.manifest.display().to_string()));
                         notice(w,"Open the published working copy to continue editing. Use Versions to commit and push later changes.".into());
                         if !current { notice(w, "Publishing completed for the saved source selected earlier. The current model was not replaced.".into()); }
+                    }
+                    Ok(Outcome::Author(author, replace)) => {
+                        if current && !cancelled {
+                            for (key, value) in [("author-name", author.name), ("author-email", author.email)] {
+                                if replace || text(w, key).is_empty() { w.repositories.fields.insert(key.into(), json!(value)); }
+                            }
+                            set_status(w, if text(w, "author-name").trim().is_empty() || text(w, "author-email").trim().is_empty() {
+                                "Enter a commit author name and email before saving a version. Git has no complete author setting."
+                            } else {
+                                "Git author loaded. You can edit the name and email before saving a version."
+                            });
+                        } else {
+                            set_status(w, "The current model changed. Load its Git author settings again when ready.");
+                        }
+                    }
+                    Ok(Outcome::Initialized(root, branch)) => {
+                        set_status(w, format!("Created local repository at {} on {branch}. Save a model in this folder, then use Versions.", root.display()));
+                        w.repositories.checkout = Some(Checkout { root, branch, projects: Vec::new() });
                     }
                 }
             }
@@ -443,33 +473,79 @@ fn browse(w: &mut Workspace, append: bool) -> Result<()> {
     });
     Ok(())
 }
+fn reviewed_branch(review: &mut PublishReview, remote: models::RemoteRepository) -> Result<()> {
+    if remote.empty {
+        review.branch = Some(review.branch.clone().unwrap_or_else(|| "main".into()));
+        review.remote_commit = None;
+        return Ok(());
+    }
+    let branch = review
+        .branch
+        .clone()
+        .or(remote.default_branch)
+        .ok_or_else(|| {
+            invalid("This repository has no default branch. Enter an existing branch.")
+        })?;
+    let reference = remote.branches.iter().find(|entry| entry.name == branch)
+        .ok_or_else(|| invalid("Choose an existing remote branch. Create a branch in Versions after opening the repository."))?;
+    if review.folder.is_empty() {
+        return Err(invalid(
+            "Choose a new model folder inside this existing repository",
+        ));
+    }
+    review.branch = Some(branch);
+    review.remote_commit = Some(reference.commit.clone());
+    Ok(())
+}
 fn review(w: &mut Workspace) -> Result<()> {
     source_ready(w)?;
-    require_login(w)?;
     w.repositories.create_review = None;
-    let destination = if text(w, "publish-mode") == "existing" {
-        Destination::Existing(
-            w.repositories
-                .selected
-                .clone()
-                .ok_or_else(|| invalid("Select a repository in Open models first"))?,
-        )
-    } else {
-        let request = forge::CreateRepository {
-            owner: text(w, "new-owner"),
-            name: text(w, "new-name"),
-            description: text(w, "new-description"),
-            private: flag(w, "new-private"),
-        };
-        if request.owner.trim().is_empty() || request.name.trim().is_empty() {
-            return Err(invalid("Enter the repository owner and name"));
+    let destination = match text(w, "publish-mode").as_str() {
+        "existing" => {
+            require_login(w)?;
+            Destination::Existing(
+                w.repositories
+                    .selected
+                    .clone()
+                    .ok_or_else(|| invalid("Select a repository under GitHub connection first"))?,
+            )
         }
-        Destination::New(request)
+        "new" => {
+            require_login(w)?;
+            let request = forge::CreateRepository {
+                owner: text(w, "new-owner"),
+                name: text(w, "new-name"),
+                description: text(w, "new-description"),
+                private: flag(w, "new-private"),
+            };
+            if request.owner.trim().is_empty() || request.name.trim().is_empty() {
+                return Err(invalid("Enter the repository owner and name"));
+            }
+            Destination::New(request)
+        }
+        "local" => Destination::Local,
+        _ => Destination::Git(RepositoryAddress::parse(text(w, "publish-url").trim())?.git_url),
+    };
+    let github = matches!(destination, Destination::New(_) | Destination::Existing(_));
+    let selected_connection = text(w, "publish-connection");
+    let connection = if matches!(destination, Destination::Local) {
+        None
+    } else {
+        crate::git_connections_ui::resolve(
+            w,
+            if github {
+                "github"
+            } else {
+                &selected_connection
+            },
+        )?
     };
     let review = PublishReview {
         context: Context::capture(w),
-        account: login(w).unwrap_or_default().into(),
+        account: github.then(|| login(w).unwrap_or_default().to_owned()),
         destination,
+        connection,
+        remote_commit: None,
         local: path_field(w, "publish-local")?,
         branch: Some(text(w, "publish-branch").trim().into())
             .filter(|branch: &String| !branch.is_empty()),
@@ -485,29 +561,39 @@ fn review(w: &mut Workspace) -> Result<()> {
         || review.author.email.trim().is_empty()
     {
         return Err(invalid(
-            "Enter a commit message, author name and author email",
+            "Enter a version message, author name and author email",
         ));
     }
     submit(
         w,
         false,
         "Checking publish destination…",
-        move |cancel, _| {
+        move |cancel, sender| {
             let mut review = review;
             models::preflight_publish(&review.source_request()?, &cancel)?;
-            if let Destination::Existing(repository) = &review.destination {
-                let actual = GitHub::discover()?.repository(&repository.full_name, &cancel)?;
-                if !actual.can_push || actual.archived {
-                    return Err(invalid(
-                        "This repository is archived or your account cannot push to it",
-                    ));
+            let url = match &review.destination {
+                Destination::Existing(repository) => {
+                    let actual = GitHub::discover()?.repository(&repository.full_name, &cancel)?;
+                    if !actual.can_push || actual.archived {
+                        return Err(invalid(
+                            "This repository is archived or your account cannot push to it",
+                        ));
+                    }
+                    let url = actual.clone_url.clone();
+                    review.destination = Destination::Existing(actual);
+                    Some(url)
                 }
-                if !actual.empty && review.folder.is_empty() {
-                    return Err(invalid(
-                        "Choose a new model folder inside this existing repository",
-                    ));
-                }
-                review.destination = Destination::Existing(actual);
+                Destination::Git(url) => Some(url.clone()),
+                Destination::New(_) | Destination::Local => None,
+            };
+            if let Some(url) = url {
+                let remote =
+                    models::inspect_remote(&url, review.connection.as_ref(), &cancel, |message| {
+                        let _ = sender.send(Event::Status(message.into()));
+                    })?;
+                reviewed_branch(&mut review, remote)?;
+            } else if review.branch.is_none() {
+                review.branch = Some("main".into());
             }
             Ok(Outcome::Reviewed(Box::new(review)))
         },
@@ -516,90 +602,122 @@ fn review(w: &mut Workspace) -> Result<()> {
 }
 fn publish(w: &mut Workspace) -> Result<()> {
     source_ready(w)?;
-    require_login(w)?;
     let review = w
         .repositories
         .review
         .clone()
-        .ok_or_else(|| invalid("Review the publish destination first"))?;
+        .ok_or_else(|| invalid("Review the destination first"))?;
     if !review.context.current(w) {
         return Err(invalid(
             "The model changed; save it and review publishing again",
         ));
     }
-    if !review.private() && !flag(w, "public-confirmed") {
+    if review.disclosure_needed() && !flag(w, "public-confirmed") {
         return Err(invalid(
-            "Confirm that this model and its source resources can be public",
+            "Confirm the destination access before publishing the model and its resources",
         ));
     }
     submit(
         w,
         true,
-        "Publishing the reviewed model…",
+        "Saving the reviewed model…",
         move |cancel, sender| {
-            let github = GitHub::discover()?;
-            if github.account(&cancel)?.login.as_deref() != Some(review.account.as_str()) {
-                return Err(invalid(
-                    "The signed-in account changed. Review publishing again.",
-                ));
-            }
             models::preflight_publish(&review.source_request()?, &cancel)?;
-            let repository = match &review.destination {
-                Destination::New(request) => {
-                    let repository = github.create(request, &cancel)?;
-                    let _ = sender.send(Event::Created(repository.clone()));
-                    repository
-                }
-                Destination::Existing(repository) => {
-                    let actual = github.repository(&repository.full_name, &cancel)?;
-                    if actual.id != repository.id
-                        || actual.private != repository.private
-                        || actual.clone_url != repository.clone_url
-                    {
+            if matches!(review.destination, Destination::Local) {
+                let result = models::create_local_model_repository(
+                    &review.source_request()?,
+                    &cancel,
+                    |message| {
+                        let _ = sender.send(Event::Status(message.into()));
+                    },
+                )?;
+                return Ok(Outcome::Published(result));
+            }
+            let (url, github_guard) = match &review.destination {
+                Destination::New(_) | Destination::Existing(_) => {
+                    // A forge destination keeps its checked account, identity and visibility.
+                    let github = GitHub::discover()?;
+                    if github.account(&cancel)?.login != review.account {
                         return Err(invalid(
-                            "Repository identity or visibility changed. Review the destination again.",
+                            "The signed-in account changed. Review publishing again.",
                         ));
                     }
-                    actual
+                    let repository = match &review.destination {
+                        Destination::New(request) => {
+                            let repository = github.create(request, &cancel)?;
+                            let _ = sender.send(Event::Created(repository.clone()));
+                            repository
+                        }
+                        Destination::Existing(repository) => {
+                            let actual = github.repository(&repository.full_name, &cancel)?;
+                            if actual.id != repository.id
+                                || actual.private != repository.private
+                                || actual.clone_url != repository.clone_url
+                            {
+                                return Err(invalid(
+                                    "Repository identity or visibility changed. Review the destination again.",
+                                ));
+                            }
+                            actual
+                        }
+                        _ => unreachable!(),
+                    };
+                    if Some(repository.private) != review.private() {
+                        return Err(invalid(
+                            "Repository visibility changed. Review the destination again.",
+                        ));
+                    }
+                    let guard = models::GitHubPublishGuard {
+                        expected_private: repository.private,
+                        expected_repository_id: repository.id,
+                        expected_login: review.account.clone().unwrap_or_default(),
+                    };
+                    (repository.clone_url, Some(guard))
                 }
+                Destination::Git(url) => (url.clone(), None),
+                Destination::Local => unreachable!(),
             };
-            if repository.private != review.private() {
-                return Err(invalid(
-                    "Repository visibility does not match the approved publish destination",
-                ));
-            }
             let request = models::PublishRequest {
                 source_manifest: review
                     .context
                     .project
+                    .clone()
                     .ok_or_else(|| invalid("The saved source is missing"))?,
                 expected_fingerprint: review.context.fingerprint,
-                clone_url: repository.clone_url,
+                clone_url: url,
                 destination: review.local,
                 branch: review.branch,
                 folder: review.folder,
                 commit_message: review.message,
                 author: review.author,
-                expected_remote_commit: None,
-                expected_private: repository.private,
-                expected_repository_id: repository.id,
-                expected_login: review.account,
+                expected_remote_commit: review.remote_commit,
+                github_guard,
+                remote_reviewed: true,
             };
-            let published = models::publish_model(&request, &github, &cancel, |message| {
-                let _ = sender.send(Event::Status(message.into()));
-            })?;
+            let published =
+                models::publish_model(&request, review.connection.as_ref(), &cancel, |message| {
+                    let _ = sender.send(Event::Status(message.into()));
+                })?;
             Ok(Outcome::Published(published))
         },
     );
     Ok(())
 }
 fn choose_destination(w: &mut Workspace, key: &str) {
-    let name = w
-        .repositories
-        .selected
-        .as_ref()
-        .map(|repository| repository.name.clone())
-        .unwrap_or_else(|| text(w, "new-name"));
+    let source = if key == "clone-local" {
+        text(w, "clone-url")
+    } else if key == "publish-local" && text(w, "publish-mode") == "url" {
+        text(w, "publish-url")
+    } else {
+        text(w, "new-name")
+    };
+    let name = source
+        .trim_end_matches('/')
+        .rsplit(['/', ':'])
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(".git")
+        .to_owned();
     let name = if name.trim().is_empty() {
         "tcad-model".into()
     } else {
@@ -614,6 +732,30 @@ fn choose_destination(w: &mut Workspace, key: &str) {
             .insert(key.into(), json!(parent.join(name).display().to_string()));
         w.repositories.review = None;
     }
+}
+fn load_author(w: &mut Workspace, replace: bool) {
+    if replace {
+        w.repositories.review = None;
+        w.repositories.create_review = None;
+        w.repositories
+            .fields
+            .insert("public-confirmed".into(), json!(false));
+    }
+    let root = w
+        .project
+        .as_ref()
+        .and_then(|path| path.parent())
+        .map(|path| path.to_path_buf());
+    submit(w, false, "Loading Git author settings…", move |_, _| {
+        let identity = cad_core::git_connections::read_author(root.as_deref())?;
+        Ok(Outcome::Author(
+            GitAuthor {
+                name: identity.name,
+                email: identity.email,
+            },
+            replace,
+        ))
+    });
 }
 fn discover(w: &mut Workspace, root: PathBuf) {
     submit(w, false, "Finding TCAD models…", move |cancel, _| {
@@ -634,6 +776,7 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
         "repositories" | "repositories.open" | "repositories.publish"
     ) {
         if w.settings.is_some()
+            || crate::drawing_interaction_ui::active(w)
             || w.tool_checkpoint.is_some()
             || w.sketch.is_some()
             || w.session.draft.is_some()
@@ -652,10 +795,8 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
             }
             .into(),
         );
-        if w.repositories.account.is_none() && idle(w) {
-            submit(w, false, "Checking GitHub sign-in…", |cancel, _| {
-                Ok(Outcome::Account(GitHub::discover()?.account(&cancel)?))
-            });
+        if text(w, "author-name").is_empty() && text(w, "author-email").is_empty() && idle(w) {
+            load_author(w, false);
         }
         return Ok(());
     }
@@ -754,11 +895,8 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
                 .find(|repository| repository.full_name == name)
                 .cloned()
                 .ok_or_else(|| invalid("Refresh and select a current repository"))?;
-            w.repositories.selected = Some(repository);
-            w.repositories.review = None;
-            w.repositories
-                .fields
-                .insert("public-confirmed".into(), json!(false));
+            select_repository(w, repository);
+            w.repositories.focus_section = Some("browse".into());
         }
         "repositories.lookup" => {
             require_login(w)?;
@@ -772,19 +910,14 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
         "repositories.clone-folder" => choose_destination(w, "clone-local"),
         "repositories.publish-folder" => choose_destination(w, "publish-local"),
         "repositories.clone" => {
-            require_login(w)?;
-            let repository = w
-                .repositories
-                .selected
-                .clone()
-                .ok_or_else(|| invalid("Select a repository first"))?;
             let request = models::CloneRequest {
-                clone_url: repository.clone_url,
+                clone_url: RepositoryAddress::parse(text(w, "clone-url").trim())?.git_url,
                 destination: path_field(w, "clone-local")?,
                 branch: Some(text(w, "clone-branch").trim().to_string())
                     .filter(|branch| !branch.is_empty()),
                 expected_commit: None,
             };
+            let connection = crate::git_connections_ui::resolve(w, &text(w, "clone-connection"))?;
             submit(
                 w,
                 false,
@@ -792,7 +925,7 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
                 move |cancel, sender| {
                     let result = models::clone_repository(
                         &request,
-                        &GitHub::discover()?,
+                        connection.as_ref(),
                         &cancel,
                         |message| {
                             let _ = sender.send(Event::Status(message.into()));
@@ -806,6 +939,23 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
                         },
                         result.notices,
                     ))
+                },
+            );
+        }
+        "repositories.author" => load_author(w, true),
+        "repositories.local-folder" => choose_destination(w, "local-folder"),
+        "repositories.initialize" => {
+            let root = path_field(w, "local-folder")?;
+            let branch = text(w, "local-branch");
+            submit(
+                w,
+                false,
+                "Creating a local repository…",
+                move |cancel, sender| {
+                    models::initialize_local_repository(&root, &branch, &cancel, |message| {
+                        let _ = sender.send(Event::Status(message.into()));
+                    })?;
+                    Ok(Outcome::Initialized(root, branch))
                 },
             );
         }
@@ -843,12 +993,17 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
                 })
                 .cloned()
                 .ok_or_else(|| invalid("Rescan and choose a current model"))?;
-            submit(w, false, "Opening the selected model…", move |_, _| {
-                Ok(Outcome::Opened(
-                    Box::new(models::open_model(&entry)?),
-                    entry.manifest,
-                ))
-            });
+            submit(
+                w,
+                false,
+                "Opening the selected model…",
+                move |cancel, _| {
+                    Ok(Outcome::Opened(
+                        Box::new(models::open_model_with_cancel(&entry, &cancel)?),
+                        entry.manifest,
+                    ))
+                },
+            );
         }
         "repositories.open-published" => {
             safe_to_leave(w)?;
@@ -871,7 +1026,7 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
                             invalid("The published model is no longer in that folder")
                         })?;
                     Ok(Outcome::Opened(
-                        Box::new(models::open_model(&entry)?),
+                        Box::new(models::open_model_with_cancel(&entry, &cancel)?),
                         entry.manifest,
                     ))
                 },
@@ -884,6 +1039,13 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
                 ));
             }
             crate::ui::save(w, false);
+        }
+        "repositories.use-selected" => {
+            w.repositories
+                .fields
+                .insert("publish-mode".into(), json!("existing"));
+            w.repositories.review = None;
+            w.repositories.focus_section = Some("publish".into());
         }
         "repositories.new" => {
             w.repositories.focus_section = Some("publish".into());
@@ -1010,8 +1172,14 @@ fn button(
         .as_str()
         .or_else(|| args["manifest"].as_str())
         .unwrap_or("main");
+    let id =
+        if command == "git-connections" || (command == "repositories.save" && group == "browse") {
+            format!("{command}/{group}/{suffix}")
+        } else {
+            format!("{command}/{suffix}")
+        };
     SemanticElement {
-        id: format!("{command}/{suffix}"),
+        id,
         role: "repository-action".into(),
         label: label.into(),
         value: None,
@@ -1038,12 +1206,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let signed_in = login(w).is_some();
     let ready_source = source_ready(w).is_ok();
     let mut elements = Vec::new();
-    for (group, label) in [
-        ("account", "Account"),
-        ("browse", "Open models"),
-        ("publish", "Publish current model"),
-        ("progress", "Operation status"),
-    ] {
+    for (group, label) in sections() {
         elements.push(SemanticElement {
             id: format!("repositories/group/{group}"),
             role: "repository-section".into(),
@@ -1055,231 +1218,80 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data: json!({"group":group,"children_role":"repository-field"}),
         });
     }
-    elements.push(information("account", "account-status", &login(w).map(|login| format!("GitHub · {login}")).unwrap_or_else(|| "GitHub · Not signed in".into()), "ready", w.repositories.account.as_ref().map(|account| json!({"host":account.host,"login":account.login,"helper_available":account.helper_available,"notice":account.notice})).unwrap_or(Value::Null)));
-    if let Some(account) = &w.repositories.account {
-        if let Some(message) = &account.notice {
-            elements.push(information(
-                "account",
-                "account-notice",
-                message,
-                "warning",
-                Value::Null,
-            ));
-        }
-        if account.accounts.len() > 1 {
-            elements.push(field(
-                w,
-                "account",
-                "account",
-                "Account",
-                Some(
-                    account
-                        .accounts
-                        .iter()
-                        .map(|account| json!({"value":account.login,"label":account.login}))
-                        .collect(),
-                ),
-            ));
-            elements.push(button(
-                w,
-                "account",
-                "repositories.switch-account",
-                "Use selected account",
-                json!({}),
-                available,
-            ));
-        }
-    }
-    elements.push(button(
-        w,
-        "account",
-        "repositories.login",
-        if signed_in {
-            "Sign in another account"
-        } else {
-            "Sign in with browser"
-        },
-        json!({}),
-        available,
+    elements.push(information(
+        "browse",
+        "git-first",
+        "Use any Git host or a local repository. A forge account is optional.",
+        "ready",
+        Value::Null,
     ));
-    elements.push(button(
-        w,
-        "account",
-        "repositories.account",
-        "Refresh sign-in",
-        json!({}),
-        available,
-    ));
-    elements.push(button(
-        w,
-        "account",
-        "repositories.logout",
-        "Sign out",
-        json!({}),
-        available
-            && (signed_in
-                || w.repositories
-                    .account
-                    .as_ref()
-                    .is_some_and(|status| !status.accounts.is_empty())),
-    ));
-    elements.push(information("account","credential-store","TCAD uses the GitHub CLI account store. Switching accounts or signing out also affects GitHub CLI on this computer.","ready",Value::Null));
-    if let Some(code) = &w.repositories.device_code {
-        elements.push(information(
-            "account",
-            "device-code",
-            &format!("Your sign-in code: {code}"),
-            "pending",
-            json!({"user_code":code,"verification_uri":"https://github.com/login/device"}),
-        ));
-        elements.push(button(
-            w,
-            "account",
-            "repositories.auth-browser",
-            "Open sign-in page",
-            json!({}),
-            true,
-        ));
-    }
-    let owners = std::iter::once(json!({"value":"","label":"All accessible repositories"}))
-        .chain(login(w).map(|login| json!({"value":login,"label":login})))
-        .chain(
-            w.repositories
-                .owners
-                .iter()
-                .filter(|owner| Some(owner.login.as_str()) != login(w))
-                .map(|owner| json!({"value":owner.login,"label":owner.login})),
-        )
-        .collect();
-    elements.push(field(w, "browse", "browse-owner", "Owner", Some(owners)));
     elements.push(field(
         w,
         "browse",
-        "browse-search",
-        "Find repositories",
+        "clone-url",
+        "Git URL or repository path",
+        None,
+    ));
+    elements.push(field(
+        w,
+        "browse",
+        "clone-connection",
+        "Connection",
+        Some(crate::git_connections_ui::choices(w)),
+    ));
+    elements.push(button(
+        w,
+        "browse",
+        "git-connections",
+        "Manage connections…",
+        json!({}),
+        available,
+    ));
+    elements.push(field(
+        w,
+        "browse",
+        "clone-branch",
+        "Branch (blank uses default)",
+        None,
+    ));
+    elements.push(field(
+        w,
+        "browse",
+        "clone-local",
+        "New local working folder",
         None,
     ));
     elements.push(button(
         w,
         "browse",
-        "repositories.browse",
-        "Browse repositories",
+        "repositories.clone-folder",
+        "Choose parent folder…",
         json!({}),
-        available && signed_in,
+        available,
     ));
     elements.push(button(
         w,
         "browse",
-        "repositories.owners",
-        "Load organizations",
+        "repositories.clone",
+        "Clone repository",
         json!({}),
-        available && signed_in,
-    ));
-    if w.repositories.owners_next.is_some() {
-        elements.push(button(
-            w,
-            "browse",
-            "repositories.more-owners",
-            "More organizations",
-            json!({}),
-            available && signed_in,
-        ));
-    }
-    for repository in &w.repositories.repositories {
-        let mut element = button(
-            w,
-            "browse",
-            "repositories.select",
-            &format!(
-                "{} · {}{}",
-                repository.full_name,
-                privacy(repository.private),
-                if repository.archived {
-                    " · Archived"
-                } else {
-                    ""
-                }
-            ),
-            json!({"repository":repository.full_name}),
-            available,
-        );
-        if w.repositories
-            .selected
-            .as_ref()
-            .is_some_and(|selected| selected.id == repository.id)
-        {
-            element.state = "selected".into();
-        }
-        element.data["repository"] = json!({"id":repository.id,"name":repository.full_name,"private":repository.private,"can_push":repository.can_push,"archived":repository.archived,"default_branch":repository.default_branch});
-        elements.push(element);
-    }
-    if w.repositories.repositories_next.is_some() {
-        elements.push(button(
-            w,
-            "browse",
-            "repositories.more",
-            "More repositories",
-            json!({}),
-            available && signed_in,
-        ));
-    }
-    elements.push(field(
-        w,
-        "browse",
-        "repository-name",
-        "Or enter owner/repository",
-        None,
-    ));
-    elements.push(button(
-        w,
-        "browse",
-        "repositories.lookup",
-        "Find exact repository",
-        json!({}),
-        available && signed_in,
-    ));
-    if let Some(repository) = &w.repositories.selected {
-        elements.push(information("browse", "selected-repository", &format!("Selected: {} · {}", repository.full_name, privacy(repository.private)), "selected", json!({"repository":repository.full_name,"url":repository.web_url,"private":repository.private,"can_push":repository.can_push,"empty":repository.empty})));
-        elements.push(field(
-            w,
-            "browse",
-            "clone-branch",
-            "Branch (blank uses default)",
-            None,
-        ));
-        elements.push(field(w, "browse", "clone-local", "New local folder", None));
-        elements.push(button(
-            w,
-            "browse",
-            "repositories.clone-folder",
-            "Choose parent folder…",
-            json!({}),
-            available,
-        ));
-        elements.push(button(
-            w,
-            "browse",
-            "repositories.clone",
-            "Download repository",
-            json!({}),
-            available && signed_in,
-        ));
-    }
-    elements.push(button(
-        w,
-        "browse",
-        "repositories.new",
-        "New repository…",
-        json!({}),
-        available && signed_in,
+        available && !text(w, "clone-url").trim().is_empty(),
     ));
     elements.push(button(
         w,
         "browse",
         "repositories.local",
-        "Browse a local folder…",
+        "Open a local folder…",
         json!({}),
         available,
+    ));
+    elements.push(button(
+        w,
+        "browse",
+        "repositories.versions",
+        "Versions and branches",
+        json!({}),
+        available && w.project.is_some(),
     ));
     if let Some(checkout) = &w.repositories.checkout {
         elements.push(information(
@@ -1312,12 +1324,33 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             elements.push(information(
                 "browse",
                 "no-models",
-                "No native TCAD models found in this folder.",
+                "No TCAD models found. Save a model in this folder to start working locally.",
                 "empty",
                 Value::Null,
             ));
         }
+        if safe_to_leave(w).is_err() {
+            elements.push(information(
+                "browse",
+                "open-blocked",
+                "Finish the current edit and save your model before opening another model.",
+                "warning",
+                Value::Null,
+            ));
+            elements.push(button(
+                w,
+                "browse",
+                "repositories.save",
+                "Save current model",
+                json!({}),
+                available
+                    && w.tool_checkpoint.is_none()
+                    && w.session.draft.is_none()
+                    && w.sketch.is_none(),
+            ));
+        }
     }
+
     if let Err(error) = source_ready(w) {
         elements.push(information(
             "publish",
@@ -1341,11 +1374,52 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         "publish-mode",
         "Destination",
         Some(vec![
-            json!({"value":"new","label":"Create a new repository"}),
-            json!({"value":"existing","label":"Use selected repository"}),
+            json!({"value":"url","label":"Git URL"}),
+            json!({"value":"local","label":"New local repository"}),
+            json!({"value":"existing","label":"Selected GitHub repository"}),
+            json!({"value":"new","label":"New GitHub repository"}),
         ]),
     ));
-    if text(w, "publish-mode") == "new" {
+    let mode = text(w, "publish-mode");
+    if mode == "url" {
+        elements.push(field(
+            w,
+            "publish",
+            "publish-url",
+            "Destination Git URL",
+            None,
+        ));
+        elements.push(field(
+            w,
+            "publish",
+            "publish-connection",
+            "Connection",
+            Some(crate::git_connections_ui::choices(w)),
+        ));
+        elements.push(button(
+            w,
+            "publish",
+            "git-connections",
+            "Manage connections…",
+            json!({}),
+            available,
+        ));
+        elements.push(information("publish", "unknown-access", "Git does not report who can access a repository. Check access to this destination before publishing.", "notice", Value::Null));
+    } else if mode == "local" {
+        elements.push(information("publish", "local-only", "Create a separate local repository with this model and its resources. Nothing is uploaded.", "ready", Value::Null));
+    } else if mode == "existing" {
+        elements.push(information(
+            "publish",
+            "selected-destination",
+            &w.repositories
+                .selected
+                .as_ref()
+                .map(|r| format!("{} · {}", r.full_name, privacy(r.private)))
+                .unwrap_or_else(|| "Choose a repository in the GitHub connection section.".into()),
+            "ready",
+            Value::Null,
+        ));
+    } else if mode == "new" {
         let owners = std::iter::once(login(w).unwrap_or_default().to_string())
             .chain(
                 w.repositories
@@ -1393,7 +1467,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 "publish",
                 "create-review",
                 &format!(
-                    "Create {}/{} · {}. No model files will be published.",
+                    "Create {}/{} · {}. No model files will be uploaded.",
                     request.owner,
                     request.name,
                     privacy(request.private)
@@ -1419,28 +1493,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 available && (request.private || flag(w, "public-confirmed")),
             ));
         }
-    } else {
-        elements.push(information(
-            "publish",
-            "existing-destination",
-            &w.repositories
-                .selected
-                .as_ref()
-                .map(|repository| {
-                    format!("{} · {}", repository.full_name, privacy(repository.private))
-                })
-                .unwrap_or_else(|| "Select a destination in Open models above.".into()),
-            "ready",
-            Value::Null,
-        ));
-        elements.push(button(
-            w,
-            "publish",
-            "repositories.new",
-            "Start a new private repository",
-            json!({}),
-            available,
-        ));
+    }
+    if matches!(mode.as_str(), "new" | "existing") && !signed_in {
+        elements.push(information("publish", "forge-sign-in", "Connect GitHub below to use this destination. Git URL and local destinations do not need GitHub.", "warning", Value::Null));
     }
     elements.push(field(
         w,
@@ -1461,16 +1516,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         w,
         "publish",
         "publish-branch",
-        if text(w, "publish-mode") == "existing"
-            && w.repositories
-                .selected
-                .as_ref()
-                .is_some_and(|repository| !repository.empty)
-        {
-            "Existing branch (blank uses default)"
-        } else {
-            "Branch (blank uses default)"
-        },
+        "Branch (blank uses default)",
         None,
     ));
     elements.push(field(
@@ -1492,33 +1538,52 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.push(button(
         w,
         "publish",
-        "repositories.review",
-        "Review publishing",
+        "repositories.author",
+        "Use Git author settings",
         json!({}),
-        available && signed_in && ready_source,
+        available,
+    ));
+    let destination_ready = !matches!(mode.as_str(), "new" | "existing") || signed_in;
+    elements.push(button(
+        w,
+        "publish",
+        "repositories.review",
+        "Review destination",
+        json!({}),
+        available && ready_source && destination_ready,
     ));
     if let Some(review) = &w.repositories.review {
-        elements.push(information("publish", "publish-review", &format!("Publish {} to {} · {}\nBranch: {} · Model folder: {}\nLocal copy: {}", w.session.committed.name, review.name(), privacy(review.private()), review.branch.as_deref().unwrap_or("repository default / main for a new repository"), if review.folder.is_empty() { "repository root" } else { &review.folder }, review.local.display()), "review", json!({"repository":review.name(),"private":review.private(),"branch":review.branch,"folder":review.folder,"local":review.local,"source":review.context.project,"fingerprint":review.context.fingerprint,"new_repository":matches!(review.destination,Destination::New(_))})));
-        if !review.private() {
-            elements.push(information("publish", "public-warning", "Public repository: anyone can download the model source, linked snapshots and textures included with this project.", "warning", Value::Null));
-            elements.push(field(
-                w,
-                "publish",
-                "public-confirmed",
-                "I intend to publish this model and its resources publicly",
-                None,
-            ));
+        let visibility = if matches!(review.destination, Destination::Local) {
+            "Local only"
+        } else {
+            review
+                .private()
+                .map(privacy)
+                .unwrap_or("Access unknown — check the destination")
+        };
+        elements.push(information("publish", "publish-review", &format!("Model: {}\nSource: {}\nDestination: {} · {}\nConnection: {}\nBranch: {}\nRemote version: {}\nModel folder: {}\nLocal copy: {}\nAuthor: {} <{}>\nMessage: {}", w.session.committed.name, review.context.project.as_ref().map(|p| p.display().to_string()).unwrap_or_default(), review.name(), visibility, review.connection.as_ref().map(|profile| profile.name.as_str()).unwrap_or(if matches!(review.destination, Destination::Local) { "Local only" } else { "Existing Git credentials" }), review.branch.as_deref().unwrap_or("main / repository default"), review.remote_commit.as_deref().unwrap_or("New repository"), if review.folder.is_empty() { "repository root" } else { &review.folder }, review.local.display(), review.author.name, review.author.email, review.message), "review", json!({"repository":review.name(),"private":review.private(),"local_only":matches!(review.destination,Destination::Local),"branch":review.branch,"remote_commit":review.remote_commit,"folder":review.folder,"local":review.local,"source":review.context.project,"fingerprint":review.context.fingerprint,"connection":review.connection.as_ref().map(|profile| &profile.name)})));
+        if review.disclosure_needed() {
+            let label = if review.private() == Some(false) {
+                "I intend to publish this model and its resources publicly"
+            } else {
+                "I checked who can access this destination and intend to upload this model and its resources"
+            };
+            elements.push(field(w, "publish", "public-confirmed", label, None));
         }
         elements.push(button(
             w,
             "publish",
             "repositories.publish-confirmed",
-            "Publish reviewed model",
+            if matches!(review.destination, Destination::Local) {
+                "Create local model repository"
+            } else {
+                "Publish reviewed model"
+            },
             json!({}),
             available
                 && ready_source
                 && review.context.current(w)
-                && (review.private() || flag(w, "public-confirmed")),
+                && (!review.disclosure_needed() || flag(w, "public-confirmed")),
         ));
     }
     if !text(w, "published-path").is_empty() {
@@ -1526,20 +1591,244 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             w,
             "publish",
             "repositories.open-published",
-            "Open published working copy",
+            "Open saved working copy",
             json!({}),
             available && safe_to_leave(w).is_ok(),
         ));
     }
-    if w.project
-        .as_ref()
-        .is_some_and(|path| path.to_string_lossy() == text(w, "published-path"))
-    {
+
+    elements.push(information(
+        "local",
+        "local-create",
+        "Start an empty repository on this computer. You can add a remote later in Versions.",
+        "ready",
+        Value::Null,
+    ));
+    elements.push(field(
+        w,
+        "local",
+        "local-folder",
+        "New repository folder",
+        None,
+    ));
+    elements.push(button(
+        w,
+        "local",
+        "repositories.local-folder",
+        "Choose parent folder…",
+        json!({}),
+        available,
+    ));
+    elements.push(field(w, "local", "local-branch", "First branch", None));
+    elements.push(button(
+        w,
+        "local",
+        "repositories.initialize",
+        "Create local repository",
+        json!({}),
+        available,
+    ));
+
+    elements.push(information("forge", "account-status", &login(w).map(|login| format!("GitHub · {login}")).unwrap_or_else(|| "Optional GitHub connection".into()), "ready", w.repositories.account.as_ref().map(|account| json!({"host":account.host,"login":account.login,"helper_available":account.helper_available,"notice":account.notice})).unwrap_or(Value::Null)));
+    if let Some(account) = &w.repositories.account {
+        if let Some(message) = &account.notice {
+            elements.push(information(
+                "forge",
+                "account-notice",
+                message,
+                "warning",
+                Value::Null,
+            ));
+        }
+        if account.accounts.len() > 1 {
+            elements.push(field(
+                w,
+                "forge",
+                "account",
+                "Account",
+                Some(
+                    account
+                        .accounts
+                        .iter()
+                        .map(|account| json!({"value":account.login,"label":account.login}))
+                        .collect(),
+                ),
+            ));
+            elements.push(button(
+                w,
+                "forge",
+                "repositories.switch-account",
+                "Use selected account",
+                json!({}),
+                available,
+            ));
+        }
+    }
+    elements.push(button(
+        w,
+        "forge",
+        "repositories.login",
+        if signed_in {
+            "Sign in another GitHub account"
+        } else {
+            "Connect GitHub with browser"
+        },
+        json!({}),
+        available,
+    ));
+    elements.push(button(
+        w,
+        "forge",
+        "repositories.account",
+        "Check GitHub connection",
+        json!({}),
+        available,
+    ));
+    elements.push(button(
+        w,
+        "forge",
+        "repositories.logout",
+        "Disconnect GitHub account",
+        json!({}),
+        available
+            && (signed_in
+                || w.repositories
+                    .account
+                    .as_ref()
+                    .is_some_and(|status| !status.accounts.is_empty())),
+    ));
+    elements.push(information("forge", "credential-store", "GitHub uses the GitHub CLI account store. Account changes also affect GitHub CLI on this computer.", "ready", Value::Null));
+    if let Some(code) = &w.repositories.device_code {
+        elements.push(information(
+            "forge",
+            "device-code",
+            &format!("Your sign-in code: {code}"),
+            "pending",
+            json!({"user_code":code,"verification_uri":"https://github.com/login/device"}),
+        ));
         elements.push(button(
             w,
-            "publish",
-            "repositories.versions",
-            "View versions and branches",
+            "forge",
+            "repositories.auth-browser",
+            "Open sign-in page",
+            json!({}),
+            true,
+        ));
+    }
+    if signed_in {
+        let owners = std::iter::once(json!({"value":"","label":"All accessible repositories"}))
+            .chain(login(w).map(|login| json!({"value":login,"label":login})))
+            .chain(
+                w.repositories
+                    .owners
+                    .iter()
+                    .filter(|owner| Some(owner.login.as_str()) != login(w))
+                    .map(|owner| json!({"value":owner.login,"label":owner.login})),
+            )
+            .collect();
+        elements.push(field(w, "forge", "browse-owner", "Owner", Some(owners)));
+        elements.push(field(
+            w,
+            "forge",
+            "browse-search",
+            "Find GitHub repositories",
+            None,
+        ));
+        elements.push(button(
+            w,
+            "forge",
+            "repositories.browse",
+            "Browse GitHub repositories",
+            json!({}),
+            available,
+        ));
+        elements.push(button(
+            w,
+            "forge",
+            "repositories.owners",
+            "Load organizations",
+            json!({}),
+            available,
+        ));
+        if w.repositories.owners_next.is_some() {
+            elements.push(button(
+                w,
+                "forge",
+                "repositories.more-owners",
+                "More organizations",
+                json!({}),
+                available,
+            ));
+        }
+        for repository in &w.repositories.repositories {
+            let mut element = button(
+                w,
+                "forge",
+                "repositories.select",
+                &format!(
+                    "{} · {}{}",
+                    repository.full_name,
+                    privacy(repository.private),
+                    if repository.archived {
+                        " · Archived"
+                    } else {
+                        ""
+                    }
+                ),
+                json!({"repository":repository.full_name}),
+                available,
+            );
+            if w.repositories
+                .selected
+                .as_ref()
+                .is_some_and(|selected| selected.id == repository.id)
+            {
+                element.state = "selected".into();
+            }
+            element.data["repository"] = json!({"id":repository.id,"name":repository.full_name,"private":repository.private,"can_push":repository.can_push,"archived":repository.archived,"default_branch":repository.default_branch});
+            elements.push(element);
+        }
+        if w.repositories.repositories_next.is_some() {
+            elements.push(button(
+                w,
+                "forge",
+                "repositories.more",
+                "More repositories",
+                json!({}),
+                available,
+            ));
+        }
+        elements.push(field(
+            w,
+            "forge",
+            "repository-name",
+            "Or enter owner/repository",
+            None,
+        ));
+        elements.push(button(
+            w,
+            "forge",
+            "repositories.lookup",
+            "Find exact repository",
+            json!({}),
+            available,
+        ));
+        if let Some(repository) = &w.repositories.selected {
+            elements.push(information("forge", "selected-repository", &format!("Selected: {} · {}. Its URL is ready in Open models.", repository.full_name, privacy(repository.private)), "selected", json!({"repository":repository.full_name,"url":repository.web_url,"private":repository.private})));
+            elements.push(button(
+                w,
+                "forge",
+                "repositories.use-selected",
+                "Publish to selected repository…",
+                json!({}),
+                available,
+            ));
+        }
+        elements.push(button(
+            w,
+            "forge",
+            "repositories.new",
+            "New private GitHub repository…",
             json!({}),
             available,
         ));
@@ -1578,6 +1867,15 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     }
     elements
 }
+fn sections() -> [(&'static str, &'static str); 5] {
+    [
+        ("browse", "Open models"),
+        ("publish", "Save or publish current model"),
+        ("local", "Create a local repository"),
+        ("forge", "Forge connections · GitHub"),
+        ("progress", "Operation status"),
+    ]
+}
 pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
     (element.data["setter"] == "repositories")
         .then(|| value(w, element.data["key"].as_str().unwrap_or_default()))
@@ -1598,6 +1896,12 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, incoming: Value) 
         "repository-name",
         "clone-local",
         "clone-branch",
+        "clone-url",
+        "clone-connection",
+        "publish-url",
+        "publish-connection",
+        "local-folder",
+        "local-branch",
         "publish-mode",
         "new-owner",
         "new-name",
@@ -1626,8 +1930,15 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, incoming: Value) 
             "Enter text without null characters, up to 8192 characters",
         ));
     }
-    if key == "publish-mode" && !matches!(incoming.as_str(), Some("new" | "existing")) {
-        return Err(invalid("Choose new or existing repository"));
+    if key == "publish-mode"
+        && !matches!(
+            incoming.as_str(),
+            Some("new" | "existing" | "url" | "local")
+        )
+    {
+        return Err(invalid(
+            "Choose a Git URL, local repository, or GitHub destination",
+        ));
     }
     if key != "public-confirmed" {
         w.repositories.review = None;
@@ -1664,11 +1975,15 @@ fn render(ui: &mut egui::Ui, w: &mut Workspace, element: SemanticElement) {
             )
             .clicked()
             {
-                action(
-                    w,
-                    &element.commands[0],
-                    Some(&element.data["actions"][0]["arguments"]),
-                );
+                if element.commands[0] == "git-connections" {
+                    crate::ui::action(w, "git-connections");
+                } else {
+                    action(
+                        w,
+                        &element.commands[0],
+                        Some(&element.data["actions"][0]["arguments"]),
+                    );
+                }
             }
         }
         "repository-information" => {
@@ -1687,12 +2002,7 @@ fn render(ui: &mut egui::Ui, w: &mut Workspace, element: SemanticElement) {
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     let focus = w.repositories.focus_section.take();
     let snapshot = semantics(w);
-    for (group, label) in [
-        ("account", "Account"),
-        ("browse", "Open models"),
-        ("publish", "Publish current model"),
-        ("progress", "Operation status"),
-    ] {
+    for (group, label) in sections() {
         let elements = snapshot
             .iter()
             .filter(|element| {
@@ -1711,7 +2021,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                 classes: &["repository-section"],
                 label,
                 state: "ready",
-                collapse: Some(group == "progress" || (group == "account" && login(w).is_none())),
+                collapse: Some(group == "browse" || (group == "progress" && !idle(w))),
                 open: focus
                     .as_ref()
                     .filter(|focus| focus.as_str() == group)

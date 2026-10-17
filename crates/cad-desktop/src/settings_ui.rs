@@ -20,6 +20,7 @@ const CATEGORIES: &[(&str, &str, &str)] = &[
     ),
     ("application.recovery", "Recovery", "Application"),
     ("application.defaults", "New model defaults", "Application"),
+    ("application.git", "Git connections", "Application"),
 ];
 
 fn source(w: &Workspace, scope: &str) -> Result<Value> {
@@ -944,6 +945,9 @@ fn category_description(category: &str) -> &'static str {
         "application.defaults" => {
             "Applied only when creating a new model. Existing models keep their saved preferences."
         }
+        "application.git" => {
+            "Personal Git accounts, keys and server trust. Connection actions save immediately; Settings Apply and Cancel affect model and interface preferences only."
+        }
         _ => "Preferences use separate model and application scopes.",
     }
 }
@@ -1092,6 +1096,12 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                 let all_fields = fields(w);
                                 let mut shown = 0;
                                 for (id,label,scope) in CATEGORIES {
+                                    if *id == "application.git" && (category == *id && search.is_empty() || !search.is_empty() && "git credentials ssh keys connections accounts".contains(&search)) {
+                                        controls::label(ui,"settings:heading:application.git","settings-heading",&[],"Application · Git connections","ready");
+                                        crate::git_connections_ui::show(ui,w);
+                                        shown += 1;
+                                        continue;
+                                    }
                                     let selected_fields = all_fields.iter().filter(|element|element.data.get("category").and_then(Value::as_str) == Some(*id))
                                         .filter(|element| if search.is_empty() {*id == category} else {format!("{scope} {label} {}",element.label).to_lowercase().contains(&search)}).collect::<Vec<_>>();
                                     if selected_fields.is_empty() {continue;}

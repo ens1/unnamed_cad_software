@@ -1,93 +1,131 @@
 # Git, forks, component updates, and model previews
 
-TCAD uses normal Git repositories. A forge stores the native project files and
-their resources. It does not need a TCAD server. Use private repositories for
-private models. GitHub sign-in, repository creation, browsing, model downloads,
-and publishing are available inside TCAD. New repositories are private by default.
+TCAD is a visual Git client for its native models. Use a local repository or a
+normal Git server; a TCAD server and a forge account are not required. HTTPS,
+SSH, and local Git repository addresses are supported. GitHub, GitLab, Forgejo,
+Bitbucket, and other compatible Git servers use the same URL workflow. Hosted
+repository search and creation currently have a GitHub.com adapter only.
 
-## Accounts and repositories
+## Open or create a repository
 
-Open **Workspace → Repositories and Accounts**. The panel has three groups:
-**Account**, **Open models**, and **Publish current model**. **File → Open from
-GitHub** and **File → Publish Model** open the relevant group. Versions also
-links to this panel.
+Open **Workspace → Git Repositories** or **File → Open Git Repository**.
 
-1. In Account, choose **Sign in with browser**. TCAD shows a device code and
-   opens GitHub. Complete sign-in in the browser. You can refresh account status,
-   select another saved account, or sign out from the same panel.
-2. In Open models, browse or search the repositories your account can access.
-   Choose an owner to narrow the list. Exact `owner/name` lookup also supports
-   accessible repositories outside that list. Visibility is shown for each repo.
-3. Select a repo, choose a new local folder, and download it. Leave the branch
-   field empty to use its default branch, or enter a branch name. TCAD finds
-   native project manifests, including named manifests in nested folders.
-   Choose the model to open. Existing folders and unsaved work are not replaced.
+1. Enter a Git URL or a local Git repository path. Choose existing Git credentials
+   or a saved connection. Leave Branch blank to use the remote default.
+2. Choose a new local folder and select **Clone repository**.
+3. Choose a TCAD model from the downloaded working copy. TCAD finds named and
+   nested project manifests. Existing folders and unsaved work are not replaced.
 
-You can also scan an existing local checkout without signing in. Opening a model
-verifies its definitions and resource hashes again. Repository scans skip hidden
-and build folders, symlinks, and invalid model files; notices explain rejected
-projects and scan limits. Git submodules are not downloaded.
+**Open a local folder** finds models in an existing checkout without cloning.
+**Create a local repository** starts an empty repository with a chosen first
+branch. It needs no account or remote. To copy the current saved model into a new
+local repository, use **Save or publish current model → New local repository**.
+Use **Versions** for later commits, branches, fetch, merges, and push.
 
-To create an empty repository, enter its owner, name, and description, then review
-and create it. This does not require a saved model. Organization policies can
-still deny creation. Private is the initial choice for each new repository form.
-Public creation or publishing needs an explicit acknowledgment in the review.
+Opening rechecks definitions and resource hashes. Scans skip hidden and build
+folders, symlinks, and invalid model files; notices explain rejected projects
+and scan limits. Git submodules are not downloaded.
+
+## Connections and credentials
+
+Open **Settings → Git connections**, **Workspace → Git Connections**, or
+**Manage connections** in the repository panel. Existing Git credentials are the
+default. A saved connection can instead use an HTTPS credential or a specific
+SSH key, with a server scope. Cloned and published working copies remember the
+chosen connection for later Versions operations.
+
+For an existing checkout, expand **Current repository**. Read its settings,
+choose a connection, and select **Use connection for this repository**. Choose
+existing Git credentials to remove a saved account choice. You can also set the
+commit author name and email for this repository without changing global Git
+settings. This name identifies commits; it is separate from authentication.
+
+- **HTTPS:** enter the server address, username, and password or access token.
+  **Store credential securely** uses macOS Keychain. Save the connection, then
+  select it when cloning or publishing. Other platforms can use their installed
+  Git credential manager through the existing-credentials option.
+- **SSH:** choose an existing private key or create an encrypted key. Read and
+  copy its public key to register it with the Git host. Unlock the private key
+  for the SSH agent when needed. Private keys stay on this computer.
+- For a new SSH server, **Review server fingerprints**, check them with the
+  server owner, then trust the reviewed keys. Changed keys block the connection.
+
+Connection preferences contain names, scopes, and key-file paths. Passwords,
+tokens, and passphrases are not saved in models or preference files and are not
+exposed in semantic UI data. Connection and credential changes take effect
+immediately; Settings Apply or Cancel does not undo them. Removing a connection
+retains its key files and stored credential; removal of a credential is separate.
+
+## Optional GitHub connection
+
+Expand **Forge connections · GitHub** in Git Repositories. **Connect GitHub with
+browser** shows a device code and opens GitHub. Complete sign-in in the browser.
+You can browse and search accessible repositories, choose an owner, look up an
+exact `owner/name`, switch saved accounts, or disconnect an account.
+
+Selecting a repository puts its URL and GitHub connection into Open models.
+**New private GitHub repository** opens a creation form. Each new form defaults
+to private. You can create an empty repository without a saved model or create
+one while publishing. Public creation needs explicit acknowledgment. Organization
+policies can still deny creation.
+
+The Mac bundle includes GitHub CLI **2.83.2** as `tcad-gh`, pinned by archive
+checksum and signed with the app. No separate GitHub CLI install is needed. Git
+and SSH must be available on the computer. Development runs can use `TCAD_GH`, an
+adjacent `tcad-gh`, or an installed `gh` for this optional adapter.
+
+GitHub CLI owns its account store. Account switching and sign-out also affect
+GitHub CLI on this computer. It tries the system credential store and can fall
+back to local configuration; TCAD reports that fallback. Environment tokens take
+precedence and must be removed before changing sign-in. See the official
+[GitHub CLI sign-in documentation](https://cli.github.com/manual/gh_auth_login).
 
 ## Publish a model
 
-Save and finish the current model first. In **Publish current model**:
+Save and finish the current model first. In **Save or publish current model**:
 
-1. Choose a new repository or the repository selected in Open models.
-2. Choose a new local working-copy folder. For a new repo, the model defaults to
-   its root. For a repo with existing files, choose a new model subfolder.
-3. Review the destination, visibility, branch, model folder, and commit author.
-4. Publish. Then choose **Open published working copy** to keep editing there.
-   Use **Versions → Save and commit**, then **Push current branch** for later work.
+1. Choose a Git URL, a new local repository, or a GitHub destination. Generic
+   URLs need no GitHub account. GitHub destinations show their checked visibility;
+   Git itself does not report who can access a generic URL.
+2. Choose a new local working-copy folder, branch, and model folder. A repository
+   with existing files needs an existing branch and a new model subfolder.
+3. Enter a version message and commit author. TCAD reads the current Git author
+   settings; you can edit the name and email without changing global settings.
+4. Review the saved source, destination, access, connection, branch, exact remote
+   version, local folder, and author. For an unknown-access destination, explicitly
+   confirm that you checked its access before publishing. Public GitHub publishing
+   requires explicit public disclosure acknowledgment.
+5. Publish, or create the local model repository. **Open saved working copy**
+   continues editing there. Use **Versions → Save and commit**, then
+   **Push current branch** for later remote updates.
 
-TCAD copies only the chosen model's manifest, definitions, referenced resources,
-shared presentation, and a current generated README preview. It does not upload
-the source folder's enclosing repository or unrelated files. It keeps the source
-model unchanged. Existing remote files and history are retained; an existing
-model folder cannot be replaced by this flow. Uploads are ordinary pushes, never
-force-pushes. The reviewed repository identity and visibility are checked again
-before upload. Commit identity is saved only in the new local checkout.
+Only the chosen model's manifest, definitions, referenced resources, shared
+presentation, and current generated README preview are copied. The source model
+stays unchanged. Its enclosing repository and unrelated files are not uploaded.
+Existing remote files and history are retained; this flow does not replace an
+existing model folder. Pushes are never forced. If the reviewed remote branch
+changes, publication stops for a fresh review. Explicit GitHub destinations also
+recheck account, repository identity, and visibility. An empty-branch review is
+an empty-branch requirement, not permission to replace later changes.
 
 Network work runs in the background with progress and cancellation. Cancellation
-cannot undo a completed remote action. Created repos and retained local checkout
-paths remain visible after a partial failure; refresh GitHub before retrying an
-interrupted upload. Late results cannot replace a model that changed meanwhile.
+cannot undo a completed remote action. Created repositories and retained local
+working-copy paths remain visible after partial failure. Check the destination
+before retrying an interrupted upload. Late results cannot replace a model that
+changed meanwhile.
 
-The initial forge adapter supports **GitHub.com**. Ordinary Versions operations
-still support other Git remotes with their existing credentials. The macOS bundle
-includes GitHub CLI **2.83.2** as `tcad-gh`, pinned by archive checksum and signed
-with the app. Git must be available on the computer. Development runs can use
-`TCAD_GH`, an adjacent `tcad-gh`, or an installed `gh`.
+Transfer limits are 100 MiB per file and 1 GiB for a model plus its shared
+presentation. Git LFS and automatic submodule retrieval are not provided. Create
+other branches in Versions after opening a working copy. Generic-host publishing
+uses a thumbnail and downloadable STL preview; GitHub-only rendering markup is
+not assumed for other servers.
 
-GitHub CLI owns the credentials; TCAD does not put tokens in models, preferences,
-semantic UI data, or progress messages. Account switching and sign-out also affect
-the shared GitHub CLI account store. The helper tries the system credential store
-and can fall back to its local configuration; TCAD reports that fallback. Tokens
-supplied through environment variables take precedence and must be removed before
-changing sign-in. See the official [GitHub CLI sign-in documentation](https://cli.github.com/manual/gh_auth_login).
-
-The versioned forge contract and model-transfer API are in `cad-core`; the desktop
-only provides the workflow and background jobs. The `tcad.repositories-ui`
-semantic contract exposes fields, actions, choices, review, and progress separately
-from the `repositories-editor` renderer. Themes can rearrange and restyle them.
-
-The repository workflow was compiled and packaged on 2026-10-16. Formatting,
-`cargo clippy --workspace --lib --bins --locked -- -D warnings`, packaging-script
-syntax, and notice-collector compilation passed. `scripts/package-macos.sh`
-completed the locked workspace build, verified the helper archive checksum,
-signed all four executables and the application, and verified the resulting
-`dist/TCAD.app`. No tests, manual smoke checks, or live authentication, creation,
-download, or publish acceptance checks were run. Interactive acceptance remains
-with the user.
-
-Current transfer limits are 100 MiB per file and 1 GiB for a model plus its shared
-presentation. Git LFS and automatic submodule retrieval are not provided by this
-workflow. Publishing into an existing repo uses an existing branch and a new model
-folder. Create other branches in Versions after opening a working copy.
+The versioned forge, Git-connection, and model-transfer contracts are in
+`cad-core`. The desktop supplies background jobs and semantic fields, actions,
+review, and progress. Layouts and themes can arrange and style these controls.
+Secrets are handled separately from the semantic control values. No manual UI,
+live authentication, repository creation, clone, or publish acceptance checks
+were run for this update. Interactive acceptance remains with the user.
 
 ## Versions
 
@@ -258,6 +296,13 @@ semantic controls through `component-fork`, `feature-transfer`, `git-ui`, and
 `readme-preview` adapters.
 
 ## Validation
+
+On 2026-10-17, the forge-neutral repository and connection update passed workspace
+format checking, strict Clippy for all libraries and executables, whitespace
+checking, and package-script syntax checking. This includes the new SSH
+passphrase helper. No tests, live credential operations, repository transfers,
+app launches, or manual acceptance checks were run. The implementation retains
+the existing dependency future-compatibility warning noted below.
 
 On 2026-10-16, implementation checkpoint `14a0dcc` passed:
 

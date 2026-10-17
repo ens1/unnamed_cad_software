@@ -38,6 +38,7 @@ mod fabrication_ui;
 mod feature_order_ui;
 mod feature_transfer_ui;
 mod finish_library_ui;
+mod git_connections_ui;
 mod git_ui;
 mod graph_ui;
 mod history;
@@ -154,6 +155,7 @@ pub struct Workspace {
     pub git_ui: git_ui::State,
     pub readme_preview: readme_preview_ui::State,
     pub repositories: repositories_ui::State,
+    pub git_connections: git_connections_ui::State,
     pub sketch_analysis: sketch_analysis_ui::State,
     pub drawing_interaction: drawing_interaction_ui::State,
     pub drawing_worker: drawing_interaction_ui::PaperWorker,
@@ -312,6 +314,7 @@ impl Workspace {
             git_ui: Default::default(),
             readme_preview: Default::default(),
             repositories: Default::default(),
+            git_connections: Default::default(),
             sketch_analysis: sketch_analysis_ui::State::default(),
             drawing_interaction: drawing_interaction_ui::State::default(),
             drawing_worker: drawing_interaction_ui::PaperWorker::new(),
@@ -1311,6 +1314,7 @@ fn poll_workers(mut w: ResMut<Workspace>) {
     feature_transfer_ui::poll(&mut w);
     readme_preview_ui::poll(&mut w);
     repositories_ui::poll(&mut w);
+    git_connections_ui::poll(&mut w);
     sketch3d_ui::poll(&mut w);
     sketch_analysis_ui::poll(&mut w);
     assembly_motion_ui::poll(&mut w);

@@ -14,11 +14,22 @@ pub trait VersionControl {
 pub struct Git;
 impl VersionControl for Git {
     fn command(&self, root: &Path, args: &[&str]) -> Result<String> {
-        // Scope the helper to GitHub without changing the user's Git configuration.
-        // Other forges continue to use their configured credential helpers.
-        let mut command = crate::forge::GitHub::discover()
-            .and_then(|github| github.git_command())
-            .unwrap_or_else(|_| Command::new("git"));
+        let mut command = Command::new("git");
+        // Accounts are optional. Only network operations need the saved connection;
+        // local inspection stays available even when an account needs repair.
+        if args
+            .first()
+            .is_some_and(|arg| matches!(*arg, "fetch" | "push" | "ls-remote" | "clone"))
+        {
+            crate::git_connections::configure_git_for_operation(
+                &mut command,
+                root,
+                &args
+                    .iter()
+                    .map(|arg| (*arg).to_string())
+                    .collect::<Vec<_>>(),
+            )?;
+        }
         let output = command
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "never")
@@ -92,28 +103,7 @@ fn non_option(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 pub fn validate_remote(url: &str) -> Result<()> {
-    non_option(url, "Git remote")?;
-    if url.contains("::") || url.len() > 8192 {
-        return Err(CadError::Invalid(
-            "Use an SSH, HTTPS, Git or local repository address".into(),
-        ));
-    }
-    if let Some((scheme, address)) = url.split_once("://") {
-        if !matches!(scheme, "https" | "http" | "ssh" | "git" | "file") {
-            return Err(CadError::Invalid("Unsupported Git transport".into()));
-        }
-        if matches!(scheme, "http" | "https")
-            && address
-                .split('/')
-                .next()
-                .is_some_and(|host| host.contains('@'))
-        {
-            return Err(CadError::Invalid(
-                "Keep credentials in the Git credential manager, not in the project URL".into(),
-            ));
-        }
-    }
-    Ok(())
+    crate::git_connections::RepositoryAddress::parse(url).map(|_| ())
 }
 pub fn repository_root(root: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(
@@ -344,8 +334,8 @@ pub fn execute(root: &Path, operation: &GitOperation) -> Result<GitReport> {
         }
         GitOperation::AddRemote { name, url } => {
             non_option(name, "remote name")?;
-            validate_remote(url)?;
-            Git.command(root, &["remote", "add", "--", name, url])?
+            let address = crate::git_connections::RepositoryAddress::parse(url)?;
+            Git.command(root, &["remote", "add", "--", name, &address.git_url])?
         }
         GitOperation::Commit { message, manifest } => commit_project(root, manifest, message)?,
         GitOperation::CommitMerge {
