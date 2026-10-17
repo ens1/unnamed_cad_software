@@ -31,6 +31,8 @@ merge** completes only those recorded files. Recovery stops if the branch or
 affected local files changed. Other staged work is retained. Finish recovery
 before saving to that project, switching branches, committing, or pushing;
 Save As to a new project remains available.
+Submodule changes and directory/file transitions require a Git client; the
+recovery operation stops before these cases instead of guessing.
 
 The project commit includes the native manifest, referenced definition and
 resource files, saved workspace presentation, and generated README preview files.
@@ -118,7 +120,9 @@ reuses the saved identity mapping and reviewed base.
 
 The same workflow works in either direction: take a feature from upstream, or
 open upstream and take a feature from a fork. It does not mark the entire source
-branch as merged. Feature deletion, feature-order reconciliation, and assembly
+branch as merged. Retained correspondence can be followed through multiple fork
+generations. Missing ancestry requires explicit input bindings; conflicting
+ancestry blocks the transfer. Feature deletion, feature-order reconciliation, and assembly
 mate/instance transfers are not part of selective part-feature transfer. Use a
 reviewed full branch merge for wider document changes.
 
@@ -170,6 +174,16 @@ semantic controls through `component-fork`, `feature-transfer`, `git-ui`, and
 
 ## Validation
 
-Implementation review, compilation, formatting, and strict linting are the
-available verification. No code tests, probe scripts, app launches, or manual
-smoke checks were run. Interactive acceptance remains with the user.
+On 2026-10-16, implementation checkpoint `14a0dcc` passed:
+
+- `cargo fmt --all --check`
+- `cargo clippy --workspace --lib --bins --locked -- -D warnings`
+- `git diff --check`
+- `scripts/package-macos.sh`, including locked workspace compilation, bundle
+  property-list linting, and strict signatures for the desktop, worker, CLI,
+  and completed `dist/TCAD.app`.
+
+Cargo reported an existing future-compatibility warning for dependency
+`proc-macro-error2 2.0.1`. No code tests, probe scripts, app launches, or manual
+smoke checks were run. These checks establish source integration and packaging;
+interactive acceptance remains with the user.

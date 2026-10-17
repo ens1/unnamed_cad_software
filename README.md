@@ -25,6 +25,12 @@ The macOS bundle contains `TCAD` (desktop), `tcad-worker` (geometry), and `tcad-
 
 ## Native kernel foundation
 
+The 2026-10-16 [Git collaboration update](docs/git-collaboration.md) adds reviewed
+branches and merges, part/assembly forks, controlled component updates, selected
+feature transfer, and generated README model previews. Formatting, strict
+workspace linting, locked compilation and signed macOS packaging passed.
+Interactive acceptance remains with the user.
+
 The 2026-10-14 [kernel foundation update](docs/kernel-foundation-2026-10-14.md)
 adds connected tangent line/arc cap fillets and chamfers, uniform shells of
 supported rounded stock, broader rational loft separation, retained native
