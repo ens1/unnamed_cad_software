@@ -34,9 +34,10 @@ validated-evaluation requirement for Apply.
 
 ## Separate work
 
-- **Astra scope:** native miter weld construction (RR-26), exact contact and
-  interference classification (RR-30), and drawing hidden-line classification
-  (RR-18).
+- **Geometry follow-up:** native miter weld construction (RR-26), native contact
+  classification (RR-30), and drawing hidden-line modes (RR-18) now have an
+  [implementation follow-up](geometry-fixes.md). It records supported cases,
+  remaining geometry limits and pending user acceptance.
 - **Distribution decision:** the starter packs remain private (RR-03). This
   implementation does not change repository visibility. Default/fallback
   content and routes to alternate repositories remain available.
