@@ -1038,25 +1038,44 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
             ))
     } else {
         egui::Modal::default_area(id)
-    };
+    }
+    .constrain_to(bounds.shrink(16.));
     let response = egui::Modal::new(id).area(area).frame(egui::Frame::NONE).show(ctx, |ui| {
         controls::with_target(target, ui, |ui| {
             let properties = controls::properties("settings:dialog", "settings-dialog", &["settings-surface"], "open");
             let mut frame = controls::frame_from_properties(ui, &properties);
             if !properties.contains_key("background") { frame.fill = ui.visuals().window_fill; }
             if !properties.contains_key("border") && !properties.contains_key("border-color") { frame.stroke = ui.visuals().window_stroke; }
+            let margin = frame.total_margin().sum();
             frame.show(ui, |ui| {
                 controls::apply_properties(ui, &properties);
                 let available = ctx.content_rect().size();
-                let maximum = egui::vec2((available.x - 32.).max(240.), (available.y - 32.).max(240.));
-                let width = styled_length(&properties, "width",available.x,700.).clamp(240., maximum.x);
-                let height = styled_length(&properties, "height",available.y,460.).clamp(240., maximum.y);
+                let maximum = (available - egui::vec2(32.,32.) - margin).max(egui::Vec2::splat(1.));
+                let minimum = maximum.min(egui::Vec2::splat(240.));
+                let width = styled_length(&properties, "width",available.x,700.).clamp(minimum.x, maximum.x);
+                let height = styled_length(&properties, "height",available.y,460.).clamp(minimum.y, maximum.y);
                 let override_width = properties.contains_key("width");
                 let override_height = properties.contains_key("height");
-                egui::Resize::default().id_salt("settings:resize").default_size(egui::vec2(width,height))
-                    .min_size(egui::vec2(if override_width {width} else {240.},if override_height {height} else {240.}))
+                let mut footer_action = None;
+                // Keep manual sizes within their authored theme geometry, rather than carrying
+                // a previous theme's remembered content size into the newly styled dialog.
+                egui::Resize::default().id_salt(("settings:resize",&properties)).default_size(egui::vec2(width,height))
+                    .min_size(egui::vec2(if override_width {width} else {minimum.x},if override_height {height} else {minimum.y}))
                     .max_size(egui::vec2(if override_width {width} else {maximum.x},if override_height {height} else {maximum.y}))
                     .resizable([!override_width,!override_height]).show(ui, |ui| {
+                    let Some(state) = &w.settings else { return; };
+                    let pending = state.pending;
+                    // Measure the styled actions first so the scrollable body cannot consume
+                    // their space. A fixed footer allowance fails with larger user buttons.
+                    egui::Panel::bottom(ui.make_persistent_id(("settings:footer",&properties)))
+                        .resizable(false).min_size(0.).frame(egui::Frame::NONE).show(ui, |ui| {
+                            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),ui.spacing().interact_size.y),egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if controls::button(ui,"command:settings.ok","settings-action",&["primary"],"OK",!pending,false).clicked() {footer_action = Some("settings.ok");}
+                                if controls::button(ui,"command:settings.cancel","settings-action",&[],"Cancel",true,false).clicked() {footer_action = Some("settings.cancel");}
+                                if controls::button(ui,"command:settings.apply","settings-action",&[],"Apply",!pending,false).clicked() {footer_action = Some("settings.apply");}
+                            });
+                        });
+                    if w.settings.is_none() { return; }
                     ui.horizontal(|ui| {
                         controls::label(ui,"settings:title","settings-title",&[],"Settings","ready");
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1072,13 +1091,16 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                     let category = state.category.clone();
                     let search = state.search.to_lowercase();
                     let pending = state.pending;
-                    let content_height = (ui.available_height() - 65.).max(90.);
-                    ui.horizontal_top(|ui| {
+                    let diagnostic = state.diagnostic.clone();
+                    let content_height = ui.available_height().max(0.);
+                    // Bound the whole row: an unconstrained horizontal separator otherwise
+                    // consumes the footer area and makes Resize grow again on every frame.
+                    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),content_height),egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         let sidebar_properties = controls::properties("settings:categories", "settings-categories", &[], "ready");
                         let sidebar_width = styled_length(&sidebar_properties,"width",ui.available_width(),175.).clamp(90.,(ui.available_width()*0.45).max(90.));
                         ui.allocate_ui_with_layout(egui::vec2(sidebar_width,content_height),egui::Layout::top_down(egui::Align::Min), |ui| {
                             controls::apply_properties(ui,&sidebar_properties);
-                            egui::ScrollArea::vertical().id_salt("settings:category-scroll").max_height(content_height).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt("settings:category-scroll").min_scrolled_height(0.).max_height(content_height).show(ui, |ui| {
                                 for scope in ["Model", "Application"] {
                                     controls::label(ui,&format!("settings:scope:{scope}"),"settings-scope",&[],scope,"ready");
                                     for (id,label,group) in CATEGORIES.iter().filter(|(_,_,group)|*group == scope) {
@@ -1094,7 +1116,21 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                         let panel_properties = controls::properties("settings:content", "settings-content", &[], "ready");
                         ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),content_height),egui::Layout::top_down(egui::Align::Min), |ui| {
                             controls::apply_properties(ui,&panel_properties);
-                            egui::ScrollArea::vertical().id_salt("settings:field-scroll").max_height(content_height).show(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt("settings:field-scroll").min_scrolled_height(0.).max_height(content_height).show(ui, |ui| {
+                                let status = diagnostic.as_deref().or(pending.then_some("Validating model preferences…"));
+                                let status_id = ui.make_persistent_id("settings:shown-status");
+                                let status_changed = ui.data_mut(|data| {
+                                    let previous = data.get_temp::<String>(status_id);
+                                    if let Some(status) = status {data.insert_temp(status_id,status.to_owned());}
+                                    else {data.remove::<String>(status_id);}
+                                    previous.as_deref() != status
+                                });
+                                let status_response = if let Some(diagnostic) = diagnostic {
+                                    Some(controls::label(ui,"settings:diagnostic","settings-diagnostic",&[],&diagnostic,"invalid"))
+                                } else if pending {
+                                    Some(controls::label(ui,"settings:pending","settings-status",&[],"Validating model preferences…","pending"))
+                                } else {None};
+                                if status_changed && let Some(response) = status_response {response.scroll_to_me(Some(egui::Align::Min));}
                                 let all_fields = fields(w);
                                 let mut shown = 0;
                                 for (id,label,scope) in CATEGORIES {
@@ -1152,18 +1188,9 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                             });
                         });
                     });
-                    let Some(state) = &w.settings else { return; };
-                    let diagnostic = state.diagnostic.clone();
-                    let pending = state.pending;
-                    if let Some(diagnostic) = diagnostic {controls::label(ui,"settings:diagnostic","settings-diagnostic",&[],&diagnostic,"invalid");}
-                    else if pending {controls::label(ui,"settings:pending","settings-status",&[],"Validating model preferences…","pending");}
-                    ui.separator();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if controls::button(ui,"command:settings.ok","settings-action",&["primary"],"OK",!pending,false).clicked() {settings::apply(w,true);}
-                        if controls::button(ui,"command:settings.cancel","settings-action",&[],"Cancel",true,false).clicked() {settings::cancel(w);}
-                        if controls::button(ui,"command:settings.apply","settings-action",&[],"Apply",!pending,false).clicked() {settings::apply(w,false);}
-                    });
                 });
+                // Handle confirmation after fields have consumed this frame's input.
+                if let Some(command) = footer_action {settings::action(w,command);}
             });
         });
     });
