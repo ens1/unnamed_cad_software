@@ -13,6 +13,9 @@ pub use symbols::*;
 
 pub const CONTRACT_VERSION: u32 = 10;
 pub const FORMAT_VERSION: u32 = 2;
+const TITLE_CELL_PADDING_MM: f64 = 1.;
+const TITLE_LABEL_SCALE: f64 = 0.65;
+const TITLE_LINE_HEIGHT: f64 = 1.35;
 pub const VIEW_KEYS: [&str; 6] = [
     "front",
     "top",
@@ -84,29 +87,48 @@ pub struct SheetFormat {
 }
 impl Default for SheetFormat {
     fn default() -> Self {
+        let text_size_mm = 2.8_f64;
+        // Keep a label and three wrapped value lines readable without relying
+        // on a document name fitting on one line. Share the renderer's leading
+        // and padding, and round up so the default never clips at a cell edge.
+        let row_height = (text_size_mm * (TITLE_LABEL_SCALE + 3.) * TITLE_LINE_HEIGHT
+            + 2. * TITLE_CELL_PADDING_MM)
+            .ceil();
         let cells = [
-            ("TITLE", LinkedText::ModelName, [0., 24., 180., 12.]),
-            ("DOCUMENT", LinkedText::DocumentName, [0., 12., 90., 12.]),
+            (
+                "TITLE",
+                LinkedText::ModelName,
+                [0., row_height * 2., 180., row_height],
+            ),
+            (
+                "DOCUMENT",
+                LinkedText::DocumentName,
+                [0., row_height, 90., row_height],
+            ),
             (
                 "PART NUMBER",
                 LinkedText::ModelProperty {
                     key: "part_number".into(),
                 },
-                [90., 12., 90., 12.],
+                [90., row_height, 90., row_height],
             ),
             (
                 "REVISION",
                 LinkedText::DocumentProperty {
                     key: "revision".into(),
                 },
-                [0., 0., 60., 12.],
+                [0., 0., 60., row_height],
             ),
             (
                 "CONFIGURATION",
                 LinkedText::ConfigurationName,
-                [60., 0., 60., 12.],
+                [60., 0., 60., row_height],
             ),
-            ("SHEET", LinkedText::SheetNumber, [120., 0., 60., 12.]),
+            (
+                "SHEET",
+                LinkedText::SheetNumber,
+                [120., 0., 60., row_height],
+            ),
         ]
         .into_iter()
         .map(|(label, value, rect_mm)| TitleCell {
@@ -125,8 +147,8 @@ impl Default for SheetFormat {
                 band_mm: 5.,
             }),
             title_block: Some(TitleBlock {
-                size_mm: [180., 36.],
-                text_size_mm: 2.8,
+                size_mm: [180., row_height * 3.],
+                text_size_mm,
                 cells,
             }),
         }
@@ -2341,18 +2363,40 @@ fn rectangle(out: &mut Vec<Primitive>, at: [f64; 2], size: [f64; 2]) {
 fn wrapped_title(value: &str, width: f64, size: f64) -> Vec<String> {
     // One text-size width per character conservatively fits the default vector
     // font without clipping or silently truncating the linked property.
-    let capacity = ((width - 2.) / size).floor().max(1.) as usize;
+    let capacity = ((width - 2. * TITLE_CELL_PADDING_MM) / size)
+        .floor()
+        .max(1.) as usize;
     let mut rows = vec![];
     for line in value.split('\n') {
         let characters = line.chars().collect::<Vec<_>>();
         if characters.is_empty() {
             rows.push(String::new());
         } else {
-            rows.extend(
-                characters
-                    .chunks(capacity)
-                    .map(|c| c.iter().collect::<String>()),
-            );
+            let mut remaining = characters.as_slice();
+            let mut word_rows = vec![];
+            while remaining.len() > capacity {
+                let space = remaining[..=capacity]
+                    .iter()
+                    .rposition(|c| *c == ' ')
+                    .filter(|index| *index > 0);
+                let end = space.unwrap_or(capacity);
+                word_rows.push(remaining[..end].iter().collect::<String>());
+                remaining = &remaining[end + usize::from(space.is_some())..];
+            }
+            if !remaining.is_empty() {
+                word_rows.push(remaining.iter().collect::<String>());
+            }
+            // Prefer whole words, but keep the existing hard-wrap fit for
+            // explicit/custom cells when word boundaries would add rows.
+            if word_rows.len() <= characters.len().div_ceil(capacity) {
+                rows.extend(word_rows);
+            } else {
+                rows.extend(
+                    characters
+                        .chunks(capacity)
+                        .map(|c| c.iter().collect::<String>()),
+                );
+            }
         }
     }
     rows
@@ -2435,32 +2479,37 @@ pub fn format_geometry(doc: &Document, sheet: &Drawing) -> Result<Vec<Primitive>
             let [x, y, width, height] = cell.rect_mm;
             let position = [at[0] + x, at[1] + y];
             rectangle(&mut out, position, [width, height]);
-            let label_size = block.text_size_mm * 0.65;
+            let label_size = block.text_size_mm * TITLE_LABEL_SCALE;
             let label = wrapped_title(&cell.label, width, label_size);
             let value = wrapped_title(
                 &linked_text(doc, sheet, &cell.value)?,
                 width,
                 block.text_size_mm,
             );
-            let used = label.len() as f64 * label_size * 1.35
-                + value.len() as f64 * block.text_size_mm * 1.35
-                + 2.;
+            let used = label.len() as f64 * label_size * TITLE_LINE_HEIGHT
+                + value.len() as f64 * block.text_size_mm * TITLE_LINE_HEIGHT
+                + 2. * TITLE_CELL_PADDING_MM;
             if used > height {
                 return Err(invalid(format!(
                     "Title field '{}' exceeds its cell; enlarge it or reduce the text size",
                     cell.label
                 )));
             }
-            let mut baseline = position[1] + height - 1.;
+            let mut baseline = position[1] + height - TITLE_CELL_PADDING_MM;
             for row in label {
-                baseline -= label_size * 1.35;
-                text(&mut out, [position[0] + 1., baseline], label_size, row);
-            }
-            for row in value {
-                baseline -= block.text_size_mm * 1.35;
+                baseline -= label_size * TITLE_LINE_HEIGHT;
                 text(
                     &mut out,
-                    [position[0] + 1., baseline],
+                    [position[0] + TITLE_CELL_PADDING_MM, baseline],
+                    label_size,
+                    row,
+                );
+            }
+            for row in value {
+                baseline -= block.text_size_mm * TITLE_LINE_HEIGHT;
+                text(
+                    &mut out,
+                    [position[0] + TITLE_CELL_PADDING_MM, baseline],
                     block.text_size_mm,
                     row,
                 );
