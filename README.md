@@ -8,7 +8,7 @@ The product target is the **mainstream mechanical CAD capabilities shared by Sol
 
 ## Start
 
-On this Mac, open **`dist/TCAD.app`** or double-click **`Start TCAD.command`**. The command launcher compiles the workspace before opening it. The app opens an empty **Part1** when no project is supplied. **File → New Part** and **New Assembly** create empty documents. The drive-unit demo is available only through **File → Open Example: Drive Unit**.
+On this Mac, open **`dist/TCAD.app`** or double-click **`Start TCAD.command`**. The command launcher compiles the workspace before opening it. The app opens an empty **Part1** when no project is supplied. **File → New Part** and **New Assembly** create empty documents.
 
 From a terminal:
 

@@ -2418,10 +2418,6 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
             Ok(document) => w.replace(document, None),
             Err(error) => w.status = format!("New document defaults could not be applied: {error}"),
         },
-        "file.example" => {
-            w.replace(Document::sample(), None);
-            w.status = "Drive unit example — sample geometry".into();
-        }
         "feature.extrude" => feature_preset(w, "Extrude"),
         "feature.cut" => feature_preset(w, "Cut"),
         "feature.revolve" => feature_preset(w, "Revolve"),

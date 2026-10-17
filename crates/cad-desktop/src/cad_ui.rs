@@ -225,7 +225,6 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "file.import",
             "file.export",
             "file.recover",
-            "file.example",
             "file.export-drawing-dxf",
             "file.export-flat-pattern",
             "file.export-cutlist",
@@ -1152,11 +1151,6 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                     ui::action(w, command);
                     ui.close();
                 }
-            }
-            ui.separator();
-            if menu_action(ui, "file.example", "Open Example: Drive Unit", true).clicked() {
-                ui::action(w, "file.example");
-                ui.close();
             }
             ui.separator();
             if menu_action(ui, "file.export-drawing-dxf", "Export Drawing DXF…", true).clicked() {

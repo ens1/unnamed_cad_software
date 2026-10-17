@@ -1074,7 +1074,6 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("drawing.sheet-format-load", "Apply Drawing Sheet Format"),
     ("file.new-part", "New Part"),
     ("file.new", "New assembly"),
-    ("file.example", "Open Example: Drive Unit"),
     ("file.open", "Open project"),
     ("file.recover", "Recover local work"),
     ("file.save", "Save"),
