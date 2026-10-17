@@ -1629,8 +1629,11 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                 .pointer_mut(pointer)
                 .ok_or_else(|| CadError::Invalid("The lighting field no longer exists".into()))? =
                 value;
-            let lighting: Lighting = serde_json::from_value(source.clone())?;
-            checked_dispatch(w, Command::SetLighting { lighting }, source, None)?;
+            let lighting: Lighting = serde_json::from_value(source)?;
+            // The editable JSON includes environment:null, while Lighting omits
+            // an absent environment. Compare the same canonical representation.
+            let expected = serde_json::to_value(&lighting)?;
+            checked_dispatch(w, Command::SetLighting { lighting }, expected, None)?;
         }
         "appearance-part" => {
             let definition = element
