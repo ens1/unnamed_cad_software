@@ -242,20 +242,27 @@ fn reader<'a>(bytes: &'a [u8], kind: &str) -> Result<ImageReader<Cursor<&'a [u8]
     reader.limits(limits);
     Ok(reader)
 }
+pub(crate) fn validate_bytes(bytes: &[u8], kind: &str) -> cad_core::Result<()> {
+    (|| -> Result<(), String> {
+        if bytes.is_empty() || bytes.len() > MAX_FILE_BYTES {
+            return Err("Environment image exceeds its encoded size bound".into());
+        }
+        let (width, height) = reader(bytes, kind)?
+            .into_dimensions()
+            .map_err(|error| format!("Cannot inspect environment: {error}"))?;
+        dimensions(width, height)
+    })()
+    .map_err(|message| CadError::Invalid(format!("Environment: {message}")))
+}
 pub(crate) fn validate_file(path: &Path) -> cad_core::Result<Vec<u8>> {
     let kind = path
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or_default();
-    (|| -> Result<Vec<u8>, String> {
-        let bytes = read(path)?;
-        let (width, height) = reader(&bytes, kind)?
-            .into_dimensions()
-            .map_err(|error| format!("Cannot inspect environment: {error}"))?;
-        dimensions(width, height)?;
-        Ok(bytes)
-    })()
-    .map_err(|message| CadError::Invalid(format!("Environment: {message}")))
+    let bytes =
+        read(path).map_err(|message| CadError::Invalid(format!("Environment: {message}")))?;
+    validate_bytes(&bytes, kind)?;
+    Ok(bytes)
 }
 pub(crate) fn load(root: &Path, resource: &Resource) -> Result<Panorama, String> {
     let path = cad_core::persistence::safe_join(root, &resource.path)

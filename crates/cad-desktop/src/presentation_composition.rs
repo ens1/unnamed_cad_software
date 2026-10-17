@@ -394,6 +394,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::git_ui::semantics(w));
     elements.extend(crate::repositories_ui::semantics(w));
     elements.extend(crate::git_connections_ui::semantics(w));
+    elements.extend(crate::content_repositories_ui::semantics(w));
     elements.extend(crate::assembly_tree_ui::semantics(w));
     if let Some(sketch) = &w.sketch {
         elements.retain(|element| {
@@ -763,7 +764,7 @@ impl ValueAdapters {
         if w.settings.is_some()
             && !matches!(
                 element.data.get("setter").and_then(|value| value.as_str()),
-                Some("settings" | "git-connections")
+                Some("settings" | "git-connections" | "content-repositories")
             )
         {
             return Err(cad_core::CadError::Invalid(
@@ -848,6 +849,11 @@ fn value_adapters() -> ValueAdapters {
         "git-connections",
         crate::git_connections_ui::set_value,
         crate::git_connections_ui::current_value,
+    );
+    adapters.register(
+        "content-repositories",
+        crate::content_repositories_ui::set_value,
+        crate::content_repositories_ui::current_value,
     );
     adapters.register(
         "assembly-tree",

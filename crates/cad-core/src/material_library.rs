@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const CONTRACT_VERSION: u32 = 1;
 pub const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MATERIALS: usize = 2000;
-const BUNDLED_JSON: &str = include_str!("../../../assets/materials/engineering.json");
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -145,29 +144,59 @@ pub fn export_json(catalog: &Catalog) -> Result<String> {
     }
     Ok(json)
 }
-pub fn bundled_catalog() -> Result<Catalog> {
-    bundled_catalog_ref().cloned()
-}
-/// Immutable validated embedded source, shared by read-only browser lookups.
-/// Imports and custom edits should use the existing owned bundled_catalog API.
-pub fn bundled_catalog_ref() -> Result<&'static Catalog> {
-    static CATALOG: std::sync::OnceLock<std::result::Result<Catalog, String>> =
+/// Installed repository definitions, cached until the repository registry is refreshed.
+/// Copying a record into a project preserves its complete independent snapshot.
+pub fn installed_catalog() -> Result<std::sync::Arc<Catalog>> {
+    type Cached = (u64, std::result::Result<std::sync::Arc<Catalog>, String>);
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<Cached>>> =
         std::sync::OnceLock::new();
-    CATALOG
-        .get_or_init(|| parse_json(BUNDLED_JSON).map_err(|error| error.to_string()))
+    let generation = crate::content_repositories::catalog_generation();
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| CadError::Invalid("The installed material cache is unavailable".into()))?;
+    if cache
         .as_ref()
-        .map_err(|message| CadError::Invalid(message.clone()))
+        .is_none_or(|(cached_generation, _)| *cached_generation != generation)
+    {
+        let snapshot = crate::content_repositories::catalog_snapshot();
+        let loaded = (|| -> Result<std::sync::Arc<Catalog>> {
+            let mut materials = Vec::new();
+            let mut ids = BTreeSet::new();
+            for (index, source) in snapshot.entries.iter().filter(|source| {
+                source.entry.kind == crate::content_repositories::ContentKind::Materials
+            }).enumerate() {
+                if index >= 32 {
+                    return Err(CadError::Invalid("At most 32 catalogs of this kind can be enabled at once. Disable unused catalogs in Libraries.".into()));
+                }
+                let bytes = crate::content_repositories::read_entry(source, MAX_JSON_BYTES)?;
+                let json = std::str::from_utf8(&bytes).map_err(|_| CadError::Invalid("Material catalog JSON must be UTF-8".into()))?;
+                let catalog = parse_json(json).map_err(|error| CadError::Invalid(format!("{} / {}: {error}", source.repository_name, source.entry.name)))?;
+                for material in catalog.materials {
+                    if !ids.insert(material.id.clone()) {
+                        return Err(CadError::Invalid(format!("Multiple enabled libraries use material ID {}. Disable one copy or give your fork distinct material IDs.", material.id)));
+                    }
+                    materials.push(material);
+                }
+            }
+            Ok(std::sync::Arc::new(Catalog::new("Installed material libraries", materials)))
+        })()
+        .map_err(|error| error.to_string());
+        *cache = Some((snapshot.generation, loaded));
+    }
+    cache
+        .as_ref()
+        .expect("cache was populated")
+        .1
+        .clone()
+        .map_err(CadError::Invalid)
 }
-/// Lookup by exact catalog identity without cloning unrelated records.
-pub fn bundled_material(id: &str) -> Result<&'static Material> {
-    bundled_catalog_ref()?
-        .materials
-        .iter()
-        .find(|material| material.id == id)
-        .ok_or_else(|| CadError::Invalid("The requested catalog material does not exist".into()))
+pub fn installed_material(id: &str) -> Result<Material> {
+    installed_catalog()?.materials.iter().find(|material| material.id == id).cloned()
+        .ok_or_else(|| CadError::Invalid("The requested material is unavailable. Enable its content repository in Libraries.".into()))
 }
 pub fn instantiate(catalog_id: &str) -> Result<Material> {
-    bundled_catalog_ref()?.instantiate(catalog_id)
+    installed_catalog()?.instantiate(catalog_id)
 }
 pub fn delete_material(document: &mut Document, material: &str) -> Result<()> {
     materials::delete_material(document, material)

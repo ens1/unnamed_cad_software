@@ -9,6 +9,7 @@ pub mod camera_views;
 pub mod component_fork;
 pub mod component_pattern;
 pub mod configuration;
+pub mod content_repositories;
 pub mod contours;
 pub mod curve_pattern;
 pub mod cut_list;

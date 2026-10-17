@@ -1,6 +1,6 @@
 # Nocturne presentation example
 
-Nocturne is a complete presentation package in `assets/ui/themes/nocturne`.
+Nocturne is an optional presentation package in the starter theme repository, under `nocturne/`. Clone that repository through **Content Libraries**, then choose Nocturne in **Settings → Themes**. Only Classic Orange ships in the application.
 It uses the same document, commands, selection, draft validation, and undo history
 as the default CAD workspace. It contains no sample part or CAD definitions.
 
@@ -47,3 +47,5 @@ last usable presentation when a resource is invalid.
 Nocturne is a deliberate, more spacious alternative. Its dimensions and target
 sizes are ordinary editable resources. Geometry, materials, and physical
 dimensions retain their authoritative model definitions when it is selected.
+
+Installed repository themes load directly from the checkout. Layout and CSS edits can reload through the normal presentation watcher, including after Settings Apply and app restart. The personal preference also keeps a self-contained last-applied snapshot, so removing the optional repository does not leave an unusable workspace. Imports from a repository theme must stay inside that repository; invalid files retain the last usable presentation. To create a variant, fork the content repository in Content Libraries, edit its files, refresh, and select the fork's theme.

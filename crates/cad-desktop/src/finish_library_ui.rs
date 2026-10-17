@@ -1,4 +1,4 @@
-//! Authored visual finish catalog and portable, pinned texture interchange.
+//! Installed repository finishes and portable, pinned texture interchange.
 use crate::{Workspace, presentation_controls as controls};
 use bevy_egui::egui;
 use cad_core::{
@@ -96,7 +96,11 @@ fn export(w: &mut Workspace, all: bool) -> Result<()> {
         document.finishes.insert(finish.id.clone(), finish.clone());
         vec![finish.id]
     };
-    let package = cad_core::finish_library::export(&document, &w.root(), &ids)?;
+    let package = if !all && key(w).is_some_and(|key| key.starts_with("catalog:")) {
+        cad_core::finish_library::package_for_catalog(&ids[0])?
+    } else {
+        cad_core::finish_library::export(&document, &w.root(), &ids)?
+    };
     let bytes = cad_core::finish_library::encode(&package)?;
     let Some(path) = rfd::FileDialog::new()
         .set_title("Export visual finishes with pinned texture maps")
@@ -116,6 +120,10 @@ fn export(w: &mut Workspace, all: bool) -> Result<()> {
 pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bool {
     if !command.starts_with("finish-library.") {
         return false;
+    }
+    if command == "finish-library.libraries" {
+        crate::ui::action(w, "content-repositories");
+        return true;
     }
     if command == "finish-library.select" {
         if let Some(key) = arguments
@@ -185,7 +193,19 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                 let source = selected(w)
                     .ok_or_else(|| CadError::Invalid("Choose a visual finish".into()))?;
                 let finish = if key(w).is_some_and(|key| key.starts_with("catalog:")) {
-                    cad_core::finish_library::instantiate(w.session.visible(), &source.id)?
+                    let mut document = w.session.visible().clone();
+                    let id = cad_core::finish_library::install_catalog(
+                        &mut document,
+                        &w.root(),
+                        &source.id,
+                    )?;
+                    let finish = document.finishes.get(&id).cloned().ok_or_else(|| {
+                        CadError::Invalid(
+                            "Repository finish installation did not produce a finish".into(),
+                        )
+                    })?;
+                    replace(w, document)?;
+                    finish
                 } else {
                     source
                 };
@@ -262,7 +282,7 @@ fn fields(w: &Workspace) -> Vec<SemanticElement> {
             w,
             "collection",
             "Collection",
-            json!([{"value":"","label":"Project and catalog"},{"value":"project","label":"Project only"},{"value":"catalog","label":"Catalog only"},{"value":"favorites","label":"Favorites"},{"value":"recent","label":"Recently assigned"}]),
+            json!([{"value":"","label":"Project and repositories"},{"value":"project","label":"Project only"},{"value":"catalog","label":"Repositories only"},{"value":"favorites","label":"Favorites"},{"value":"recent","label":"Recently assigned"}]),
         ),
     ]
 }
@@ -361,6 +381,7 @@ fn actions(w: &Workspace) -> Vec<SemanticElement> {
     [("finish-library.assign","Assign selected finish",has&&available(w),"Choose a visual finish and an appearance target"),
         ("finish-library.add","Add to project",has&&available(w)&&key(w).is_some_and(|key|key.starts_with("catalog:")),"Choose a catalog finish"),
         ("finish-library.favorite","Favorite",has,"Choose a finish"),
+        ("finish-library.libraries","Get libraries…",true,""),
         ("finish-library.import","Import finishes…",available(w),"Finish the active operation first"),
         ("finish-library.export","Export selected…",has,"Choose a finish"),
         ("finish-library.export-project","Export project finishes…",!w.session.visible().finishes.is_empty(),"The project finish library is empty")]
@@ -402,6 +423,12 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         },
     ];
     elements.extend(fields(w));
+    for (index, error) in cad_core::finish_library::catalog_diagnostics()
+        .into_iter()
+        .enumerate()
+    {
+        elements.push(SemanticElement { id: format!("appearance:catalog:diagnostic:{index}"), role: "diagnostic".into(), label: error, value: None, state: "error".into(), commands: vec!["content-repositories".into()], relationships: vec!["workspace.finish-library".into()], data: json!({"actions":[{"command":"content-repositories","label":"Content Libraries"}]}) });
+    }
     elements.extend(actions(w));
     for finish in w.session.visible().finishes.values() {
         elements.push(entry(w, finish, false));
@@ -456,6 +483,16 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         .unwrap_or(true)
     {
         return;
+    }
+    for error in cad_core::finish_library::catalog_diagnostics() {
+        controls::label(
+            ui,
+            "appearance:catalog:diagnostic",
+            "diagnostic",
+            &[],
+            &error,
+            "error",
+        );
     }
     for element in fields(w) {
         crate::ui::semantic_field(ui, w, &element);
@@ -556,7 +593,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             "appearance:catalog:empty",
             "finish-library-description",
             &[],
-            "No matching finishes. Clear a filter or import a library.",
+            "No matching finishes. Use Get libraries to clone a finish repository, or import a portable finish package.",
             "empty",
         );
     }

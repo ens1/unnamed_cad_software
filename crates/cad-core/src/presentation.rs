@@ -1210,6 +1210,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("repositories.open", "Open a Git repository"),
     ("repositories.publish", "Publish model to a Git repository"),
     ("git-connections", "Git connections and credentials"),
+    ("content-repositories", "Content libraries and repositories"),
     ("component.fork", "Fork part or assembly"),
     ("feature-transfer", "Transfer selected features"),
     ("readme.preview", "Update README model preview"),

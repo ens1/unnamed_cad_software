@@ -9,7 +9,6 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const CONTRACT_VERSION: u32 = 1;
-const EMBEDDED: &str = include_str!("../../../assets/weldment-profiles/nominal-sections.json");
 const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 const MAX_PROFILES: usize = 2000;
 const MAX_CONTOUR_POINTS: usize = 256;
@@ -455,9 +454,7 @@ impl Catalog {
             || !identity(&self.id)
             || !text(&self.revision, 128)
             || !text(&self.name, 1024)
-            || self.collections.is_empty()
             || self.collections.len() > 64
-            || self.profiles.is_empty()
             || self.profiles.len() > MAX_PROFILES
         {
             return Err(invalid(
@@ -781,11 +778,51 @@ pub fn catalog_json(catalog: &Catalog) -> Result<String> {
     }
     Ok(json)
 }
-pub fn builtin() -> Result<Catalog> {
-    static CATALOG: std::sync::OnceLock<std::result::Result<Catalog, String>> =
+/// Installed repository catalogs. Existing members retain their saved `Origin`.
+/// Files are parsed once per explicitly refreshed repository generation.
+pub fn installed_catalogs() -> Result<Vec<std::sync::Arc<Catalog>>> {
+    type Cached = (
+        u64,
+        std::result::Result<Vec<std::sync::Arc<Catalog>>, String>,
+    );
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<Cached>>> =
         std::sync::OnceLock::new();
-    CATALOG
-        .get_or_init(|| parse_catalog(EMBEDDED).map_err(|error| error.to_string()))
+    let generation = crate::content_repositories::catalog_generation();
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| invalid("The installed profile cache is unavailable"))?;
+    if cache
+        .as_ref()
+        .is_none_or(|(cached_generation, _)| *cached_generation != generation)
+    {
+        let snapshot = crate::content_repositories::catalog_snapshot();
+        let loaded = (|| -> Result<Vec<std::sync::Arc<Catalog>>> {
+            let mut catalogs = Vec::new();
+            let mut ids = BTreeSet::new();
+            for (index, source) in snapshot.entries.iter().filter(|source| {
+                source.entry.kind == crate::content_repositories::ContentKind::WeldmentProfiles
+            }).enumerate() {
+                if index >= 32 {
+                    return Err(invalid("At most 32 catalogs of this kind can be enabled at once. Disable unused catalogs in Libraries."));
+                }
+                let bytes = crate::content_repositories::read_entry(source, MAX_JSON_BYTES)?;
+                let json = std::str::from_utf8(&bytes).map_err(|_| invalid("Profile catalog JSON must be UTF-8"))?;
+                let catalog = parse_catalog(json).map_err(|error| invalid(format!("{} / {}: {error}", source.repository_name, source.entry.name)))?;
+                if !ids.insert(catalog.id.clone()) {
+                    return Err(invalid(format!("Multiple enabled libraries use catalog ID {}. Disable one copy or give your fork a distinct catalog ID.", catalog.id)));
+                }
+                catalogs.push(std::sync::Arc::new(catalog));
+            }
+            Ok(catalogs)
+        })()
+        .map_err(|error| error.to_string());
+        *cache = Some((snapshot.generation, loaded));
+    }
+    cache
+        .as_ref()
+        .expect("cache was populated")
+        .1
         .clone()
         .map_err(CadError::Invalid)
 }

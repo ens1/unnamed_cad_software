@@ -42,9 +42,19 @@ fn assigned(w: &Workspace) -> Option<Id> {
     .ok()
 }
 fn catalog() -> Vec<Material> {
-    cad_core::material_library::bundled_catalog()
-        .map(|catalog| catalog.materials)
+    cad_core::material_library::installed_catalog()
+        .map(|catalog| catalog.materials.clone())
         .unwrap_or_default()
+}
+fn library_notice() -> Option<String> {
+    match cad_core::material_library::installed_catalog() {
+        Ok(catalog) if catalog.materials.is_empty() => Some(
+            "No engineering material library is enabled. Project materials remain available."
+                .into(),
+        ),
+        Err(error) => Some(error.to_string()),
+        _ => None,
+    }
 }
 fn key(w: &Workspace) -> Option<String> {
     w.fields
@@ -66,9 +76,7 @@ fn selected(w: &Workspace) -> Option<Material> {
         w.session.visible().materials.get(id).cloned()
     } else {
         let id = key.strip_prefix("catalog:")?;
-        cad_core::material_library::bundled_material(id)
-            .ok()
-            .cloned()
+        cad_core::material_library::installed_material(id).ok()
     }
 }
 fn record_field(element: &SemanticElement) -> bool {
@@ -119,9 +127,7 @@ fn bound_material(w: &Workspace, element: &SemanticElement) -> Option<Material> 
         w.session.visible().materials.get(id)?.clone()
     } else {
         let id = record_key.strip_prefix("catalog:")?;
-        cad_core::material_library::bundled_material(id)
-            .ok()?
-            .clone()
+        cad_core::material_library::installed_material(id).ok()?
     };
     (element.data["material"] == material.id).then_some(material)
 }
@@ -186,7 +192,7 @@ fn select(w: &mut Workspace, next: &str) -> Result<()> {
         .is_some_and(|id| w.session.visible().materials.contains_key(id))
         || next
             .strip_prefix("catalog:")
-            .is_some_and(|id| cad_core::material_library::bundled_material(id).is_ok())
+            .is_some_and(|id| cad_core::material_library::installed_material(id).is_ok())
     {
         choose(w, next.into());
         Ok(())
@@ -920,7 +926,7 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                         .strip_prefix("project:")
                         .is_some_and(|id| w.session.visible().materials.contains_key(id))
                         || text.strip_prefix("catalog:").is_some_and(|id| {
-                            cad_core::material_library::bundled_material(id).is_ok()
+                            cad_core::material_library::installed_material(id).is_ok()
                         }))
                     {
                         return Err(CadError::Invalid(
@@ -1344,6 +1350,21 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         relationships: vec![],
         data: json!({"transaction":"shared-document-draft","independent_visual_finishes":true,"favorite_scope":"personal-presentation","target":target(w),"configuration":configuration(w)}),
     }];
+    let mut get_libraries = action_element("content-repositories", "Get libraries…", true, "");
+    get_libraries.id = "command:materials:get-libraries".into();
+    elements.push(get_libraries);
+    if let Some(notice) = library_notice() {
+        elements.push(SemanticElement {
+            id: "material:library-notice".into(),
+            role: "material-description".into(),
+            label: notice,
+            value: None,
+            state: "empty".into(),
+            commands: vec![],
+            relationships: vec!["workspace.material-library".into()],
+            data: json!({"source":"content-repositories"}),
+        });
+    }
     elements.extend(browser_fields(w));
     elements.extend(target_fields(w));
     elements.extend(actions(w));
@@ -1620,6 +1641,29 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         }
     });
     section(ui, w, "browser", "Material library", true, |ui, w| {
+        if let Some(notice) = library_notice() {
+            controls::label(
+                ui,
+                "material:library-notice",
+                "material-description",
+                &[],
+                &notice,
+                "empty",
+            );
+        }
+        if controls::button(
+            ui,
+            "command:materials:get-libraries",
+            "material-action",
+            &["semantic-control"],
+            "Get libraries…",
+            true,
+            false,
+        )
+        .clicked()
+        {
+            crate::ui::action(w, "content-repositories");
+        }
         for element in browser_fields(w) {
             crate::ui::semantic_field(ui, w, &element);
         }
@@ -1667,7 +1711,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                             "material:project-heading"
                         },
                         if is_catalog {
-                            "Curated catalog"
+                            "Installed libraries"
                         } else {
                             "In this project"
                         },
@@ -1714,7 +1758,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                 "material:no-results",
                 "material-description",
                 &[],
-                "No matching materials. Clear a filter or import a library.",
+                "No matching materials. Clear a filter, create a project material, or get a library.",
                 "empty",
             );
         }

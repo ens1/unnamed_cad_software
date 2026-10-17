@@ -8,7 +8,10 @@ use std::{
     fs::File,
     io::Read,
     path::Path,
-    sync::OnceLock,
+    sync::{
+        OnceLock, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 pub const LIBRARY_VERSION: u32 = 1;
@@ -16,8 +19,8 @@ pub const LIBRARY_FORMAT: &str = "tcad.surface-finishes";
 pub const MAX_PACKAGE_BYTES: usize = 256 * 1024 * 1024;
 pub const MAX_TEXTURE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_TOTAL_TEXTURE_BYTES: usize = 64 * 1024 * 1024;
-const SOURCE: &str = "TCAD authored visual approximation, WTFPL. PBR values are artistic display parameters; color is uncalibrated sRGB.";
-
+/// Finish presets are optional repository content. Only definitions copied into
+/// a document become model data; browsing never installs a texture resource.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CatalogEntry {
     pub finish: Finish,
@@ -25,155 +28,196 @@ pub struct CatalogEntry {
     pub tags: Vec<String>,
     pub source: String,
 }
-fn entry(mut finish: Finish, category: &str, tags: &[&str], description: &str) -> CatalogEntry {
-    let tags = tags.iter().map(|tag| (*tag).into()).collect::<Vec<_>>();
-    finish.metadata = Some(FinishMetadata {
-        category: category.into(),
-        tags: tags.clone(),
-        description: description.into(),
-        source: SOURCE.into(),
-        catalog_id: Some(finish.id.clone()),
-    });
-    CatalogEntry {
-        finish,
-        category: category.into(),
-        tags,
-        source: SOURCE.into(),
+#[derive(Clone)]
+struct CatalogSource {
+    entry: crate::content_repositories::ResolvedEntry,
+    original_id: Id,
+}
+#[derive(Default)]
+struct Catalog {
+    generation: Option<u64>,
+    entries: Vec<CatalogEntry>,
+    sources: BTreeMap<Id, CatalogSource>,
+    diagnostics: Vec<String>,
+}
+fn cache() -> &'static RwLock<Catalog> {
+    static CACHE: OnceLock<RwLock<Catalog>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(Catalog::default()))
+}
+static REFRESHING: AtomicBool = AtomicBool::new(false);
+struct RefreshClaim;
+impl RefreshClaim {
+    fn acquire() -> Option<Self> {
+        REFRESHING
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .ok()
+            .map(|_| Self)
     }
 }
-fn optical(
-    id: &str,
-    name: &str,
-    color: [f64; 3],
-    metallic: f64,
-    roughness: f64,
-    bump: BuiltinBump,
-) -> Finish {
-    Finish {
-        id: format!("finish-{id}"),
-        name: name.into(),
-        base_color: color,
-        metallic,
-        roughness,
-        clearcoat: 0.,
-        clearcoat_roughness: 0.25,
-        builtin_bump: bump,
-        anisotropy: if matches!(bump, BuiltinBump::Brushed | BuiltinBump::Machined) {
-            0.5
-        } else {
-            0.
-        },
-        height_mm: match bump {
-            BuiltinBump::None => 0.,
-            BuiltinBump::Brushed => 0.012,
-            BuiltinBump::Blasted => 0.008,
-            BuiltinBump::Machined => 0.018,
-            BuiltinBump::OrangePeel => 0.045,
-            BuiltinBump::Molded => 0.015,
-            BuiltinBump::Wood => 0.035,
-        },
-        mapping: TextureMapping {
-            scale_mm: match bump {
-                BuiltinBump::Machined => [12., 12.],
-                BuiltinBump::OrangePeel | BuiltinBump::Molded => [8., 8.],
-                BuiltinBump::Wood => [100., 100.],
-                _ => [25., 25.],
-            },
-            ..TextureMapping::default()
-        },
-        ..Finish::default()
+impl Drop for RefreshClaim {
+    fn drop(&mut self) {
+        REFRESHING.store(false, Ordering::Release);
     }
 }
-/// Catalog entries stay outside document defaults. Browsing never changes a
-/// source fingerprint, pins textures, or inserts unused finishes into a project.
-pub fn catalog() -> &'static [CatalogEntry] {
-    static CATALOG: OnceLock<Vec<CatalogEntry>> = OnceLock::new();
-    CATALOG.get_or_init(|| {
-        let mut catalog = default_finishes().into_values().map(|finish| {
-            let category = if finish.id == "painted-ral1015" { "Paint and powder coat" } else { "Aluminum" };
-            CatalogEntry { finish, category: category.into(), tags: vec!["built-in".into()], source: SOURCE.into() }
-        }).collect::<Vec<_>>();
-        for (id, name, category, color, metallic, roughness, bump, tags) in [
-            ("aluminum-machined", "Aluminum · Machined", "Aluminum", [0.77,0.79,0.81], 1.,0.28,BuiltinBump::Machined, vec!["metal","bare","machined"]),
-            ("aluminum-brushed", "Aluminum · Satin Brushed", "Aluminum", [0.78,0.80,0.82], 1.,0.36,BuiltinBump::Brushed, vec!["metal","bare","satin"]),
-            ("aluminum-polished", "Aluminum · Polished", "Aluminum", [0.82,0.84,0.86], 1.,0.10,BuiltinBump::None, vec!["metal","bare","polished"]),
-            ("aluminum-blasted", "Aluminum · Bead Blasted", "Aluminum", [0.70,0.72,0.74], 1.,0.54,BuiltinBump::Blasted, vec!["metal","bare","matte"]),
-            ("steel-mill", "Steel · Mill Finish", "Steel and stainless", [0.30,0.32,0.34], 1.,0.61,BuiltinBump::Blasted, vec!["metal","bare","mill"]),
-            ("steel-machined", "Steel · Machined", "Steel and stainless", [0.56,0.58,0.61], 1.,0.30,BuiltinBump::Machined, vec!["metal","bare","machined"]),
-            ("steel-polished", "Steel · Polished", "Steel and stainless", [0.65,0.67,0.70], 1.,0.12,BuiltinBump::None, vec!["metal","bare","polished"]),
-            ("stainless-brushed", "Stainless Steel · Brushed", "Steel and stainless", [0.65,0.67,0.69], 1.,0.32,BuiltinBump::Brushed, vec!["metal","stainless","satin"]),
-            ("stainless-polished", "Stainless Steel · Mirror Polished", "Steel and stainless", [0.70,0.72,0.74], 1.,0.07,BuiltinBump::None, vec!["metal","stainless","polished"]),
-            ("stainless-blasted", "Stainless Steel · Bead Blasted", "Steel and stainless", [0.55,0.57,0.59], 1.,0.58,BuiltinBump::Blasted, vec!["metal","stainless","matte"]),
-            ("steel-black-oxide", "Steel · Black Oxide", "Steel and stainless", [0.06,0.07,0.08], 0.85,0.43,BuiltinBump::Blasted, vec!["metal","coated","black"]),
-            ("cast-iron", "Cast Iron · As Cast", "Other metals", [0.22,0.23,0.24], 0.85,0.76,BuiltinBump::Molded, vec!["metal","cast","matte"]),
-            ("copper-satin", "Copper · Satin", "Other metals", [0.85,0.50,0.35], 1.,0.32,BuiltinBump::Brushed, vec!["metal","bare","satin"]),
-            ("copper-polished", "Copper · Polished", "Other metals", [0.95,0.63,0.47], 1.,0.10,BuiltinBump::None, vec!["metal","bare","polished"]),
-            ("copper-patina", "Copper · Patina Approximation", "Other metals", [0.24,0.45,0.34], 0.12,0.77,BuiltinBump::Blasted, vec!["metal","patina","green"]),
-            ("brass-satin", "Brass · Satin", "Other metals", [0.84,0.69,0.36], 1.,0.32,BuiltinBump::Brushed, vec!["metal","bare","satin"]),
-            ("brass-polished", "Brass · Polished", "Other metals", [0.91,0.78,0.45], 1.,0.10,BuiltinBump::None, vec!["metal","bare","polished"]),
-            ("bronze", "Bronze · Brushed", "Other metals", [0.68,0.46,0.26], 1.,0.38,BuiltinBump::Brushed, vec!["metal","bare","satin"]),
-            ("titanium", "Titanium · Satin", "Other metals", [0.53,0.55,0.59], 1.,0.42,BuiltinBump::Brushed, vec!["metal","bare","satin"]),
-            ("galvanized", "Zinc · Galvanized Approximation", "Other metals", [0.67,0.70,0.73], 0.90,0.46,BuiltinBump::Blasted, vec!["metal","coated","zinc"]),
-            ("chrome", "Chrome · Polished", "Other metals", [0.74,0.76,0.79], 1.,0.06,BuiltinBump::None, vec!["metal","coated","polished"]),
-            ("abs-black", "ABS · Black Molded", "Plastics and elastomers", [0.055,0.058,0.063], 0.,0.43,BuiltinBump::Molded, vec!["plastic","black","molded"]),
-            ("abs-white", "ABS · White Molded", "Plastics and elastomers", [0.89,0.90,0.91], 0.,0.43,BuiltinBump::Molded, vec!["plastic","white","molded"]),
-            ("nylon-natural", "Nylon · Natural", "Plastics and elastomers", [0.86,0.83,0.72], 0.,0.49,BuiltinBump::Molded, vec!["plastic","natural","molded"]),
-            ("acetal-black", "Acetal · Black Machined", "Plastics and elastomers", [0.045,0.05,0.06], 0.,0.29,BuiltinBump::Machined, vec!["plastic","black","machined"]),
-            ("ptfe-natural", "PTFE · Natural", "Plastics and elastomers", [0.94,0.94,0.93], 0.,0.64,BuiltinBump::None, vec!["plastic","natural","matte"]),
-            ("rubber-black", "Rubber · Black", "Plastics and elastomers", [0.025,0.027,0.03], 0.,0.86,BuiltinBump::Molded, vec!["elastomer","black","matte"]),
-            ("silicone-gray", "Silicone · Gray", "Plastics and elastomers", [0.42,0.44,0.46], 0.,0.72,BuiltinBump::Molded, vec!["elastomer","gray","matte"]),
-            ("ceramic-white", "Ceramic · Glazed White", "Other surfaces", [0.94,0.93,0.91], 0.,0.16,BuiltinBump::None, vec!["ceramic","white","glazed"]),
-            ("wood-maple", "Wood · Maple Approximation", "Other surfaces", [0.76,0.57,0.35], 0.,0.56,BuiltinBump::Wood, vec!["wood","grain","maple"]),
-            ("wood-walnut", "Wood · Walnut Approximation", "Other surfaces", [0.31,0.18,0.10], 0.,0.52,BuiltinBump::Wood, vec!["wood","grain","walnut"]),
-        ] {
-            catalog.push(entry(optical(id, name, color, metallic, roughness, bump), category, &tags, "Authored visual finish. Imported texture maps can replace the bundled grayscale relief; this preset has no effect on mass or engineering properties."));
-        }
-        for (id, name, color) in [
-            ("black", "Black", [0.055,0.06,0.07]), ("blue", "Blue", [0.07,0.24,0.55]),
-            ("red", "Red", [0.57,0.10,0.09]), ("gold", "Gold", [0.68,0.50,0.17]),
-            ("bronze", "Bronze", [0.36,0.23,0.13]), ("violet", "Violet", [0.36,0.12,0.47]),
-        ] {
-            let mut finish = optical(&format!("anodized-{id}"), &format!("Aluminum · {name} Anodized"), color, 1., 0.33, BuiltinBump::Brushed);
-            finish.clearcoat = 0.18;
-            catalog.push(entry(finish, "Aluminum", &["metal","anodized","colored"], "Uncalibrated dyed anodized appearance with grayscale grain. Anodize thickness, alloy and process specifications belong in engineering properties."));
-        }
-        for (code, name, color) in [
-            ("1003", "Signal Yellow", [0.96,0.73,0.04]), ("1015", "Light Ivory", [0.90,0.84,0.68]),
-            ("2004", "Pure Orange", [0.92,0.32,0.08]), ("3000", "Flame Red", [0.66,0.11,0.14]),
-            ("3020", "Traffic Red", [0.78,0.10,0.10]), ("5010", "Gentian Blue", [0.05,0.23,0.43]),
-            ("5015", "Sky Blue", [0.13,0.48,0.69]), ("6005", "Moss Green", [0.12,0.24,0.19]),
-            ("7016", "Anthracite Gray", [0.22,0.25,0.27]), ("7035", "Light Gray", [0.78,0.79,0.77]),
-            ("9005", "Jet Black", [0.04,0.04,0.04]), ("9010", "Pure White", [0.94,0.93,0.89]),
-            ("9016", "Traffic White", [0.96,0.96,0.94]),
-        ] {
-            for (sheen, roughness, bump, coat) in [("Matte",0.64,BuiltinBump::OrangePeel,0.03),("Satin",0.39,BuiltinBump::OrangePeel,0.12),("Gloss",0.18,BuiltinBump::None,0.35)] {
-                let mut finish = optical(&format!("paint-ral{code}-{}", sheen.to_lowercase()), &format!("Paint · RAL {code} {name} · {sheen} (Approx.)"), color, 0., roughness, bump);
-                finish.clearcoat = coat;
-                catalog.push(entry(finish, "Paint and powder coat", &["paint","powder coat",code,sheen], "RAL names identify a common color family only. RGB swatches are authored display approximations, not official licensed RAL color data or calibrated manufacturing specifications."));
-            }
-        }
-        catalog.sort_by(|a,b| (&a.category,&a.finish.name).cmp(&(&b.category,&b.finish.name)));
-        catalog
-    })
+/// Call after a repository refresh in the background. One decoder owns the
+/// refresh; UI readers retain the prior snapshot without blocking on package IO.
+pub fn refresh_catalog() {
+    if let Some(_claim) = RefreshClaim::acquire() {
+        rebuild_catalog();
+    }
 }
-pub fn instantiate(doc: &Document, catalog_id: &str) -> Result<Finish> {
-    let mut finish = catalog()
-        .iter()
-        .find(|entry| entry.finish.id == catalog_id)
-        .ok_or_else(|| {
-            CadError::Invalid("The selected visual finish catalog entry does not exist".into())
-        })?
-        .finish
-        .clone();
-    if doc
-        .finishes
-        .get(&finish.id)
-        .is_some_and(|existing| existing != &finish)
+fn rebuild_catalog() {
+    use crate::content_repositories::{self, ContentKind};
+    let snapshot = content_repositories::catalog_snapshot();
+    let mut next = Catalog {
+        generation: Some(snapshot.generation),
+        ..Catalog::default()
+    };
+    for entry in snapshot
+        .entries
+        .into_iter()
+        .filter(|entry| entry.entry.kind == ContentKind::Finishes)
     {
-        finish.id = crate::id();
+        let result = content_repositories::read_entry(&entry, MAX_PACKAGE_BYTES)
+            .and_then(|bytes| decode(&bytes));
+        match result {
+            Ok(package) => {
+                for mut finish in package.finishes {
+                    if next.entries.len() >= 4096 {
+                        next.diagnostics.push("Installed finish libraries exceed 4096 presets; remove a library to show the remainder".into());
+                        break;
+                    }
+                    let original_id = finish.id.clone();
+                    finish.id = format!(
+                        "repository-finish-{:x}",
+                        Sha256::digest(
+                            format!("{}:{}:{}", entry.repository_id, entry.entry.id, original_id)
+                                .as_bytes()
+                        )
+                    );
+                    let metadata = finish.metadata.get_or_insert_with(FinishMetadata::default);
+                    metadata.catalog_id = Some(finish.id.clone());
+                    let category = if metadata.category.is_empty() {
+                        entry.repository_name.clone()
+                    } else {
+                        metadata.category.clone()
+                    };
+                    next.sources.insert(
+                        finish.id.clone(),
+                        CatalogSource {
+                            entry: entry.clone(),
+                            original_id,
+                        },
+                    );
+                    next.entries.push(CatalogEntry {
+                        category,
+                        tags: metadata.tags.clone(),
+                        source: entry.repository_name.clone(),
+                        finish,
+                    });
+                }
+            }
+            Err(error) => next.diagnostics.push(format!(
+                "{} / {}: {error}",
+                entry.repository_name, entry.entry.name
+            )),
+        }
     }
-    validate_finish(doc, &finish)?;
-    Ok(finish)
+    next.entries.sort_by(|left, right| {
+        (&left.category, &left.finish.name).cmp(&(&right.category, &right.finish.name))
+    });
+    if let Ok(mut current) = cache().write() {
+        *current = next;
+    }
+}
+fn ensure_catalog() {
+    let generation = crate::content_repositories::catalog_generation();
+    if cache()
+        .read()
+        .is_ok_and(|cached| cached.generation == Some(generation))
+    {
+        return;
+    }
+    if let Some(claim) = RefreshClaim::acquire() {
+        // Acquisition happens before spawning, so frames cannot queue duplicate
+        // 256 MiB package decodes while the background manager is warming data.
+        // Dropping the closure on a spawn failure releases the claim as well.
+        let _ = std::thread::Builder::new()
+            .name("tcad-finish-catalog".into())
+            .spawn(move || {
+                let _claim = claim;
+                rebuild_catalog();
+            });
+    }
+}
+pub fn catalog() -> Vec<CatalogEntry> {
+    ensure_catalog();
+    cache()
+        .read()
+        .map(|cached| cached.entries.clone())
+        .unwrap_or_default()
+}
+pub fn catalog_diagnostics() -> Vec<String> {
+    ensure_catalog();
+    cache()
+        .read()
+        .map(|cached| cached.diagnostics.clone())
+        .unwrap_or_else(|_| vec!["Finish library cache is unavailable".into()])
+}
+/// Return the selected finish and only its checksum-pinned images. Re-reading
+/// checks the reviewed repository digest before document resource installation.
+pub fn package_for_catalog(catalog_id: &str) -> Result<Package> {
+    ensure_catalog();
+    let generation = crate::content_repositories::catalog_generation();
+    let source = cache()
+        .read()
+        .ok()
+        .filter(|cached| cached.generation == Some(generation))
+        .and_then(|cached| cached.sources.get(catalog_id).cloned())
+        .ok_or_else(|| {
+            invalid("The selected repository finish is unavailable or its library is still refreshing; wait for Content Libraries to finish")
+        })?;
+    let bytes = crate::content_repositories::read_entry(&source.entry, MAX_PACKAGE_BYTES)?;
+    let package = decode(&bytes)?;
+    let mut finish = package
+        .finishes
+        .into_iter()
+        .find(|finish| finish.id == source.original_id)
+        .ok_or_else(|| {
+            invalid("The selected repository finish no longer exists; refresh Content Libraries")
+        })?;
+    finish.id = catalog_id.into();
+    finish
+        .metadata
+        .get_or_insert_with(FinishMetadata::default)
+        .catalog_id = Some(catalog_id.into());
+    let used = finish
+        .textures
+        .resources()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut selected = Package {
+        format: LIBRARY_FORMAT.into(),
+        version: LIBRARY_VERSION,
+        finishes: vec![finish],
+        textures: package
+            .textures
+            .into_iter()
+            .filter(|texture| used.contains(&texture.resource.id))
+            .collect(),
+    };
+    pin_legacy_maps(&mut selected)?;
+    validate_package(&selected)?;
+    Ok(selected)
+}
+/// Copy the preset and exact texture bytes into an isolated document draft.
+/// Existing assignments are independent of future repository updates/removal.
+pub fn install_catalog(doc: &mut Document, root: &Path, catalog_id: &str) -> Result<Id> {
+    let package = package_for_catalog(catalog_id)?;
+    install(doc, root, &package)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| invalid("The repository finish package is empty"))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -246,14 +290,80 @@ pub fn export(doc: &Document, root: &Path, ids: &[Id]) -> Result<Package> {
             bytes,
         });
     }
-    let package = Package {
+    let mut package = Package {
         format: LIBRARY_FORMAT.into(),
         version: LIBRARY_VERSION,
         finishes,
         textures,
     };
+    pin_legacy_maps(&mut package)?;
     validate_package(&package)?;
     Ok(package)
+}
+/// A portable export must not depend on an optional installed legacy map.
+/// Resolve once, include exact bytes, and remove the external identity from the
+/// exported copy. The document's existing finish is never rewritten here.
+fn pin_legacy_maps(package: &mut Package) -> Result<()> {
+    use crate::content_repositories::{self, ContentKind};
+    let entries = content_repositories::entries(ContentKind::Textures);
+    for finish in &mut package.finishes {
+        if finish.textures.height.is_some() {
+            continue;
+        }
+        let Some(map_id) = finish.builtin_bump.repository_entry() else {
+            continue;
+        };
+        let matches = entries
+            .iter()
+            .filter(|entry| entry.entry.id == map_id)
+            .collect::<Vec<_>>();
+        let [entry] = matches.as_slice() else {
+            return Err(CadError::Invalid(format!(
+                "Finish {} needs one installed texture named {map_id}. Get its library and pin the intended image before exporting or using this repository finish.",
+                finish.name
+            )));
+        };
+        let bytes = content_repositories::read_entry(entry, MAX_TEXTURE_BYTES)?;
+        let kind = entry
+            .path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if !TEXTURE_KINDS.contains(&kind.as_str()) {
+            return Err(invalid("The legacy map is not a supported image file"));
+        }
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
+        let resource_id = if let Some(existing) = package
+            .textures
+            .iter()
+            .find(|texture| texture.resource.sha256 == sha256 && texture.resource.kind == kind)
+        {
+            existing.resource.id.clone()
+        } else {
+            let resource_id = format!("legacy-map-{sha256}");
+            if package
+                .textures
+                .iter()
+                .any(|texture| texture.resource.id == resource_id)
+            {
+                return Err(invalid("Legacy texture resource identity collision"));
+            }
+            package.textures.push(PortableTexture {
+                resource: Resource {
+                    id: resource_id.clone(),
+                    path: format!("resources/{resource_id}.{kind}"),
+                    kind,
+                    sha256,
+                },
+                bytes,
+            });
+            resource_id
+        };
+        finish.textures.height = Some(resource_id);
+        finish.builtin_bump = BuiltinBump::None;
+    }
+    Ok(())
 }
 fn validate_package(package: &Package) -> Result<()> {
     if package.format != LIBRARY_FORMAT || package.version != LIBRARY_VERSION {

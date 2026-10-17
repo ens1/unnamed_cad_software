@@ -8,7 +8,7 @@ Open **Settings…** from **Edit** or **Tools**, or press **Cmd+,** on macOS
 (**Ctrl+,** on other platforms). The compact, resizable dialog groups searchable
 preferences under **Model** and **Application**. Model categories are **Units and
 precision**, **Geometry and parts**, and **Lighting**. Application categories are
-**Interface**, **Themes**, **Model display**, **Trackpad and navigation**, **Recovery**, and **New model defaults**.
+**Interface**, **Themes**, **Content libraries**, **Git connections**, **Model display**, **Trackpad and navigation**, **Recovery**, and **New model defaults**.
 
 Current-model settings include the displayed length unit, length and angle
 decimal places, evaluation tolerance in millimetres, and the default visual finish
@@ -21,8 +21,7 @@ default for new parts changes.
 Application preferences include interface scale, trackpad navigation profiles,
 gesture directions and sensitivities, automatic reload of external presentation
 files, recovery snapshot enablement and interval, and defaults for new models.
-The new-model pickers accept built-in, catalog or current-project materials and
-finishes. Custom choices retain independent personal source snapshots. Finish
+The new-model pickers accept the minimal fallback, installed repository entries, or current-project materials and finishes. New installs contain no optional catalog; **Content libraries** adds one. Custom choices retain independent personal source snapshots. Finish
 textures are copied into a checksum-pinned personal resource store; new documents
 receive their own pinned files in the unsaved resource root before assignment.
 The default snapshot does not keep a live link to the source project. Imported
@@ -34,14 +33,28 @@ theme resources remain independent presentation files.
 
 Repeated personal-default validation retains at most 1024 process-local successful decode proofs, keyed by the actual texture-byte SHA-256 and normalized PNG/JPEG/TIFF/WebP codec. Each use still rereads bounded package bytes, verifies pinned resource checksums and rehashes the exact slice; a matching proof only avoids decoding those identical bytes again. Dimension/allocation/codec budgets remain unchanged, failed decodes are never cached, eviction requires a fresh decode, and the cache retains neither image pixels nor renderer handles. New documents publish the actual installed finish/resource identities only after complete staged validation.
 
-**Application → Themes** provides a picker for **Classic · Orange**,
-**Nocturne · Violet**, and imported packages. Picking a theme previews its whole
+**Application → Themes** provides a picker for **Classic · Orange**, installed
+repository themes, and imported packages. Classic is the only bundled theme.
+Use **Get libraries…** to clone a theme repository or register your own checkout;
+the optional starter theme repository contains **Nocturne · Violet**. Picking a theme previews its whole
 layout and styling immediately. **Load theme…** accepts a presentation manifest,
 CSS stylesheet, or JSON theme; a stylesheet keeps the current layout. Imported
 themes are copied into the personal library with their local dependencies so
 they remain available after their source files move. **Export theme…** writes a
 portable package of the current layout and styling. **Edit layout/style…** applies
-Settings before opening the presentation source editor.
+Settings before opening the presentation source editor. Repository themes load
+directly from their checkout. Valid layout/CSS saves reload when external
+presentation watching is enabled; their imports must stay inside the repository.
+Apply retains that live source and also saves a self-contained recovery snapshot.
+Removing a theme repository therefore does not remove the last-applied theme.
+
+**Content libraries** manages optional weldment profiles, textures, finishes,
+themes, engineering materials, and standard parts through ordinary Git
+repositories. Clone a URL, register a checkout, create or fork a library, inspect
+updates, then apply the chosen revision. Library operations are personal data
+management actions and are immediate; Settings Cancel does not undo them.
+Model insertions copy source definitions and required bytes into the model draft,
+so repository removal does not change existing parts. See [Content libraries](content-libraries.md).
 
 **Apply** remembers the selected presentation as the personal default, with
 project-specific presentation resources still taking precedence. **Cancel**

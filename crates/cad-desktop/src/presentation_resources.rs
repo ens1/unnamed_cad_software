@@ -30,7 +30,10 @@ enum Target {
         layout: Option<PathBuf>,
         theme: Option<PathBuf>,
     },
-    Package(PathBuf),
+    Package {
+        path: PathBuf,
+        boundary: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,6 +129,8 @@ struct Reader {
     stamps: BTreeMap<PathBuf, Option<Stamp>>,
     stack: Vec<PathBuf>,
     bytes: u64,
+    repository_boundary: Option<PathBuf>,
+    forced_boundary: Option<PathBuf>,
 }
 
 fn invalid(message: impl Into<String>) -> CadError {
@@ -240,8 +245,32 @@ impl Reader {
         parse: impl FnOnce(&mut Self, &str, &Path) -> Result<T>,
     ) -> Result<T> {
         self.track(path);
+        if self.stack.is_empty() {
+            self.repository_boundary = if let Some(root) = &self.forced_boundary {
+                Some(std::fs::canonicalize(root)?)
+            } else {
+                cad_core::content_repositories::catalog_snapshot()
+                    .entries
+                    .iter()
+                    .filter(|entry| {
+                        entry.entry.kind == cad_core::content_repositories::ContentKind::Themes
+                    })
+                    .find(|entry| path.starts_with(&entry.root))
+                    .map(|entry| std::fs::canonicalize(&entry.root))
+                    .transpose()?
+            };
+        }
         let canonical = std::fs::canonicalize(path)
             .map_err(|error| invalid(format!("{}: {error}", path.display())))?;
+        if self
+            .repository_boundary
+            .as_ref()
+            .is_some_and(|root| !canonical.starts_with(root))
+        {
+            return Err(invalid(
+                "Repository presentation imports must stay inside that library checkout",
+            ));
+        }
         self.track(&canonical);
         if self.stack.contains(&canonical) {
             return Err(invalid(format!(
@@ -663,18 +692,44 @@ fn source_candidate(w: &Workspace, reader: &mut Reader) -> Result<Candidate> {
     })
 }
 
+fn package_target(path: PathBuf) -> Target {
+    let boundary = cad_core::content_repositories::catalog_snapshot()
+        .entries
+        .iter()
+        .filter(|entry| entry.entry.kind == cad_core::content_repositories::ContentKind::Themes)
+        .find(|entry| path.starts_with(&entry.root))
+        .map(|entry| entry.root.clone());
+    Target::Package { path, boundary }
+}
+
 fn load_target(target: &Target, reader: &mut Reader) -> Result<Candidate> {
     match target {
         Target::Personal => {
             let manifest = personal_directory().join("presentation.json");
             reader.track(&manifest);
             if manifest.is_file() {
-                reader.file(&manifest, Reader::package)
+                let saved = reader.file(&manifest, Reader::package)?;
+                if let Some(path) = saved
+                    .library_id
+                    .as_deref()
+                    .and_then(crate::theme_library::repository_manifest)
+                {
+                    let mut live = reader.file(&path, Reader::package)?;
+                    live.library_id = saved.library_id;
+                    Ok(live)
+                } else {
+                    // The self-contained last-applied snapshot survives a removed
+                    // optional repository and is the recovery presentation.
+                    Ok(saved)
+                }
             } else {
                 load_files(reader, None, None, None)
             }
         }
-        Target::Package(path) => reader.file(path, Reader::package),
+        Target::Package { path, boundary } => {
+            reader.forced_boundary = boundary.clone();
+            reader.file(path, Reader::package)
+        }
         Target::Project(root) => {
             let directory = root.join("ui");
             let manifest = directory.join("presentation.json");
@@ -818,7 +873,7 @@ fn reload(w: &mut Workspace, target: Target) {
             install(w, candidate, reader.paths);
             w.presentation_resources.target = Some(target.clone());
             w.presentation_resources.package_path = match &target {
-                Target::Package(path) => Some(path.clone()),
+                Target::Package { path, .. } => Some(path.clone()),
                 Target::Personal if personal_directory().join("presentation.json").is_file() => {
                     Some(personal_directory().join("presentation.json"))
                 }
@@ -1099,7 +1154,7 @@ pub(crate) fn install_library(w: &mut Workspace, candidate: Candidate, package: 
         .chain(candidate.theme_path.iter().cloned())
         .collect();
     install(w, candidate, paths);
-    w.presentation_resources.target = package.clone().map(Target::Package);
+    w.presentation_resources.target = package.clone().map(package_target);
     w.presentation_resources.package_path = package;
     w.presentation_resources.watch = watch;
 }
@@ -1184,6 +1239,15 @@ pub(crate) fn finish_personal(w: &mut Workspace, pending: &PendingPersonal) {
     w.presentation_resources.target = Some(Target::Personal);
     w.presentation_resources.package_path = Some(pending.manifest.clone());
     w.presentation_resources.watch = watch;
+    if pending
+        .candidate
+        .library_id
+        .as_deref()
+        .and_then(crate::theme_library::repository_manifest)
+        .is_some()
+    {
+        reload(w, Target::Personal);
+    }
 }
 
 fn import_source(w: &mut Workspace, path: PathBuf, theme: bool) {
@@ -1349,7 +1413,7 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
                 .add_filter("Presentation manifest", &["json"])
                 .pick_file()
             {
-                reload(w, Target::Package(path));
+                reload(w, package_target(path));
                 w.presentation_resources.watch = true;
             }
         }

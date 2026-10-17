@@ -743,6 +743,9 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     registry.register("git-connections-editor", |ui, w, _| {
         crate::git_connections_ui::show(ui, w)
     });
+    registry.register("content-repositories-editor", |ui, w, _| {
+        crate::content_repositories_ui::show(ui, w)
+    });
     registry.register("git-connection-secret", |ui, w, context| {
         let binding = context
             .layout
@@ -1003,6 +1006,10 @@ pub(crate) fn semantic_element(
     }
 }
 pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
+    if command == "content-repositories" || command.starts_with("content-repositories.") {
+        crate::content_repositories_ui::action(w, command, Some(&element.data));
+        return;
+    }
     if command == "git-connections" || command.starts_with("git-connections.") {
         crate::git_connections_ui::action(w, command, Some(&element.data));
         return;
@@ -1317,6 +1324,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                         | "assembly-group"
                         | "repositories"
                         | "git-connections"
+                        | "content-repositories"
                 )
         }) {
         element.role.as_str()
@@ -2170,6 +2178,10 @@ fn reference_repair_blocks(w: &mut Workspace, command: &str) -> bool {
 }
 
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if cmd == "content-repositories" || cmd.starts_with("content-repositories.") {
+        crate::content_repositories_ui::action(w, cmd, None);
+        return;
+    }
     if cmd == "git-connections" || cmd.starts_with("git-connections.") {
         crate::git_connections_ui::action(w, cmd, None);
         return;
@@ -3533,6 +3545,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "versions" => "Design versions",
             "repositories" => "Git Repositories",
             "git-connections" => "Git Connections",
+            "content-repositories" => "Content Libraries",
             "feature-transfer" => "Transfer Selected Features",
             "materials" => "Engineering Materials",
             "appearances" => "Appearance · Colors and Textures",
@@ -3688,6 +3701,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 "versions" => versions(ui, w),
                 "repositories" => crate::repositories_ui::show(ui, w),
                 "git-connections" => crate::git_connections_ui::show(ui, w),
+                "content-repositories" => crate::content_repositories_ui::show(ui, w),
                 "feature-transfer" => crate::feature_transfer_ui::show(ui, w),
                 "bom" => bom(ui, w),
                 "materials" => materials(ui, w),

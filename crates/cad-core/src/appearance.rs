@@ -73,7 +73,8 @@ impl TextureMaps {
         .filter_map(Option::as_ref)
     }
 }
-/// Built-in grayscale height image used when no imported height resource is assigned.
+/// Legacy grayscale map identity. Images live in installed content repositories;
+/// new assignments pin an image resource instead of depending on this identity.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinBump {
@@ -95,6 +96,17 @@ impl BuiltinBump {
         Self::Molded,
         Self::Wood,
     ];
+    pub fn repository_entry(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Brushed => Some("brushed-height-v1"),
+            Self::Blasted => Some("blasted-height-v1"),
+            Self::Machined => Some("machined-height-v1"),
+            Self::OrangePeel => Some("orange-peel-height-v1"),
+            Self::Molded => Some("molded-height-v1"),
+            Self::Wood => Some("wood-height-v1"),
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::None => "None",
@@ -243,6 +255,17 @@ pub fn default_finishes() -> BTreeMap<Id, Finish> {
     .into_iter()
     .map(|finish| (finish.id.clone(), finish))
     .collect()
+}
+/// New documents contain one untextured fallback finish. Keep
+/// `default_finishes` unchanged for old files that omitted the legacy library.
+pub fn new_document_finishes() -> BTreeMap<Id, Finish> {
+    let finish = Finish {
+        builtin_bump: BuiltinBump::None,
+        height_mm: 0.,
+        anisotropy: 0.,
+        ..Finish::default()
+    };
+    [(finish.id.clone(), finish)].into_iter().collect()
 }
 pub fn is_default_finishes(finishes: &BTreeMap<Id, Finish>) -> bool {
     *finishes == default_finishes()
@@ -983,7 +1006,7 @@ pub fn semantic(doc: &Document, active: Option<&str>, state: &str) -> Vec<Semant
             ),
             (
                 "/builtin_bump",
-                "Built-in Bump Map",
+                "Legacy Repository Bump Map",
                 None,
                 None,
                 None,

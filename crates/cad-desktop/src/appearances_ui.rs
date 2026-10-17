@@ -31,7 +31,7 @@ const SECTIONS: &[(&str, &str, bool)] = &[
     ("manufacturing", "Manufacturing finish requirements", false),
     ("color-values", "Color values", false),
     ("surface", "Surface response", true),
-    ("textures", "Textures · import images", true),
+    ("textures", "Textures · libraries and images", true),
     ("mapping", "Tile size and mapping", true),
     ("source", "Advanced source", false),
 ];
@@ -454,6 +454,7 @@ fn selection_changing(command: &str) -> bool {
             | "appearance.capture-face"
             | "appearance.inherit-face"
             | "appearance.clear-manufacturing"
+            | "appearance.texture.pin-legacy"
     )
 }
 pub fn field_error(w: &mut Workspace, element: &SemanticElement, error: Option<String>) {
@@ -615,6 +616,10 @@ fn customize_target(w: &mut Workspace) -> Result<()> {
     Ok(())
 }
 pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bool {
+    if command == "appearance.libraries" {
+        crate::ui::action(w, "content-repositories");
+        return true;
+    }
     if matches!(command, "appearance" | "appearances" | "lighting") {
         begin(w, command == "lighting");
         return true;
@@ -780,6 +785,8 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                 }
                 if command == "appearance.new" {
                     new.textures = Default::default();
+                    new.builtin_bump = cad_core::appearance::BuiltinBump::None;
+                    new.height_mm = 0.;
                 }
                 let id = new.id.clone();
                 put(w, new)?;
@@ -955,6 +962,19 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                 }
                 reset_target_editor(w);
             }
+            "appearance.texture.pin-legacy" => {
+                let id =
+                    finish.ok_or_else(|| CadError::Invalid("Choose a visual finish".into()))?;
+                let kind = w
+                    .session
+                    .visible()
+                    .finishes
+                    .get(&id)
+                    .ok_or_else(|| CadError::Invalid("The finish is missing".into()))?
+                    .builtin_bump;
+                let entry = crate::texture_assets::legacy_entry(kind)?;
+                assign_repository_texture(w, &id, "height", &entry)?;
+            }
             "appearance.texture.import" | "appearance.texture.clear" => {
                 let id =
                     finish.ok_or_else(|| CadError::Invalid("Choose a visual finish".into()))?;
@@ -1039,6 +1059,12 @@ fn texture(w: &mut Workspace, finish_id: &str, slot: &str, import: bool) -> Resu
     };
     let mut source = serde_json::to_value(&finish)?;
     source["textures"][slot] = json!(resource);
+    if slot == "height" {
+        source["builtin_bump"] = json!("none");
+        if import && finish.height_mm == 0. {
+            source["height_mm"] = json!(0.006);
+        }
+    }
     let finish: Finish = serde_json::from_value(source)?;
     document.finishes.insert(finish_id.into(), finish);
     document.validate()?;
@@ -1048,6 +1074,71 @@ fn texture(w: &mut Workspace, finish_id: &str, slot: &str, import: bool) -> Resu
         return Err(CadError::Invalid(w.status.clone()));
     }
     load(w, finish_id);
+    Ok(())
+}
+fn assign_repository_texture(
+    w: &mut Workspace,
+    finish_id: &str,
+    slot: &str,
+    entry: &cad_core::content_repositories::ResolvedEntry,
+) -> Result<()> {
+    if ![
+        "base_color",
+        "normal",
+        "roughness",
+        "metallic",
+        "occlusion",
+        "height",
+    ]
+    .contains(&slot)
+    {
+        return Err(CadError::Invalid("Unknown texture map slot".into()));
+    }
+    if cad_core::library::finish_is_pinned(w.session.visible(), finish_id) {
+        return Err(CadError::Invalid(
+            "Duplicate this linked finish before changing its textures".into(),
+        ));
+    }
+    let bytes = cad_core::content_repositories::read_entry(entry, 64 * 1024 * 1024)?;
+    let kind = entry
+        .path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    crate::texture_assets::validate_repository_texture(&bytes, kind)?;
+    let mut document = w.session.visible().clone();
+    let resource = cad_core::persistence::import_resource_bytes(
+        &mut document,
+        &w.root(),
+        &entry.path,
+        &bytes,
+    )?;
+    let finish = document
+        .finishes
+        .get(finish_id)
+        .ok_or_else(|| CadError::Invalid("The finish no longer exists".into()))?;
+    let mut source = finish_source(finish);
+    source["textures"][slot] = json!(resource);
+    if slot == "height" {
+        source["builtin_bump"] = json!("none");
+        if finish.height_mm == 0. {
+            source["height_mm"] = json!(0.006);
+        }
+    }
+    document
+        .finishes
+        .insert(finish_id.into(), serde_json::from_value(source)?);
+    document.validate()?;
+    let expected = document.fingerprint();
+    w.dispatch(Command::ReplaceDocument { document });
+    if w.session.visible().fingerprint() != expected {
+        return Err(CadError::Invalid(w.status.clone()));
+    }
+    load(w, finish_id);
+    w.status = format!(
+        "Copied {} into the project draft; Apply keeps the pinned image, Cancel restores the previous finish",
+        entry.entry.name
+    );
     Ok(())
 }
 fn texture_label(slot: &str) -> &str {
@@ -1378,6 +1469,36 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                 .get("finish")
                 .and_then(Value::as_str)
                 .ok_or_else(|| CadError::Invalid("Missing finish identity".into()))?;
+            if let Some(slot) = element
+                .data
+                .get("field")
+                .and_then(Value::as_str)
+                .and_then(|field| field.strip_prefix("/textures/"))
+                && let Some(choice) = value
+                    .as_str()
+                    .and_then(|value| value.strip_prefix("repository:"))
+            {
+                let entry = cad_core::content_repositories::entries(
+                    cad_core::content_repositories::ContentKind::Textures,
+                )
+                .into_iter()
+                .find(|entry| {
+                    format!(
+                        "{}:{}:{}",
+                        entry.repository_id, entry.entry.id, entry.sha256
+                    ) == choice
+                })
+                .ok_or_else(|| {
+                    CadError::Invalid(
+                        "This repository texture is no longer installed; refresh Content Libraries"
+                            .into(),
+                    )
+                })?;
+                if !source_text_is_valid(w, Some(&element.id)) {
+                    return Err(CadError::Invalid("Correct retained finish text before copying a library image; your text is preserved".into()));
+                }
+                return assign_repository_texture(w, id, slot, &entry);
+            }
             if let Some(field) = element
                 .data
                 .get("field")
@@ -1436,6 +1557,12 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                 .get("field")
                 .and_then(Value::as_str)
                 .ok_or_else(|| CadError::Invalid("Missing finish field".into()))?;
+            if pointer == "/textures/height" {
+                source["builtin_bump"] = json!("none");
+                if !value.is_null() && source["height_mm"].as_f64() == Some(0.) {
+                    source["height_mm"] = json!(0.006);
+                }
+            }
             let value = if pointer == "/metadata/tags" {
                 json!(
                     value
@@ -1464,6 +1591,40 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                 .get("field")
                 .and_then(Value::as_str)
                 .ok_or_else(|| CadError::Invalid("Missing lighting field".into()))?;
+            if pointer == "/environment"
+                && let Some(choice) = value
+                    .as_str()
+                    .and_then(|value| value.strip_prefix("repository:"))
+            {
+                let entry = cad_core::content_repositories::entries(cad_core::content_repositories::ContentKind::Textures).into_iter()
+                    .find(|entry| format!("{}:{}:{}", entry.repository_id, entry.entry.id, entry.sha256) == choice)
+                    .ok_or_else(|| CadError::Invalid("This repository environment is no longer available; refresh Content Libraries".into()))?;
+                let bytes = cad_core::content_repositories::read_entry(
+                    &entry,
+                    crate::environment_assets::MAX_FILE_BYTES,
+                )?;
+                let kind = entry
+                    .path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default();
+                crate::environment_assets::validate_bytes(&bytes, kind)?;
+                let mut document = w.session.visible().clone();
+                document.lighting.environment = Some(cad_core::persistence::import_resource_bytes(
+                    &mut document,
+                    &w.root(),
+                    &entry.path,
+                    &bytes,
+                )?);
+                document.validate()?;
+                let expected = document.fingerprint();
+                w.dispatch(Command::ReplaceDocument { document });
+                if w.session.visible().fingerprint() != expected {
+                    return Err(CadError::Invalid(w.status.clone()));
+                }
+                w.rendered_key.clear();
+                return Ok(());
+            }
             *source
                 .pointer_mut(pointer)
                 .ok_or_else(|| CadError::Invalid("The lighting field no longer exists".into()))? =
@@ -1538,7 +1699,8 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
 fn button(ui: &mut egui::Ui, w: &mut Workspace, command: &str, label: &str, enabled: bool) {
     let modifies_finish = command.starts_with(IMPORT)
         || command.starts_with(CLEAR)
-        || command == "appearance.clear-manufacturing";
+        || command == "appearance.clear-manufacturing"
+        || command == "appearance.texture.pin-legacy";
     let enabled = enabled
         && (!modifies_finish || selected(w).is_some_and(|id| finish_editable(w, &id)))
         && (!selection_changing(command) || source_text_is_valid(w, None));
@@ -2123,8 +2285,9 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
         description(
             ui,
             "appearance:texture-help",
-            "Import grayscale bump maps or color, normal and surface response images. PNG, JPEG, TIFF and WebP are supported.",
+            "Choose an installed repository image to copy into this project, or import a PNG, JPEG, TIFF or WebP file. Saved images remain usable after a library is removed.",
         );
+        button(ui, w, "appearance.libraries", "Get libraries…", true);
         for (slot, label) in [
             ("height", "Grayscale bump / height"),
             ("base_color", "Color"),
@@ -2171,7 +2334,11 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
                     w,
                     &format!("{CLEAR}{id}/{slot}"),
                     "Clear",
-                    map.is_some(),
+                    map.is_some()
+                        || slot == "height"
+                            && w.session.visible().finishes.get(&id).is_some_and(|finish| {
+                                finish.builtin_bump != cad_core::appearance::BuiltinBump::None
+                            }),
                 );
             });
             if let Some(path) = path {
@@ -2191,19 +2358,30 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
                 );
             }
             if slot == "height" {
-                field(
-                    ui,
-                    w,
-                    &fields,
-                    "/builtin_bump",
-                    "Built-in bump",
-                    json!([{"value":"none","label":"None"},{"value":"brushed","label":"Brushed grain"},{"value":"blasted","label":"Bead blasted"},{"value":"machined","label":"Machined tool marks"},{"value":"orange_peel","label":"Paint / powder coat"},{"value":"molded","label":"Molded polymer"},{"value":"wood","label":"Wood grain"}]),
-                );
+                if let Some(finish) = w.session.visible().finishes.get(&id)
+                    && finish.builtin_bump != cad_core::appearance::BuiltinBump::None
+                {
+                    description(
+                        ui,
+                        "appearance:legacy-map",
+                        &format!(
+                            "Legacy map: {}. Pin it into this project to keep it independent of installed libraries.",
+                            finish.builtin_bump.label()
+                        ),
+                    );
+                    button(
+                        ui,
+                        w,
+                        "appearance.texture.pin-legacy",
+                        "Pin legacy map into project",
+                        true,
+                    );
+                }
                 field(ui, w, &fields, "/height_mm", "Bump depth (mm)", json!([]));
                 description(
                     ui,
                     "appearance:grain-help",
-                    "The grayscale bump map drives surface grain. An imported height image overrides the built-in bump; Clear returns to the selected built-in map. Clear the image and choose None to remove bump relief. Tile size and texture direction scale and rotate the bump; depth controls its lighting relief.",
+                    "The grayscale bump image drives grain. Library selections copy exact image bytes into this project. Clear removes bump relief. Tile size and direction scale and rotate the grain; depth controls its lighting relief.",
                 );
             } else if slot == "normal" {
                 field(
@@ -2220,7 +2398,7 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
                 w,
                 &fields,
                 &format!("/textures/{slot}"),
-                "Pinned image",
+                "Image · copy from library",
                 resource_choices(w),
             );
         }
@@ -2283,6 +2461,22 @@ fn resource_choices(w: &Workspace) -> Value {
             })
             .map(|resource| json!({"value":resource.id,"label":resource.path})),
     );
+    choices.extend(cad_core::content_repositories::entries(cad_core::content_repositories::ContentKind::Textures).into_iter().filter(|entry| entry.path.extension().and_then(|value| value.to_str()).is_some_and(|extension| cad_core::appearance::TEXTURE_KINDS.contains(&extension.to_ascii_lowercase().as_str()))).map(|entry| json!({"value":format!("repository:{}:{}:{}",entry.repository_id,entry.entry.id,entry.sha256),"label":format!("Copy · {} / {}",entry.repository_name,entry.entry.name)})));
+    json!(choices)
+}
+fn environment_choices(w: &Workspace) -> Value {
+    let mut choices = vec![json!({"value":null,"label":"Built-in studio"})];
+    choices.extend(
+        w.session
+            .visible()
+            .resources
+            .values()
+            .filter(|resource| matches!(resource.kind.to_lowercase().as_str(), "hdr" | "exr"))
+            .map(|resource| json!({"value":resource.id,"label":resource.path})),
+    );
+    choices.extend(cad_core::content_repositories::entries(cad_core::content_repositories::ContentKind::Textures).into_iter()
+        .filter(|entry| entry.path.extension().and_then(|value|value.to_str()).is_some_and(|extension|matches!(extension.to_lowercase().as_str(),"hdr"|"exr")))
+        .map(|entry|json!({"value":format!("repository:{}:{}:{}",entry.repository_id,entry.entry.id,entry.sha256),"label":format!("Copy · {} / {}",entry.repository_name,entry.entry.name)})));
     json!(choices)
 }
 fn edit_environment(w: &mut Workspace, import: bool) -> Result<()> {
@@ -2373,7 +2567,7 @@ fn lighting_controls(ui: &mut egui::Ui, w: &mut Workspace) {
         &fields,
         "/environment",
         "Reflection environment",
-        json!([]),
+        environment_choices(w),
     );
     for element in environment_semantics(w)
         .into_iter()
@@ -2498,6 +2692,31 @@ fn diagnostics(ui: &mut egui::Ui, w: &mut Workspace) {
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = vec![library_element(w), source_element(w), assignment_element(w)];
     elements.extend(environment_semantics(w));
+    for (command, label) in [
+        ("appearance.libraries", "Get libraries…"),
+        (
+            "appearance.texture.pin-legacy",
+            "Pin legacy map into project",
+        ),
+    ] {
+        let enabled = command == "appearance.libraries"
+            || selected(w)
+                .and_then(|id| w.session.visible().finishes.get(&id))
+                .is_some_and(|finish| {
+                    finish.builtin_bump != cad_core::appearance::BuiltinBump::None
+                        && finish_editable(w, &finish.id)
+                });
+        elements.push(SemanticElement {
+            id: format!("command:{command}"),
+            role: "appearance-action".into(),
+            label: label.into(),
+            value: None,
+            state: if enabled { "ready" } else { "disabled" }.into(),
+            commands: vec![command.into()],
+            relationships: vec!["workspace.appearance-panel".into()],
+            data: json!({"enabled":enabled,"accessibility_label":label}),
+        });
+    }
     elements.extend(target_elements(w));
     if let Some(id) = selected(w) {
         elements.extend(metadata_elements(w, &id));
@@ -2547,12 +2766,12 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         (
             "appearance:grain-help",
             "appearance-description",
-            "The grayscale bump map drives surface grain. An imported height image overrides the built-in bump; Clear returns to the selected built-in map. Clear the image and choose None to remove bump relief. Tile size and texture direction scale and rotate the bump; depth controls its lighting relief.",
+            "The grayscale bump image drives grain. Library selections copy exact image bytes into this project. Clear removes bump relief. Tile size and direction scale and rotate the grain; depth controls its lighting relief.",
         ),
         (
             "appearance:texture-help",
             "appearance-description",
-            "Import grayscale bump maps or color, normal and surface response images. PNG, JPEG, TIFF and WebP are supported.",
+            "Choose an installed repository image to copy into this project, or import a PNG, JPEG, TIFF or WebP file. Saved images remain usable after a library is removed.",
         ),
         (
             "appearance:bump-help",
@@ -2787,7 +3006,10 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                     label: format!("{label} · {} · {}", texture_label(slot), finish.name),
                     value: None,
                     state: if finish_editable(w, &finish.id)
-                        && (prefix == IMPORT || !resource.is_null())
+                        && (prefix == IMPORT
+                            || !resource.is_null()
+                            || slot == "height"
+                                && finish.builtin_bump != cad_core::appearance::BuiltinBump::None)
                     {
                         "ready"
                     } else {
@@ -2822,6 +3044,24 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
 }
 pub fn reconcile_semantics(w: &Workspace, elements: &mut [SemanticElement]) {
     for element in elements {
+        if element.data["setter"] == "appearance-lighting"
+            && element.data["field"] == "/environment"
+        {
+            element.data["choices"] = environment_choices(w);
+        }
+        if element.data["setter"] == "appearance-finish"
+            && element.data["field"]
+                .as_str()
+                .is_some_and(|field| field.starts_with("/textures/"))
+        {
+            element.data["choices"] = resource_choices(w);
+            element.label = "Image · copy from library".into();
+        }
+        if element.data["setter"] == "appearance-finish" && element.data["field"] == "/builtin_bump"
+        {
+            element.data["editable"] = json!(false);
+            element.state = "readonly".into();
+        }
         protect_finish_field(w, element);
         if element.data["setter"] == "appearance-ui"
             && element.data["field"].as_str().is_some_and(|field| {

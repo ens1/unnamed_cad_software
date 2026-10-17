@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 mod generate;
 pub const CONTRACT_VERSION: u32 = 1;
-const EMBEDDED: &str = include_str!("../../../assets/standard-parts/metric-hardware.json");
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Family {
@@ -258,13 +257,81 @@ pub fn parse_catalog(json: &str) -> Result<Catalog> {
     value.validate()?;
     Ok(value)
 }
-pub fn catalog() -> Result<Catalog> {
-    static CATALOG: std::sync::OnceLock<std::result::Result<Catalog, String>> =
+fn installed_catalogs() -> Result<Vec<std::sync::Arc<Catalog>>> {
+    type Cached = (
+        u64,
+        std::result::Result<Vec<std::sync::Arc<Catalog>>, String>,
+    );
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<Cached>>> =
         std::sync::OnceLock::new();
-    CATALOG
-        .get_or_init(|| parse_catalog(EMBEDDED).map_err(|error| error.to_string()))
+    let generation = crate::content_repositories::catalog_generation();
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| invalid("The installed hardware cache is unavailable"))?;
+    if cache
+        .as_ref()
+        .is_none_or(|(cached_generation, _)| *cached_generation != generation)
+    {
+        let snapshot = crate::content_repositories::catalog_snapshot();
+        let loaded = (|| -> Result<Vec<std::sync::Arc<Catalog>>> {
+            let mut catalogs = Vec::new();
+            let mut ids = BTreeSet::new();
+            let mut sources = BTreeMap::new();
+            for (index, source) in snapshot.entries.iter().filter(|source| {
+                source.entry.kind == crate::content_repositories::ContentKind::StandardParts
+            }).enumerate() {
+                if index >= 32 {
+                    return Err(invalid("At most 32 catalogs of this kind can be enabled at once. Disable unused catalogs in Libraries."));
+                }
+                let bytes = crate::content_repositories::read_entry(source, 4 * 1024 * 1024)?;
+                let json = std::str::from_utf8(&bytes).map_err(|_| invalid("Hardware catalog JSON must be UTF-8"))?;
+                let catalog = parse_catalog(json).map_err(|error| invalid(format!("{} / {}: {error}", source.repository_name, source.entry.name)))?;
+                for entry in &catalog.entries {
+                    if !ids.insert(entry.id.clone()) {
+                        return Err(invalid(format!("Multiple enabled libraries use hardware ID {}. Disable one copy or give your fork distinct hardware IDs.", entry.id)));
+                    }
+                }
+                for citation in &catalog.sources {
+                    if sources.insert(citation.id.clone(), citation.clone()).is_some_and(|existing| existing != *citation) {
+                        return Err(invalid(format!("Enabled hardware libraries have different citations with source ID {}. Give distinct sources distinct IDs.", citation.id)));
+                    }
+                }
+                catalogs.push(std::sync::Arc::new(catalog));
+            }
+            Ok(catalogs)
+        })()
+        .map_err(|error| error.to_string());
+        *cache = Some((snapshot.generation, loaded));
+    }
+    cache
+        .as_ref()
+        .expect("cache was populated")
+        .1
         .clone()
         .map_err(CadError::Invalid)
+}
+/// Browser union; insertion retains the selected source catalog's original version.
+pub fn catalog() -> Result<Catalog> {
+    let catalogs = installed_catalogs()?;
+    let mut sources = BTreeMap::new();
+    let mut entries = Vec::new();
+    for catalog in catalogs {
+        sources.extend(
+            catalog
+                .sources
+                .iter()
+                .map(|source| (source.id.clone(), source.clone())),
+        );
+        entries.extend(catalog.entries.iter().cloned());
+    }
+    Ok(Catalog {
+        schema_version: CONTRACT_VERSION,
+        catalog_version: "installed-repositories".into(),
+        name: "Installed hardware libraries".into(),
+        sources: sources.into_values().collect(),
+        entries,
+    })
 }
 pub fn validate_origin(origin: &Origin) -> Result<()> {
     if origin.version != CONTRACT_VERSION || !text(&origin.catalog_version, 128) {
@@ -299,20 +366,24 @@ fn validate_length(family: Family, length: Option<f64>) -> Result<()> {
     Ok(())
 }
 pub fn origin(request: &Request) -> Result<Origin> {
-    let catalog = catalog()?;
+    let catalogs = installed_catalogs()?;
+    let catalog = catalogs.iter().find(|catalog| catalog.entries.iter().any(|entry| entry.id == request.entry))
+        .ok_or_else(|| invalid("The selected hardware size is unavailable. Enable its content repository in Libraries."))?;
     let entry = catalog
         .entries
-        .into_iter()
+        .iter()
         .find(|entry| entry.id == request.entry)
+        .cloned()
         .ok_or_else(|| invalid("The selected hardware size does not exist"))?;
     let sources = catalog
         .sources
-        .into_iter()
+        .iter()
         .filter(|source| entry.sources.contains(&source.id))
+        .cloned()
         .collect();
     let origin = Origin {
         version: CONTRACT_VERSION,
-        catalog_version: catalog.catalog_version,
+        catalog_version: catalog.catalog_version.clone(),
         entry,
         sources,
         length_mm: request.length_mm,

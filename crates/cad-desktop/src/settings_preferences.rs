@@ -181,7 +181,7 @@ impl Preferences {
                     "The portable finish must match the new-part preference".into(),
                 ));
             }
-        } else if !appearance::default_finishes()
+        } else if !appearance::new_document_finishes()
             .contains_key(&self.default_model.default_new_part_finish)
         {
             return Err(CadError::Invalid(
@@ -249,7 +249,13 @@ pub fn capture_default_finish(
     root: &Path,
     finish: &str,
 ) -> Result<DefaultFinish> {
-    let mut package = cad_core::finish_library::export(document, root, &[finish.into()])?;
+    let package = cad_core::finish_library::export(document, root, &[finish.into()])?;
+    capture_default_package(package)
+}
+
+pub fn capture_default_package(
+    mut package: cad_core::finish_library::Package,
+) -> Result<DefaultFinish> {
     validate_default_textures(&package)?;
     let source = package
         .finishes
@@ -348,7 +354,24 @@ pub fn load(reset: bool) -> Loaded {
         Ok(bytes) => {
             return match serde_json::from_slice::<Preferences>(&bytes)
                 .map_err(CadError::from)
-                .and_then(|preferences| {
+                .and_then(|mut preferences| {
+                    // Preserve explicitly selected defaults from before optional libraries.
+                    let material = &preferences.default_model.default_new_part_material;
+                    if preferences.default_material.is_none() && material != "aluminum" {
+                        preferences.default_material =
+                            cad_core::Document::legacy_materials().remove(material);
+                    }
+                    let finish = &preferences.default_model.default_new_part_finish;
+                    if preferences.default_finish.is_none()
+                        && !appearance::new_document_finishes().contains_key(finish)
+                        && let Some(finish) = appearance::default_finishes().remove(finish)
+                    {
+                        preferences.default_finish = Some(DefaultFinish {
+                            version: 1,
+                            finish,
+                            resources: BTreeMap::new(),
+                        });
+                    }
                     preferences.validate()?;
                     preferences.validate_default_assets()?;
                     Ok(preferences)

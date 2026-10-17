@@ -107,7 +107,7 @@ with roles `sketch-reference-action` and `sketch-relation-action`. Their stable
 IDs are `<sketch>::reference-action.<reference>` and
 `<sketch>::relation-action.<kind>`. The editor publishes their actions, selection
 state, descriptions and `modeling-action` / `compact` classes for custom layouts.
-Both bundled themes give these buttons filled surfaces and visible borders;
+Classic and the optional Nocturne theme give these buttons filled surfaces and visible borders;
 height, pointer targets, padding, colors and shape remain theme properties.
 Reference buttons also show their selected state. Shared buttons publish
 transient `hover`, `active` / `pressed`, and `focus` states for pointer and
@@ -120,7 +120,7 @@ contact intent belong to the shared sketch planner rather than a widget-specific
 selection rule. See [Tangent selection](sketch-bulk-relations.md#tangent-selection).
 
 Saved complete theme packages retain their authored styling. Selecting the
-bundled Classic or Nocturne entry in Settings loads the current bundled rules;
+Classic or installed Nocturne entry in Settings loads the selected rules;
 user resources are not overwritten to apply a visual update.
 
 For example, add a dedicated parameter component and place it independently:
@@ -203,7 +203,7 @@ Core exports versioned semantic, layout and style contracts without egui, Bevy o
 
 Portable package schema 1 is `{ "schema_version": 1, "name": "...", "inherit_defaults": false, "layout": "layout.json", "theme": "theme.css", "active_layout": "instrument-rail", "extends": ["base/presentation.json"] }`. Complete exported packages use `inherit_defaults: false` so selecting, saving, and reloading preserve the same compositions and style cascade. Legacy manifests that omit this field remain patches over the bundled presentation. JSON layout/theme resources can also contain `extends` paths; objects merge recursively and arrays replace, while theme rules from package inheritance preserve their cascade order. CSS supports prefix local `@import "base.css";`. Imports are relative to their source, bounded, checked for cycles and observed for changes. Sharing an exported package does not include CAD definitions or an absolute local dependency path.
 
-**Settings → Application → Themes** previews bundled and personal library choices. Load a complete manifest to replace both layout and styling, or load a CSS/JSON theme to retain the current layout. Apply saves the selection as the personal presentation default; Cancel restores the presentation and its reload sources. The [Nocturne package](theme-example.md) demonstrates alternate docking, control sizes and shapes, colors, typography, and viewport overlays using editable resources. The native picker publishes `settings:field:presentation:theme` and registered settings actions, so a custom composition can host the same controls.
+**Settings → Application → Themes** previews Classic, installed repository themes and personal library choices. Load a complete manifest to replace both layout and styling, or load a CSS/JSON theme to retain the current layout. Apply saves the selection as the personal presentation default; Cancel restores the presentation and its reload sources. Optional themes come from **Content Libraries**, which can clone any compatible repository or register an editable checkout. Installed theme imports stay within that checkout. Valid watched edits remain live after Apply; a personal snapshot remains available if the repository is removed. The optional [Nocturne package](theme-example.md) demonstrates alternate docking, control sizes and shapes, colors, typography, and viewport overlays using editable resources. The native picker publishes `settings:field:presentation:theme` and registered settings actions, so a custom composition can host the same controls.
 
 
 Fillet and Chamfer maintain an explicit edge set. Command/Ctrl/Shift-click
@@ -532,7 +532,7 @@ independent style targets. Existing `.modeling-group`,
 hierarchy styles. User layouts can continue to move or duplicate the original
 groups and their bound controls.
 
-Both bundled themes expose reusable `--section-*` variables for body and header
+Classic and the optional Nocturne theme expose reusable `--section-*` variables for body and header
 backgrounds, border color, padding, gap, header height, corner radius, and divider
 width/spacing. These are ordinary theme variables, not reserved engine options.
 Individual selectors can override the variables or hide either decoration:

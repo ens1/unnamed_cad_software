@@ -17,9 +17,12 @@ sketch swept along a sketch path.
    rows, or choose **Select all**. **Clear selection** keeps an explicitly empty
    group; it never silently selects the complete sketch. At least one valid path
    entity is required before confirmation.
-4. Choose **Standard / collection**, **Profile type** and **Size**. The bundled
-   library supplies nominal metric and imperial collections. Each group receives
-   its own ordinary local section sketch and profile feature.
+4. Choose **Standard / collection**, **Profile type** and **Size**. A new install
+   has no profile catalog. Use **Get libraries…** to clone the optional
+   [TCAD weldment profile repository](https://github.com/ens1/tcad-weldment-profiles),
+   register your own checkout, or import a catalog. The starter repository
+   supplies nominal metric and imperial collections. Each group receives its
+   own ordinary local section sketch and profile feature.
 5. Under **Locate profile**, choose a named locating point in the list or click
    its marker in the profile diagram. The diagram's crosshair represents the
    authored path. Adjust **Rotation**, **Horizontal offset** and **Vertical
@@ -58,10 +61,10 @@ centerline length continues to describe that layout path's evaluated developed
 length, after the existing end treatments. It is not a new measurement of an
 offset stock edge.
 
-## Bundled sections and precision
+## Optional starter sections and precision
 
-[`nominal-sections.json`](../assets/weldment-profiles/nominal-sections.json)
-contains 104 original profiles in nine families: square tube, rectangular tube,
+[`nominal-sections.json`](https://github.com/ens1/tcad-weldment-profiles/blob/main/nominal-sections.json)
+in the separate private starter repository contains 104 original profiles in nine families: square tube, rectangular tube,
 round tube, angle, channel, I beam, flat bar, solid round and solid square.
 
 All coordinates and radii use authoritative `f64` millimetres. Imperial labels
@@ -87,24 +90,27 @@ the presence of a profile catalog; unsupported cases report diagnostics.
 
 ## Importing and exporting libraries
 
-The guided editor exposes **Import profile library…** and **Export profile
-library…**. Imports validate the complete catalog before an atomic write to the
-personal `structural-profiles` directory beside `settings.json`. A successful
-import replaces the personal catalog with the same catalog ID, or adds another
-catalog. Personal catalogs need a distinct ID from the bundled library. This
-changes available choices; it does not update committed sections.
+**Content Libraries** manages Git checkouts, clones, forks, local creation,
+updates and publication. Profile entries in `tcad-library.json` point to catalog
+JSON using kind `weldment_profiles`. The guided editor reads enabled repository
+entries and names their source. Fork a repository to author different stock;
+refresh after changing its catalog data. Repository updates never replace a
+committed section's saved profile.
 
-Export writes the selected profile's available source catalog as ordinary JSON.
-If that complete catalog is unavailable, the member's saved profile snapshot
-still evaluates, but exporting the complete library requires importing its
-source library first. At most 32 loaded libraries are accepted by the interactive
-import adapter. Restart loading reads bounded local JSON files from that personal
-directory.
+The guided editor also retains **Import profile library…** and **Export profile
+library…** for portable JSON interchange. Existing personal catalogs remain
+available. Imports validate the whole catalog before atomically updating its
+personal copy; imported catalogs cannot replace the snapshot stored in a model.
+Export writes the selected profile's complete source catalog when available. A
+member continues to evaluate from its saved profile if its source library is
+removed; exporting that entire library requires restoring the source catalog.
+The personal adapter remains bounded to 32 loaded libraries and bounded local
+JSON reads.
 
 The portable v1 grammar is implemented in
 [`weldment_profiles.rs`](../crates/cad-core/src/weldment_profiles.rs).
-[`assets/weldment-profiles/README.md`](../assets/weldment-profiles/README.md)
-includes a complete small custom-library example. A catalog contains:
+The [starter repository README](https://github.com/ens1/tcad-weldment-profiles#readme)
+includes the editable source and library guidance. A catalog contains:
 
 - `version`, `id`, `revision`, `name`, `collections` and `profiles`.
 - Each collection's `id`, `label`, nominal `units` and `notes`.

@@ -241,24 +241,49 @@ pub(crate) fn load_height(root: &Path, resource: &Resource) -> Result<Image, Str
     height_image(decode(&bytes, &resource.kind)?)
 }
 
-/// The bundled original grayscale texture follows exactly the imported height
-/// path: red-channel heights, floating-point mip averaging, physical gradients.
+/// Resolve an old map identity from installed libraries. No texture bytes are
+/// embedded in the renderer and ambiguous repository IDs require user choice.
+pub(crate) fn legacy_entry(
+    kind: cad_core::appearance::BuiltinBump,
+) -> cad_core::Result<cad_core::content_repositories::ResolvedEntry> {
+    use cad_core::content_repositories::{self, ContentKind};
+    let id = kind
+        .repository_entry()
+        .ok_or_else(|| CadError::Invalid("The finish has no legacy height map".into()))?;
+    let entries = content_repositories::entries(ContentKind::Textures)
+        .into_iter()
+        .filter(|entry| entry.entry.id == id)
+        .collect::<Vec<_>>();
+    match entries.as_slice() {
+        [entry] => Ok(entry.clone()),
+        [] => Err(CadError::Invalid(format!(
+            "Missing repository texture {id}. Get the texture library, then pin this map into the project, or choose an imported image."
+        ))),
+        _ => Err(CadError::Invalid(format!(
+            "Multiple libraries provide {id}. Choose the intended repository image and copy it into the project."
+        ))),
+    }
+}
 pub(crate) fn builtin_height(kind: cad_core::appearance::BuiltinBump) -> Result<Image, String> {
-    use cad_core::appearance::BuiltinBump;
-    let bytes: &[u8] = match kind {
-        BuiltinBump::None => return Err("The finish has no built-in height map".into()),
-        BuiltinBump::Brushed => include_bytes!("../../../assets/appearance/brushed-height-v1.png"),
-        BuiltinBump::Blasted => include_bytes!("../../../assets/appearance/blasted-height-v1.png"),
-        BuiltinBump::Machined => {
-            include_bytes!("../../../assets/appearance/machined-height-v1.png")
-        }
-        BuiltinBump::OrangePeel => {
-            include_bytes!("../../../assets/appearance/orange-peel-height-v1.png")
-        }
-        BuiltinBump::Molded => include_bytes!("../../../assets/appearance/molded-height-v1.png"),
-        BuiltinBump::Wood => include_bytes!("../../../assets/appearance/wood-height-v1.png"),
-    };
-    height_image(decode(bytes, "png")?)
+    let entry = legacy_entry(kind).map_err(|error| error.to_string())?;
+    let bytes = cad_core::content_repositories::read_entry(&entry, MAX_ENCODED_BYTES as usize)
+        .map_err(|error| error.to_string())?;
+    let extension = entry
+        .path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    height_image(decode(&bytes, extension)?)
+}
+pub(crate) fn validate_repository_texture(bytes: &[u8], kind: &str) -> cad_core::Result<()> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_ENCODED_BYTES {
+        return Err(CadError::Invalid(
+            "Texture must contain at most 64 MiB".into(),
+        ));
+    }
+    dimensions(bytes, kind)
+        .map(|_| ())
+        .map_err(|error| CadError::Invalid(format!("Repository texture: {error}")))
 }
 
 fn height_image(source: DynamicImage) -> Result<Image, String> {

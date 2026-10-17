@@ -21,6 +21,7 @@ const CATEGORIES: &[(&str, &str, &str)] = &[
     ("application.recovery", "Recovery", "Application"),
     ("application.defaults", "New model defaults", "Application"),
     ("application.git", "Git connections", "Application"),
+    ("application.libraries", "Content libraries", "Application"),
 ];
 
 fn source(w: &Workspace, scope: &str) -> Result<Value> {
@@ -203,7 +204,7 @@ fn model_fields(w: &Workspace, application_defaults: bool) -> Vec<SemanticElemen
         "model.geometry"
     };
     let finish_choices = if application_defaults {
-        let mut choices = cad_core::appearance::default_finishes().into_values().map(|finish| json!({"value":format!("builtin:{}",finish.id),"label":format!("Built-in · {}",finish.name)})).collect::<Vec<_>>();
+        let mut choices = cad_core::appearance::new_document_finishes().into_values().map(|finish| json!({"value":format!("builtin:{}",finish.id),"label":format!("Built-in · {}",finish.name)})).collect::<Vec<_>>();
         choices.extend(cad_core::finish_library::catalog().iter().map(|entry| json!({"value":format!("catalog:{}",entry.finish.id),"label":format!("Catalog · {}",entry.finish.name)})));
         choices.extend(w.session.visible().finishes.values().map(|finish| json!({"value":format!("project:{}",finish.id),"label":format!("This project · {}",finish.name)})));
         let preferences = w
@@ -227,7 +228,7 @@ fn model_fields(w: &Workspace, application_defaults: bool) -> Vec<SemanticElemen
     };
     let material_choices = if application_defaults {
         let mut choices = cad_core::Document::blank_part("Part1").materials.into_values().map(|material| json!({"value":format!("builtin:{}",material.id),"label":format!("Built-in · {}",material.name)})).collect::<Vec<_>>();
-        if let Ok(catalog) = cad_core::material_library::bundled_catalog() {
+        if let Ok(catalog) = cad_core::material_library::installed_catalog() {
             choices.extend(catalog.materials.iter().map(|material| json!({"value":format!("catalog:{}",material.id),"label":format!("Catalog · {}",material.name)})));
         }
         choices.extend(w.session.visible().materials.values().map(|material| json!({"value":format!("project:{}",material.id),"label":format!("This project · {}",material.name)})));
@@ -577,7 +578,7 @@ pub fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
             .unwrap_or_else(|| w.application_preferences.clone());
         match kind {
             "builtin" => {
-                if !cad_core::appearance::default_finishes().contains_key(identity) {
+                if !cad_core::appearance::new_document_finishes().contains_key(identity) {
                     return Err(CadError::Invalid(
                         "The built-in finish no longer exists".into(),
                     ));
@@ -597,24 +598,16 @@ pub fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                 }
             }
             "catalog" | "project" => {
-                let mut catalog_document;
-                let source = if kind == "catalog" {
-                    let finish = cad_core::finish_library::catalog()
-                        .iter()
-                        .find(|entry| entry.finish.id == identity)
-                        .ok_or_else(|| {
-                            CadError::Invalid("The catalog finish no longer exists".into())
-                        })?
-                        .finish
-                        .clone();
-                    catalog_document = cad_core::Document::blank_part("Finish catalog default");
-                    catalog_document.finishes.insert(finish.id.clone(), finish);
-                    &catalog_document
+                let snapshot = if kind == "catalog" {
+                    let package = cad_core::finish_library::package_for_catalog(identity)?;
+                    settings_preferences::capture_default_package(package)?
                 } else {
-                    w.session.visible()
+                    settings_preferences::capture_default_finish(
+                        w.session.visible(),
+                        &w.root(),
+                        identity,
+                    )?
                 };
-                let snapshot =
-                    settings_preferences::capture_default_finish(source, &w.root(), identity)?;
                 preferences.default_model.default_new_part_finish = snapshot.finish.id.clone();
                 preferences.default_finish = Some(snapshot);
             }
@@ -904,6 +897,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ("settings.presentation", "Layout and theme…"),
         ("settings.theme-load", "Load theme…"),
         ("settings.theme-export", "Export theme…"),
+        ("content-repositories", "Get libraries…"),
     ] {
         let available = w.settings.is_some() && (command == "settings.cancel" || !pending);
         elements.push(SemanticElement {
@@ -944,6 +938,9 @@ fn category_description(category: &str) -> &'static str {
         }
         "application.defaults" => {
             "Applied only when creating a new model. Existing models keep their saved preferences."
+        }
+        "application.libraries" => {
+            "Optional profiles, textures, materials, standard parts and themes in your own Git repositories. Library actions save immediately; Settings Apply and Cancel do not undo them. Existing model definitions keep their saved copies."
         }
         "application.git" => {
             "Personal Git accounts, keys and server trust. Connection actions save immediately; Settings Apply and Cancel affect model and interface preferences only."
@@ -1096,6 +1093,13 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                 let all_fields = fields(w);
                                 let mut shown = 0;
                                 for (id,label,scope) in CATEGORIES {
+                                    if *id == "application.libraries" && (category == *id && search.is_empty() || !search.is_empty() && "content libraries repositories profiles materials hardware standard parts textures finishes themes".contains(&search)) {
+                                        controls::label(ui,"settings:heading:application.libraries","settings-heading",&[],"Application · Content libraries","ready");
+                                        controls::label(ui,"settings:description:application.libraries","settings-description",&[],category_description(id),"ready");
+                                        crate::content_repositories_ui::show(ui,w);
+                                        shown += 1;
+                                        continue;
+                                    }
                                     if *id == "application.git" && (category == *id && search.is_empty() || !search.is_empty() && "git credentials ssh keys connections accounts".contains(&search)) {
                                         controls::label(ui,"settings:heading:application.git","settings-heading",&[],"Application · Git connections","ready");
                                         crate::git_connections_ui::show(ui,w);
@@ -1119,6 +1123,9 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                         settings::action(w,"settings.presentation");
                                     }
                                     if *id == "application.themes" {
+                                        if controls::button(ui,"command:content-repositories","settings-action",&[],"Get libraries…",!pending,false).clicked() {
+                                            crate::content_repositories_ui::action(w,"content-repositories",None);
+                                        }
                                         crate::workspace_controls::confirmation_preview(ui);
                                         let selected = crate::theme_library::selected(w);
                                         if let Some(choice) = crate::theme_library::choices(w).into_iter().find(|choice|choice.id == selected) {

@@ -1687,7 +1687,38 @@ impl Document {
         let root = a.id.clone();
         let mut assemblies = BTreeMap::new();
         assemblies.insert(root.clone(), a);
-        let materials = [
+        let materials = Self::legacy_materials()
+            .into_iter()
+            .filter(|(id, _)| id == "aluminum")
+            .collect();
+        Self {
+            schema_version: 1,
+            id: id(),
+            name: name.into(),
+            revision: 0,
+            root,
+            parts: BTreeMap::new(),
+            assemblies,
+            materials,
+            finishes: crate::appearance::new_document_finishes(),
+            lighting: crate::appearance::Lighting::default(),
+            settings: crate::settings::ModelSettings::default(),
+            resources: BTreeMap::new(),
+            drawings: vec![],
+            comments: vec![],
+            properties: BTreeMap::new(),
+            libraries: BTreeMap::new(),
+            component_forks: BTreeMap::new(),
+            feature_transfers: BTreeMap::new(),
+            active_configurations: BTreeMap::new(),
+            sensors: BTreeMap::new(),
+            tolerance_stacks: BTreeMap::new(),
+            camera_views: BTreeMap::new(),
+        }
+    }
+    /// Compatibility values for saved pre-library defaults. New documents use one fallback.
+    pub fn legacy_materials() -> BTreeMap<Id, Material> {
+        [
             ("aluminum", "Aluminum", 2700., [0.68, 0.72, 0.77], 1., 0.28),
             ("steel", "Steel", 7850., [0.42, 0.46, 0.52], 1., 0.22),
             ("rubber", "Rubber", 1100., [0.025, 0.028, 0.03], 0., 0.85),
@@ -1709,32 +1740,9 @@ impl Document {
                 },
             )
         })
-        .collect();
-        Self {
-            schema_version: 1,
-            id: id(),
-            name: name.into(),
-            revision: 0,
-            root,
-            parts: BTreeMap::new(),
-            assemblies,
-            materials,
-            finishes: crate::appearance::default_finishes(),
-            lighting: crate::appearance::Lighting::default(),
-            settings: crate::settings::ModelSettings::default(),
-            resources: BTreeMap::new(),
-            drawings: vec![],
-            comments: vec![],
-            properties: BTreeMap::new(),
-            libraries: BTreeMap::new(),
-            component_forks: BTreeMap::new(),
-            feature_transfers: BTreeMap::new(),
-            active_configurations: BTreeMap::new(),
-            sensors: BTreeMap::new(),
-            tolerance_stacks: BTreeMap::new(),
-            camera_views: BTreeMap::new(),
-        }
+        .collect()
     }
+
     /// Create a part with this model's finish preference, without inserting an occurrence.
     pub fn new_part(&self, name: &str) -> Part {
         let mut part = Part::new(name);
@@ -1781,6 +1789,7 @@ impl Document {
     }
     pub fn sample() -> Self {
         let mut d = Self::empty("Drive unit");
+        d.materials = Self::legacy_materials();
         let mut p = Part::new("Bearing support");
         for (key, name, v) in [
             ("thickness", "Thickness", "8 mm"),

@@ -23,6 +23,7 @@ pub struct Choice {
 struct Entry {
     choice: Choice,
     manifest: PathBuf,
+    repository: Option<cad_core::content_repositories::ResolvedEntry>,
 }
 
 #[derive(Clone)]
@@ -75,20 +76,16 @@ fn directory() -> PathBuf {
 /// every settings frame. Packages are fully validated only when selected.
 pub fn refresh(w: &mut Workspace) {
     let mut entries = Vec::new();
+    let mut errors = Vec::new();
     let paths = match std::fs::read_dir(directory()) {
-        Ok(paths) => paths,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            w.presentation_resources.library.entries.clear();
-            return;
-        }
+        Ok(paths) => Some(paths),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
-            w.presentation_resources.diagnostic =
-                Some(format!("Could not read personal theme library: {error}"));
-            return;
+            errors.push(format!("Could not read personal theme library: {error}"));
+            None
         }
     };
-    let mut errors = Vec::new();
-    for item in paths.take(MAX_CHOICES + 1) {
+    for item in paths.into_iter().flatten().take(MAX_CHOICES + 1) {
         if entries.len() >= MAX_CHOICES {
             errors.push(format!(
                 "Personal theme library is limited to {MAX_CHOICES} packages"
@@ -138,6 +135,7 @@ pub fn refresh(w: &mut Workspace) {
                     description: record.description,
                 },
                 manifest,
+                repository: None,
             }))
         })();
         match result {
@@ -145,6 +143,21 @@ pub fn refresh(w: &mut Workspace) {
             Ok(None) => {}
             Err(error) => errors.push(error.to_string()),
         }
+    }
+    for repository in
+        cad_core::content_repositories::entries(cad_core::content_repositories::ContentKind::Themes)
+    {
+        if entries.len() >= MAX_CHOICES {
+            errors.push(format!(
+                "Theme library is limited to {MAX_CHOICES} packages"
+            ));
+            break;
+        }
+        entries.push(Entry { choice: Choice {
+            id: format!("repository:{}:{}", repository.repository_id, repository.entry.id),
+            name: format!("{} · {}", repository.entry.name, repository.repository_name),
+            description: "Installed Git repository theme. Edit its layout and CSS files in the checkout; valid saves reload when presentation watching is enabled.".into(),
+        }, manifest: repository.path.clone(), repository: Some(repository) });
     }
     entries.sort_by(|left, right| {
         left.choice
@@ -162,7 +175,6 @@ pub fn refresh(w: &mut Workspace) {
 pub fn choices(w: &Workspace) -> Vec<Choice> {
     let mut choices = vec![
         Choice { id: "classic".into(), name: "Classic · Orange".into(), description: "Compact warm CAD workspace with a left feature tree, small rectangular controls and an orange accent.".into() },
-        Choice { id: "nocturne".into(), name: "Nocturne · Violet".into(), description: "A dark violet workspace with a right feature tree, bottom command deck, generous pill controls and contrasting mint actions.".into() },
     ];
     choices.extend(
         w.presentation_resources
@@ -178,6 +190,13 @@ pub fn choices(w: &Workspace) -> Vec<Choice> {
     choices
 }
 
+pub(crate) fn repository_manifest(id: &str) -> Option<PathBuf> {
+    cad_core::content_repositories::entries(cad_core::content_repositories::ContentKind::Themes)
+        .into_iter()
+        .find(|entry| format!("repository:{}:{}", entry.repository_id, entry.entry.id) == id)
+        .map(|entry| entry.path)
+}
+
 pub fn selected(w: &Workspace) -> String {
     w.presentation_resources.library.selected.clone()
 }
@@ -185,13 +204,6 @@ pub fn selected(w: &Workspace) -> String {
 fn bundled(id: &str) -> Result<resources::Candidate> {
     let (layout, theme, active_layout) = match id {
         "classic" => (default_layout(), default_theme(), "instrument-rail"),
-        "nocturne" => (
-            serde_json::from_str(include_str!(
-                "../../../assets/ui/themes/nocturne/layout.json"
-            ))?,
-            Theme::parse_css(include_str!("../../../assets/ui/themes/nocturne/theme.css"))?,
-            "nocturne-workspace",
-        ),
         _ => return Err(invalid(format!("Unknown bundled theme {id}"))),
     };
     Ok(resources::Candidate {
@@ -210,19 +222,22 @@ pub fn select(w: &mut Workspace, id: &str) -> Result<()> {
     if id == "custom" && selected(w) == id {
         return Ok(());
     }
-    let (mut candidate, manifest) = if matches!(id, "classic" | "nocturne") {
+    let (mut candidate, manifest) = if id == "classic" {
         (bundled(id)?, None)
     } else {
-        let path = w
+        let entry = w
             .presentation_resources
             .library
             .entries
             .iter()
             .find(|entry| entry.choice.id == id)
-            .map(|entry| entry.manifest.clone())
-            .ok_or_else(|| invalid(format!("Theme is not in the personal library: {id}")))?;
-        let (candidate, _) = resources::read_library_source(w, &path)?;
-        (candidate, Some(path))
+            .cloned()
+            .ok_or_else(|| invalid(format!("Theme is not installed: {id}. Open Content Libraries to clone a theme repository.")))?;
+        if let Some(repository) = &entry.repository {
+            cad_core::content_repositories::read_entry(repository, 4 * 1024 * 1024)?;
+        }
+        let (candidate, _) = resources::read_library_source(w, &entry.manifest)?;
+        (candidate, Some(entry.manifest))
     };
     candidate.library_id = Some(id.into());
     resources::validate(w, &candidate)?;

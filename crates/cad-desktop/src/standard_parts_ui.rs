@@ -21,6 +21,13 @@ fn catalog() -> Catalog {
         entries: vec![],
     })
 }
+fn library_notice() -> Option<String> {
+    match standard_parts::catalog() {
+        Ok(catalog) if catalog.entries.is_empty() => Some("No standard hardware library is enabled. Open Libraries to clone a repository or add your own.".into()),
+        Err(error) => Some(error.to_string()),
+        _ => None,
+    }
+}
 fn stored<'a>(w: &'a Workspace, key: &str) -> Option<&'a str> {
     w.fields.get(&format!("{PREFIX}{key}")).map(String::as_str)
 }
@@ -113,7 +120,9 @@ fn parsed(w: &Workspace) -> Result<Insertion> {
         request: Request {
             entry: entry.id,
             length_mm,
-            material: stored(w, "material").unwrap_or("steel").into(),
+            material: stored(w, "material")
+                .unwrap_or(&w.session.visible().settings.default_new_part_material)
+                .into(),
             finish: stored(w, "finish")
                 .unwrap_or(cad_core::appearance::DEFAULT_FINISH)
                 .into(),
@@ -159,6 +168,11 @@ pub fn begin(w: &mut Workspace) {
     };
     if cad_core::library::is_definition_pinned(w.session.visible(), &owner) {
         w.status = "Make the linked assembly unique before inserting hardware".into();
+        return;
+    }
+    if let Some(notice) = library_notice() {
+        crate::ui::action(w, "content-repositories");
+        w.status = notice;
         return;
     }
     if !w.fields.contains_key(TOOL) {
@@ -289,11 +303,24 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let catalog = catalog();
     let family = family(w);
     let entry = entry(w);
+    if let Some(notice) = library_notice() {
+        return vec![SemanticElement {
+            id: "workspace.standard-parts".into(),
+            role: "standard-parts-editor".into(),
+            label: "Standard Hardware".into(),
+            value: Some(notice),
+            state: "empty".into(),
+            commands: vec!["content-repositories".into()],
+            relationships: vec![],
+            data: json!({"renderer":"standard-parts-editor","library_required":true,"actions":[{"command":"content-repositories","label":"Get libraries…","enabled":true}]}),
+        }];
+    }
+
     let mut elements=vec![SemanticElement{id:"workspace.standard-parts".into(),role:"standard-parts-editor".into(),label:"Standard Hardware".into(),value:entry.as_ref().map(|entry|entry.id.clone()),state:if w.dialog.as_deref()==Some("standard-parts"){"open"}else{"closed"}.into(),commands:vec!["standard-parts".into()],relationships:owner(w).into_iter().collect(),data:json!({"renderer":"standard-parts-editor","version":standard_parts::CONTRACT_VERSION,"catalog_version":catalog.catalog_version,"native_sketch_geometry":true,"simplified_threads":true,"transaction":"shared-document-draft"})},
  field(w,"owner","Owning assembly",json!(owner(w).unwrap_or_default()),json!(w.session.visible().assemblies.values().map(|assembly|json!({"value":assembly.id,"label":assembly.name})).collect::<Vec<_>>())),
  field(w,"family","Hardware",json!(family),json!(Family::ALL.into_iter().map(|family|json!({"value":family,"label":family.label()})).collect::<Vec<_>>())),
  field(w,"entry","Size / dimensional reference",json!(entry.as_ref().map(|entry|entry.id.as_str()).unwrap_or_default()),json!(catalog.entries.iter().filter(|entry|entry.shape.family()==family).map(|entry|json!({"value":entry.id,"label":format!("{} · {}",entry.size,entry.standard_reference)})).collect::<Vec<_>>())),
- field(w,"material","Engineering material",json!(stored(w,"material").unwrap_or("steel")),json!(w.session.visible().materials.values().map(|material|json!({"value":material.id,"label":material.name})).collect::<Vec<_>>())),
+ field(w,"material","Engineering material",json!(stored(w,"material").unwrap_or(&w.session.visible().settings.default_new_part_material)),json!(w.session.visible().materials.values().map(|material|json!({"value":material.id,"label":material.name})).collect::<Vec<_>>())),
  field(w,"finish","Surface finish",json!(stored(w,"finish").unwrap_or(cad_core::appearance::DEFAULT_FINISH)),json!(w.session.visible().finishes.values().map(|finish|json!({"value":finish.id,"label":finish.name})).collect::<Vec<_>>())),
  ];
     if family.has_length() {
@@ -379,7 +406,10 @@ pub fn value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
         "fixed" => Some(json!(stored(w, name) == Some("true"))),
         "reuse" => Some(json!(stored(w, name).is_none_or(|value| value == "true"))),
         "length-preset" => Some(json!(stored(w, "length").unwrap_or("20 mm"))),
-        "material" => Some(json!(stored(w, "material").unwrap_or("steel"))),
+        "material" => Some(json!(
+            stored(w, "material")
+                .unwrap_or(&w.session.visible().settings.default_new_part_material)
+        )),
         "finish" => Some(json!(
             stored(w, "finish").unwrap_or(cad_core::appearance::DEFAULT_FINISH)
         )),
@@ -491,6 +521,33 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
     }
 }
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
+    if let Some(notice) = library_notice() {
+        if w.fields.contains_key(TOOL) {
+            cad_ui::confirmation(ui, w);
+        }
+        controls::label(
+            ui,
+            "standard-parts:library-notice",
+            "standard-part-help",
+            &[],
+            &notice,
+            "empty",
+        );
+        if controls::button(
+            ui,
+            "command:standard-parts:get-libraries",
+            "standard-part-action",
+            &["semantic-control"],
+            "Get libraries…",
+            true,
+            false,
+        )
+        .clicked()
+        {
+            crate::ui::action(w, "content-repositories");
+        }
+        return;
+    }
     if !w.fields.contains_key(TOOL) {
         begin(w);
         if !w.fields.contains_key(TOOL) {

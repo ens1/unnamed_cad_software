@@ -143,7 +143,7 @@ fn environment_key(doc: &Document, root: &Path) -> Option<EnvironmentKey> {
 }
 enum Reply {
     Texture(TextureKey, Result<Image, String>),
-    BuiltinHeight(BuiltinBump, Result<Image, String>),
+    BuiltinHeight(u64, BuiltinBump, Result<Image, String>),
     Studio(Image, Image),
     Environment(
         EnvironmentKey,
@@ -161,6 +161,7 @@ pub struct Runtime {
     white: Handle<Image>,
     flat_normal: Handle<Image>,
     builtin_height: BTreeMap<BuiltinBump, TextureState>,
+    builtin_generation: u64,
     pub epoch: u64,
     studio: Option<(Handle<Image>, Handle<Image>)>,
     usage_key: String,
@@ -182,10 +183,8 @@ impl Default for Runtime {
             image_bytes: 0,
             white: Handle::default(),
             flat_normal: Handle::default(),
-            builtin_height: BuiltinBump::MAPS
-                .into_iter()
-                .map(|kind| (kind, TextureState::Pending))
-                .collect(),
+            builtin_height: BTreeMap::new(),
+            builtin_generation: u64::MAX,
             epoch: 0,
             studio: None,
             usage_key: String::new(),
@@ -380,11 +379,12 @@ impl Runtime {
             .collect::<std::collections::BTreeSet<_>>();
         for kind in builtin {
             match self.builtin_height.get(&kind) {
-                Some(TextureState::Pending) | None => {
-                    messages.push(format!("Loading texture built-in {}", kind.label()))
-                }
+                Some(TextureState::Pending) | None => messages.push(format!(
+                    "Loading texture legacy repository {}",
+                    kind.label()
+                )),
                 Some(TextureState::Failed(error)) => {
-                    messages.push(format!("Built-in {}: {error}", kind.label()))
+                    messages.push(format!("Legacy repository map {}: {error}", kind.label()))
                 }
                 Some(TextureState::Loaded(_)) => {}
             }
@@ -458,13 +458,6 @@ pub struct StudioLight(pub bool);
 pub fn setup(commands: &mut Commands, images: &mut Assets<Image>, runtime: &mut Runtime) {
     runtime.white = images.add(pixel([255, 255, 255, 255]));
     runtime.flat_normal = images.add(pixel([128, 128, 255, 255]));
-    let height_sender = runtime.sender.clone();
-    std::thread::spawn(move || {
-        for kind in BuiltinBump::MAPS {
-            let result = crate::texture_assets::builtin_height(kind);
-            let _ = height_sender.send(Reply::BuiltinHeight(kind, result));
-        }
-    });
     // A coarse studio is available immediately. Filtering the final resources
     // stays off the main thread, but metal never starts in an unlit void.
     runtime.studio = Some((
@@ -581,6 +574,45 @@ pub fn poll_assets(
         }
         runtime.retain_sources(&sources, &root, &mut images);
     }
+    // Repository maps are only a compatibility path for old documents. New
+    // assignments use checksum-pinned project resources. Refresh discards old
+    // generations and refuses late worker results from an updated checkout.
+    let generation = cad_core::content_repositories::catalog_generation();
+    if runtime.builtin_generation != generation {
+        let old = std::mem::take(&mut runtime.builtin_height);
+        for state in old.into_values() {
+            if let TextureState::Loaded(handle) = state
+                && let Some(image) = images.remove(&handle)
+            {
+                runtime.image_bytes = runtime
+                    .image_bytes
+                    .saturating_sub(image.data.as_ref().map(Vec::len).unwrap_or(0));
+            }
+        }
+        runtime.builtin_generation = generation;
+        runtime.epoch = runtime.epoch.wrapping_add(1);
+    }
+    let wanted = w
+        .session
+        .visible()
+        .finishes
+        .values()
+        .filter(|finish| finish.textures.height.is_none())
+        .map(|finish| finish.builtin_bump)
+        .filter(|kind| *kind != BuiltinBump::None)
+        .collect::<std::collections::BTreeSet<_>>();
+    for kind in wanted {
+        if generation == 0 || runtime.builtin_height.contains_key(&kind) {
+            continue;
+        }
+        runtime.builtin_height.insert(kind, TextureState::Pending);
+        let sender = runtime.sender.clone();
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(|| crate::texture_assets::builtin_height(kind))
+                .unwrap_or_else(|_| Err("Repository texture decoder failed".into()));
+            let _ = sender.send(Reply::BuiltinHeight(generation, kind, result));
+        });
+    }
     runtime.select_environment(w.session.visible(), &root);
     let validating =
         w.fields.contains_key("appearance-tool") || w.fields.contains_key("display-state-editor");
@@ -637,11 +669,19 @@ pub fn poll_assets(
                 runtime.textures.insert(key, state);
                 runtime.epoch = runtime.epoch.wrapping_add(1);
             }
-            Reply::BuiltinHeight(kind, result) => {
+            Reply::BuiltinHeight(generation, kind, result) => {
+                if generation != runtime.builtin_generation {
+                    continue;
+                }
                 let state = match result {
                     Ok(image) => {
-                        runtime.image_bytes += image.data.as_ref().map(Vec::len).unwrap_or(0);
-                        TextureState::Loaded(images.add(image))
+                        let bytes = image.data.as_ref().map(Vec::len).unwrap_or(0);
+                        if runtime.image_bytes.saturating_add(bytes) > CACHE_BYTES {
+                            TextureState::Failed("Renderer texture memory limit reached; pin only the maps used by this model".into())
+                        } else {
+                            runtime.image_bytes += bytes;
+                            TextureState::Loaded(images.add(image))
+                        }
                     }
                     Err(error) => TextureState::Failed(error),
                 };

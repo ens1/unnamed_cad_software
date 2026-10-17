@@ -12,7 +12,7 @@ use cad_core::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{cell::RefCell, collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, sync::Arc};
 
 pub const CONTRACT_VERSION: u32 = 1;
 const DEFERRED: &str = "tcad:structural-member:";
@@ -20,7 +20,6 @@ const ACTION: &str = "structural-member.action";
 const PICK: &str = "structural-member-pick";
 const INVALID: &str = "structural-member-invalid:";
 const MAX_PICK_SEGMENTS: usize = 65536;
-const MAX_LIBRARY_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Pending {
@@ -29,76 +28,18 @@ struct Pending {
     path: Option<NodeRef>,
     members: Vec<Id>,
 }
-#[derive(Default)]
-struct Libraries {
-    initialized: bool,
-    catalogs: Vec<Arc<Catalog>>,
-    diagnostics: Vec<String>,
-}
-thread_local! {static LIBRARIES:RefCell<Libraries>=RefCell::new(Libraries::default());}
-
 fn invalid(message: &str) -> CadError {
     CadError::Invalid(format!("Structural member: {message}"))
 }
-fn library_directory() -> std::path::PathBuf {
-    crate::settings_preferences::path()
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("structural-profiles")
-}
-fn read_catalog(path: &std::path::Path) -> Result<Catalog> {
-    use std::io::Read;
-    let file = std::fs::File::open(path)?;
-    if file.metadata()?.len() > MAX_LIBRARY_BYTES {
-        return Err(invalid("Profile library exceeds the 4 MiB import limit"));
-    }
-    let mut source = String::new();
-    file.take(MAX_LIBRARY_BYTES + 1)
-        .read_to_string(&mut source)?;
-    if source.len() as u64 > MAX_LIBRARY_BYTES {
-        return Err(invalid("Profile library exceeds the 4 MiB import limit"));
-    }
-    cad_core::weldment_profiles::parse_catalog(&source)
-}
 fn catalogs() -> Vec<Arc<Catalog>> {
-    LIBRARIES.with(|libraries| {
-        let mut libraries = libraries.borrow_mut();
-        if !libraries.initialized {
-            libraries.initialized = true;
-            match cad_core::weldment_profiles::builtin() {
-                Ok(catalog) => libraries.catalogs.push(Arc::new(catalog)),
-                Err(error) => libraries.diagnostics.push(error.to_string()),
-            }
-            if let Ok(paths) = std::fs::read_dir(library_directory()) {
-                let mut paths = paths
-                    .filter_map(std::result::Result::ok)
-                    .filter(|entry| entry.path().extension().is_some_and(|e| e == "json"))
-                    .take(31)
-                    .map(|entry| entry.path())
-                    .collect::<Vec<_>>();
-                paths.sort();
-                for path in paths {
-                    match read_catalog(&path) {
-                        Ok(catalog) => {
-                            if let Some(existing) = libraries
-                                .catalogs
-                                .iter_mut()
-                                .find(|existing| existing.id == catalog.id)
-                            {
-                                *existing = Arc::new(catalog);
-                            } else {
-                                libraries.catalogs.push(Arc::new(catalog));
-                            }
-                        }
-                        Err(error) => libraries
-                            .diagnostics
-                            .push(format!("{}: {error}", path.display())),
-                    }
-                }
-            }
-        }
-        libraries.catalogs.clone()
-    })
+    cad_core::weldment_profiles::installed_catalogs().unwrap_or_default()
+}
+fn library_notice() -> Option<String> {
+    match cad_core::weldment_profiles::installed_catalogs() {
+        Ok(catalogs) if catalogs.iter().all(|catalog| catalog.profiles.is_empty()) => Some("No weldment profile library is enabled. Open Libraries to clone a profile repository or add your own.".into()),
+        Err(error) => Some(error.to_string()),
+        _ => None,
+    }
 }
 fn current(w: &Workspace) -> Option<(NodeRef, Feature)> {
     if crate::command_palette::context_editor(w) != Some("feature")
@@ -338,8 +279,14 @@ fn begin_pending(w: &mut Workspace, pending: Pending) {
         return;
     };
     let libraries = catalogs();
-    let Some(catalog) = libraries.first() else {
-        w.status = "No valid structural profile library is available".into();
+    let Some(catalog) = libraries
+        .iter()
+        .find(|catalog| !catalog.profiles.is_empty())
+    else {
+        crate::ui::action(w, "content-repositories");
+        w.status = library_notice().unwrap_or_else(|| {
+            "No weldment profile library is enabled. Use Get libraries to add one.".into()
+        });
         return;
     };
     let Some(entry) = catalog
@@ -706,6 +653,16 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ));
     }
     out.push(group(w, &owner, "profile", "Pre-made profile"));
+    if let Some(notice) = library_notice() {
+        out.push(note(
+            w,
+            &owner,
+            "profile",
+            "library-notice",
+            &format!("{notice} This member retains its saved profile."),
+        ));
+    }
+
     let mut collections = entries
         .iter()
         .map(|(catalog, entry)| (catalog.to_string(), entry.collection.clone()))
@@ -801,12 +758,32 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             &profile.profile.notes,
         ));
     }
+    let profile_update = libraries
+        .iter()
+        .find(|catalog| catalog.id == profile.catalog_id)
+        .and_then(|catalog| {
+            catalog
+                .profiles
+                .iter()
+                .find(|entry| entry.id == profile.profile.id)
+        })
+        .is_some_and(|entry| entry != &profile.profile);
+    if profile_update {
+        out.push(action_element(
+            w,
+            &owner,
+            "profile",
+            "update-profile",
+            "Use updated library profile",
+            true,
+        ));
+    }
     out.push(action_element(
         w,
         &owner,
         "profile",
         "import",
-        "Import profile library…",
+        "Get libraries…",
         true,
     ));
     out.push(action_element(
@@ -1444,6 +1421,23 @@ pub fn action(w: &mut Workspace, command: &str, payload: &Value) -> bool {
                     .ok_or_else(|| invalid("The locating-point control closed"))?;
                 set_value(w, &field, locator)
             }
+            "update-profile" => {
+                let snapshot =
+                    origin(&feature).ok_or_else(|| invalid("No saved profile is selected"))?;
+                let libraries = cad_core::weldment_profiles::installed_catalogs()?;
+                let catalog = libraries
+                    .iter()
+                    .find(|catalog| catalog.id == snapshot.catalog_id)
+                    .ok_or_else(|| invalid("Enable the profile's source repository first"))?;
+                let entry = catalog
+                    .profiles
+                    .iter()
+                    .find(|entry| entry.id == snapshot.profile.id)
+                    .ok_or_else(|| {
+                        invalid("The current library no longer contains this profile")
+                    })?;
+                select_profile(w, &catalog.id, entry)
+            }
             "import" => import_library(w),
             "export" => export_library(w),
             "restore-profile" => restore_profile(w),
@@ -1533,46 +1527,7 @@ fn restore_profile(w: &mut Workspace) -> Result<()> {
     Ok(())
 }
 fn import_library(w: &mut Workspace) -> Result<()> {
-    let Some(path) = rfd::FileDialog::new()
-        .set_title("Import structural profile library")
-        .add_filter("TCAD profile library", &["json"])
-        .pick_file()
-    else {
-        return Ok(());
-    };
-    let catalog = read_catalog(&path)?;
-    if catalog.id == cad_core::weldment_profiles::builtin()?.id {
-        return Err(invalid("Use a distinct library ID for personal profiles"));
-    }
-    if catalogs().len() >= 32 && !catalogs().iter().any(|existing| existing.id == catalog.id) {
-        return Err(invalid("At most 32 profile libraries may be loaded"));
-    }
-    let source = cad_core::weldment_profiles::catalog_json(&catalog)?;
-    std::fs::create_dir_all(library_directory())?;
-    let existing = std::fs::read_dir(library_directory())?
-        .filter_map(std::result::Result::ok)
-        .take(32)
-        .find(|entry| read_catalog(&entry.path()).is_ok_and(|saved| saved.id == catalog.id))
-        .map(|entry| entry.path());
-    let target =
-        existing.unwrap_or_else(|| library_directory().join(format!("{}.json", cad_core::id())));
-    cad_core::persistence::atomic_write(&target, source.as_bytes())?;
-    LIBRARIES.with(|libraries| {
-        let mut libraries = libraries.borrow_mut();
-        if let Some(existing) = libraries
-            .catalogs
-            .iter_mut()
-            .find(|existing| existing.id == catalog.id)
-        {
-            *existing = Arc::new(catalog.clone());
-        } else {
-            libraries.catalogs.push(Arc::new(catalog.clone()));
-        }
-    });
-    w.status = format!(
-        "Loaded {}. Existing part profiles retain their saved snapshots.",
-        catalog.name
-    );
+    crate::ui::action(w, "content-repositories");
     Ok(())
 }
 fn export_library(w: &mut Workspace) -> Result<()> {
@@ -1582,7 +1537,7 @@ fn export_library(w: &mut Workspace) -> Result<()> {
         .into_iter()
         .find(|catalog| catalog.id == profile.catalog_id)
         .ok_or_else(|| {
-            invalid("Import this profile's source library before exporting the complete library")
+            invalid("Enable this profile's source repository before exporting the complete library")
         })?;
     let Some(path) = rfd::FileDialog::new()
         .set_title("Export structural profile library")
