@@ -1268,6 +1268,52 @@ fn descriptors(
             .then_some(w.view.active_part.as_deref())
             .flatten(),
     );
+    if actions.iter().any(|action| {
+        action
+            .commands
+            .iter()
+            .any(|command| matches!(command.as_str(), "sheet.flange" | "sheet.hem" | "sheet.jog"))
+    }) {
+        let compatible = w
+            .selected
+            .as_ref()
+            .and_then(|pick| {
+                let SelectionTarget::Geometry {
+                    definition,
+                    path,
+                    reference,
+                    ..
+                } = target
+                else {
+                    return None;
+                };
+                if &pick.definition != definition
+                    || &pick.path != path
+                    || !cad_core::selection_sets::same_reference(&pick.reference, reference)
+                {
+                    return None;
+                }
+                let stock =
+                    cad_core::sheet_metal::stock(w.session.visible(), pick.body.as_ref()?).ok()?;
+                crate::fabrication_sources_ui::picked_attachment(w, &stock)
+            })
+            .is_some();
+        if !compatible {
+            let reason =
+                "Select an unused straight base perimeter or free full-width flange terminal edge";
+            for action in &mut actions {
+                if action.state != "disabled"
+                    && action.commands.iter().any(|command| {
+                        matches!(command.as_str(), "sheet.flange" | "sheet.hem" | "sheet.jog")
+                    })
+                {
+                    action.state = "disabled".into();
+                    action.value = Some(reason.into());
+                    action.data["disabled_reason"] = reason.into();
+                }
+            }
+        }
+    }
     if w.sketch.is_none() && w.view.history_cursor.is_none() {
         actions.extend(set_descriptors(w, target));
     }

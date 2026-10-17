@@ -705,8 +705,8 @@ fn package_target(path: PathBuf) -> Target {
     Target::Package { path, boundary }
 }
 
-fn load_target(target: &Target, reader: &mut Reader) -> Result<Candidate> {
-    match target {
+fn load_target(w: &Workspace, target: &Target, reader: &mut Reader) -> Result<Candidate> {
+    let candidate = match target {
         Target::Personal => {
             let manifest = personal_directory().join("presentation.json");
             reader.track(&manifest);
@@ -720,14 +720,19 @@ fn load_target(target: &Target, reader: &mut Reader) -> Result<Candidate> {
                     // The saved self-contained theme is authoritative recovery
                     // data. An optional checkout can be offline, removed or have
                     // incomplete edits without making the workspace unusable.
-                    match reader.file(&path, Reader::package) {
-                        Ok(mut live) => {
-                            live.library_id = saved.library_id;
-                            Ok(live)
-                        }
+                    match reader.file(&path, Reader::package).and_then(|mut live| {
+                        live.library_id = saved.library_id.clone();
+                        // Parsing cannot establish that renderer properties,
+                        // layout relationships and scoped variables are usable.
+                        // Keep the self-contained snapshot until those checks
+                        // also succeed, including on a cold application start.
+                        validate(w, &live)?;
+                        Ok(live)
+                    }) {
+                        Ok(live) => return Ok(live),
                         Err(error) => {
                             reader.library_notice = Some(format!(
-                                "The theme repository is unavailable. Using your saved theme snapshot. {error}"
+                                "The theme repository is unavailable or invalid. Using your saved theme snapshot. {error}"
                             ));
                             Ok(saved)
                         }
@@ -755,28 +760,34 @@ fn load_target(target: &Target, reader: &mut Reader) -> Result<Candidate> {
             let manifest = directory.join("presentation.json");
             reader.track(&manifest);
             if manifest.is_file() {
-                return reader.file(&manifest, Reader::package);
+                reader.file(&manifest, Reader::package)
+            } else {
+                let layout = directory.join("layout.json");
+                let css = directory.join("theme.css");
+                let json = directory.join("theme.json");
+                for path in [&layout, &css, &json] {
+                    reader.track(path);
+                }
+                let personal = load_target(w, &Target::Personal, reader)?;
+                if !layout.is_file() && !css.is_file() && !json.is_file() {
+                    return Ok(personal);
+                }
+                load_files(
+                    reader,
+                    layout.is_file().then_some(layout),
+                    if css.is_file() {
+                        Some(css)
+                    } else {
+                        json.is_file().then_some(json)
+                    },
+                    Some(personal),
+                )
             }
-            let layout = directory.join("layout.json");
-            let css = directory.join("theme.css");
-            let json = directory.join("theme.json");
-            for path in [&layout, &css, &json] {
-                reader.track(path);
-            }
-            let personal = load_target(&Target::Personal, reader)?;
-            load_files(
-                reader,
-                layout.is_file().then_some(layout),
-                if css.is_file() {
-                    Some(css)
-                } else {
-                    json.is_file().then_some(json)
-                },
-                Some(personal),
-            )
         }
         Target::Files { layout, theme } => load_files(reader, layout.clone(), theme.clone(), None),
-    }
+    }?;
+    validate(w, &candidate)?;
+    Ok(candidate)
 }
 
 fn load_files(
@@ -884,8 +895,7 @@ fn report(w: &mut Workspace, error: impl std::fmt::Display) {
 
 fn reload(w: &mut Workspace, target: Target) {
     let mut reader = Reader::default();
-    let result = load_target(&target, &mut reader).and_then(|candidate| {
-        validate(w, &candidate)?;
+    let result = load_target(w, &target, &mut reader).and_then(|candidate| {
         reader.verify_stable()?;
         Ok(candidate)
     });

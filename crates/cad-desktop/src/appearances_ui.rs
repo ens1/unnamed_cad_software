@@ -301,7 +301,8 @@ fn field_revision(w: &Workspace) -> Value {
         w.session
             .draft
             .as_ref()
-            .map(|draft| (&draft.id, draft.edit))
+            .map(|draft| (&draft.id, draft.edit)),
+        w.session.source_epoch()
     ])
 }
 fn field_source(w: &Workspace, element: &SemanticElement) -> Option<Value> {
@@ -1816,7 +1817,8 @@ fn field(
     crate::ui::semantic_field(ui, w, &element);
 }
 fn panel_open(w: &Workspace) -> bool {
-    w.dialog.as_deref() == Some("appearances") || w.fields.contains_key(TOOL)
+    w.dialog.as_deref() != Some("materials")
+        && (w.dialog.as_deref() == Some("appearances") || w.fields.contains_key(TOOL))
 }
 fn description(ui: &mut egui::Ui, id: &str, text: &str) {
     controls::label(ui, id, "appearance-description", &[], text, "ready");
@@ -2000,6 +2002,9 @@ fn target_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     }
 }
 pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
+    if !panel_open(w) {
+        return;
+    }
     controls::label(
         ui,
         "appearance:heading",
@@ -2019,6 +2024,9 @@ pub fn panel(ui: &mut egui::Ui, w: &mut Workspace) {
         .show(ui, |ui| show_content(ui, w));
 }
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
+    if !panel_open(w) {
+        return;
+    }
     if w.fields.contains_key(TOOL) {
         cad_ui::confirmation(ui, w);
     }
@@ -2062,6 +2070,13 @@ fn show_content(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         }
     });
+    if w.fields.contains_key("material-tool") {
+        description(
+            ui,
+            "appearance:shared-draft",
+            "Material and appearance changes share this edit. Apply saves both; Cancel discards both.",
+        );
+    }
     if w.fields.get("appearance-tab").map(String::as_str) == Some("lighting") {
         lighting_controls(ui, w);
         return;

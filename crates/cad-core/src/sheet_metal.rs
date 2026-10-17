@@ -769,11 +769,30 @@ pub fn dxf(sheets: &std::collections::BTreeMap<String, EvaluatedSheet>) -> Resul
             "No evaluated native sheet flat patterns are available",
         ));
     }
-    let mut out="0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n".to_string();
+    let mut out="0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nAPPID\n70\n1\n0\nAPPID\n2\nTCAD\n70\n0\n0\nENDTAB\n0\nTABLE\n2\nLAYER\n".to_string();
+    out.push_str(&format!("70\n{}\n", sheets.len() * 4));
+    for index in 1..=sheets.len() {
+        for (name, color) in [
+            ("CUT", 7),
+            ("BEND_UP", 3),
+            ("BEND_DOWN", 1),
+            ("BEND_NOTES", 8),
+        ] {
+            out.push_str(&format!(
+                "0\nLAYER\n2\n{name}_{index:02}\n70\n0\n62\n{color}\n6\nCONTINUOUS\n"
+            ));
+        }
+    }
+    out.push_str("0\nENDTAB\n0\nTABLE\n2\nLTYPE\n70\n1\n0\nLTYPE\n2\nCONTINUOUS\n70\n0\n3\nSolid line\n72\n65\n73\n0\n40\n0\n0\nENDTAB\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n");
     let mut offset: f64 = 0.;
-    for (key, sheet) in sheets {
+    for (sheet_index, (key, sheet)) in sheets.iter().enumerate() {
         if let Some(error) = &sheet.flat_export_error {
             return Err(CadError::Unsupported(error.clone()));
+        }
+        if !sheet.thickness_mm.is_finite() || sheet.thickness_mm <= 0. {
+            return Err(invalid(
+                "Flat-pattern sheet thickness must be finite and positive",
+            ));
         }
         let min = sheet
             .flat_contours
@@ -798,19 +817,53 @@ pub fn dxf(sheets: &std::collections::BTreeMap<String, EvaluatedSheet>) -> Resul
                 "Flat-pattern layout exceeds the finite coordinate range",
             ));
         }
-        let layer = key
-            .chars()
-            .take(220)
-            .map(|character| {
-                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
-                    character
-                } else {
-                    '_'
+        let number = sheet_index + 1;
+        let source = serde_json::json!({"sheet":key,"source":sheet.source,"base_source":sheet.base_source,"thickness_mm":sheet.thickness_mm});
+        let provenance = |out: &mut String, value: &str| {
+            out.push_str("1001\nTCAD\n");
+            // Keep extended strings below DXF's 255-byte limit without
+            // splitting UTF-8 identities between records.
+            let mut rest = value;
+            while !rest.is_empty() {
+                let mut boundary = rest.len().min(240);
+                while !rest.is_char_boundary(boundary) {
+                    boundary -= 1;
                 }
-            })
-            .collect::<String>();
-        for curve in &sheet.flat_contours {
-            out.push_str(&format!("0\nSPLINE\n8\nflat-{layer}\n70\n12\n71\n{}\n72\n{}\n73\n{}\n74\n0\n210\n0\n220\n0\n230\n1\n",curve.degree,curve.knots.len(),curve.control_points.len()));
+                let (chunk, next) = rest.split_at(boundary);
+                out.push_str("1000\n");
+                out.push_str(chunk);
+                out.push('\n');
+                rest = next;
+            }
+        };
+        for (contour_index, curve) in sheet.flat_contours.iter().enumerate() {
+            crate::sketch_edit::validate_nurbs(curve)?;
+            if curve
+                .control_points
+                .iter()
+                .any(|p| !(p[0] + dx).is_finite())
+            {
+                return Err(invalid(
+                    "Flat-pattern control points exceed the finite coordinate range",
+                ));
+            }
+            let metadata = serde_json::to_string(
+                &serde_json::json!({"source":source,"contour":contour_index}),
+            )?;
+            if curve.degree == 1 {
+                // Each nonempty degree-one knot span is an exact line even
+                // when its endpoint weights differ. Do not tessellate curves.
+                for (index, points) in curve.control_points.windows(2).enumerate() {
+                    if curve.knots[index + 2] <= curve.knots[index + 1] {
+                        continue;
+                    }
+                    let [a, b] = [points[0], points[1]];
+                    out.push_str(&format!("0\nLINE\n8\nCUT_{number:02}\n10\n{}\n20\n{}\n30\n0\n11\n{}\n21\n{}\n31\n0\n",a[0]+dx,a[1],b[0]+dx,b[1]));
+                    provenance(&mut out, &metadata);
+                }
+                continue;
+            }
+            out.push_str(&format!("0\nSPLINE\n8\nCUT_{number:02}\n70\n12\n71\n{}\n72\n{}\n73\n{}\n74\n0\n210\n0\n220\n0\n230\n1\n",curve.degree,curve.knots.len(),curve.control_points.len()));
             for knot in &curve.knots {
                 out.push_str(&format!("40\n{knot}\n"));
             }
@@ -825,6 +878,7 @@ pub fn dxf(sheets: &std::collections::BTreeMap<String, EvaluatedSheet>) -> Resul
                 }
                 out.push_str(&format!("10\n{}\n20\n{}\n30\n0\n", p[0] + dx, p[1]));
             }
+            provenance(&mut out, &metadata);
         }
         for bend in &sheet.bends {
             if ![
@@ -832,21 +886,41 @@ pub fn dxf(sheets: &std::collections::BTreeMap<String, EvaluatedSheet>) -> Resul
                 bend.start[1],
                 bend.end[0] + dx,
                 bend.end[1],
+                bend.angle_rad,
+                bend.angle_rad.to_degrees(),
+                bend.inside_radius_mm,
+                bend.allowance_mm,
+                bend.k_factor,
             ]
             .iter()
             .all(|value| value.is_finite())
             {
                 return Err(invalid(
-                    "Flat-pattern bend lines exceed the finite coordinate range",
+                    "Flat-pattern bend geometry and fabrication metadata must be finite",
                 ));
             }
+            if bend.inside_radius_mm < 0.
+                || bend.allowance_mm < 0.
+                || !(0.0..=1.).contains(&bend.k_factor)
+            {
+                return Err(invalid(
+                    "Flat-pattern bend radius, allowance or K factor is invalid",
+                ));
+            }
+            let direction = if bend.angle_rad >= 0. { "UP" } else { "DOWN" };
+            let metadata = serde_json::to_string(
+                &serde_json::json!({"source":source,"feature":bend.feature,"member":bend.member,"bend_index":bend.index,"direction":direction,"angle_deg":bend.angle_rad.to_degrees(),"inside_radius_mm":bend.inside_radius_mm,"allowance_mm":bend.allowance_mm,"k_factor":bend.k_factor}),
+            )?;
             out.push_str(&format!(
-                "0\nLINE\n8\nbend-{layer}\n10\n{}\n20\n{}\n30\n0\n11\n{}\n21\n{}\n31\n0\n",
+                "0\nLINE\n8\nBEND_{direction}_{number:02}\n10\n{}\n20\n{}\n30\n0\n11\n{}\n21\n{}\n31\n0\n",
                 bend.start[0] + dx,
                 bend.start[1],
                 bend.end[0] + dx,
                 bend.end[1]
             ));
+            provenance(&mut out, &metadata);
+            out.push_str(&format!("0\nTEXT\n8\nBEND_NOTES_{number:02}\n10\n{}\n20\n{}\n30\n0\n40\n2.5\n1\n{direction} {:.3} DEG  R{:.3} mm\n",bend.start[0]*0.5+bend.end[0]*0.5+dx,bend.start[1]*0.5+bend.end[1]*0.5+3.,bend.angle_rad.to_degrees().abs(),bend.inside_radius_mm));
+            provenance(&mut out, &metadata);
         }
         offset += max - min + 20.;
         if !offset.is_finite() {

@@ -523,7 +523,8 @@ pub fn camera_components() -> impl Bundle {
 
 fn validation_key(w: &Workspace) -> String {
     format!(
-        "{}:{}:{}:{:?}:{:?}:{}",
+        "{}:{}:{}:{}:{:?}:{:?}:{}",
+        w.session.source_epoch(),
         w.session.generation,
         w.session.committed.revision,
         w.saved_source,
@@ -553,7 +554,8 @@ pub fn poll_assets(
 ) {
     let root = w.root();
     let usage_key = format!(
-        "{}:{}:{}:{:?}:{}:{:?}",
+        "{}:{}:{}:{}:{:?}:{}:{:?}",
+        w.session.source_epoch(),
         w.session.generation,
         w.session.committed.revision,
         w.saved_source,

@@ -860,7 +860,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     out.push(field(
         w,
         "repository-url",
-        "Repository URL",
+        "Repository",
         json!(preferences.repository_url),
         None,
     ));
@@ -874,7 +874,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     out.push(field(
         w,
         "project-folder",
-        "Project folder in repository",
+        "Folder in repository",
         json!(preferences.project_folder),
         None,
     ));
@@ -915,7 +915,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     out.push(field(
         w,
         "message",
-        "Commit message (blank uses model revision)",
+        "Commit message",
         json!(w.publish.message),
         None,
     ));
@@ -932,6 +932,10 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         "Git author email",
         json!(w.publish.author_email),
         None,
+    ));
+    out.push(note(
+        "message-help",
+        "Leave the message blank to use the model revision.",
     ));
     out.push(note("status", &w.publish.status));
     if let Some(last) = &w.publish.last {
@@ -1070,6 +1074,27 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
     Ok(())
 }
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
+    show_actions(ui, w);
+    show_contents(ui, w);
+}
+pub fn show_actions(ui: &mut egui::Ui, w: &mut Workspace) {
+    let elements = semantics(w);
+    let publishing = busy(w);
+    ui.horizontal_wrapped(|ui| {
+        for element in elements.iter().filter(|element| {
+            element.role == "publish-action"
+                && matches!(
+                    element.commands.first().map(String::as_str),
+                    Some("publish.run" | "publish.save-settings" | "publish.close")
+                )
+                || publishing
+                    && element.commands.first().map(String::as_str) == Some("publish.cancel")
+        }) {
+            render_element(ui, w, element);
+        }
+    });
+}
+pub fn show_contents(ui: &mut egui::Ui, w: &mut Workspace) {
     let elements = semantics(w);
     for element in elements
         .iter()
@@ -1108,10 +1133,18 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         );
     }
     ui.horizontal_wrapped(|ui| {
-        for element in elements
-            .iter()
-            .filter(|element| element.role == "publish-action")
-        {
+        for element in elements.iter().filter(|element| {
+            element.role == "publish-action"
+                && !matches!(
+                    element.commands.first().map(String::as_str),
+                    Some(
+                        "publish.run"
+                            | "publish.save-settings"
+                            | "publish.close"
+                            | "publish.cancel"
+                    )
+                )
+        }) {
             render_element(ui, w, element);
         }
     });
@@ -1120,13 +1153,14 @@ fn render_element(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElemen
     match element.role.as_str() {
         "publish-field" => crate::ui::semantic_field(ui, w, element),
         "publish-information" => {
-            controls::label(
+            controls::bounded_label(
                 ui,
                 &element.id,
                 &element.role,
                 &[],
                 &element.label,
                 &element.state,
+                ui.available_width(),
             );
         }
         "publish-action"

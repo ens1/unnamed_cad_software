@@ -8,6 +8,21 @@ Paper Smart Dimension picks native geometry on an existing drawing view. Auto, a
 
 Automatic Front/Top/Right views form a projected block with one standard scale selected to fit the group. Top sits above Front and Right beside Front. Additional detail and section rows preserve that block. Explicit paper rectangles, scales and parent relationships remain editable overrides; see [P1 implementation details](usability-p1-fixes.md).
 
+For a new sheet without saved view rectangles, automatic rows and columns use
+the maximum actual projected extent in each row/column. Fixed paper margins and
+caption gaps are reserved before choosing the largest fitting standard common
+scale. A shallow front view no longer takes the same row height as a deep top
+view. Saved user rectangles, scales and alignments retain their existing behavior.
+
+New paper dimensions start beyond the projected view geometry with an 8 mm
+clearance. Horizontal dimensions prefer below the part, away from the captions;
+vertical dimensions prefer its right side. Additional candidate lanes avoid
+existing text labels and page borders where space permits. This is initial
+placement, not an automatic drawing-layout solver: dense sheets may still need
+manual editing. Dimensions retain ordinary saved paper offsets. Their offset
+handle has a distinct grip shape, and drag picking uses the original press point
+so moving past a small handle before the drag threshold does not lose its target.
+
 Attachment handles and Reattach controls replace the first, second, third or target reference, as appropriate. Exact circular dimensions and center marks offer carrier reattachment. An unresolved dimension, annotation, overflowing view or table remains an explicit diagnostic paper item during repair. Several errors can be corrected incrementally. Its placeholder is a selection aid only. Apply and exports still require every source reference to validate; a complete current native model evaluation is retained separately to make repair possible when only the drawing is invalid. Incomplete geometry never acquires that permission.
 
 Drag previews update the shared drawing draft before Apply. Escape restores that gesture's starting document and fields while retaining earlier drawing edits. Whole-operation Cancel restores the editing checkpoint. Apply waits for the current worker identity and commits one undoable change. Competing source commands and field mutations cannot take over an active paper capture. Changes of focus, layout, scale, sheet or page invalidate obsolete hit geometry. A failed final drag proposal restores the gesture rather than silently accepting an earlier position.

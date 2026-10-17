@@ -82,20 +82,50 @@ pub struct Selection {
     pub point: [f64; 3],
 }
 const PICK_FILTER: &str = "model-pick-filter";
+fn edge_tool_active(w: &Workspace) -> bool {
+    w.tool_checkpoint.is_some()
+        && w.dialog.as_deref() == Some("feature")
+        && w.view
+            .active_part
+            .as_ref()
+            .and_then(|definition| {
+                let id = w.fields.get("feature-editor-id")?;
+                w.session
+                    .visible()
+                    .parts
+                    .get(definition)?
+                    .features
+                    .iter()
+                    .find(|feature| &feature.id == id)
+            })
+            .is_some_and(|feature| {
+                matches!(
+                    feature.operation,
+                    cad_core::Operation::Fillet { .. } | cad_core::Operation::Chamfer { .. }
+                )
+            })
+}
 fn pick_filter(w: &Workspace) -> &str {
     if crate::weld_beads_ui::picking_support(w) {
         "face"
     } else {
-        w.fields
+        let saved = w
+            .fields
             .get(PICK_FILTER)
             .map(String::as_str)
-            .unwrap_or("all")
+            .unwrap_or("all");
+        if edge_tool_active(w) && !matches!(saved, "all" | "edge") {
+            "edge"
+        } else {
+            saved
+        }
     }
 }
 pub fn picking_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
     use cad_core::presentation::SemanticElement;
     let mut elements = Vec::new();
     let support_pick = crate::weld_beads_ui::picking_support(w);
+    let edge_tool = edge_tool_active(w);
     let current = pick_filter(w);
     for (value, label) in [
         ("all", "All geometry"),
@@ -105,7 +135,8 @@ pub fn picking_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticE
     ] {
         let data = serde_json::json!({"contract":"tcad.model-picking","version":1,"document":w.session.visible().id,"filter":value,"geometry_changes":false});
         let mut action_data = data.clone();
-        action_data["actions"] = serde_json::json!([{"command":"viewport.pick-filter","label":label,"enabled":!support_pick,"disabled_reason":support_pick.then_some("Finish or stop picking the weld support faces to change the geometry filter"),"arguments":data}]);
+        let incompatible = edge_tool && !matches!(value, "all" | "edge");
+        action_data["actions"] = serde_json::json!([{"command":"viewport.pick-filter","label":label,"enabled":!support_pick && !incompatible,"disabled_reason":if support_pick {Some("Finish or stop picking the weld support faces to change the geometry filter")} else if incompatible {Some("This operation selects edges; use All geometry or Edges")} else {None},"arguments":data}]);
         elements.push(SemanticElement {
             id: format!("viewport.pick-filter/{value}"),
             role: "selection-filter".into(),
@@ -113,7 +144,7 @@ pub fn picking_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticE
             value: Some(value.into()),
             state: if current == value {
                 "selected"
-            } else if support_pick {
+            } else if support_pick || incompatible {
                 "disabled"
             } else {
                 "ready"
@@ -151,6 +182,10 @@ pub fn picking_action(w: &mut Workspace, command: &str, data: Option<&serde_json
             .and_then(serde_json::Value::as_str)
             .filter(|filter| matches!(*filter, "all" | "edge" | "face" | "reference"))
         {
+            if edge_tool_active(w) && !matches!(filter, "all" | "edge") {
+                w.status = "This operation selects edges; use All geometry or Edges".into();
+                return true;
+            }
             w.fields.insert(PICK_FILTER.into(), filter.into());
             w.candidates.clear();
             w.candidate_index = 0;
@@ -171,24 +206,9 @@ pub fn picking_action(w: &mut Workspace, command: &str, data: Option<&serde_json
     true
 }
 fn candidate_label(w: &Workspace, candidate: &Selection) -> String {
-    let mut owner = w.session.visible().root.as_str();
-    let mut names = Vec::new();
-    for id in &candidate.path {
-        if let Some(instance) = w
-            .session
-            .visible()
-            .assemblies
-            .get(owner)
-            .and_then(|assembly| assembly.instances.get(id))
-        {
-            names.push(instance.name.as_str());
-            owner = &instance.definition;
-        }
-    }
-    if names.is_empty() {
-        names.push(&candidate.name);
-    }
-    format!("{} · {}", names.join(" › "), candidate.reference.topology)
+    let name = cad_core::occurrence_names::path(w.session.visible(), &candidate.path)
+        .unwrap_or_else(|| candidate.name.clone());
+    format!("{} · {}", name, candidate.reference.topology)
 }
 pub fn picking_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     let current = pick_filter(w);
@@ -2377,6 +2397,15 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
         let (Some(a), Some(b)) = (project(w, rect, origin), project(w, rect, end)) else {
             continue;
         };
+        // Keep model-space pitch authoritative while drawing a compact direction cue.
+        let vector = b - a;
+        if vector.length_sq() < 1e-6 || !rect.contains(a) {
+            continue;
+        }
+        let maximum = crate::presentation_controls::number(&props, "max-width", 96.)
+            .max(16.)
+            .min(rect.width().min(rect.height()) * 0.25);
+        let b = a + vector.normalized() * vector.length().min(maximum);
         let color = props
             .get("color")
             .and_then(|color| crate::ui::color(color))

@@ -1117,7 +1117,7 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
         }
         if draft.pending
             || !draft.evaluation.as_ref().is_some_and(|evaluation| {
-                evaluation.valid && evaluation.identity == w.session.identity()
+                evaluation.valid && evaluation.identity == crate::source_cache::identity(w)
             })
         {
             return Some("A current validated preview is required");
@@ -1148,7 +1148,12 @@ fn publish_available(w: &Workspace) -> bool {
 }
 
 pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
-    ui.horizontal(|ui| {
+    let viewport_width = ui.available_width();
+    egui::ScrollArea::horizontal()
+        .id_salt("cad-main-menu-overflow")
+        .auto_shrink([false, true])
+        .show(ui, |ui| { ui.horizontal(|ui| {
+        let row_start = ui.cursor().min.x;
         ui.label(RichText::new("TCAD").strong());
         menu_button(ui, "File", |ui| {
             for (label, command) in [
@@ -1296,7 +1301,8 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
         });
         menu_button(ui, "Workspace", |ui| {
             for (label, command) in [
-                ("Layout and Theme…", "presentation"),
+                ("Choose Theme…", "settings.themes"),
+                ("Advanced Layout and Style…", "presentation"),
                 ("Versions…", "versions"),
                 ("Git Repositories…", "repositories"),
                 ("Git Connections…", "git-connections"),
@@ -1314,18 +1320,24 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         });
         ui.separator();
-        let dirty = w.session.committed.fingerprint() != w.saved_source
-            || w.session.draft.is_some()
-            || w.sketch.is_some();
-        ui.label(
+        let dirty = w.session.draft.is_some()
+            || w.sketch.is_some()
+            || crate::source_cache::identity(w).source != w.saved_source;
+        let title_width = (viewport_width * 0.25).clamp(80., 240.);
+        ui.add_sized(egui::vec2(title_width, ui.spacing().interact_size.y), egui::Label::new(
             RichText::new(format!(
                 "{}{}",
                 w.session.visible().name,
                 if dirty { " *" } else { "" }
             ))
             .strong(),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ).truncate()).on_hover_text(&w.session.visible().name);
+        // Keep the actions at the far end on a wide workspace, while allowing
+        // the complete native menu row to scroll on small/high-scale windows.
+        let actions_id = ui.make_persistent_id("cad-main-menu-actions-width");
+        let actions_width = ui.data(|data| data.get_temp::<f32>(actions_id)).unwrap_or(260.);
+        ui.add_space((viewport_width - (ui.cursor().min.x - row_start) - actions_width).max(0.));
+        let actions = ui.horizontal(|ui| {
             if command_button(ui, "commands", "Find a command  ⌘K", true).clicked() {
                 w.open_editor("commands");
             }
@@ -1341,62 +1353,77 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ui::action(w, "file.publish");
             }
         });
+        ui.data_mut(|data| data.insert_temp(actions_id, actions.response.rect.width()));
+    });
     });
 }
 pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
-    ui.horizontal(|ui| {
-        for tab in [
-            "Features", "Sketch", "Assembly", "Drawing", "Evaluate", "Graph",
-        ] {
-            if controls::selectable(
-                ui,
-                &format!("command-tab/{}", tab.to_lowercase()),
-                "command-tab",
-                tab,
-                w.command_tab == tab,
-            )
-            .clicked()
-            {
-                presentation_action(
-                    w,
-                    &format!("presentation.command-tab.{}", tab.to_lowercase()),
-                );
-            }
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            menu_button(ui, "Size", |ui| {
-                if menu_action(ui, "presentation.compact", "Compact", true).clicked() {
-                    w.view.ui_scale = 1.;
-                    w.view.toolbar_height = 68.;
-                    resize_toolbar(w);
-                    crate::settings::save_live_application(w);
-                    ui.close();
-                }
-                if menu_action(ui, "presentation.comfortable", "Comfortable", true).clicked() {
-                    w.view.ui_scale = 1.15;
-                    w.view.toolbar_height = 80.;
-                    resize_toolbar(w);
-                    crate::settings::save_live_application(w);
-                    ui.close();
-                }
-                if ui
-                    .add(egui::Slider::new(&mut w.view.ui_scale, 0.75..=1.5).text("UI scale"))
-                    .changed()
-                {
-                    crate::settings::save_live_application(w);
-                }
-                if ui
-                    .add(
-                        egui::Slider::new(&mut w.view.toolbar_height, 60.0..=130.0)
-                            .text("Toolbar height"),
+    let viewport_width = ui.available_width();
+    egui::ScrollArea::horizontal()
+        .id_salt("cad-command-tabs-overflow")
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let row_start = ui.cursor().min.x;
+                for tab in [
+                    "Features", "Sketch", "Assembly", "Drawing", "Evaluate", "Graph",
+                ] {
+                    if controls::selectable(
+                        ui,
+                        &format!("command-tab/{}", tab.to_lowercase()),
+                        "command-tab",
+                        tab,
+                        w.command_tab == tab,
                     )
-                    .changed()
-                {
-                    resize_toolbar(w);
+                    .clicked()
+                    {
+                        presentation_action(
+                            w,
+                            &format!("presentation.command-tab.{}", tab.to_lowercase()),
+                        );
+                    }
                 }
+                ui.add_space((viewport_width - (ui.cursor().min.x - row_start) - 70.).max(0.));
+                ui.horizontal(|ui| {
+                    menu_button(ui, "Size", |ui| {
+                        if menu_action(ui, "presentation.compact", "Compact", true).clicked() {
+                            w.view.ui_scale = 1.;
+                            w.view.toolbar_height = 68.;
+                            resize_toolbar(w);
+                            crate::settings::save_live_application(w);
+                            ui.close();
+                        }
+                        if menu_action(ui, "presentation.comfortable", "Comfortable", true)
+                            .clicked()
+                        {
+                            w.view.ui_scale = 1.15;
+                            w.view.toolbar_height = 80.;
+                            resize_toolbar(w);
+                            crate::settings::save_live_application(w);
+                            ui.close();
+                        }
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut w.view.ui_scale, 0.75..=1.5)
+                                    .text("UI scale"),
+                            )
+                            .changed()
+                        {
+                            crate::settings::save_live_application(w);
+                        }
+                        if ui
+                            .add(
+                                egui::Slider::new(&mut w.view.toolbar_height, 60.0..=130.0)
+                                    .text("Toolbar height"),
+                            )
+                            .changed()
+                        {
+                            resize_toolbar(w);
+                        }
+                    });
+                });
             });
         });
-    });
     let sketching = w.sketch.is_some();
     let blocked = w.tool_checkpoint.is_some() && !sketching;
     let tab = w.command_tab.clone();
@@ -2023,7 +2050,15 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                             .get(&effective.material)
                             .map(|m| m.name.as_str())
                             .unwrap_or("Unassigned");
-                        let response = ui.small_button(format!("Material: {material}"));
+                        let response = controls::button(
+                            ui,
+                            &format!("{}::material", part.id),
+                            "material-assignment",
+                            &["feature-tree-row"],
+                            &format!("Material: {material}"),
+                            w.tool_checkpoint.is_none(),
+                            false,
+                        );
                         if response.clicked() {
                             crate::selection_ui::object_selected(
                                 w,
@@ -2033,6 +2068,8 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                                     role: "material".into(),
                                 },
                             );
+                            w.view.active_part = Some(part.id.clone());
+                            crate::materials_ui::begin(w);
                         }
                         let finish = doc
                             .finishes

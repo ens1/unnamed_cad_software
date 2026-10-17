@@ -19,13 +19,14 @@ pub use paper_cache::PaperWorker;
 
 #[derive(Clone, PartialEq)]
 struct BuildKey {
-    stamp: (u64, u64, Option<(Id, u64)>),
+    stamp: (Id, u64, u64, Option<(Id, u64)>),
     backend: String,
     source: Drawing,
     page: u32,
 }
-fn document_stamp(w: &Workspace) -> (u64, u64, Option<(Id, u64)>) {
+fn document_stamp(w: &Workspace) -> (Id, u64, u64, Option<(Id, u64)>) {
     (
+        w.session.source_epoch().into(),
         w.session.generation,
         w.session.committed.revision,
         w.session
@@ -151,7 +152,7 @@ fn current_native(w: &Workspace) -> Option<&Evaluation> {
         .as_ref()
         .and_then(|d| d.evaluation.as_ref())
         .or(w.session.evaluation.as_ref())
-        .filter(|e| (e.valid || e.geometry_valid) && e.identity == w.session.identity())
+        .filter(|e| (e.valid || e.geometry_valid) && e.identity == crate::source_cache::identity(w))
 }
 fn session_native(session: &Session) -> Option<&Evaluation> {
     session
@@ -1955,7 +1956,7 @@ fn click_reference(
                 point: hit.model_point,
                 reference: Some(hit.point.clone()),
             };
-            let action = Action::CreateDimension {
+            let mut action = Action::CreateDimension {
                 view: hit.view.clone(),
                 kind,
                 first: Box::new(make(&first)),
@@ -1969,6 +1970,12 @@ fn click_reference(
                 second_curve: edge_separation.then_some(hit.curve).flatten().map(Box::new),
                 offset_mm: 8.,
             };
+            interaction::place_created_dimension(
+                w.session.visible(),
+                &cache.evaluation,
+                source,
+                &mut action,
+            )?;
             apply(w, state, &action)?;
             state.tool = Tool::Dimension { first: None };
             let hint = format!(
@@ -2396,9 +2403,26 @@ pub fn frame(
                 .unwrap_or(accent);
             let p = at(paper, scale, handle.at_mm);
             let rect = Rect::from_center_size(p, egui::Vec2::splat(size * 1.8));
-            painter.circle_filled(p, size * 0.55, color);
+            if handle.kind == HandleKind::DimensionOffset {
+                painter.rect_filled(
+                    Rect::from_center_size(p, egui::vec2(size * 1.6, size)),
+                    controls::number(&properties, "border-radius", size * 0.2)
+                        .clamp(0., size * 0.5),
+                    color,
+                );
+                painter.line_segment(
+                    [
+                        p - egui::vec2(size * 0.45, 0.),
+                        p + egui::vec2(size * 0.45, 0.),
+                    ],
+                    Stroke::new(1., ui.visuals().extreme_bg_color),
+                );
+            } else {
+                painter.circle_filled(p, size * 0.55, color);
+            }
             if over && pointer.is_some_and(|point| rect.contains(point)) {
                 hovered_handle = Some((target.clone(), handle.clone()));
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
             }
         }
     }
@@ -2447,8 +2471,32 @@ pub fn frame(
         let hit = interaction::hit(&scene, point, 6. / scale as f64).cloned();
         state.hover = hit.as_ref().map(|h| h.target.clone());
         if response.drag_started() && matches!(state.tool, Tool::Select) {
-            if let Some((target, handle)) = hovered_handle.clone().or_else(|| {
-                hit.as_ref().and_then(|target| {
+            // Resolve at the press origin: by the time egui recognizes a drag,
+            // the pointer can already be outside a small label/offset handle.
+            let press_pointer = ui
+                .input(|input| input.pointer.press_origin())
+                .unwrap_or(pointer);
+            let press_point = paper_point(paper, scale, press_pointer);
+            let press_handle = selected(&state)
+                .and_then(|selected| {
+                    scene
+                        .targets
+                        .iter()
+                        .find(|target| &target.target == selected)
+                })
+                .and_then(|target| {
+                    target
+                        .handles
+                        .iter()
+                        .find(|handle| {
+                            at(paper, scale, handle.at_mm).distance(press_pointer)
+                                <= handle_size * 1.2
+                        })
+                        .map(|handle| (target.clone(), handle.clone()))
+                });
+            let press_hit = interaction::hit(&scene, press_point, 6. / scale as f64);
+            if let Some((target, handle)) = press_handle.or_else(|| {
+                press_hit.and_then(|target| {
                     target
                         .handles
                         .iter()
@@ -2457,7 +2505,7 @@ pub fn frame(
                         })
                         .map(|handle| {
                             let mut handle = handle.clone();
-                            handle.at_mm = point;
+                            handle.at_mm = press_point;
                             (target.clone(), handle)
                         })
                 })
@@ -2471,7 +2519,7 @@ pub fn frame(
                         page: page(w),
                         target: &target,
                         handle,
-                        pointer,
+                        pointer: press_pointer,
                         viewport_id,
                         viewport,
                         paper,

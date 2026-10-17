@@ -24,6 +24,7 @@ pub enum Column {
     Description,
     Section,
     Length,
+    LengthBasis,
     StartCutAngle,
     EndCutAngle,
     Quantity,
@@ -50,6 +51,7 @@ impl Column {
             Self::Description => "Member",
             Self::Section => "Section",
             Self::Length => "Length",
+            Self::LengthBasis => "Length basis",
             Self::StartCutAngle => "Start angle",
             Self::EndCutAngle => "Finish angle",
             Self::Quantity => "Qty",
@@ -66,6 +68,25 @@ impl Column {
             Self::Thickness => "Thickness",
             Self::StockBounds => "Stock bounds",
             Self::Manufacturing { field } => field.label(),
+        }
+    }
+    /// Export headings carry units; the compact column-picker labels remain
+    /// independent of a drawing's selected display units.
+    pub fn heading(&self, units: crate::drawing::Units) -> String {
+        let unit = if units == crate::drawing::Units::Inches {
+            "in"
+        } else {
+            "mm"
+        };
+        match self {
+            Self::Length => format!("Length ({unit})"),
+            Self::BendRadius | Self::StockWidth | Self::StockHeight | Self::Thickness => {
+                format!("{} ({unit})", self.label())
+            }
+            Self::StartCutAngle | Self::EndCutAngle | Self::BendSweep => {
+                format!("{} (deg)", self.label())
+            }
+            _ => self.label().into(),
         }
     }
 }
@@ -87,6 +108,7 @@ pub fn column_choices() -> Vec<Column> {
         Column::Description,
         Column::Section,
         Column::Length,
+        Column::LengthBasis,
         Column::StartCutAngle,
         Column::EndCutAngle,
         Column::Quantity,
@@ -940,6 +962,14 @@ pub fn cells(
             Column::Description => row.description.clone(),
             Column::Section => crate::manufacturing::section_display(row, units, precision),
             Column::Length => length(row.length_mm),
+            Column::LengthBasis => if row.accessory.is_some() {
+                "Maximum blank dimension"
+            } else if row.bend_radius_mm.is_some() {
+                "Retained reference-path arc; not saw long/short point"
+            } else {
+                "Reference path between end planes; not saw long/short point"
+            }
+            .into(),
             Column::StartCutAngle => angle(row.start_cut_angle_rad),
             Column::EndCutAngle => angle(row.end_cut_angle_rad),
             Column::Quantity => group.quantity.to_string(),
@@ -1016,10 +1046,20 @@ pub fn csv(
     if precision > 9 {
         return Err(invalid("Use at most nine displayed decimal places"));
     }
-    let mut output = crate::bom::csv_record(options.columns.iter().map(Column::label));
+    let mut columns = options.columns.clone();
+    if let Some(index) = columns.iter().position(|column| *column == Column::Length)
+        && !columns.contains(&Column::LengthBasis)
+    {
+        columns.insert(index + 1, Column::LengthBasis);
+    }
+    let headings = columns
+        .iter()
+        .map(|column| column.heading(units))
+        .collect::<Vec<_>>();
+    let mut output = crate::bom::csv_record(headings.iter().map(String::as_str));
     for (index, row) in rows(doc, evaluation, options)?.iter().enumerate() {
         output.push_str(&crate::bom::csv_record(
-            cells(row, &options.columns, (index + 1) as u32, units, precision)
+            cells(row, &columns, (index + 1) as u32, units, precision)
                 .iter()
                 .map(String::as_str),
         ));

@@ -24,8 +24,9 @@ pub struct State {
 }
 fn key(w: &Workspace) -> String {
     format!(
-        "{}:{}:{}:{:?}",
+        "{}:{}:{}:{}:{:?}",
         w.session.visible().id,
+        w.session.source_epoch(),
         w.session.generation,
         w.session.committed.revision,
         w.session.draft.as_ref().map(|d| (&d.id, d.edit))
@@ -39,6 +40,7 @@ fn build(doc: &Document, owner: &str, path: &[Id], active: &[Vec<Id>], depth: us
         return vec![];
     };
     let mut ordinary = Vec::new();
+    let names = cad_core::occurrence_names::siblings(doc, owner);
     let mut groups = std::collections::BTreeMap::<Id, Node>::new();
     for instance in assembly.instances.values() {
         let mut path = path.to_vec();
@@ -49,7 +51,10 @@ fn build(doc: &Document, owner: &str, path: &[Id], active: &[Vec<Id>], depth: us
         let is_assembly = doc.assemblies.contains_key(&instance.definition);
         let node = Node {
             id: format!("component:{}", path.join("/")),
-            name: instance.name.clone(),
+            name: names
+                .get(&instance.id)
+                .cloned()
+                .unwrap_or_else(|| instance.name.clone()),
             definition: Some(instance.definition.clone()),
             kind: if is_assembly { "assembly" } else { "part" },
             children: if is_assembly {
@@ -148,12 +153,8 @@ fn lookup<'a>(doc: &'a Document, path: &[Id]) -> Option<(&'a str, &'a Instance)>
 }
 pub fn selection_label(w: &Workspace) -> Option<String> {
     let path = w.selected_component.as_ref()?;
-    let names = (1..=path.len())
-        .filter_map(|length| {
-            lookup(w.session.visible(), &path[..length]).map(|(_, instance)| instance.name.as_str())
-        })
-        .collect::<Vec<_>>();
-    (!names.is_empty()).then(|| format!("{} · occurrence", names.join(" › ")))
+    cad_core::occurrence_names::path(w.session.visible(), path)
+        .map(|name| format!("{name} · occurrence"))
 }
 fn rename(w: &mut Workspace, path: &[Id]) {
     if w.tool_checkpoint.is_some() || w.sketch.is_some() {

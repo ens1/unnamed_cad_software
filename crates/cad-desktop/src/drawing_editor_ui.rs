@@ -12,6 +12,19 @@ const VERSION: u32 = 1;
 const ACTION: &str = "drawing-editor.action";
 const GENERATION: &str = "drawing-editor-generation";
 
+#[derive(Default)]
+pub struct Cache {
+    key: Option<Value>,
+    elements: Vec<SemanticElement>,
+    source: Option<SourceValue>,
+}
+struct SourceValue {
+    identity: cad_core::protocol::RequestIdentity,
+    sheet: Id,
+    text: Option<String>,
+    value: Value,
+}
+
 fn invalid(message: &str) -> CadError {
     CadError::Invalid(message.into())
 }
@@ -65,13 +78,15 @@ fn remove_token(w: &mut Workspace, sheet: &str, collection: &str, count: usize, 
         json!(tokens).to_string(),
     );
 }
-fn active_sheet(w: &Workspace) -> Option<Drawing> {
-    let id = w
-        .fields
+fn active_sheet_id(w: &Workspace) -> Option<&str> {
+    w.fields
         .get("drawing-active")
         .filter(|id| w.session.visible().drawings.iter().any(|s| &s.id == *id))
-        .or_else(|| w.session.visible().drawings.first().map(|s| &s.id))?;
-    crate::drawing_ui::sheet_source(w, id)
+        .or_else(|| w.session.visible().drawings.first().map(|s| &s.id))
+        .map(String::as_str)
+}
+fn active_sheet(w: &Workspace) -> Option<Drawing> {
+    crate::drawing_ui::sheet_source(w, active_sheet_id(w)?)
 }
 fn section(w: &Workspace, sheet: &Drawing) -> String {
     let requested = w
@@ -2198,6 +2213,33 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     if !crate::drawing_ui::is_workspace(w) {
         return vec![];
     }
+    let native = crate::drawing_ui::evaluation(w);
+    let key = json!({
+        "identity": crate::source_cache::identity(w),
+        "fields": w.fields.iter().filter(|(key, _)| key.starts_with("drawing-")).collect::<std::collections::BTreeMap<_, _>>(),
+        "selection": w.selected.as_ref().map(|selection| json!({"instance":selection.instance,"path":selection.path,"definition":selection.definition,"reference":selection.reference,"body":selection.body,"point":selection.point})),
+        "settings": w.settings.is_some(),
+        "checkpoint": w.tool_checkpoint.is_some(),
+        "confirmation": crate::cad_ui::confirmation_available(w),
+        "native": native.map(|e| (&e.identity, e.valid, e.geometry_valid)),
+    });
+    if let Ok(cache) = w.drawing_editor_cache.lock()
+        && cache.key.as_ref() == Some(&key)
+    {
+        return cache.elements.clone();
+    }
+    let elements = build_semantics(w);
+    if let Ok(mut cache) = w.drawing_editor_cache.lock() {
+        cache.key = Some(key);
+        cache.elements = elements.clone();
+    }
+    elements
+}
+
+fn build_semantics(w: &Workspace) -> Vec<SemanticElement> {
+    if !crate::drawing_ui::is_workspace(w) {
+        return vec![];
+    }
     let Some(sheet) = active_sheet(w) else {
         return empty_semantics(w);
     };
@@ -2431,7 +2473,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
 }
 
 fn live(w: &Workspace, element: &SemanticElement) -> Result<SemanticElement> {
-    let fresh = semantics(w)
+    let fresh = build_semantics(w)
         .into_iter()
         .find(|e| e.id == element.id)
         .ok_or_else(|| invalid("This drawing control is no longer available"))?;
@@ -2447,102 +2489,52 @@ fn live(w: &Workspace, element: &SemanticElement) -> Result<SemanticElement> {
     }
     Ok(fresh)
 }
-fn sheet_control_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
-    let transient = element.data.get("transient").and_then(Value::as_str);
-    let pointer = element.data.get("pointer").and_then(Value::as_str);
-    let key = match transient {
-        Some("sheet" | "section" | "projection" | "scale") => {
-            format!("context/{}", transient?)
-        }
-        None if matches!(
-            pointer,
-            Some(
-                "/name"
-                    | "/definition"
-                    | "/paper_mm/0"
-                    | "/paper_mm/1"
-                    | "/exploded_view"
-                    | "/display_state"
-            )
-        ) =>
-        {
-            pointer?.trim_start_matches('/').into()
-        }
-        _ => return None,
-    };
+pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
+    let sheet = active_sheet_id(w)?;
     if !crate::drawing_ui::is_workspace(w)
         || w.settings.is_some()
         || element.data["contract"] != CONTRACT
         || element.data["setter"] != "drawing-editor"
         || element.data["document"] != w.session.visible().id
         || element.data["editor"] != json!(w.fields.get(GENERATION))
+        || element.data["sheet_id"] != sheet
     {
         return None;
     }
-    let sheet = active_sheet(w)?;
-    if element.data["sheet_id"] != sheet.id
-        || element.id != format!("drawing-editor:{}/{key}", sheet.id)
-    {
-        return None;
-    }
-    let section = section(w, &sheet);
-    if transient == Some("sheet") {
-        return Some(json!(sheet.id));
-    }
-    if transient == Some("section") {
-        return Some(json!(section));
-    }
-    if matches!(
-        section.as_str(),
-        "views" | "format" | "dimensions" | "annotations" | "tables"
-    ) {
-        return None;
-    }
-    // These fields are always present in sheet controls and have fixed source
-    // addresses. Dynamic rows, conditional fields and mutations retain `live`.
-    match transient {
-        Some("projection") => {
-            let views = view_keys(&sheet);
-            Some(json!(if views == ["front", "top", "right"] {
-                "standard"
-            } else if views == ["front", "top", "right", "isometric"] {
-                "standard-isometric"
-            } else if views == ["front"] {
-                "front"
-            } else {
-                "custom"
-            }))
-        }
-        Some("scale") => Some(json!(
-            sheet
-                .view_layouts
-                .get("front")
-                .and_then(|layout| layout.scale)
-        )),
-        None => match pointer? {
-            "/name" => Some(json!(sheet.name)),
-            "/definition" => Some(json!(sheet.definition)),
-            "/paper_mm/0" => Some(json!(sheet.paper_mm[0])),
-            "/paper_mm/1" => Some(json!(sheet.paper_mm[1])),
-            "/exploded_view" => Some(json!(sheet.exploded_view)),
-            "/display_state" => Some(json!(sheet.display_state)),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
-    if let Some(value) = sheet_control_value(w, element) {
-        return Some(value);
-    }
-    let element = live(w, element).ok()?;
     if element.data.get("transient").is_some() {
-        return Some(element.data["json"].clone());
+        return semantics(w)
+            .into_iter()
+            .find(|current| current.id == element.id)
+            .map(|current| current.data["json"].clone());
     }
-    let sheet = crate::drawing_ui::sheet_source(w, element.data.get("sheet_id")?.as_str()?)?;
-    let source = json!(sheet);
-    let value = source
-        .pointer(element.data.get("pointer")?.as_str()?)
+    let identity = crate::source_cache::identity(w);
+    let text = w.fields.get(&format!("drawing-editor:{sheet}"));
+    let mut cache = w.drawing_editor_cache.lock().ok()?;
+    if !cache.source.as_ref().is_some_and(|source| {
+        source.identity == identity && source.sheet == sheet && source.text.as_ref() == text
+    }) {
+        let value = if let Some(text) = text {
+            serde_json::from_str::<Value>(text).ok()?
+        } else {
+            json!(
+                w.session
+                    .visible()
+                    .drawings
+                    .iter()
+                    .find(|source| source.id == sheet)?
+            )
+        };
+        cache.source = Some(SourceValue {
+            identity,
+            sheet: sheet.into(),
+            text: text.cloned(),
+            value,
+        });
+    }
+    // Read stable object/slot addresses directly from one current source image.
+    // Actual edits still regenerate the projection through `live` before dispatch.
+    let source = &cache.source.as_ref()?.value;
+    let value = resolve_address(w, sheet, source, element.data.get("address")?)
         .cloned()
         .unwrap_or_else(|| {
             element
@@ -2575,6 +2567,7 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
         Some(value)
     }
 }
+
 fn set_at(source: &mut Value, path: &str, value: Value) -> Result<()> {
     let (parent, key) = path
         .rsplit_once('/')
@@ -3041,7 +3034,7 @@ fn create_dimension(w: &Workspace, sheet: &Drawing, kind: &str) -> Result<Drawin
                 })
         })
         .map(|s| s.reference.producer.clone());
-    Ok(DrawingDimension {
+    let mut dimension = DrawingDimension {
         id: cad_core::id(),
         view: selected_view(sheet),
         first: [0.; 3],
@@ -3058,7 +3051,16 @@ fn create_dimension(w: &Workspace, sheet: &Drawing, kind: &str) -> Result<Drawin
             third_point: [0., 0., 50.],
             ..Default::default()
         },
-    })
+    };
+    if let Some(evaluation) = crate::drawing_ui::evaluation(w) {
+        let _ = cad_core::drawing_interaction::place_dimension_outside(
+            w.session.visible(),
+            evaluation,
+            sheet,
+            &mut dimension,
+        );
+    }
+    Ok(dimension)
 }
 fn create_annotation(w: &Workspace, sheet: &Drawing, kind: &str) -> Result<Annotation> {
     let target = crate::drawing_ui::selected_anchor(w);

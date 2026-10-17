@@ -754,6 +754,73 @@ fn consuming_closure(part: &Part) -> std::collections::BTreeSet<Id> {
 }
 impl Session {
     pub fn dispatch(&mut self, command: Command) -> Result<()> {
-        self.edit(|d| command.execute(d))
+        self.last_dispatch_reused_evaluation = false;
+        let metadata_only = match &command {
+            Command::PutInstance { assembly, instance } => self
+                .visible()
+                .assemblies
+                .get(assembly)
+                .and_then(|assembly| assembly.instances.get(&instance.id))
+                .is_some_and(|previous| {
+                    let mut renamed = previous.clone();
+                    renamed.name = instance.name.clone();
+                    previous.name != instance.name && renamed == *instance
+                }),
+            Command::SetModelSettings { settings } => {
+                let previous = &self.visible().settings;
+                let mut reporting_only = previous.clone();
+                reporting_only.production = settings.production.clone();
+                previous.production != settings.production && reporting_only == *settings
+            }
+            _ => false,
+        };
+        // Occurrence names and production table preferences cannot change
+        // geometry. Reuse only an exact current validated result; pending,
+        // stale and invalid drafts always take the worker path.
+        let had_draft = self.draft.is_some();
+        let evaluation = metadata_only
+            .then(|| {
+                let identity = self.identity();
+                self.draft
+                    .as_ref()
+                    .and_then(|draft| (!draft.pending).then_some(draft))
+                    .and_then(|draft| draft.evaluation.as_ref())
+                    .or_else(|| {
+                        self.draft
+                            .is_none()
+                            .then_some(self.evaluation.as_ref())
+                            .flatten()
+                    })
+                    .filter(|evaluation| evaluation.valid && evaluation.identity == identity)
+                    .cloned()
+            })
+            .flatten();
+        self.edit(|d| command.execute(d))?;
+        if let Some(mut evaluation) = evaluation {
+            evaluation.identity = self.identity();
+            evaluation.elapsed_ms = 0;
+            if !had_draft {
+                evaluation.operation_preview = None;
+            }
+            for instance in &mut evaluation.instances {
+                if let Some(name) = crate::occurrence_names::path(self.visible(), &instance.path) {
+                    instance.name = name;
+                }
+            }
+            for report in evaluation.assembly_inspections.values_mut() {
+                for occurrence in &mut report.occurrences {
+                    if let Some(name) = crate::occurrence_names::path_from(
+                        self.visible(),
+                        &report.assembly,
+                        &occurrence.target.path,
+                    ) {
+                        occurrence.name = name;
+                    }
+                }
+            }
+            self.accept(evaluation);
+            self.last_dispatch_reused_evaluation = true;
+        }
+        Ok(())
     }
 }

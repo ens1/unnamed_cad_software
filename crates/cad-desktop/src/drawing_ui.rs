@@ -9,7 +9,7 @@ pub(crate) fn evaluation(w: &Workspace) -> Option<&cad_core::protocol::Evaluatio
         .as_ref()
         .and_then(|d| d.evaluation.as_ref())
         .or(w.session.evaluation.as_ref())
-        .filter(|e| (e.valid || e.geometry_valid) && e.identity == w.session.identity())
+        .filter(|e| (e.valid || e.geometry_valid) && e.identity == crate::source_cache::identity(w))
 }
 /// Paper controls use the represented model's local placements, independently
 /// of the part/component currently displayed in the 3D workspace.

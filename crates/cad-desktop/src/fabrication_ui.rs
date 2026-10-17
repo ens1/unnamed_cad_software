@@ -485,6 +485,9 @@ pub(crate) fn sheet_attachment_choices(
     choices
 }
 pub(crate) fn sheet_target(w: &Workspace, stock: &Stock) -> Option<(String, Option<NodeRef>)> {
+    if let Some(target) = crate::fabrication_sources_ui::picked_attachment(w, stock) {
+        return Some(target);
+    }
     let terminal = |source: &NodeRef| {
         stock.flanges.iter().find(|flange| {
             &flange.source == source
@@ -494,26 +497,24 @@ pub(crate) fn sheet_target(w: &Workspace, stock: &Stock) -> Option<(String, Opti
                     .any(|child| child.attachment.as_ref() == Some(source))
         })
     };
-    let model_terminal = crate::fabrication_sources_ui::picked_terminal(w, stock);
-    let explicit = model_terminal
-        .or_else(|| match w.context_selection.as_ref() {
-            Some(cad_core::selection_actions::SelectionTarget::Feature {
-                definition,
-                feature,
-            }) => Some(NodeRef {
-                definition: definition.clone(),
-                node: feature.clone(),
-            }),
-            _ => None,
-        })
-        .or_else(|| {
-            w.selected_feature_path.as_ref().and_then(|_| {
-                Some(NodeRef {
-                    definition: w.view.active_part.clone()?,
-                    node: w.view.active_node.clone()?,
-                })
+    let explicit = match w.context_selection.as_ref() {
+        Some(cad_core::selection_actions::SelectionTarget::Feature {
+            definition,
+            feature,
+        }) => Some(NodeRef {
+            definition: definition.clone(),
+            node: feature.clone(),
+        }),
+        _ => None,
+    }
+    .or_else(|| {
+        w.selected_feature_path.as_ref().and_then(|_| {
+            Some(NodeRef {
+                definition: w.view.active_part.clone()?,
+                node: w.view.active_node.clone()?,
             })
-        });
+        })
+    });
     if let Some(flange) = explicit.as_ref().and_then(terminal) {
         return Some((flange.member.clone(), Some(flange.source.clone())));
     }
@@ -673,6 +674,13 @@ pub fn preset(w: &mut Workspace, name: &str) {
                     return;
                 }
             };
+            if w.selected.as_ref().is_some_and(|pick| {
+                pick.reference.topology == "edge" && pick.body.as_ref() == Some(&body)
+            }) && crate::fabrication_sources_ui::picked_attachment(w, &stock).is_none()
+            {
+                w.status = "The selected edge is not an unused base edge or a free full-width terminal. Select a suitable sheet edge, or clear the selection to choose a named source.".into();
+                return;
+            }
             let Some((member, attachment)) = sheet_target(w, &stock) else {
                 w.status =
                     "Select an unused supporting base edge or an available terminal flange edge"

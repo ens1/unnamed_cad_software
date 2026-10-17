@@ -10,10 +10,12 @@ use std::{
     path::{Path, PathBuf},
 };
 mod snapshot_integrity;
+mod update_summary;
 pub use snapshot_integrity::{
     SnapshotProof, finish_is_pinned, hydrate_pins, material_is_pinned, replace_command, semantic,
     validate_replacement, validate_verified_replacement, verified_source,
 };
+use update_summary::engineering_changes;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ComponentLink {
@@ -595,6 +597,7 @@ fn link_snapshot(
     );
     if old.is_none() {
         let instance = id();
+        let name = crate::occurrence_names::insertion(doc, &doc.root, &name);
         let assembly = doc
             .assemblies
             .get_mut(&doc.root)
@@ -1275,9 +1278,21 @@ pub struct AffectedOccurrence {
     pub instance: Id,
     pub name: String,
     pub definition: Id,
+    #[serde(default)]
+    pub paths: Vec<Vec<Id>>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentUpdateImpact {
+    #[serde(default)]
+    pub component_name: String,
+    #[serde(default)]
+    pub source_path: String,
+    #[serde(default)]
+    pub revision_before: u64,
+    #[serde(default)]
+    pub revision_after: u64,
+    #[serde(default)]
+    pub engineering_changes: Vec<String>,
     pub source_before: String,
     pub source_after: String,
     pub changed_definitions: Vec<Id>,
@@ -1340,7 +1355,13 @@ pub fn update_impact(
     }
     let mut occurrences = BTreeMap::new();
     let mut mates = BTreeSet::new();
-    for assembly in before.assemblies.values().chain(after.assemblies.values()) {
+    for (document, assembly) in before
+        .assemblies
+        .values()
+        .map(|assembly| (before, assembly))
+        .chain(after.assemblies.values().map(|assembly| (after, assembly)))
+    {
+        let names = crate::occurrence_names::siblings(document, &assembly.id);
         let instance_ids = assembly
             .instances
             .values()
@@ -1351,8 +1372,12 @@ pub fn update_impact(
                     AffectedOccurrence {
                         assembly: assembly.id.clone(),
                         instance: instance.id.clone(),
-                        name: instance.name.clone(),
+                        name: names
+                            .get(&instance.id)
+                            .cloned()
+                            .unwrap_or_else(|| instance.name.clone()),
                         definition: instance.definition.clone(),
+                        paths: Vec::new(),
                     },
                 );
                 instance.id.clone()
@@ -1367,6 +1392,32 @@ pub fn update_impact(
                 })
                 .map(|mate| mate.id.clone()),
         );
+    }
+    // Include complete root-relative paths, including repeated nested uses.
+    // Update impact concerns definition-local occurrences; paths explain every
+    // physical use of those occurrences in the receiving assembly.
+    for document in [before, after] {
+        for placed in document.placed_parts()? {
+            let mut owner = document.root.as_str();
+            for (index, component) in placed.path.iter().enumerate() {
+                if let Some(occurrence) =
+                    occurrences.get_mut(&(owner.to_string(), component.clone()))
+                {
+                    let path = placed.path[..=index].to_vec();
+                    if !occurrence.paths.contains(&path) {
+                        occurrence.paths.push(path);
+                    }
+                }
+                let Some(instance) = document
+                    .assemblies
+                    .get(owner)
+                    .and_then(|assembly| assembly.instances.get(component))
+                else {
+                    break;
+                };
+                owner = &instance.definition;
+            }
+        }
     }
     let drawings = before
         .drawings
@@ -1404,6 +1455,11 @@ pub fn update_impact(
             })
     };
     Ok(ComponentUpdateImpact {
+        component_name: crate::occurrence_names::definition(after, &new.definition),
+        source_path: new.source_path.clone(),
+        revision_before: old.source_revision,
+        revision_after: new.source_revision,
+        engineering_changes: engineering_changes(before, after, old, new),
         source_before: label(old),
         source_after: label(new),
         changed_definitions,

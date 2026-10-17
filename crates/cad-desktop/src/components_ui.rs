@@ -165,7 +165,17 @@ fn preview_definition(w: &mut Workspace, definition: &str) -> Result<()> {
         .get("component-insert-id")
         .cloned()
         .unwrap_or_else(id);
-    let name = presentation::definition_name(&document, definition);
+    let name = prior
+        .as_ref()
+        .filter(|instance| instance.definition == definition)
+        .map(|instance| instance.name.clone())
+        .unwrap_or_else(|| {
+            cad_core::occurrence_names::insertion(
+                &document,
+                &owner,
+                &presentation::definition_name(&document, definition),
+            )
+        });
     let parent = document
         .assemblies
         .get_mut(&owner)

@@ -387,7 +387,7 @@ impl Registry {
 
 /// One snapshot supplies the native workspace, binding catalog and user templates.
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
-    let mut elements = cad_core::presentation::project(&w.session, w.view.active_part.as_deref());
+    let mut elements = crate::source_cache::project(w);
     elements.extend(crate::readme_preview_ui::semantics(w));
     elements.extend(crate::component_fork_ui::semantics(w));
     elements.extend(crate::feature_transfer_ui::semantics(w));
@@ -826,7 +826,12 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> serde_json::Va
         .unwrap_or_else(|| element.value_descriptor().value)
 }
 
-fn value_adapters() -> ValueAdapters {
+fn value_adapters() -> &'static ValueAdapters {
+    static ADAPTERS: std::sync::OnceLock<ValueAdapters> = std::sync::OnceLock::new();
+    ADAPTERS.get_or_init(build_value_adapters)
+}
+
+fn build_value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
     adapters.register(
         "readme-preview",
@@ -1066,10 +1071,7 @@ fn value_adapters() -> ValueAdapters {
         crate::drawing_ui::current_value,
     );
     adapters.register("document-pointer", set_document_field, |w, element| {
-        serde_json::to_value(w.session.visible())
-            .ok()?
-            .pointer(element.data.get("pointer")?.as_str()?)
-            .cloned()
+        crate::source_cache::value(w, element.data.get("pointer")?.as_str()?)
     });
     adapters.register("sketch-dimension", set_dimension_field, |w, element| {
         let constraint = w.sketch.as_ref()?.constraints.iter().find(|constraint| {
@@ -1173,8 +1175,11 @@ fn set_document_field(
     element: &SemanticElement,
     value: serde_json::Value,
 ) -> cad_core::Result<()> {
-    let mut current_elements =
-        cad_core::presentation::project(&w.session, w.view.active_part.as_deref());
+    let mut current_elements = cad_core::presentation::project_with_identity(
+        &w.session,
+        w.view.active_part.as_deref(),
+        &crate::source_cache::identity(w),
+    );
     active_fields(w, &mut current_elements);
     let current = current_elements
         .iter()

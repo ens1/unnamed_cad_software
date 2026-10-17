@@ -91,7 +91,8 @@ fn source_revision(w: &Workspace) -> Value {
         w.session
             .draft
             .as_ref()
-            .map(|draft| (&draft.id, draft.edit))
+            .map(|draft| (&draft.id, draft.edit)),
+        w.session.source_epoch()
     ])
 }
 fn record_digest(material: &Material) -> Option<String> {
@@ -1619,6 +1620,16 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         begin(w);
     }
     cad_ui::confirmation(ui, w);
+    if w.fields.contains_key("appearance-tool") {
+        controls::label(
+            ui,
+            "material:shared-draft",
+            "material-description",
+            &[],
+            "Material and appearance changes share this edit. Apply saves both; Cancel discards both.",
+            "ready",
+        );
+    }
     controls::label(
         ui,
         "material:independence",

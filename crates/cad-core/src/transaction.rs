@@ -29,8 +29,15 @@ pub struct Session {
     pub draft: Option<Draft>,
     undo: Vec<Document>,
     redo: Vec<Document>,
+    /// Disposable source identity for presentation caches. Clones retain their
+    /// snapshot identity; every new edit gets a fresh token, including edits
+    /// made after restoring an earlier checkpoint with the same draft counter.
+    source_epoch: Id,
     pub generation: u64,
     pub backend: String,
+    /// Set only by a successful metadata-only command over a current validated
+    /// evaluation. The desktop can avoid scheduling an unnecessary worker job.
+    pub last_dispatch_reused_evaluation: bool,
 }
 impl Session {
     pub fn new(document: Document, backend: &str) -> Self {
@@ -40,8 +47,10 @@ impl Session {
             draft: None,
             undo: vec![],
             redo: vec![],
+            source_epoch: crate::id(),
             generation: 1,
             backend: backend.into(),
+            last_dispatch_reused_evaluation: false,
         }
     }
     pub fn visible(&self) -> &Document {
@@ -50,7 +59,11 @@ impl Session {
             .map(|d| &d.document)
             .unwrap_or(&self.committed)
     }
+    pub fn source_epoch(&self) -> &str {
+        &self.source_epoch
+    }
     pub fn edit(&mut self, change: impl FnOnce(&mut Document) -> Result<()>) -> Result<()> {
+        self.last_dispatch_reused_evaluation = false;
         let mut d = self.draft.clone().unwrap_or(Draft {
             id: crate::id(),
             base_revision: self.committed.revision,
@@ -70,6 +83,7 @@ impl Session {
         }
         d.error = None;
         self.draft = Some(d);
+        self.source_epoch = crate::id();
         Ok(())
     }
     pub fn identity(&self) -> RequestIdentity {
@@ -153,12 +167,14 @@ impl Session {
         self.committed = doc;
         let mut e = evaluation;
         self.draft = None;
+        self.source_epoch = crate::id();
         e.identity = self.identity();
         self.evaluation = Some(e);
         Ok(())
     }
     pub fn cancel(&mut self) {
         self.draft = None;
+        self.source_epoch = crate::id();
     }
     pub fn undo(&mut self) -> bool {
         if let Some(previous) = self.undo.pop() {
@@ -168,6 +184,7 @@ impl Session {
             self.committed = previous;
             self.committed.revision = next;
             self.evaluation = None;
+            self.source_epoch = crate::id();
             true
         } else {
             false
@@ -181,6 +198,7 @@ impl Session {
             self.committed = next;
             self.committed.revision = revision;
             self.evaluation = None;
+            self.source_epoch = crate::id();
             true
         } else {
             false

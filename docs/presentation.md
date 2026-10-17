@@ -554,3 +554,34 @@ Heading styles control its background, text, padding, size, border and shape.
 Divider styles use `color`, `stroke-width` and `height`; `display: none` or
 `visibility: hidden` suppresses a decoration. Container paint stays on the
 section frame and does not recolor the input fields or buttons it contains.
+
+## Presentation read caches
+
+The native adapter reuses the session-owned semantic projection and a serialized
+source image while its document, backend, evaluation and session source identity
+remain current. Editor projections are composed separately, so selection,
+pending text, focus, Settings and confirmation state remain live. Registered
+field adapters are initialized once; fields do not rebuild the registration
+table or serialize the complete CAD document on each read.
+
+`Session::source_epoch()` is a disposable token, never saved in the CAD file.
+Each successful source edit, Apply, Cancel, Undo and Redo gives it a new identity.
+Cloning a checkpoint preserves the token for that exact snapshot. Editing a
+restored checkpoint creates a new token even when its draft ID and edit counter
+repeat an earlier state. This lets display adapters reuse the exact source hash
+without confusing two different versions of the same draft counter. Worker
+result checks still compare the complete request identity and source hash.
+
+Drawing controls share one current projection and one current sheet source image.
+Fields read stable object and collection-slot addresses; mutations reconstruct
+the current controls and validate their document, sheet and editor identity.
+Apply continues to require the current validated native evaluation.
+
+BOM and cut-list views share a source-derived report generated on one background
+thread. At most one report job runs at a time; intermediate changes coalesce into
+the latest source. A report is admitted only for its exact document/source and
+current native-evaluation availability. While it is pending, the presentation
+publishes `production-report-status` instead of old rows. Rows retain their
+existing semantic identities and their exact source hash. Errors publish
+`production-error`. The default panel and custom layouts consume the same rows;
+the cache does not authorize source mutations, Apply or export.

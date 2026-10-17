@@ -87,6 +87,7 @@ mod sketch_issues_ui;
 mod sketch_overlay;
 mod sketch_relations_ui;
 mod sketch_ui;
+mod source_cache;
 mod split_ui;
 mod standard_parts_ui;
 mod structural_member_ui;
@@ -164,6 +165,9 @@ pub struct Workspace {
     pub drawing_interaction: drawing_interaction_ui::State,
     pub drawing_worker: drawing_interaction_ui::PaperWorker,
     pub operation_values: std::sync::Mutex<operation_editor_ui::ValueCache>,
+    pub production_cache: std::sync::Mutex<production_ui::Cache>,
+    pub drawing_editor_cache: std::sync::Mutex<drawing_editor_ui::Cache>,
+    pub source_cache: std::sync::Mutex<source_cache::Cache>,
     pub jobs: background::Jobs,
     pub worker: worker::WorkerClient,
     pub display_mesh: display_mesh::State,
@@ -325,6 +329,9 @@ impl Workspace {
             drawing_interaction: drawing_interaction_ui::State::default(),
             drawing_worker: drawing_interaction_ui::PaperWorker::new(),
             operation_values: Default::default(),
+            production_cache: Default::default(),
+            drawing_editor_cache: Default::default(),
+            source_cache: Default::default(),
             jobs: background::Jobs::new(),
             worker: worker::WorkerClient::new(),
             display_mesh: Default::default(),
@@ -493,7 +500,13 @@ impl Workspace {
         match self.session.dispatch(c) {
             Ok(()) => {
                 self.changed = Instant::now();
-                self.status = "Draft changed — evaluating preview".into();
+                if self.session.last_dispatch_reused_evaluation {
+                    self.requested = Some(self.session.identity());
+                    self.requested_preview = operation_preview::request_key(self);
+                    self.status = "Updated; geometry unchanged".into();
+                } else {
+                    self.status = "Draft changed — evaluating preview".into();
+                }
                 if let Some(before) = before {
                     sketch::reconcile(self, &before);
                 }
@@ -685,6 +698,7 @@ impl Workspace {
             return;
         }
         let editing_edges = selection_ui::edge_feature(self).is_some();
+        let imported_context = self.fields.get("step-import-active-part").cloned();
         match self.session.apply() {
             Ok(()) => {
                 sketch3d_ui::cancel(self);
@@ -715,6 +729,15 @@ impl Workspace {
                 self.status = "Applied as one undoable change".into();
                 self.requested = Some(self.session.identity());
                 self.fields.clear();
+                if let Some(imported) = imported_context {
+                    let part = self
+                        .session
+                        .committed
+                        .parts
+                        .contains_key(&imported)
+                        .then_some(imported);
+                    self.activate_context(part, None);
+                }
                 drawing_interaction_ui::reset(self);
                 production_ui::reset(self);
                 drawing_ui::retain_workspace(self);
@@ -795,6 +818,7 @@ impl Workspace {
         settings::cancel(self);
         self.cancel();
         self.session = Session::new(d, BACKEND);
+        self.source_cache = Default::default();
         self.project = path;
         git_ui::reset(self);
         let navigation = self.view.navigation.clone();
@@ -1420,7 +1444,19 @@ fn poll_workers(mut w: ResMut<Workspace>) {
             WorkerResponse::Exported { path, .. } => w.status = format!("Wrote {path}"),
             WorkerResponse::Imported { identity, document } => {
                 if identity == w.session.identity() {
+                    let added = document
+                        .parts
+                        .keys()
+                        .filter(|id| !w.session.visible().parts.contains_key(*id))
+                        .cloned()
+                        .collect::<Vec<_>>();
                     w.dispatch(cad_core::commands::Command::ReplaceDocument { document });
+                    let focus = if added.len() == 1 {
+                        added[0].clone()
+                    } else {
+                        String::new()
+                    };
+                    w.fields.insert("step-import-active-part".into(), focus);
                     w.status = "Imported STEP structure; inspect and Apply".into();
                 } else {
                     w.status =

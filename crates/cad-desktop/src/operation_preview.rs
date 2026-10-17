@@ -37,8 +37,17 @@ pub fn focus(w: &Workspace) -> Option<NodeRef> {
 }
 
 fn active(w: &Workspace) -> bool {
+    let metadata_only_without_difference = w.session.last_dispatch_reused_evaluation
+        && focus(w).is_none()
+        && w.session.draft.as_ref().is_some_and(|draft| {
+            !draft.pending
+                && draft.evaluation.as_ref().is_some_and(|evaluation| {
+                    evaluation.valid && evaluation.operation_preview.is_none()
+                })
+        });
     !w.fields.contains_key("appearance-tool")
         && w.settings.is_none()
+        && !metadata_only_without_difference
         && (focus(w).is_some() || w.session.draft.is_some())
 }
 

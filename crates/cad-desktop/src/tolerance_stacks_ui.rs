@@ -20,6 +20,7 @@ const DOMAIN: &str = "tolerance-stack-domain:";
 #[derive(Clone, PartialEq, Eq)]
 struct Stamp {
     document: Id,
+    epoch: Id,
     generation: u64,
     revision: u64,
     draft: Option<(Id, u64)>,
@@ -147,6 +148,7 @@ fn report(w: &Workspace) -> Report {
     let document = w.session.visible();
     let stamp = Stamp {
         document: document.id.clone(),
+        epoch: w.session.source_epoch().into(),
         generation: w.session.generation,
         revision: document.revision,
         draft: w

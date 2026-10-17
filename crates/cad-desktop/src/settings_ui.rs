@@ -1069,7 +1069,7 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                     // their space. A fixed footer allowance fails with larger user buttons.
                     egui::Panel::bottom(ui.make_persistent_id(("settings:footer",&properties)))
                         .resizable(false).min_size(0.).frame(egui::Frame::NONE).show(ui, |ui| {
-                            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),ui.spacing().interact_size.y),egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),ui.spacing().interact_size.y),egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true), |ui| {
                                 if controls::button(ui,"command:settings.ok","settings-action",&["primary"],"OK",!pending,false).clicked() {footer_action = Some("settings.ok");}
                                 if controls::button(ui,"command:settings.cancel","settings-action",&[],"Cancel",true,false).clicked() {footer_action = Some("settings.cancel");}
                                 if controls::button(ui,"command:settings.apply","settings-action",&[],"Apply",!pending,false).clicked() {footer_action = Some("settings.apply");}
@@ -1092,12 +1092,38 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                     let search = state.search.to_lowercase();
                     let pending = state.pending;
                     let diagnostic = state.diagnostic.clone();
+                    let sidebar_properties = controls::properties("settings:categories", "settings-categories", &[], "ready");
+                    let sidebar_width = styled_length(&sidebar_properties,"width",ui.available_width(),175.).clamp(90.,(ui.available_width()*0.45).max(90.));
+                    // Collapse category navigation before it consumes the space
+                    // needed for preference fields on a narrow themed surface.
+                    let compact_categories = ui.available_width() < sidebar_width + 320.;
+                    if compact_categories {
+                        let properties = controls::properties("settings:categories", "settings-categories", &["compact"], "ready");
+                        ui.scope(|ui| {
+                            controls::apply_properties(ui, &properties);
+                            let selected = CATEGORIES.iter().find(|(id,_,_)| *id == category)
+                                .map(|(_,label,scope)| format!("{scope} · {label}"))
+                                .unwrap_or_else(|| "Choose preferences".into());
+                            egui::ComboBox::from_id_salt("settings:category-picker")
+                                .width(ui.available_width()).wrap_mode(egui::TextWrapMode::Truncate)
+                                .selected_text(&selected).show_ui(ui, |ui| {
+                                    for scope in ["Model", "Application"] {
+                                        controls::label(ui,&format!("settings:scope:{scope}"),"settings-scope",&[],scope,"ready");
+                                        for (id,label,_) in CATEGORIES.iter().filter(|(_,_,group)| *group == scope) {
+                                            if controls::button(ui,&format!("settings:category:{id}"),"settings-category",&[],label,!pending,category == *id && search.is_empty()).clicked() {
+                                                if let Some(state) = &mut w.settings { state.category = (*id).into(); state.search.clear(); }
+                                                ui.close();
+                                            }
+                                        }
+                                    }
+                                }).response.on_hover_text(selected);
+                        });
+                    }
                     let content_height = ui.available_height().max(0.);
                     // Bound the whole row: an unconstrained horizontal separator otherwise
                     // consumes the footer area and makes Resize grow again on every frame.
                     ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),content_height),egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                        let sidebar_properties = controls::properties("settings:categories", "settings-categories", &[], "ready");
-                        let sidebar_width = styled_length(&sidebar_properties,"width",ui.available_width(),175.).clamp(90.,(ui.available_width()*0.45).max(90.));
+                        if !compact_categories {
                         ui.allocate_ui_with_layout(egui::vec2(sidebar_width,content_height),egui::Layout::top_down(egui::Align::Min), |ui| {
                             controls::apply_properties(ui,&sidebar_properties);
                             egui::ScrollArea::vertical().id_salt("settings:category-scroll").min_scrolled_height(0.).max_height(content_height).show(ui, |ui| {
@@ -1113,10 +1139,13 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                             });
                         });
                         ui.separator();
+                        }
                         let panel_properties = controls::properties("settings:content", "settings-content", &[], "ready");
                         ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),content_height),egui::Layout::top_down(egui::Align::Min), |ui| {
                             controls::apply_properties(ui,&panel_properties);
-                            egui::ScrollArea::vertical().id_salt("settings:field-scroll").min_scrolled_height(0.).max_height(content_height).show(ui, |ui| {
+                            let content_width = ui.available_width();
+                            egui::ScrollArea::both().id_salt("settings:field-scroll").min_scrolled_width(0.).min_scrolled_height(0.).max_height(content_height).show(ui, |ui| {
+                                ui.set_max_width(content_width);
                                 let status = diagnostic.as_deref().or(pending.then_some("Validating model preferences…"));
                                 let status_id = ui.make_persistent_id("settings:shown-status");
                                 let status_changed = ui.data_mut(|data| {

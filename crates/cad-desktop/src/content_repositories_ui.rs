@@ -1089,9 +1089,8 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         available,
     ));
     out.push(info("packs", "access", "The TCAD pack repositories are private. Use an account with access, or add your own repository below. If a download fails, you can keep working and retry later."));
-    let mut packs = libraries::packs().iter().collect::<Vec<_>>();
-    packs.sort_by_key(|pack| w.content_repositories.focused_pack.as_deref() != Some(pack.id));
-    for pack in packs {
+    // Focus highlights a stable row; downloads never move the pack under the pointer.
+    for pack in libraries::packs() {
         let installed = libraries::matching_pack_repository(pack, &w.content_repositories.registry);
         let ready = installed.is_some_and(|repository| {
             repository.enabled

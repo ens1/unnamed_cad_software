@@ -19,6 +19,7 @@ const TOKEN: &str = "display-state-editor-token";
 #[derive(Clone, PartialEq, Eq)]
 struct Stamp {
     document: Id,
+    epoch: Id,
     generation: u64,
     revision: u64,
     draft: Option<(Id, u64)>,
@@ -49,6 +50,7 @@ fn refresh(w: &Workspace) {
     let doc = document(w);
     let stamp = Stamp {
         document: doc.id.clone(),
+        epoch: w.session.source_epoch().into(),
         generation: w.session.generation,
         revision: doc.revision,
         draft: w.session.draft.as_ref().map(|d| (d.id.clone(), d.edit)),

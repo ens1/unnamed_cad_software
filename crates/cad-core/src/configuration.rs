@@ -1725,6 +1725,7 @@ pub fn placed_parts(
         matrix: nalgebra::Matrix4<f64>,
         path: Vec<Id>,
         name: String,
+        last_name: String,
         excluded: bool,
         finish: Option<Id>,
     }
@@ -1746,6 +1747,7 @@ pub fn placed_parts(
                 matrix,
                 path,
                 name,
+                last_name,
                 excluded,
                 finish,
             } = placement;
@@ -1779,6 +1781,7 @@ pub fn placed_parts(
                 return Err(invalid("Assembly hierarchy/configuration cycle"));
             }
             let a = &scoped.assemblies[definition];
+            let names = crate::occurrence_names::siblings(self.source, definition);
             let evaluated = self
                 .evaluated
                 .and_then(|e| e.get(&key(definition, configuration.as_deref())));
@@ -1808,6 +1811,20 @@ pub fn placed_parts(
                 .cloned();
                 let mut child_path = path.clone();
                 child_path.push(instance.id.clone());
+                let child_label = names.get(&instance.id).unwrap_or(&instance.name);
+                let child_name = if name.is_empty()
+                    || (&last_name == child_label
+                        && crate::occurrence_names::is_placeholder(&a.name)
+                        && a.instances.len() == 1)
+                {
+                    if name.is_empty() {
+                        child_label.clone()
+                    } else {
+                        name.clone()
+                    }
+                } else {
+                    format!("{name} › {child_label}")
+                };
                 self.walk(
                     &scoped,
                     &instance.definition,
@@ -1815,7 +1832,8 @@ pub fn placed_parts(
                     PlacementState {
                         matrix: matrix * placement.matrix(),
                         path: child_path,
-                        name: instance.name.clone(),
+                        name: child_name,
+                        last_name: child_label.clone(),
                         excluded,
                         finish: instance.finish.clone().or_else(|| finish.clone()),
                     },
@@ -1840,6 +1858,7 @@ pub fn placed_parts(
             matrix: nalgebra::Matrix4::identity(),
             path: Vec::new(),
             name: String::new(),
+            last_name: String::new(),
             excluded: false,
             finish: None,
         },

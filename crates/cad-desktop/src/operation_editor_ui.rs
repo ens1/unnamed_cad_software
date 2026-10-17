@@ -75,7 +75,8 @@ impl<'a> Fields<'a> {
             revision: json!([
                 w.session.generation,
                 w.session.committed.revision,
-                w.session.draft.as_ref().map(|d| (&d.id, d.edit))
+                w.session.draft.as_ref().map(|d| (&d.id, d.edit)),
+                w.session.source_epoch()
             ]),
         }
     }
@@ -1588,7 +1589,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     // includes source/draft, both available evaluation revisions, the editor,
     // selected geometry and field errors; camera navigation never rebuilds
     // topology/provenance choices. Do not hold the lock while constructing it.
-    let key = json!({"document":w.session.visible().id,"generation":w.session.generation,
+    let key = json!({"document":w.session.visible().id,"generation":w.session.generation,"source_epoch":w.session.source_epoch(),
         "revision":w.session.committed.revision,"draft":w.session.draft.as_ref().map(|draft|(&draft.id,draft.edit)),
         "dialog":w.dialog,"owner":w.view.active_part,"instance":w.view.active_instance,"node":w.view.active_node,
         "editor":w.fields.get("feature-editor-generation"),"feature":w.fields.get("feature-editor-id"),
@@ -1730,6 +1731,7 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
     }
     let key = json!([
         w.session.visible().id,
+        w.session.source_epoch(),
         w.session.generation,
         w.session.committed.revision,
         w.session.draft.as_ref().map(|d| (&d.id, d.edit)),

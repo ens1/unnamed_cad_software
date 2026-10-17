@@ -1354,6 +1354,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                         | "repositories"
                         | "git-connections"
                         | "content-repositories"
+                        | "publish"
                 )
         }) {
         element.role.as_str()
@@ -2597,6 +2598,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
             w.source_text = serde_json::to_string_pretty(w.session.visible()).unwrap_or_default();
             w.open_editor("source");
         }
+        "settings.themes" => crate::settings::open(w, Some("application.themes")),
         "presentation" => w.open_editor("presentation"),
         "versions" => {
             w.open_editor("versions");
@@ -3599,7 +3601,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "component-insert" => "Insert Existing Component",
             "selection" => "Selection Actions",
             "source" => "Source definitions",
-            "presentation" => "Layout and theme",
+            "presentation" => "Advanced layout and style",
             "assembly" => "Assembly",
             "configurations" => "Configurations and Equations",
             "versions" => "Design versions",
@@ -3662,6 +3664,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 | "reference-repair"
                 | "feature-order"
                 | "assembly-motion"
+                | "publish"
         ) && !w.fields.contains_key("mate-editor")
             && !w.fields.contains_key("component-pattern-editor")
             && !w.fields.contains_key("assembly-weld-editor")
@@ -3727,6 +3730,13 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         }
         ui.separator();
     }
+    if dialog == "publish" {
+        crate::publish_ui::show_actions(ui, w);
+        if w.dialog.as_deref() != Some("publish") {
+            return;
+        }
+        ui.separator();
+    }
     egui::ScrollArea::vertical()
         .id_salt("workspace-editor")
         .show(ui, |ui| {
@@ -3768,7 +3778,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 "component-insert" => crate::components_ui::show(ui, w),
                 "versions" => versions(ui, w),
                 "repositories" => crate::repositories_ui::show(ui, w),
-                "publish" => crate::publish_ui::show(ui, w),
+                "publish" => crate::publish_ui::show_contents(ui, w),
                 "git-connections" => crate::git_connections_ui::show(ui, w),
                 "content-repositories" => crate::content_repositories_ui::show(ui, w),
                 "feature-transfer" => crate::feature_transfer_ui::show(ui, w),
@@ -4344,7 +4354,7 @@ fn assembly_editor(ui: &mut egui::Ui, w: &mut Workspace) {
             for i in a.instances.values().filter(|i|present.contains(&i.id)) {
                 egui::CollapsingHeader::new(format!(
                     "{} · {}",
-                    i.name,
+                    cad_core::occurrence_names::instance(&doc, &a.id, i),
                     cad_core::presentation::definition_name(&doc, &i.definition)
                 ))
                 .id_salt(&i.id)

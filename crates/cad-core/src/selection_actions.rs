@@ -49,6 +49,7 @@ pub fn menu_metadata(element: &mut SemanticElement) {
         "Reference" => 70,
         "Component" => 80,
         "Weld" | "Weldments" => 90,
+        "Sheet Metal" => 85,
         "Mold" => 100,
         "View" => 110,
         _ => 120,
@@ -456,6 +457,16 @@ pub fn project(
                     );
                 }
                 "edge" => {
+                    if matches!(selected_operation, crate::Operation::Sheet { .. }) {
+                        add("sheet.flange", "Edge Flange", "Sheet Metal", solid_reason);
+                        add("sheet.hem", "Open Hem", "Sheet Metal", solid_reason);
+                        add(
+                            "sheet.jog",
+                            "Jog / Offset Flange",
+                            "Sheet Metal",
+                            solid_reason,
+                        );
+                    }
                     add(
                         "weld.bead",
                         "Weld Bead",

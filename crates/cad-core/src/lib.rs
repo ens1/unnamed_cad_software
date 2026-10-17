@@ -44,6 +44,7 @@ mod mate_solver;
 pub mod material_csv;
 pub mod material_library;
 pub mod materials;
+pub mod occurrence_names;
 pub mod persistence;
 pub mod placement_pattern;
 pub mod presentation;

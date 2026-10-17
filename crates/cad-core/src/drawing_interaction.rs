@@ -1266,6 +1266,216 @@ fn dimension_axis(
     }
     Ok([-delta[1] / length, delta[0] / length])
 }
+
+/// Start a new dimension outside the represented view's geometry. The saved
+/// result is still an ordinary editable paper offset, never a screen position.
+/// Existing annotations and captions supply keep-out regions for its label.
+pub fn place_dimension_outside(
+    doc: &Document,
+    evaluation: &Evaluation,
+    sheet: &Drawing,
+    dimension: &mut DrawingDimension,
+) -> Result<()> {
+    if matches!(
+        dimension.options.kind,
+        DimensionKind::Angular | DimensionKind::HoleCallout
+    ) {
+        return Ok(());
+    }
+    let rendered = drawing::build_sheet_preview(doc, evaluation, sheet, 0)?;
+    let projection = rendered
+        .projections
+        .get(&dimension.view)
+        .ok_or_else(|| invalid("Missing projected dimension view"))?;
+    let group = rendered
+        .groups
+        .iter()
+        .find(|group| matches!(&group.target, Target::View { key } if key == &dimension.view))
+        .ok_or_else(|| invalid("Missing drawing geometry for dimension placement"))?;
+    let geometry = rendered.primitives
+        [group.primitive_start..group.primitive_start + group.primitive_count]
+        .iter()
+        .filter(|primitive| !matches!(primitive, Primitive::Text { .. }))
+        .cloned()
+        .collect::<Vec<_>>();
+    let Some(extent) = bounds(&geometry) else {
+        return Ok(());
+    };
+    let axis = dimension_axis(doc, evaluation, sheet, projection, dimension)?;
+    let dot = |p: [f64; 2]| p[0] * axis[0] + p[1] * axis[1];
+    let mut base = projection.paper_point(
+        &dimension.view,
+        drawing::point(
+            doc,
+            evaluation,
+            sheet,
+            dimension.first,
+            &dimension.options.first,
+        )?,
+    )?;
+    if matches!(
+        dimension.options.kind,
+        DimensionKind::Horizontal | DimensionKind::Vertical
+    ) {
+        let (a, b) = if dimension.options.second_curve.is_some() {
+            let (a, b) = drawing::edge_separation_points(doc, evaluation, sheet, dimension)?;
+            (projection.paper_projected(a), projection.paper_projected(b))
+        } else {
+            (
+                base,
+                projection.paper_point(
+                    &dimension.view,
+                    drawing::point(
+                        doc,
+                        evaluation,
+                        sheet,
+                        dimension.second,
+                        &dimension.options.second,
+                    )?,
+                )?,
+            )
+        };
+        let normal_axis = usize::from(dimension.options.kind == DimensionKind::Horizontal);
+        base[normal_axis] = a[normal_axis].max(b[normal_axis]);
+    } else if dimension.options.kind == DimensionKind::Perpendicular {
+        let (a, _) = drawing::edge_separation_points(doc, evaluation, sheet, dimension)?;
+        base = projection.paper_projected(a);
+    } else if matches!(
+        dimension.options.kind,
+        DimensionKind::Diameter | DimensionKind::Radius
+    ) {
+        let circle = drawing::circular(
+            doc,
+            evaluation,
+            sheet,
+            dimension
+                .options
+                .curve
+                .as_ref()
+                .ok_or_else(|| invalid("Choose an exact circular edge"))?,
+        )?;
+        base = projection.paper_point(&dimension.view, circle.center)?;
+    }
+    let corners = [
+        extent[0],
+        [extent[0][0], extent[1][1]],
+        extent[1],
+        [extent[1][0], extent[0][1]],
+    ];
+    let limits = [
+        corners
+            .iter()
+            .map(|p| dot(*p))
+            .fold(f64::INFINITY, f64::min),
+        corners
+            .iter()
+            .map(|p| dot(*p))
+            .fold(f64::NEG_INFINITY, f64::max),
+    ];
+    // Horizontal labels go below the geometry so their extension lines cannot
+    // run through the view captions above it. Vertical labels prefer the right.
+    let preferred = if axis[1].abs() >= axis[0].abs() {
+        -1.
+    } else {
+        1.
+    };
+    let keep_out = rendered
+        .primitives
+        .iter()
+        .filter(|primitive| matches!(primitive, Primitive::Text { .. }))
+        .filter_map(|primitive| bounds(std::slice::from_ref(primitive)))
+        .collect::<Vec<_>>();
+    let paper = drawing::paper_bounds(sheet);
+    let mut fallback = None;
+    for side in [preferred, -preferred] {
+        for lane in 0..=sheet.dimensions.len().min(32) {
+            let clearance = 8. + lane as f64 * 6.;
+            let offset = if side < 0. {
+                limits[0] - clearance
+            } else {
+                limits[1] + clearance
+            } - dot(base);
+            dimension.offset_mm = offset;
+            let mut primitives = Vec::new();
+            drawing::dimension_for_placement(
+                doc,
+                evaluation,
+                sheet,
+                projection,
+                dimension,
+                &mut primitives,
+            )?;
+            let labels = primitives
+                .iter()
+                .filter(|primitive| matches!(primitive, Primitive::Text { .. }))
+                .filter_map(|primitive| bounds(std::slice::from_ref(primitive)))
+                .collect::<Vec<_>>();
+            fallback.get_or_insert(offset);
+            if labels.iter().all(|label| {
+                contains(paper, label[0])
+                    && contains(paper, label[1])
+                    && keep_out.iter().all(|other| {
+                        label[1][0] + 2. < other[0][0]
+                            || label[0][0] - 2. > other[1][0]
+                            || label[1][1] + 2. < other[0][1]
+                            || label[0][1] - 2. > other[1][1]
+                    })
+            }) {
+                return Ok(());
+            }
+        }
+    }
+    // Dense pages retain a useful exterior starting point for manual layout;
+    // final source/geometry validation remains the Apply gate.
+    if let Some(offset) = fallback {
+        dimension.offset_mm = offset;
+    }
+    Ok(())
+}
+
+/// Apply the same initial placement to a paper Smart Dimension request while
+/// preserving `Action::CreateDimension`'s explicit-offset contract for callers.
+pub fn place_created_dimension(
+    doc: &Document,
+    evaluation: &Evaluation,
+    sheet: &Drawing,
+    action: &mut Action,
+) -> Result<()> {
+    let Action::CreateDimension {
+        view,
+        kind,
+        first,
+        second,
+        curve,
+        second_curve,
+        offset_mm,
+    } = action
+    else {
+        return Err(invalid(
+            "Initial dimension placement requires a new dimension",
+        ));
+    };
+    let mut dimension = DrawingDimension {
+        id: crate::id(),
+        view: view.clone(),
+        first: first.point,
+        second: second.point,
+        offset_mm: *offset_mm,
+        parameter: None,
+        tolerance: String::new(),
+        options: drawing::DimensionOptions {
+            kind: kind.clone(),
+            first: first.reference.clone(),
+            second: second.reference.clone(),
+            curve: curve.as_deref().cloned(),
+            second_curve: second_curve.as_deref().cloned(),
+            ..Default::default()
+        },
+    };
+    place_dimension_outside(doc, evaluation, sheet, &mut dimension)?;
+    *offset_mm = dimension.offset_mm;
+    Ok(())
+}
 fn annotation_mut<'a>(sheet: &'a mut Drawing, id: &str) -> Result<&'a mut drawing::Annotation> {
     sheet
         .entities

@@ -298,7 +298,11 @@ pub fn semantic_fields(
             for pair in &report.pairs {
                 let mut pair_target = target.clone();
                 pair_target["pair"] = serde_json::json!(pair.id);
-                output.push(SemanticElement{id:format!("{}::{}",definition.id,pair.id),role:"inspection-pair".into(),label:"Component Pair".into(),value:pair.boundary_distance.as_ref().map(|d|format!("{:.6} mm (approximate boundary distance)",d.distance_mm)),state:if pair.interference==InterferenceStatus::Unavailable||!pair.diagnostics.is_empty(){"uncertain".into()}else{state.into()},commands:vec!["assembly.inspection-highlight".into(),"assembly.inspection-select-first".into(),"assembly.inspection-select-second".into()],relationships:vec![definition.id.clone()],data:serde_json::json!({"target":pair_target,"result":pair,"assembled_occurrences":true,"clearance_error_bound":null})});
+                let name = |target: &Target| {
+                    crate::occurrence_names::path_from(doc, owner, &target.path)
+                        .unwrap_or_else(|| "Missing occurrence".into())
+                };
+                output.push(SemanticElement{id:format!("{}::{}",definition.id,pair.id),role:"inspection-pair".into(),label:format!("{} ↔ {}",name(&pair.first),name(&pair.second)),value:pair.boundary_distance.as_ref().map(|d|format!("{:.6} mm (approximate boundary distance)",d.distance_mm)),state:if pair.interference==InterferenceStatus::Unavailable||!pair.diagnostics.is_empty(){"uncertain".into()}else{state.into()},commands:vec!["assembly.inspection-highlight".into(),"assembly.inspection-select-first".into(),"assembly.inspection-select-second".into()],relationships:vec![definition.id.clone()],data:serde_json::json!({"target":pair_target,"result":pair,"assembled_occurrences":true,"clearance_error_bound":null})});
             }
         }
     }

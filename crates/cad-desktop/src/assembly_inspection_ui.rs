@@ -597,14 +597,21 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
         }
         for pair in &report.pairs {
             let name = |target: &Target| {
-                report
-                    .occurrences
-                    .iter()
-                    .find(|i| &i.target == target)
-                    .map(|i| i.name.as_str())
-                    .unwrap_or("Missing occurrence")
+                cad_core::occurrence_names::path_from(
+                    w.session.visible(),
+                    &report.assembly,
+                    &target.path,
+                )
+                .or_else(|| {
+                    report
+                        .occurrences
+                        .iter()
+                        .find(|i| &i.target == target)
+                        .map(|i| i.name.clone())
+                })
+                .unwrap_or_else(|| "Missing occurrence".into())
             };
-            ui.push_id(&pair.id,|ui|{ui.collapsing(format!("{} / {}",name(&pair.first),name(&pair.second)),|ui|{
+            ui.push_id(&pair.id,|ui|{ui.collapsing(format!("{} ↔ {}",name(&pair.first),name(&pair.second)),|ui|{
                 ui.label(match pair.interference{InterferenceStatus::ValidatedCommonSolid=>"Native common solid detected: engineering clearance is zero.",InterferenceStatus::SeparatedNativeHulls=>"Positive native carrier hulls are separated.",InterferenceStatus::NoCommonSolidReturned=>"No common solid returned; contact/separation remains unresolved.",InterferenceStatus::Unavailable=>"Native interference check unavailable.",InterferenceStatus::NotRequested=>"Native interference was not requested."});
                 if let Some(volume)=pair.approximate_common_volume_mm3{ui.label(format!("Common-result planar boundary volume: {volume:.6} mm³ (f64 estimate)"));}
                 if let Some(distance)=&pair.boundary_distance{ui.label(format!("Minimum boundary distance: {:.6} mm (approximate)",distance.distance_mm));ui.small(if distance.below_requested{"Boundary estimate is below the requested clearance; this is not a certified native distance comparison."}else{"Boundary estimate meets the requested value; this is not a clearance certificate."});}

@@ -220,16 +220,18 @@ fn nested(doc: &Document, definition: &str) -> Vec<(String, Vec<Id>, Id)> {
         }
         active.push(definition.into());
         if let Some(a) = doc.assemblies.get(definition) {
+            let names = cad_core::occurrence_names::siblings(doc, definition);
             for i in a.instances.values() {
+                let name = names.get(&i.id).unwrap_or(&i.name);
                 let mut p = path.clone();
                 p.push(i.id.clone());
                 visit(
                     doc,
                     &i.definition,
                     if prefix.is_empty() {
-                        i.name.clone()
+                        name.clone()
                     } else {
-                        format!("{prefix} / {}", i.name)
+                        format!("{prefix} › {name}")
                     },
                     p,
                     active,
@@ -453,8 +455,8 @@ pub fn preview_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticE
         let name = source
             .instances
             .get(participant)
-            .map(|i| i.name.as_str())
-            .unwrap_or("Missing component");
+            .map(|i| cad_core::occurrence_names::instance(doc, assembly, i))
+            .unwrap_or_else(|| "Missing component".into());
         out.push(cad_core::presentation::SemanticElement {
             id: format!("mate:{}:reference:{index}:preview", mate.id),
             role: "mate-reference-preview".into(),
@@ -769,19 +771,24 @@ fn reference_editor(
         "auxiliary_plane"
     };
     let classes = assembly_geometry::reference_classes(&kind, role);
+    let names = cad_core::occurrence_names::siblings(doc, &a.id);
     ui.push_id(label, |ui| {
         ui.strong(label);
         egui::ComboBox::from_id_salt("component")
             .selected_text(
                 a.instances
                     .get(participant)
-                    .map(|i| i.name.as_str())
+                    .and_then(|i| names.get(&i.id).map(String::as_str))
                     .unwrap_or("Missing component"),
             )
             .show_ui(ui, |ui| {
                 for i in a.instances.values() {
                     if ui
-                        .selectable_value(participant, i.id.clone(), &i.name)
+                        .selectable_value(
+                            participant,
+                            i.id.clone(),
+                            names.get(&i.id).unwrap_or(&i.name),
+                        )
                         .changed()
                     {
                         changed = true;
@@ -1260,6 +1267,7 @@ fn relationship_editor(
     r: &mut Relationship,
 ) -> bool {
     let mut changed = false;
+    let names = cad_core::occurrence_names::siblings(doc, &a.id);
     match r {
         Relationship::ProfileCenter { rotation } => {
             ui.small("Choose closed sketch profiles or planar model faces. Centers are area centroids including inner boundaries.");
@@ -1378,7 +1386,7 @@ fn relationship_editor(
                     support
                         .as_ref()
                         .and_then(|id| a.instances.get(id))
-                        .map(|i| i.name.as_str())
+                        .and_then(|i| names.get(&i.id).map(String::as_str))
                         .unwrap_or("Assembly universe"),
                 )
                 .show_ui(ui, |ui| {
@@ -1391,7 +1399,11 @@ fn relationship_editor(
                         .filter(|i| i.id != m.first && i.id != m.second)
                     {
                         changed |= ui
-                            .selectable_value(support, Some(i.id.clone()), &i.name)
+                            .selectable_value(
+                                support,
+                                Some(i.id.clone()),
+                                names.get(&i.id).unwrap_or(&i.name),
+                            )
                             .changed();
                     }
                 });

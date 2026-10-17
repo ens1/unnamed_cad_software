@@ -22,6 +22,16 @@ pub struct SemanticElement {
     pub data: serde_json::Value,
 }
 pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> {
+    project_with_identity(session, active, &session.identity())
+}
+
+/// Project one source snapshot using its already computed session identity.
+/// Desktop adapters may reuse this identity until the session's source changes.
+pub fn project_with_identity(
+    session: &Session,
+    active: Option<&str>,
+    identity: &crate::protocol::RequestIdentity,
+) -> Vec<SemanticElement> {
     let mut out = vec![SemanticElement {
         id: "document".into(),
         role: "document-context".into(),
@@ -397,7 +407,7 @@ pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> 
             .map_or(session.evaluation.as_ref(), |draft| {
                 draft.evaluation.as_ref()
             })
-            .filter(|evaluation| evaluation.valid && evaluation.identity == session.identity());
+            .filter(|evaluation| evaluation.valid && evaluation.identity == *identity);
         let configuration = doc.active_configurations.get(&part.id);
         let evaluated_key = crate::configuration::key(&part.id, configuration.map(String::as_str));
         let effective = evaluation.and_then(|_| {
@@ -435,7 +445,7 @@ pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> 
                     .draft
                     .as_ref()
                     .map_or(session.evaluation.as_ref(), |d| d.evaluation.as_ref())
-                    .filter(|e| e.valid && e.identity == session.identity());
+                    .filter(|e| e.valid && e.identity == *identity);
                 let report = evaluation
                     .and_then(|e| e.mold_analyses.get(&format!("{}::{}", part.id, feature.id)));
                 out.push(SemanticElement { id:format!("mold:{}",feature.id),role:if operation.is_analysis(){"mold-analysis"}else{"mold-operation"}.into(),label:feature.name.clone(),value:Some(operation.name().into()),state:if feature.suppressed{"suppressed"}else if report.is_some(){"evaluated"}else{"active"}.into(),commands:vec!["feature.edit".into()],relationships:operation.dependencies().into_iter().map(|r|r.node).collect(),data:serde_json::json!({"contract_version":crate::mold::CONTRACT_VERSION,"definition":part.id,"feature":feature.id,"source":operation,"report":report}) });
@@ -461,7 +471,7 @@ pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> 
         }) {
             let key = format!("{}::{}", part.id, feature.id);
             let evaluated = evaluation
-                .filter(|e| e.valid && e.identity == session.identity())
+                .filter(|e| e.valid && e.identity == *identity)
                 .and_then(|e| e.references.get(&key));
             out.push(SemanticElement {
                 id: format!("reference:{}", feature.id),
@@ -528,7 +538,7 @@ pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> 
         state,
     ));
     let inspection_evaluation =
-        property_evaluation.filter(|evaluation| evaluation.identity == session.identity());
+        property_evaluation.filter(|evaluation| evaluation.identity == *identity);
     for assembly in doc.assemblies.values() {
         out.extend(crate::assembly_inspection::semantic_fields(
             doc,
@@ -604,11 +614,12 @@ pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> 
         for (id, parameter) in &assembly.parameters {
             out.push(SemanticElement { id: format!("{}::{id}",assembly.id), role: "parameter-field".into(), label: parameter.name.clone(), value: Some(parameter.expression.0.clone()), state: state.into(), commands: vec!["parameter.edit".into()], relationships: vec![assembly.id.clone()], data: serde_json::json!({"type":"quantity","dimension":parameter.dimension,"expression":parameter.expression,"evaluated":crate::expression::value(doc,&assembly.id,&parameter.expression,parameter.dimension).ok(),"editable":true}) });
         }
+        let occurrence_names = crate::occurrence_names::siblings(doc, &assembly.id);
         for instance in assembly.instances.values() {
             out.push(SemanticElement {
                 id: instance.id.clone(),
                 role: "component-instance".into(),
-                label: instance.name.clone(),
+                label: occurrence_names.get(&instance.id).cloned().unwrap_or_else(||instance.name.clone()),
                 value: Some(definition_name(doc, &instance.definition)),
                 state: if instance.fixed {
                     "fixed"
@@ -669,7 +680,7 @@ pub fn project(session: &Session, active: Option<&str>) -> Vec<SemanticElement> 
                         && d.error.is_none()
                         && d.evaluation
                             .as_ref()
-                            .is_some_and(|e| e.valid && e.identity == session.identity())
+                            .is_some_and(|e| e.valid && e.identity == *identity)
                 }) =>
             {
                 Some("A current valid preview is required")
@@ -1177,10 +1188,11 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("configurations", "Configurations and design tables"),
     ("equations", "Equations and named dimensions"),
     ("parameter.new", "Named parameter"),
-    ("presentation", "Layout and theme"),
+    ("presentation", "Advanced Layout and Style…"),
     ("settings", "Settings…"),
     ("settings.model", "Model Settings…"),
     ("settings.application", "Application Preferences…"),
+    ("settings.themes", "Choose Theme…"),
     ("settings.apply", "Apply Settings"),
     ("settings.ok", "Save Settings and Close"),
     ("settings.cancel", "Cancel Settings"),
@@ -1665,9 +1677,5 @@ pub fn default_theme() -> Theme {
         .clone()
 }
 pub fn definition_name(doc: &Document, id: &str) -> String {
-    doc.parts
-        .get(id)
-        .map(|p| p.name.clone())
-        .or_else(|| doc.assemblies.get(id).map(|a| a.name.clone()))
-        .unwrap_or_else(|| id.into())
+    crate::occurrence_names::definition(doc, id)
 }

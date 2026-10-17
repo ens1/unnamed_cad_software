@@ -514,7 +514,7 @@ fn selected_target(
 /// Presets treat a picked model edge as terminal intent only when its native
 /// face incidence proves that exact full-width terminal. A flange side face or
 /// thickness edge never silently requests a chained bend.
-pub(crate) fn picked_terminal(w: &Workspace, stock: &Stock) -> Option<NodeRef> {
+pub(crate) fn picked_attachment(w: &Workspace, stock: &Stock) -> Option<(Id, Option<NodeRef>)> {
     let pick = w
         .selected
         .as_ref()
@@ -561,7 +561,7 @@ pub(crate) fn picked_terminal(w: &Workspace, stock: &Stock) -> Option<NodeRef> {
     }
     edge_target(edge, stock, "terminal-edge")
         .ok()?
-        .and_then(|(_, source)| source)
+        .or_else(|| edge_target(edge, stock, "base-edge").ok().flatten())
 }
 fn publish(w: &mut Workspace, owner: &NodeRef, feature: Feature) -> Result<()> {
     let expected = feature.clone();

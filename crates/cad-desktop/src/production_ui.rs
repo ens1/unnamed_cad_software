@@ -5,6 +5,7 @@ use cad_core::{
     CadError, Result, commands::Command, presentation::SemanticElement, production::Preferences,
 };
 use serde_json::{Value, json};
+use std::sync::{Arc, mpsc};
 
 const EDITOR: &str = "production-editor";
 const SOURCE: &str = "production-source";
@@ -12,6 +13,59 @@ const ROOT: &str = "production-root";
 const PENDING: &str = "production-pending:";
 const INVALID: &str = "production-invalid:";
 const CONTRACT: &str = "tcad.production-panel";
+
+#[derive(Clone, PartialEq, Eq)]
+struct ReportKey {
+    document: cad_core::Id,
+    epoch: cad_core::Id,
+    source: cad_core::protocol::RequestIdentity,
+    evaluated: bool,
+}
+#[derive(Default)]
+struct Report {
+    semantics: Vec<SemanticElement>,
+    bom_headers: Vec<String>,
+    bom_cells: Vec<(String, Vec<String>)>,
+    bom_error: Option<String>,
+    stock_headers: Vec<String>,
+    stock_cells: Vec<(String, Vec<String>)>,
+    stock_error: Option<String>,
+    evaluated: bool,
+}
+struct ReportJob {
+    key: ReportKey,
+    document: cad_core::Document,
+    evaluation: Option<cad_core::protocol::Evaluation>,
+}
+struct ReportWorker {
+    sender: mpsc::SyncSender<ReportJob>,
+    receiver: mpsc::Receiver<(ReportKey, Arc<Report>)>,
+}
+impl ReportWorker {
+    fn start() -> std::io::Result<Self> {
+        let (sender, input) = mpsc::sync_channel::<ReportJob>(1);
+        let (output, receiver) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("tcad-production-report".into())
+            .spawn(move || {
+                while let Ok(job) = input.recv() {
+                    let report = build_report(&job);
+                    if output.send((job.key, Arc::new(report))).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self { sender, receiver })
+    }
+}
+/// A single source-derived report supplies every native/custom presentation.
+/// No report cache participates in mutation or Apply validation.
+#[derive(Default)]
+pub struct Cache {
+    worker: Option<ReportWorker>,
+    in_flight: Option<ReportKey>,
+    current: Option<(ReportKey, Arc<Report>)>,
+}
 
 fn invalid(message: &str) -> CadError {
     CadError::Invalid(message.into())
@@ -30,7 +84,9 @@ fn evaluation(w: &Workspace) -> Option<&cad_core::protocol::Evaluation> {
         .as_ref()
         .and_then(|draft| draft.preview_evaluation())
         .or(w.session.evaluation.as_ref())
-        .filter(|evaluation| evaluation.valid && evaluation.identity == w.session.identity())
+        .filter(|evaluation| {
+            evaluation.valid && evaluation.identity == crate::source_cache::identity(w)
+        })
 }
 pub fn reset(w: &mut Workspace) {
     w.fields.remove(EDITOR);
@@ -443,10 +499,32 @@ fn guarded(w: &Workspace, element: &SemanticElement) -> Result<SemanticElement> 
     Ok(current)
 }
 pub fn field_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
-    guarded(w, element)
-        .ok()
-        .and_then(|element| element.data.get("json").cloned())
+    if element.role != "production-field"
+        || element.data["contract"] != CONTRACT
+        || element.data["document"] != w.session.visible().id
+        || element.data["root"] != w.session.visible().root
+        || element.data["editor"] != json!(w.fields.get(EDITOR))
+    {
+        return None;
+    }
+    let pointer = element.data.get("pointer")?.as_str()?;
+    let id = format!(
+        "production:field:{}",
+        pointer.trim_start_matches('/').replace('/', ":")
+    );
+    if element.id != id {
+        return None;
+    }
+    w.fields
+        .get(&format!("{PENDING}{id}"))
+        .and_then(|value| serde_json::from_str(value).ok())
+        .or_else(|| {
+            json!(w.session.visible().settings.production)
+                .pointer(pointer)
+                .cloned()
+        })
 }
+
 pub fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Result<()> {
     let current = guarded(w, element)?;
     if current.data["editable"] != true {
@@ -713,28 +791,182 @@ pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Semantic
     }
 }
 
-pub fn row_semantics(w: &Workspace) -> Vec<SemanticElement> {
-    let doc = w.session.visible();
+fn build_report(job: &ReportJob) -> Report {
+    let doc = &job.document;
     let preferences = &doc.settings.production;
-    let evaluation = evaluation(w);
-    let mut output = vec![];
-    if let Ok(rows) = cad_core::bom::rows_with_placements(
+    let evaluation = job.evaluation.as_ref();
+    let mut report = Report {
+        bom_headers: preferences
+            .bom
+            .columns
+            .iter()
+            .map(|column| column.label().to_owned())
+            .collect(),
+        stock_headers: preferences
+            .cut_list
+            .columns
+            .iter()
+            .map(|column| column.heading(preferences.units))
+            .collect(),
+        evaluated: evaluation.is_some(),
+        ..Default::default()
+    };
+    // One exact source identity, reused for every row in this snapshot.
+    let source = &job.key.source.source;
+    match cad_core::bom::rows_with_placements(
         doc,
         &preferences.bom,
         evaluation.map(|evaluation| &evaluation.assemblies),
     ) {
-        for (index, row) in rows.iter().enumerate() {
-            output.push(SemanticElement{id:format!("production:bom:{}",row.key),role:"production-bom-row".into(),label:row.part_number.clone(),value:Some(cad_core::bom::cells(row,&preferences.bom.columns,(index+1)as u32).join(" · ")),state:"ready".into(),commands:vec![],relationships:vec![doc.root.clone(),row.definition.clone()],data:json!({"contract":"tcad.bom","version":cad_core::bom::CONTRACT_VERSION,"row":row,"columns":preferences.bom.columns,"document":doc.id,"source":doc.fingerprint(),"quantity_basis":"total_current_configured_occurrences"})});
+        Ok(rows) => {
+            for (index, row) in rows.iter().enumerate() {
+                let id = format!("production:bom:{}", row.key);
+                let mut cells =
+                    cad_core::bom::cells(row, &preferences.bom.columns, (index + 1) as u32);
+                report.semantics.push(SemanticElement {
+                    id: id.clone(), role: "production-bom-row".into(), label: row.part_number.clone(), value: Some(cells.join(" · ")), state: "ready".into(), commands: vec![], relationships: vec![doc.root.clone(), row.definition.clone()],
+                    data: json!({"contract":"tcad.bom","version":cad_core::bom::CONTRACT_VERSION,"row":row,"columns":preferences.bom.columns,"document":doc.id,"source":source,"quantity_basis":"total_current_configured_occurrences"}),
+                });
+                if preferences.bom.mode == cad_core::bom::Mode::Indented
+                    && let Some(column) = preferences.bom.columns.iter().position(|column| {
+                        matches!(
+                            column,
+                            cad_core::bom::Column::PartNumber | cad_core::bom::Column::Description
+                        )
+                    })
+                {
+                    cells[column] = format!("{}{}", "  ".repeat(row.depth.min(256)), cells[column]);
+                }
+                report.bom_cells.push((id, cells));
+            }
+        }
+        Err(error) => report.bom_error = Some(error.to_string()),
+    }
+    if let Some(evaluation) = evaluation {
+        match cad_core::cut_list::rows(doc, evaluation, &preferences.cut_list) {
+            Ok(rows) => {
+                for (index, row) in rows.iter().enumerate() {
+                    let id = format!("production:stock:{}", row.key);
+                    let cells = cad_core::cut_list::cells(
+                        row,
+                        &preferences.cut_list.columns,
+                        (index + 1) as u32,
+                        preferences.units,
+                        preferences.precision,
+                    );
+                    report.semantics.push(SemanticElement {
+                        id: id.clone(), role: "production-stock-row".into(), label: row.row.description.clone(), value: Some(cells.join(" · ")), state: "ready".into(), commands: vec![], relationships: vec![doc.root.clone(), row.row.definition.clone()].into_iter().chain(row.sources.iter().map(|source| source.member.group.node.clone())).collect(),
+                        data: json!({"contract":"tcad.cut-list","version":cad_core::cut_list::CONTRACT_VERSION,"row":row,"columns":preferences.cut_list.columns,"document":doc.id,"source":source,"geometry_basis":"native_manufacturing_metadata"}),
+                    });
+                    report.stock_cells.push((id, cells));
+                }
+            }
+            Err(error) => report.stock_error = Some(error.to_string()),
         }
     }
-    if let Some(evaluation) = evaluation
-        && let Ok(rows) = cad_core::cut_list::rows(doc, evaluation, &preferences.cut_list)
+    report
+}
+fn report(w: &Workspace) -> Option<Arc<Report>> {
+    let evaluation = evaluation(w);
+    let key = ReportKey {
+        document: w.session.visible().id.clone(),
+        epoch: w.session.source_epoch().into(),
+        source: crate::source_cache::identity(w),
+        evaluated: evaluation.is_some(),
+    };
+    let mut cache = w.production_cache.lock().ok()?;
+    if let Some((current, report)) = &cache.current
+        && current == &key
     {
-        for (index, row) in rows.iter().enumerate() {
-            output.push(SemanticElement{id:format!("production:stock:{}",row.key),role:"production-stock-row".into(),label:row.row.description.clone(),value:Some(cad_core::cut_list::cells(row,&preferences.cut_list.columns,(index+1)as u32,preferences.units,preferences.precision).join(" · ")),state:"ready".into(),commands:vec![],relationships:vec![doc.root.clone(),row.row.definition.clone()].into_iter().chain(row.sources.iter().map(|source|source.member.group.node.clone())).collect(),data:json!({"contract":"tcad.cut-list","version":cad_core::cut_list::CONTRACT_VERSION,"row":row,"columns":preferences.cut_list.columns,"document":doc.id,"source":doc.fingerprint(),"geometry_basis":"native_manufacturing_metadata"})});
+        return Some(report.clone());
+    }
+    if cache.worker.is_none() {
+        match ReportWorker::start() {
+            Ok(worker) => cache.worker = Some(worker),
+            Err(error) => {
+                let report = Arc::new(Report {
+                    bom_error: Some(format!(
+                        "Could not start manufacturing report worker: {error}"
+                    )),
+                    ..Default::default()
+                });
+                cache.current = Some((key, report.clone()));
+                return Some(report);
+            }
         }
     }
-    output
+    loop {
+        match cache.worker.as_ref()?.receiver.try_recv() {
+            Ok((completed, report)) => {
+                if cache.in_flight.as_ref() == Some(&completed) {
+                    cache.in_flight = None;
+                }
+                if completed == key {
+                    cache.current = Some((completed, report));
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => break,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                cache.worker = None;
+                cache.in_flight = None;
+                let report = Arc::new(Report {
+                    bom_error: Some(
+                        "The manufacturing report worker stopped; update the model or reopen the project to retry."
+                            .into(),
+                    ),
+                    ..Default::default()
+                });
+                cache.current = Some((key, report.clone()));
+                return Some(report);
+            }
+        }
+    }
+    if let Some((current, report)) = &cache.current
+        && current == &key
+    {
+        return Some(report.clone());
+    }
+    // One job at a time; intervening edits are coalesced into the newest source.
+    // Never show rows derived from a previous draft, configuration or evaluation.
+    cache.current = None;
+    if cache.in_flight.is_none() {
+        let job = ReportJob {
+            key: key.clone(),
+            document: w.session.visible().clone(),
+            evaluation: evaluation.cloned(),
+        };
+        if cache.worker.as_ref()?.sender.try_send(job).is_ok() {
+            cache.in_flight = Some(key);
+        }
+    }
+    None
+}
+
+pub fn row_semantics(w: &Workspace) -> Vec<SemanticElement> {
+    if let Some(report) = report(w) {
+        let mut elements = report.semantics.clone();
+        for (scope, error) in [("bom", &report.bom_error), ("stock", &report.stock_error)] {
+            if let Some(error) = error {
+                elements.push(SemanticElement {
+                    id: format!("production:{scope}:error"), role: "production-error".into(),
+                    label: error.clone(), value: None, state: "invalid".into(),
+                    commands: vec![], relationships: vec![w.session.visible().root.clone()],
+                    data: json!({"contract":CONTRACT,"version":1,"document":w.session.visible().id,"source":crate::source_cache::identity(w).source}),
+                });
+            }
+        }
+        return elements;
+    }
+    vec![SemanticElement {
+        id: "production:report-status".into(),
+        role: "production-report-status".into(),
+        label: "Updating manufacturing reports…".into(),
+        value: None,
+        state: "pending".into(),
+        commands: vec![],
+        relationships: vec![w.session.visible().root.clone()],
+        data: json!({"contract":CONTRACT,"version":1,"document":w.session.visible().id,"source":crate::source_cache::identity(w).source}),
+    }]
 }
 
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
@@ -771,9 +1003,19 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                 }
             });
     }
-    let doc = w.session.visible();
-    let preferences = &doc.settings.production;
-    let evaluation = evaluation(w);
+    let Some(report) = report(w) else {
+        controls::label(
+            ui,
+            "production:report-status",
+            "production-report-status",
+            &[],
+            "Updating manufacturing reports…",
+            "pending",
+        );
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(50));
+        return;
+    };
     ui.separator();
     controls::label(
         ui,
@@ -783,51 +1025,17 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         "Bill of materials",
         "ready",
     );
-    match cad_core::bom::rows_with_placements(
-        doc,
-        &preferences.bom,
-        evaluation.map(|evaluation| &evaluation.assemblies),
-    ) {
-        Ok(rows) => {
-            let headers = preferences
-                .bom
-                .columns
-                .iter()
-                .map(|column| column.label().to_string())
-                .collect::<Vec<_>>();
-            let cells = rows
-                .iter()
-                .enumerate()
-                .map(|(index, row)| {
-                    let mut cells =
-                        cad_core::bom::cells(row, &preferences.bom.columns, (index + 1) as u32);
-                    if preferences.bom.mode == cad_core::bom::Mode::Indented
-                        && let Some(column) = preferences.bom.columns.iter().position(|column| {
-                            matches!(
-                                column,
-                                cad_core::bom::Column::PartNumber
-                                    | cad_core::bom::Column::Description
-                            )
-                        })
-                    {
-                        cells[column] =
-                            format!("{}{}", "  ".repeat(row.depth.min(256)), cells[column]);
-                    }
-                    (format!("production:bom:{}", row.key), cells)
-                })
-                .collect::<Vec<_>>();
-            table(ui, "production:bom", &headers, &cells);
-        }
-        Err(error) => {
-            controls::label(
-                ui,
-                "production:report-error",
-                "production-error",
-                &[],
-                &error.to_string(),
-                "invalid",
-            );
-        }
+    if let Some(error) = &report.bom_error {
+        controls::label(
+            ui,
+            "production:bom:error",
+            "production-error",
+            &[],
+            error,
+            "invalid",
+        );
+    } else {
+        table(ui, "production:bom", &report.bom_headers, &report.bom_cells);
     }
     ui.separator();
     controls::label(
@@ -838,44 +1046,22 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         "Weldment cut list",
         "ready",
     );
-    if let Some(evaluation) = evaluation {
-        match cad_core::cut_list::rows(doc, evaluation, &preferences.cut_list) {
-            Ok(rows) => {
-                let headers = preferences
-                    .cut_list
-                    .columns
-                    .iter()
-                    .map(|column| column.label().to_string())
-                    .collect::<Vec<_>>();
-                let cells = rows
-                    .iter()
-                    .enumerate()
-                    .map(|(index, row)| {
-                        (
-                            format!("production:stock:{}", row.key),
-                            cad_core::cut_list::cells(
-                                row,
-                                &preferences.cut_list.columns,
-                                (index + 1) as u32,
-                                preferences.units,
-                                preferences.precision,
-                            ),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                table(ui, "production:stock", &headers, &cells);
-            }
-            Err(error) => {
-                controls::label(
-                    ui,
-                    "production:report-error",
-                    "production-error",
-                    &[],
-                    &error.to_string(),
-                    "invalid",
-                );
-            }
-        }
+    if let Some(error) = &report.stock_error {
+        controls::label(
+            ui,
+            "production:stock:error",
+            "production-error",
+            &[],
+            error,
+            "invalid",
+        );
+    } else if report.evaluated {
+        table(
+            ui,
+            "production:stock",
+            &report.stock_headers,
+            &report.stock_cells,
+        );
     } else {
         ui.small("Wait for current evaluated fabrication metadata.");
     }

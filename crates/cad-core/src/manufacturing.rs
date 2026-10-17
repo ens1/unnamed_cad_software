@@ -656,7 +656,7 @@ pub fn cut_list(doc: &Document) -> Result<Vec<CutListRow>> {
     Ok(rows)
 }
 pub fn cut_list_csv(doc: &Document) -> Result<String> {
-    let mut s = "Definition,Member,Material,Length mm,Quantity\n".to_string();
+    let mut s = "Definition,Member,Material,Reference-path length (mm),Quantity\n".to_string();
     for r in cut_list(doc)? {
         s.push_str(&format!(
             "{},\"{}\",\"{}\",{:.6},{}\n",

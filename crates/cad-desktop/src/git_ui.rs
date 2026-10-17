@@ -10,6 +10,7 @@ use cad_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     path::PathBuf,
     sync::{Mutex, mpsc},
 };
@@ -24,6 +25,11 @@ pub struct State {
     source_request: Option<library::GitLinkRequest>,
     merge: Option<MergeCommit>,
     restored_merge: Option<(PathBuf, Id)>,
+    checked_sources: BTreeMap<Id, SourceCheck>,
+}
+struct SourceCheck {
+    pin: String,
+    available_revision: Option<u64>,
 }
 struct Pending {
     fingerprint: String,
@@ -48,8 +54,13 @@ enum Outcome {
     Compare(Document, PathBuf),
     Source(Document, library::GitLinkRequest),
     Linked(Document),
-    Update(library::ComponentUpdatePlan),
-    Checked(String),
+    Update(Box<library::ComponentUpdatePlan>),
+    Checked {
+        link: Id,
+        pin: String,
+        available_revision: Option<u64>,
+        message: String,
+    },
     Merge {
         document: Document,
         head: String,
@@ -250,7 +261,21 @@ pub fn poll(w: &mut Workspace) {
                 w.git_ui.impact = Some(plan.impact);
                 w.status = "Review affected items and the model preview. Apply waits for validation; Cancel keeps the old component version".into();
             }
-            Outcome::Checked(message) => w.status = message,
+            Outcome::Checked {
+                link,
+                pin,
+                available_revision,
+                message,
+            } => {
+                w.git_ui.checked_sources.insert(
+                    link,
+                    SourceCheck {
+                        pin,
+                        available_revision,
+                    },
+                );
+                w.status = message;
+            }
             Outcome::Merge {
                 document,
                 head,
@@ -581,12 +606,12 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                         let mut document = before.clone();
                         library::link(&mut document, &root, &source, None, Some(&link))?;
                         let impact = library::update_impact(&before, &document, &link)?;
-                        Ok(Outcome::Update(library::ComponentUpdatePlan {
+                        Ok(Outcome::Update(Box::new(library::ComponentUpdatePlan {
                             base_fingerprint: before.fingerprint(),
                             link,
                             document,
                             impact,
-                        }))
+                        })))
                     });
                 }
             }
@@ -606,15 +631,26 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                 let document = w.session.visible().clone();
                 if command == "component-source.check" {
                     submit(w, false, move || {
-                        Ok(Outcome::Checked(
-                            match library::check_update(&source, &root, true)? {
-                                Some((revision, _)) => format!(
-                                    "{} has an update (source revision {revision}). Preview it before applying",
-                                    source.name
-                                ),
-                                None => format!("{} is current", source.name),
-                            },
-                        ))
+                        let available_revision = library::check_update(&source, &root, true)?
+                            .map(|(revision, _)| revision);
+                        let name =
+                            cad_core::occurrence_names::definition(&document, &source.definition);
+                        let message = match available_revision {
+                            Some(revision) => format!(
+                                "{name}: revision {} → {revision} available. Preview it before applying",
+                                source.source_revision
+                            ),
+                            None => format!(
+                                "{name}: source revision {} is current",
+                                source.source_revision
+                            ),
+                        };
+                        Ok(Outcome::Checked {
+                            link,
+                            pin: source.source_sha256,
+                            available_revision,
+                            message,
+                        })
                     });
                 } else {
                     let revision = arguments
@@ -622,12 +658,12 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                         .and_then(Value::as_str)
                         .map(str::to_string);
                     submit(w, false, move || {
-                        Ok(Outcome::Update(library::prepare_update(
+                        Ok(Outcome::Update(Box::new(library::prepare_update(
                             &document,
                             &root,
                             &link,
                             revision.as_deref(),
-                        )?))
+                        )?)))
                     });
                 }
             }
@@ -857,26 +893,75 @@ fn library_elements(w: &Workspace) -> Vec<SemanticElement> {
         ));
     }
     for link in w.session.visible().libraries.values() {
+        let group = format!("component-source/{}", link.id);
+        let name = cad_core::occurrence_names::definition(w.session.visible(), &link.definition);
+        let available = w
+            .git_ui
+            .checked_sources
+            .get(&link.id)
+            .filter(|check| check.pin == link.source_sha256);
+        let status = match available {
+            Some(SourceCheck {
+                available_revision: Some(revision),
+                ..
+            }) => format!(
+                "Current revision {} → available revision {revision}",
+                link.source_revision
+            ),
+            Some(_) => format!("Revision {} · source is current", link.source_revision),
+            None => format!(
+                "Current revision {} · updates not checked",
+                link.source_revision
+            ),
+        };
+        elements.push(SemanticElement { id:group.clone(), role:"component-source-group".into(), label:name,
+            value:Some(status), state:if available.is_some_and(|check|check.available_revision.is_some()){"update-available"}else{"pinned"}.into(),
+            commands:vec![], relationships:vec![link.definition.clone()],
+            data:json!({"contract":"tcad.component-source","version":2,"link":link.id,"source_path":link.source_path,"current_revision":link.source_revision,"available_revision":available.and_then(|check|check.available_revision),"children":[format!("component-source/details/{}",link.id),format!("component-source.check/{}",link.id),format!("component-source.locate/{}",link.id),format!("component-source.update/{}",link.id)]}) });
+        let location = link
+            .git_source
+            .as_ref()
+            .map(|git| {
+                format!(
+                    "{} · {} · update channel {}",
+                    git.remote,
+                    if git.project_path.is_empty() {
+                        "Repository root"
+                    } else {
+                        &git.project_path
+                    },
+                    git.update_ref
+                )
+            })
+            .unwrap_or_else(|| link.source_path.clone());
+        elements.push(SemanticElement {id:format!("component-source/details/{}",link.id),role:"component-source-location".into(),label:"Source project".into(),value:Some(location),state:"ready".into(),commands:vec![],relationships:vec![group.clone()],data:json!({"contract":"tcad.component-source","version":2,"link":link.id,"source_path":link.source_path,"git_source":link.git_source})});
         elements.push(action_element(
             w,
             "component-source.check",
-            &format!("Check {}", link.name),
+            "Check for updates",
             json!({"link":link.id}),
         ));
         if link.git_source.is_none() {
             elements.push(action_element(
                 w,
                 "component-source.locate",
-                &format!("Locate {} source…", link.name),
+                "Locate source…",
                 json!({"link":link.id}),
             ));
         }
         elements.push(action_element(
             w,
             "component-source.update",
-            &format!("Preview {} update", link.name),
+            "Preview update",
             json!({"link":link.id}),
         ));
+        for element in elements
+            .iter_mut()
+            .rev()
+            .take(if link.git_source.is_none() { 3 } else { 2 })
+        {
+            element.relationships.push(group.clone());
+        }
     }
     elements
 }
@@ -887,15 +972,34 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         elements.push(SemanticElement{id:"git/repository-status".into(),role:"git-repository-status".into(),label:format!("Branch: {}",report.branch),value:Some(report.status.clone()),state:"ready".into(),commands:vec!["git.refresh".into()],relationships:vec![w.session.visible().id.clone()],data:json!({"contract":"tcad.git-status","version":1,"branch":report.branch,"status":report.status,"history":report.history,"branches":report.branches,"remotes":report.remotes,"recovery":report.recovery})});
     }
     for link in w.session.visible().libraries.values() {
-        elements.push(SemanticElement{id:format!("component-source/{}",link.id),role:"component-source-pin".into(),label:link.name.clone(),value:Some(link.git_source.as_ref().map(|source|source.commit.clone()).unwrap_or_else(||link.source_sha256.clone())),state:"pinned".into(),commands:vec!["component-source.check".into(),"component-source.update".into()],relationships:vec![link.id.clone(),link.definition.clone()],data:json!({"contract":"tcad.component-source","version":1,"link":link.id,"source_document":link.source_document,"source_definition":link.source_definition,"source_revision":link.source_revision,"source_sha256":link.source_sha256,"git_source":link.git_source,"definition_closure":link.definition_closure,"offline_snapshot":link.snapshot_resource})});
+        elements.push(SemanticElement{id:format!("component-source/pin/{}",link.id),role:"component-source-pin".into(),label:cad_core::occurrence_names::definition(w.session.visible(),&link.definition),value:Some(format!("Revision {}",link.source_revision)),state:"pinned".into(),commands:vec!["component-source.check".into(),"component-source.update".into()],relationships:vec![link.id.clone(),link.definition.clone()],data:json!({"contract":"tcad.component-source","version":2,"link":link.id,"source_document":link.source_document,"source_definition":link.source_definition,"source_revision":link.source_revision,"source_sha256":link.source_sha256,"git_source":link.git_source,"definition_closure":link.definition_closure,"offline_snapshot":link.snapshot_resource,"advanced_source":true})});
     }
     if let Some(impact) = &w.git_ui.impact {
         elements.push(SemanticElement{id:"component-source/update-impact".into(),role:"component-update-impact".into(),label:"Component update review".into(),value:Some(format!("{} components · {} mates · {} drawings · {} BOM rows",impact.occurrences.len(),impact.mates.len(),impact.drawings.len(),impact.bom_rows.len())),state:"review".into(),commands:vec![],relationships:impact.changed_definitions.clone(),data:json!({"contract":"tcad.component-update-impact","version":1,"impact":impact,"requires_current_evaluation":true})});
+        for (index, change) in impact.engineering_changes.iter().enumerate() {
+            elements.push(SemanticElement {
+                id:format!("component-source/update-impact/change/{index}"),
+                role:"component-update-change".into(), label:change.clone(), value:None,
+                state:"review".into(), commands:vec![],
+                relationships:vec!["component-source/update-impact".into()],
+                data:json!({"contract":"tcad.component-update-impact","version":2,"component_name":impact.component_name,"current_revision":impact.revision_before,"proposed_revision":impact.revision_after,"engineering_summary":true,"source_path":impact.source_path}),
+            });
+        }
     }
     elements
 }
 fn show_element(ui: &mut egui::Ui, w: &mut Workspace, element: SemanticElement) {
-    if element.role == "git-field" {
+    if element.role == "component-source-group" {
+        ui.separator();
+        ui.strong(&element.label);
+        if let Some(value) = &element.value {
+            ui.label(value);
+        }
+    } else if element.role == "component-source-location" {
+        if let Some(value) = &element.value {
+            ui.small(value);
+        }
+    } else if element.role == "git-field" {
         crate::ui::semantic_field(ui, w, &element);
     } else if controls::button(
         ui,
@@ -977,28 +1081,33 @@ pub fn versions(ui: &mut egui::Ui, w: &mut Workspace) {
 }
 pub fn libraries(ui: &mut egui::Ui, w: &mut Workspace) {
     ui.label("Linked components keep exact source versions and work offline. Updates require preview and Apply.");
-    for element in library_elements(w) {
-        show_element(ui, w, element);
-    }
-    for link in w.session.visible().libraries.values() {
-        ui.separator();
-        ui.strong(&link.name);
-        if let Some(git) = &link.git_source {
-            ui.small(format!("{} · commit {}", git.remote, &git.commit[..12]));
-            ui.small(format!("Update channel: {}", git.update_ref));
-        } else {
-            ui.small(format!(
-                "{} · source revision {}",
-                link.source_path, link.source_revision
-            ));
+    let mut elements = library_elements(w).into_iter().peekable();
+    let mut insertion = Vec::new();
+    while elements
+        .peek()
+        .is_some_and(|element| element.role != "component-source-group")
+    {
+        if let Some(element) = elements.next() {
+            insertion.push(element);
         }
+    }
+    egui::CollapsingHeader::new("Link another component")
+        .default_open(w.session.visible().libraries.is_empty())
+        .show(ui, |ui| {
+            for element in insertion {
+                show_element(ui, w, element);
+            }
+        });
+    for element in elements {
+        show_element(ui, w, element);
     }
     if let Some(impact) = &w.git_ui.impact {
         ui.separator();
-        ui.strong("Update impact");
-        ui.small(format!(
-            "{} → {}",
-            impact.source_before, impact.source_after
+        ui.strong(format!("Update {}", impact.component_name));
+        ui.small(&impact.source_path);
+        ui.label(format!(
+            "Revision {} → {}",
+            impact.revision_before, impact.revision_after
         ));
         ui.label(format!(
             "{} component occurrences · {} mates · {} drawings · {} changed BOM rows",
@@ -1007,12 +1116,29 @@ pub fn libraries(ui: &mut egui::Ui, w: &mut Workspace) {
             impact.drawings.len(),
             impact.bom_rows.len()
         ));
+        ui.strong("Engineering changes");
+        for change in &impact.engineering_changes {
+            ui.label(change);
+        }
         ui.collapsing("Affected components", |ui| {
             for occurrence in &impact.occurrences {
-                ui.label(&occurrence.name);
+                if occurrence.paths.is_empty() {
+                    ui.label(&occurrence.name);
+                } else {
+                    for path in &occurrence.paths {
+                        ui.label(
+                            cad_core::occurrence_names::path(w.session.visible(), path)
+                                .unwrap_or_else(|| occurrence.name.clone()),
+                        );
+                    }
+                }
             }
         });
-        ui.collapsing("Source changes", |ui| {
+        ui.collapsing("Advanced Source · exact changes", |ui| {
+            ui.small(format!(
+                "{} → {}",
+                impact.source_before, impact.source_after
+            ));
             for change in &impact.changes {
                 ui.small(&change.path);
                 ui.monospace(format!(

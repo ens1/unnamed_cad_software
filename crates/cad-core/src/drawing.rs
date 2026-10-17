@@ -2801,6 +2801,30 @@ fn cosmetic_thread_mark(view: &View, circle: &CircularGeometry) -> Result<Primit
     })
 }
 
+pub(crate) fn dimension_for_placement(
+    doc: &Document,
+    evaluation: &Evaluation,
+    sheet: &Drawing,
+    projection: &ViewProjection,
+    source: &DrawingDimension,
+    out: &mut Vec<Primitive>,
+) -> Result<()> {
+    dimension(
+        doc,
+        evaluation,
+        sheet,
+        &View {
+            name: source.view.clone(),
+            at: [projection.rect_mm[0], projection.rect_mm[1]],
+            size: [projection.rect_mm[2], projection.rect_mm[3]],
+            center: projection.model_center,
+            scale: projection.scale,
+        },
+        source,
+        out,
+    )
+}
+
 fn dimension(
     doc: &Document,
     e: &Evaluation,
@@ -4000,6 +4024,7 @@ fn build_sheet_mode(
         [bounds[1][0], footer_height + 2.],
     );
     let mut prepared = BTreeMap::new();
+    let mut automatic_slots = BTreeMap::new();
     // The automatic layout is disposable presentation data. Saving/dragging a
     // resolved view copies its relationship into editable source; an explicit
     // unlinked layout remains the user's independent override.
@@ -4110,6 +4135,7 @@ fn build_sheet_mode(
                 .min((cell[1] - 10.) / (max[1] - min[1]).max(1.))
                 * 0.78,
         };
+        automatic_slots.insert(name.clone(), (column, row));
         if !sheet.view_layouts.contains_key(name) {
             effective.view_layouts.insert(
                 name.clone(),
@@ -4200,6 +4226,66 @@ fn build_sheet_mode(
             (view, lines, view_curves, note, min, max, view_dashes),
         );
     }
+    // Reserve equal paper margins, rather than equal-sized model cells. A
+    // shallow front view should not consume as much height as a tall top view
+    // and force their common scale down an entire standard ratio.
+    if sheet.view_layouts.is_empty() {
+        let mut column_extents = vec![0f64; columns];
+        let mut row_extents = vec![0f64; rows];
+        for (name, (_, _, _, _, min, max, _)) in &prepared {
+            let (column, row) = automatic_slots[name];
+            column_extents[column] = column_extents[column].max((max[0] - min[0]).max(1.));
+            row_extents[row] = row_extents[row].max((max[1] - min[1]).max(1.));
+        }
+        let area = [
+            bounds[1][0] - bounds[0][0] - 8.,
+            bounds[1][1] - footer_height - 13.,
+        ];
+        let margin = 24.;
+        let gaps = [8., 10.];
+        let limit = ((area[0] - margin * columns as f64 - gaps[0] * (columns - 1) as f64)
+            / column_extents.iter().sum::<f64>())
+        .min(
+            (area[1] - margin * rows as f64 - gaps[1] * (rows - 1) as f64)
+                / row_extents.iter().sum::<f64>(),
+        );
+        if !limit.is_finite() || limit <= 0. {
+            return Err(invalid(
+                "Paper is too small for clear view margins and captions; enlarge the sheet or reduce its views",
+            ));
+        }
+        let scale = standard_scale(limit);
+        let widths = column_extents
+            .iter()
+            .map(|extent| extent * scale + margin)
+            .collect::<Vec<_>>();
+        let heights = row_extents
+            .iter()
+            .map(|extent| extent * scale + margin)
+            .collect::<Vec<_>>();
+        let used = [
+            widths.iter().sum::<f64>() + gaps[0] * (columns - 1) as f64,
+            heights.iter().sum::<f64>() + gaps[1] * (rows - 1) as f64,
+        ];
+        let origin = [
+            bounds[0][0] + 4. + (area[0] - used[0]) * 0.5,
+            footer_height + 6. + (area[1] - used[1]) * 0.5,
+        ];
+        for (name, (view, _, _, _, _, _, _)) in &mut prepared {
+            let (column, row) = automatic_slots[name];
+            view.at = [
+                origin[0] + widths[..column].iter().sum::<f64>() + gaps[0] * column as f64,
+                origin[1] + heights[..row].iter().sum::<f64>() + gaps[1] * row as f64,
+            ];
+            view.size = [widths[column], heights[row]];
+            view.scale = scale * if name == "detail-front" { 2. } else { 1. };
+            let layout = effective
+                .view_layouts
+                .get_mut(name)
+                .ok_or_else(|| invalid("Missing automatic view placement"))?;
+            layout.rect_mm = [view.at[0], view.at[1], view.size[0], view.size[1]];
+        }
+    }
     validate_view_relationships(&effective)?;
     for name in &names {
         let layout = &effective.view_layouts[name];
@@ -4227,6 +4313,9 @@ fn build_sheet_mode(
                 key == name
             })
             .map(|(_, (view, _, _, _, min, max, _))| {
+                if sheet.view_layouts.is_empty() {
+                    return view.scale;
+                }
                 (view.size[0] / (max[0] - min[0]).max(1.))
                     .min(view.size[1] / (max[1] - min[1]).max(1.))
                     * 0.78
