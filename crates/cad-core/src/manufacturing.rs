@@ -349,6 +349,24 @@ pub fn stl(evaluation: &Evaluation, path: &Path) -> Result<()> {
     writeln!(file, "endsolid tcad")?;
     Ok(())
 }
+fn pdf_drawing_path(content: &mut String, points: &[[f64; 2]], pattern_mm: &[f64]) {
+    const FACTOR: f64 = 72. / 25.4;
+    let pattern = pattern_mm
+        .iter()
+        .map(|length| format!("{:.6}", length * FACTOR))
+        .collect::<Vec<_>>()
+        .join(" ");
+    content.push_str(&format!("[{pattern}] 0 d\n"));
+    for (index, point) in points.iter().enumerate() {
+        content.push_str(&format!(
+            "{:.6} {:.6} {}\n",
+            point[0] * FACTOR,
+            point[1] * FACTOR,
+            if index == 0 { "m" } else { "l" }
+        ));
+    }
+    content.push_str("S\n");
+}
 pub fn drawing_pdf(doc: &Document, e: &Evaluation, path: &Path) -> Result<()> {
     let factor = 72. / 25.4;
     let mut pages = vec![];
@@ -357,20 +375,22 @@ pub fn drawing_pdf(doc: &Document, e: &Evaluation, path: &Path) -> Result<()> {
         for primitive in sheet.primitives {
             match primitive {
                 crate::drawing::Primitive::Polyline { points, dashed } => {
-                    content.push_str(if dashed {
-                        "[11.34 2.83 2.83 2.83] 0 d\n"
-                    } else {
-                        "[] 0 d\n"
-                    });
-                    for (i, p) in points.iter().enumerate() {
-                        content.push_str(&format!(
-                            "{:.6} {:.6} {}\n",
-                            p[0] * factor,
-                            p[1] * factor,
-                            if i == 0 { "m" } else { "l" }
-                        ));
-                    }
-                    content.push_str("S\n");
+                    pdf_drawing_path(
+                        &mut content,
+                        &points,
+                        if dashed {
+                            &crate::drawing_strokes::REFERENCE_PATTERN_MM
+                        } else {
+                            &[]
+                        },
+                    );
+                }
+                crate::drawing::Primitive::HiddenPolyline { points } => {
+                    pdf_drawing_path(
+                        &mut content,
+                        &points,
+                        &crate::drawing_strokes::HIDDEN_PATTERN_MM,
+                    );
                 }
                 crate::drawing::Primitive::Text { at, size, text } => {
                     content.push_str(&format!(
@@ -382,20 +402,22 @@ pub fn drawing_pdf(doc: &Document, e: &Evaluation, path: &Path) -> Result<()> {
                     ));
                 }
                 crate::drawing::Primitive::Spline { curve, dashed } => {
-                    content.push_str(if dashed {
-                        "[11.34 2.83 2.83 2.83] 0 d\n"
-                    } else {
-                        "[] 0 d\n"
-                    });
-                    for (i, p) in crate::drawing::display_curve(&curve)?.iter().enumerate() {
-                        content.push_str(&format!(
-                            "{:.6} {:.6} {}\n",
-                            p[0] * factor,
-                            p[1] * factor,
-                            if i == 0 { "m" } else { "l" }
-                        ));
-                    }
-                    content.push_str("S\n");
+                    pdf_drawing_path(
+                        &mut content,
+                        &crate::drawing::display_curve(&curve)?,
+                        if dashed {
+                            &crate::drawing_strokes::REFERENCE_PATTERN_MM
+                        } else {
+                            &[]
+                        },
+                    );
+                }
+                crate::drawing::Primitive::HiddenSpline { curve } => {
+                    pdf_drawing_path(
+                        &mut content,
+                        &crate::drawing::display_curve(&curve)?,
+                        &crate::drawing_strokes::HIDDEN_PATTERN_MM,
+                    );
                 }
                 crate::drawing::Primitive::Circle { center, radius } => {
                     let x = center[0] * factor;

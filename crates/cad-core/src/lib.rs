@@ -26,6 +26,7 @@ pub mod drawing_layout;
 pub mod drawing_revision;
 pub mod drawing_strokes;
 pub mod drawing_tables;
+pub mod drawing_visibility;
 pub mod edge_features;
 pub mod exploded_views;
 pub mod expression;

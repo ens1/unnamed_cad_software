@@ -281,12 +281,12 @@ fn bounds(primitives: &[Primitive]) -> Option<[[f64; 2]; 2]> {
     };
     for primitive in primitives {
         match primitive {
-            Primitive::Polyline { points, .. } => {
+            Primitive::Polyline { points, .. } | Primitive::HiddenPolyline { points } => {
                 for point in points {
                     add(*point);
                 }
             }
-            Primitive::Spline { curve, .. } => {
+            Primitive::Spline { curve, .. } | Primitive::HiddenSpline { curve } => {
                 for point in &curve.control_points {
                     add(*point);
                 }
@@ -920,11 +920,11 @@ fn segment_distance(point: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 }
 fn primitive_distance(point: [f64; 2], primitive: &Primitive) -> f64 {
     match primitive {
-        Primitive::Polyline { points, .. } => points
+        Primitive::Polyline { points, .. } | Primitive::HiddenPolyline { points } => points
             .windows(2)
             .map(|pair| segment_distance(point, pair[0], pair[1]))
             .fold(f64::INFINITY, f64::min),
-        Primitive::Spline { curve, .. } => {
+        Primitive::Spline { curve, .. } | Primitive::HiddenSpline { curve } => {
             drawing::display_curve(curve)
                 .ok()
                 .map_or(f64::INFINITY, |points| {
@@ -1282,7 +1282,7 @@ pub fn place_dimension_outside(
     ) {
         return Ok(());
     }
-    let rendered = drawing::build_sheet_preview(doc, evaluation, sheet, 0)?;
+    let rendered = drawing::build_sheet_layout(doc, evaluation, sheet, 0)?;
     let projection = rendered
         .projections
         .get(&dimension.view)
@@ -1525,7 +1525,7 @@ fn diagnostic_position(
         Target::TableSegment { segment, .. } => segment,
         _ => return Ok(None),
     };
-    let rendered = drawing::build_sheet_preview(doc, evaluation, source, page)?;
+    let rendered = drawing::build_sheet_layout(doc, evaluation, source, page)?;
     if !rendered.diagnostics.contains_key(key) {
         return Ok(None);
     }
@@ -1600,7 +1600,7 @@ pub fn apply(
             finite(delta_mm)?;
             match target {
                 Target::View { key } => {
-                    let rendered = drawing::build_sheet_preview(doc, evaluation, source, 0)?;
+                    let rendered = drawing::build_sheet_layout(doc, evaluation, source, 0)?;
                     let actual = rendered
                         .views
                         .get(key)
@@ -1618,7 +1618,7 @@ pub fn apply(
                     }
                 }
                 Target::Dimension { id } => {
-                    let rendered = drawing::build_sheet_preview(doc, evaluation, source, 0)?;
+                    let rendered = drawing::build_sheet_layout(doc, evaluation, source, 0)?;
                     let dimension = source
                         .dimensions
                         .iter()
@@ -1698,7 +1698,7 @@ pub fn apply(
             finite(rect_mm)?;
             match target {
                 Target::View { key } => {
-                    let rendered = drawing::build_sheet_preview(doc, evaluation, source, 0)?;
+                    let rendered = drawing::build_sheet_layout(doc, evaluation, source, 0)?;
                     let actual = rendered
                         .views
                         .get(key)
@@ -2067,6 +2067,6 @@ pub fn apply(
     // Every gesture may repair one item while another still has a drawing
     // diagnostic. Native reference proofs above stay strict; the worker must
     // validate the complete drawing before final Apply or production export.
-    drawing::build_sheet_preview(doc, evaluation, &sheet, page)?;
+    drawing::build_sheet_layout(doc, evaluation, &sheet, page)?;
     Ok(sheet)
 }

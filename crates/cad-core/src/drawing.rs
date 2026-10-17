@@ -11,8 +11,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod symbols;
 pub use symbols::*;
 
-pub const CONTRACT_VERSION: u32 = 10;
-pub const FORMAT_VERSION: u32 = 2;
+pub const CONTRACT_VERSION: u32 = 11;
+pub const FORMAT_VERSION: u32 = 3;
 const TITLE_CELL_PADDING_MM: f64 = 1.;
 const TITLE_LABEL_SCALE: f64 = 0.65;
 const TITLE_LINE_HEIGHT: f64 = 1.35;
@@ -191,6 +191,8 @@ pub struct SheetTemplate {
     pub views: Vec<String>,
     pub annotations: Vec<String>,
     pub view_layouts: BTreeMap<String, ViewLayout>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub view_display_modes: BTreeMap<String, crate::drawing_visibility::DisplayMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub title_block: BTreeMap<String, String>,
 }
@@ -471,6 +473,14 @@ pub struct Annotation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Primitive {
+    /// Occluded model edges use short engineering dashes, separately from
+    /// center/reference/ghost strokes carried by the legacy `dashed` flag.
+    HiddenPolyline {
+        points: Vec<[f64; 2]>,
+    },
+    HiddenSpline {
+        curve: crate::sketch_edit::Curve2,
+    },
     Polyline {
         points: Vec<[f64; 2]>,
         dashed: bool,
@@ -512,8 +522,11 @@ impl ViewProjection {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ViewFidelity {
     pub description: String,
+    /// True only when occluded strokes are omitted, not when shown dashed.
     pub hidden_line_removal: bool,
     pub approximate: bool,
+    #[serde(default)]
+    pub visibility: crate::drawing_visibility::Fidelity,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DrawingSourceInfo {
@@ -940,6 +953,15 @@ pub fn new_sheet(doc: &Document, definition: &str, name: String) -> Result<Drawi
         tables: vec![],
         format: Some(SheetFormat::default()),
         view_layouts: BTreeMap::new(),
+        view_display_modes: ["front", "top", "right"]
+            .map(|key| {
+                (
+                    key.into(),
+                    crate::drawing_visibility::DisplayMode::HiddenLinesRemoved,
+                )
+            })
+            .into_iter()
+            .collect(),
         exploded_view: None,
         display_state: None,
     };
@@ -1074,9 +1096,21 @@ pub fn set_views(sheet: &mut Drawing, views: Vec<String>) -> Result<()> {
             "Break or reparent aligned views before removing their parent view",
         ));
     }
+    let convention = sheet.view_display_modes.values().next().copied();
+    for key in &views {
+        if !sheet.views.contains(key)
+            && key != "section-z"
+            && let Some(mode) = convention
+        {
+            sheet.view_display_modes.insert(key.clone(), mode);
+        }
+    }
     sheet.views = views;
     sheet
         .view_layouts
+        .retain(|key, _| sheet.views.contains(key));
+    sheet
+        .view_display_modes
         .retain(|key, _| sheet.views.contains(key));
     Ok(())
 }
@@ -1090,6 +1124,7 @@ impl SheetTemplate {
             views: view_keys(sheet),
             annotations: sheet.annotations.clone(),
             view_layouts: sheet.view_layouts.clone(),
+            view_display_modes: sheet.view_display_modes.clone(),
             title_block: sheet.title_block.clone(),
         }
     }
@@ -1115,6 +1150,7 @@ impl SheetTemplate {
             tables: vec![],
             format: Some(self.format.clone()),
             view_layouts: self.view_layouts.clone(),
+            view_display_modes: self.view_display_modes.clone(),
             exploded_view: None,
             display_state: None,
         };
@@ -1128,6 +1164,7 @@ impl SheetTemplate {
         sheet.views = self.views.clone();
         sheet.annotations = self.annotations.clone();
         sheet.view_layouts = self.view_layouts.clone();
+        sheet.view_display_modes = self.view_display_modes.clone();
         sheet.title_block = self.title_block.clone();
         let mut format = self.format.clone();
         refresh_format_ids(&mut format);
@@ -1901,12 +1938,28 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
     }
     ids.insert(sheet.id.clone());
     let views = view_keys(sheet);
+    if sheet
+        .view_display_modes
+        .keys()
+        .any(|key| !views.contains(key))
+    {
+        return Err(invalid(
+            "A drawing visibility mode refers to a view absent from its sheet",
+        ));
+    }
     if views.len() > 16
         || views.iter().collect::<BTreeSet<_>>().len() != views.len()
         || views.iter().any(|v| !VIEW_KEYS.contains(&v.as_str()))
     {
         return Err(invalid(
             "Sheet view keys must be distinct supported named projections",
+        ));
+    }
+    if crate::drawing_visibility::mode_for(sheet, "section-z")
+        != crate::drawing_visibility::DisplayMode::Wireframe
+    {
+        return Err(invalid(
+            "Section-Z is a sampled section intersection; line visibility modes apply to full model views",
         ));
     }
     for key in &views {
@@ -2292,6 +2345,52 @@ impl View {
             self.at[1] + self.size[1] / 2. + (p[1] - self.center[1]) * self.scale,
         ])
     }
+}
+fn emit_projected_curve(
+    out: &mut Vec<Primitive>,
+    view: &View,
+    curve: crate::sketch_edit::Curve3,
+    dashed: bool,
+    hidden: bool,
+    clip: bool,
+) -> Result<()> {
+    let curve = crate::sketch_edit::Curve2 {
+        control_points: curve
+            .control_points
+            .into_iter()
+            .map(|p| view.screen(p))
+            .collect::<Result<_>>()?,
+        weights: curve.weights,
+        knots: curve.knots,
+        degree: curve.degree,
+    };
+    crate::sketch_edit::validate_nurbs(&curve)?;
+    if curve.control_points.iter().all(|p| {
+        (p[0] - curve.control_points[0][0]).hypot(p[1] - curve.control_points[0][1]) < 1e-10
+    }) {
+        return Ok(());
+    }
+    if clip {
+        for pair in display_curve(&curve)?.windows(2) {
+            if let Some([a, b]) = clipped_segment(pair[0], pair[1], view) {
+                out.push(if hidden {
+                    Primitive::HiddenPolyline { points: vec![a, b] }
+                } else {
+                    Primitive::Polyline {
+                        points: vec![a, b],
+                        dashed,
+                    }
+                });
+            }
+        }
+    } else {
+        out.push(if hidden {
+            Primitive::HiddenSpline { curve }
+        } else {
+            Primitive::Spline { curve, dashed }
+        });
+    }
+    Ok(())
 }
 /// Display/print tessellation only. DXF retains the exact projected rational curve.
 pub fn display_curve(curve: &crate::sketch_edit::Curve2) -> Result<Vec<[f64; 2]>> {
@@ -3596,6 +3695,15 @@ pub fn sheets(doc: &Document, e: &Evaluation) -> Result<Vec<Sheet>> {
             tables: vec![],
             format: None,
             view_layouts: BTreeMap::new(),
+            view_display_modes: ["front", "top", "right", "isometric"]
+                .map(|key| {
+                    (
+                        key.into(),
+                        crate::drawing_visibility::DisplayMode::HiddenLinesRemoved,
+                    )
+                })
+                .into_iter()
+                .collect(),
             exploded_view: None,
             display_state: None,
         }]
@@ -3833,6 +3941,19 @@ pub fn build_sheet_preview(
         build_continuation_sheet(doc, e, sheet, page, true)
     }
 }
+/// Disposable layout/annotation geometry for synchronous interaction. It keeps
+/// all source-reference and paper diagnostics, but omits surface visibility.
+/// Production preview, validation and export must use the full sheet builders.
+pub fn build_sheet_layout(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    page: u32,
+) -> Result<Sheet> {
+    let mut layout = sheet.clone();
+    layout.view_display_modes.clear();
+    build_sheet_preview(doc, e, &layout, page)
+}
 fn build_sheet_mode(
     doc: &Document,
     e: &Evaluation,
@@ -3895,6 +4016,13 @@ fn build_sheet_mode(
     let mut triangles = Vec::new();
     let mut line_dashes = Vec::new();
     let mut triangle_dashes = Vec::new();
+    let visibility_requested = view_keys(sheet).iter().any(|key| {
+        key != "section-z"
+            && crate::drawing_visibility::mode_for(sheet, key)
+                != crate::drawing_visibility::DisplayMode::Wireframe
+    });
+    let mut visibility_scene = crate::drawing_visibility::Scene::default();
+    let mut source_faces = Vec::new();
     for displayed in &instances {
         if displayed.effect.visibility == Some(crate::display_states::Visibility::Hidden) {
             continue;
@@ -3911,6 +4039,14 @@ fn build_sheet_mode(
         let Some(mesh) = e.meshes.get(&key) else {
             continue;
         };
+        if visibility_requested {
+            source_faces.extend(visibility_scene.add_mesh(
+                mesh,
+                instance.matrix,
+                ghost,
+                e.accuracy.modeling.linear_mm,
+            )?);
+        }
         for edge in &mesh.edges {
             line_dashes.push(ghost);
             world.push(
@@ -4090,6 +4226,10 @@ fn build_sheet_mode(
                     .flatten()
                     .flat_map(|c| c.control_points.iter()),
             )
+            // Curved silhouettes can extend beyond native edges. Both layout
+            // and classified views include these surface extents, so switching
+            // line modes preserves view scale and dimension origins.
+            .chain(triangles.iter().flatten().filter(|_| name != "section-z"))
         {
             let p = project(name, *p)?;
             for i in 0..2 {
@@ -4330,7 +4470,7 @@ fn build_sheet_mode(
         resolve_view_alignment(&effective, name, &mut prepared, &mut resolved)?;
     }
     for name in &names {
-        let (view, lines, view_curves, note, min, max, view_dashes) = prepared
+        let (view, lines, view_curves, mut note, min, max, view_dashes) = prepared
             .remove(name)
             .ok_or_else(|| invalid("Missing prepared view"))?;
         let [x, y] = view.at;
@@ -4379,11 +4519,56 @@ fn build_sheet_mode(
             },
         );
         let layout_invalid = result.diagnostics.contains_key(&view_id(sheet, name));
+        let mode = crate::drawing_visibility::mode_for(sheet, name);
+        let mut occlusion =
+            if name != "section-z" && mode != crate::drawing_visibility::DisplayMode::Wireframe {
+                Some(visibility_scene.project(name, e.accuracy)?)
+            } else {
+                None
+            };
+        let visibility = if name == "section-z" {
+            crate::drawing_visibility::Fidelity::SectionIntersection {
+                chord_tolerance_mm: e.accuracy.display_mm,
+            }
+        } else {
+            occlusion.as_ref().map_or_else(
+                || crate::drawing_visibility::Fidelity::Wireframe,
+                |scene| scene.fidelity(),
+            )
+        };
+        if occlusion.is_some() {
+            note = match &visibility {
+                crate::drawing_visibility::Fidelity::Tessellated {
+                    chord_tolerance_mm, ..
+                } => format!(
+                    "{}; sampled surface visibility and silhouettes ({chord_tolerance_mm:.4} mm chord tolerance); native rational edge carriers retained",
+                    mode.label()
+                ),
+                _ => format!(
+                    "{}; native planar trim visibility; exact rational edge carriers",
+                    mode.label()
+                ),
+            };
+            if curves.iter().any(Option::is_none) {
+                note.push_str("; unsupported edge carriers sampled");
+            }
+            if name == "detail-front" {
+                note.push_str("; detail clipping uses sampled paper curves");
+            }
+            if view_dashes.iter().any(|ghost| *ghost) {
+                note.push_str("; ghost components remain reference strokes and do not occlude");
+            }
+        }
         result.view_fidelity.insert(
             name.clone(),
             ViewFidelity {
-                approximate: name == "section-z" || curves.iter().any(Option::is_none),
-                hidden_line_removal: false,
+                approximate: visibility.approximate()
+                    || curves.iter().any(Option::is_none)
+                    || name == "detail-front"
+                    || layout_invalid,
+                hidden_line_removal: mode
+                    == crate::drawing_visibility::DisplayMode::HiddenLinesRemoved,
+                visibility,
                 description: if layout_invalid {
                     format!("Layout needs repair; preview clipped to saved rectangle. {note}")
                 } else {
@@ -4472,42 +4657,71 @@ fn build_sheet_mode(
                 }
             }
         }
-        for ((line, curve), dashed) in lines.into_iter().zip(view_curves).zip(view_dashes) {
-            let curve = curve
-                .map(|curve| {
-                    Ok::<_, CadError>(crate::sketch_edit::Curve2 {
-                        control_points: curve
-                            .control_points
-                            .into_iter()
-                            .map(|p| view.screen(p))
-                            .collect::<Result<_>>()?,
-                        weights: curve.weights,
-                        knots: curve.knots,
-                        degree: curve.degree,
-                    })
-                })
-                .transpose()?;
-            if name != "detail-front"
-                && !layout_invalid
-                && let Some(curve) = curve
-            {
-                crate::sketch_edit::validate_nurbs(&curve)?;
-                out.push(Primitive::Spline { curve, dashed });
-            } else {
-                let points = if let Some(curve) = curve {
-                    display_curve(&curve)?
+        for (index, ((line, curve), dashed)) in lines
+            .into_iter()
+            .zip(view_curves)
+            .zip(view_dashes)
+            .enumerate()
+        {
+            let edge_curves = curve.map_or_else(
+                || {
+                    line.windows(2)
+                        .map(|p| crate::drawing_visibility::line_curve([p[0], p[1]]))
+                        .collect::<Vec<_>>()
+                },
+                |curve| vec![curve],
+            );
+            for curve in edge_curves {
+                let pieces = if !dashed && let Some(scene) = &mut occlusion {
+                    scene.split(&curve, source_faces.get(index).map_or(&[], Vec::as_slice))?
                 } else {
-                    line.into_iter()
-                        .map(|p| view.screen(p))
-                        .collect::<Result<_>>()?
+                    vec![crate::drawing_visibility::Piece {
+                        curve,
+                        hidden: false,
+                    }]
                 };
-                for pair in points.windows(2) {
-                    if let Some([a, b]) = clipped_segment(pair[0], pair[1], &view) {
-                        out.push(Primitive::Polyline {
-                            points: vec![a, b],
-                            dashed,
-                        });
+                for piece in pieces {
+                    if piece.hidden
+                        && mode == crate::drawing_visibility::DisplayMode::HiddenLinesRemoved
+                    {
+                        continue;
                     }
+                    emit_projected_curve(
+                        out,
+                        &view,
+                        piece.curve,
+                        dashed,
+                        piece.hidden,
+                        name == "detail-front" || layout_invalid,
+                    )?;
+                }
+            }
+        }
+        if let Some(scene) = &mut occlusion {
+            for (points, ghost) in std::mem::take(&mut scene.silhouettes) {
+                let curve = crate::drawing_visibility::line_curve(points);
+                let pieces = if ghost {
+                    vec![crate::drawing_visibility::Piece {
+                        curve,
+                        hidden: false,
+                    }]
+                } else {
+                    scene.split(&curve, &[])?
+                };
+                for piece in pieces {
+                    if piece.hidden
+                        && mode == crate::drawing_visibility::DisplayMode::HiddenLinesRemoved
+                    {
+                        continue;
+                    }
+                    emit_projected_curve(
+                        out,
+                        &view,
+                        piece.curve,
+                        ghost,
+                        piece.hidden,
+                        name == "detail-front" || layout_invalid,
+                    )?;
                 }
             }
         }
@@ -4613,8 +4827,10 @@ fn build_sheet_mode(
             });
     }
     if out.iter().any(|p| match p {
-        Primitive::Polyline { points, .. } => points.iter().flatten().any(|v| !v.is_finite()),
-        Primitive::Spline { curve, .. } => curve
+        Primitive::Polyline { points, .. } | Primitive::HiddenPolyline { points } => {
+            points.iter().flatten().any(|v| !v.is_finite())
+        }
+        Primitive::Spline { curve, .. } | Primitive::HiddenSpline { curve } => curve
             .control_points
             .iter()
             .flatten()
@@ -4637,12 +4853,21 @@ fn build_sheet_mode(
 
 pub fn dxf(doc: &Document, e: &Evaluation) -> Result<String> {
     let sheets = sheets(doc, e)?;
-    let mut out="0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLTYPE\n70\n1\n0\nLTYPE\n2\nTCAD_REFERENCE\n70\n0\n3\nTCAD reference geometry\n72\n65\n73\n4\n40\n7\n49\n4\n74\n0\n49\n-1\n74\n0\n49\n1\n74\n0\n49\n-1\n74\n0\n0\nENDTAB\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n".to_string();
+    let mut out="0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLTYPE\n70\n2\n0\nLTYPE\n2\nTCAD_REFERENCE\n70\n0\n3\nTCAD reference geometry\n72\n65\n73\n4\n40\n7\n49\n4\n74\n0\n49\n-1\n74\n0\n49\n1\n74\n0\n49\n-1\n74\n0\n0\nLTYPE\n2\nTCAD_HIDDEN\n70\n0\n3\nTCAD hidden model edges\n72\n65\n73\n2\n40\n3\n49\n2\n74\n0\n49\n-1\n74\n0\n0\nENDTAB\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n".to_string();
     let mut offset = 0.;
     for sheet in sheets {
         let layer = sheet.name.replace(['\n', '\r'], " ");
         for primitive in sheet.primitives {
             match primitive {
+                Primitive::HiddenPolyline { points } => {
+                    for pair in points.windows(2) {
+                        let [a, b] = [pair[0], pair[1]];
+                        out.push_str(&format!(
+                            "0\nLINE\n8\n{layer}\n6\nTCAD_HIDDEN\n10\n{}\n20\n{}\n30\n0\n11\n{}\n21\n{}\n31\n0\n",
+                            a[0]+offset,a[1],b[0]+offset,b[1]
+                        ));
+                    }
+                }
                 Primitive::Polyline { points, dashed } => {
                     let segments = if dashed {
                         crate::drawing_strokes::reference_segments(&points)?
@@ -4666,17 +4891,20 @@ pub fn dxf(doc: &Document, e: &Evaluation) -> Result<String> {
                     text.replace(['\n', '\r'], " ")
                 )),
                 Primitive::Spline { curve, dashed } => {
-                    let linetype = if dashed { "6\nTCAD_REFERENCE\n" } else { "" };
-                    out.push_str(&format!("0\nSPLINE\n8\n{layer}\n{linetype}70\n12\n71\n{}\n72\n{}\n73\n{}\n74\n0\n210\n0\n220\n0\n230\n1\n",curve.degree,curve.knots.len(),curve.control_points.len()));
-                    for knot in curve.knots {
-                        out.push_str(&format!("40\n{knot}\n"));
-                    }
-                    for weight in curve.weights {
-                        out.push_str(&format!("41\n{weight}\n"));
-                    }
-                    for p in curve.control_points {
-                        out.push_str(&format!("10\n{}\n20\n{}\n30\n0\n", p[0] + offset, p[1]));
-                    }
+                    dxf_curve(
+                        &mut out,
+                        &curve,
+                        &layer,
+                        offset,
+                        if dashed {
+                            "TCAD_REFERENCE"
+                        } else {
+                            "CONTINUOUS"
+                        },
+                    );
+                }
+                Primitive::HiddenSpline { curve } => {
+                    dxf_curve(&mut out, &curve, &layer, offset, "TCAD_HIDDEN");
                 }
                 Primitive::Circle { center, radius } => out.push_str(&format!(
                     "0\nCIRCLE\n8\n{layer}\n10\n{}\n20\n{}\n30\n0\n40\n{radius}\n",
@@ -4689,6 +4917,36 @@ pub fn dxf(doc: &Document, e: &Evaluation) -> Result<String> {
     }
     out.push_str("0\nENDSEC\n0\nEOF\n");
     Ok(out)
+}
+
+fn dxf_curve(
+    out: &mut String,
+    curve: &crate::sketch_edit::Curve2,
+    layer: &str,
+    offset: f64,
+    linetype: &str,
+) {
+    if curve.degree == 1 && curve.control_points.len() == 2 {
+        let [a, b] = [curve.control_points[0], curve.control_points[1]];
+        out.push_str(&format!(
+            "0\nLINE\n8\n{layer}\n6\n{linetype}\n10\n{}\n20\n{}\n30\n0\n11\n{}\n21\n{}\n31\n0\n",
+            a[0] + offset,
+            a[1],
+            b[0] + offset,
+            b[1]
+        ));
+        return;
+    }
+    out.push_str(&format!("0\nSPLINE\n8\n{layer}\n6\n{linetype}\n70\n12\n71\n{}\n72\n{}\n73\n{}\n74\n0\n210\n0\n220\n0\n230\n1\n",curve.degree,curve.knots.len(),curve.control_points.len()));
+    for knot in &curve.knots {
+        out.push_str(&format!("40\n{knot}\n"));
+    }
+    for weight in &curve.weights {
+        out.push_str(&format!("41\n{weight}\n"));
+    }
+    for p in &curve.control_points {
+        out.push_str(&format!("10\n{}\n20\n{}\n30\n0\n", p[0] + offset, p[1]));
+    }
 }
 
 pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation::SemanticElement> {
@@ -4714,7 +4972,7 @@ pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation
         out.push(crate::presentation::SemanticElement {id:sheet.id.clone(),role:"drawing-sheet".into(),label:sheet.name.clone(),value:Some(format!("Sheet {} / {}",index+1,doc.drawings.len())),state:state.into(),commands,relationships:vec![sheet.definition.clone()].into_iter().chain(sheet.exploded_view.iter().cloned()).collect(),data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"sheet":sheet,"paper_units":"mm","template_contract":"tcad.drawing-sheet-template","template_version":FORMAT_VERSION})});
         out.push(crate::presentation::SemanticElement {id:format!("{}::format",sheet.id),role:"drawing-sheet-format".into(),label:"Sheet format and linked title block".into(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-format-load".into(),"drawing.sheet-template-save".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing-sheet-format","version":FORMAT_VERSION,"sheet_id":sheet.id,"format":sheet.format,"paper_units":"mm","vectors":format_geometry(doc,sheet).ok()})});
         for key in view_keys(sheet) {
-            out.push(crate::presentation::SemanticElement {id:view_id(sheet,&key),role:"drawing-view".into(),label:key.clone(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-preview".into()],relationships:vec![sheet.id.clone()].into_iter().chain(sheet.view_layouts.get(&key).and_then(|layout|layout.alignment.as_ref()).map(|alignment|view_id(sheet,&alignment.parent))).collect(),data:serde_json::json!({"sheet_id":sheet.id,"view_key":key,"layout":sheet.view_layouts.get(&key),"paper_units":"mm","identity_scope":"sheet","exploded_view":sheet.exploded_view})});
+            out.push(crate::presentation::SemanticElement {id:view_id(sheet,&key),role:"drawing-view".into(),label:key.clone(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-preview".into()],relationships:vec![sheet.id.clone()].into_iter().chain(sheet.view_layouts.get(&key).and_then(|layout|layout.alignment.as_ref()).map(|alignment|view_id(sheet,&alignment.parent))).collect(),data:serde_json::json!({"sheet_id":sheet.id,"view_key":key,"layout":sheet.view_layouts.get(&key),"display_mode":crate::drawing_visibility::mode_for(sheet,&key),"paper_units":"mm","identity_scope":"sheet","exploded_view":sheet.exploded_view})});
         }
         for cell in sheet
             .format

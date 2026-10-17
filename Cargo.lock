@@ -2257,6 +2257,7 @@ dependencies = [
  "cad-core",
  "monstertruck",
  "nalgebra",
+ "num-bigint",
  "robust",
  "serde",
  "serde_json",

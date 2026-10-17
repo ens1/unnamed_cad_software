@@ -151,12 +151,33 @@ pub(super) enum PreparedPrimitive {
         radius: f64,
     },
 }
+enum Dash {
+    Solid,
+    Reference,
+    Hidden,
+}
 impl PreparedPrimitive {
     fn new(primitive: &Primitive) -> Result<Self> {
         match primitive {
-            Primitive::Polyline { points, dashed } => Self::path(points.clone(), *dashed),
-            Primitive::Spline { curve, dashed } => {
-                Self::path(cad_core::drawing::display_curve(curve)?, *dashed)
+            Primitive::Polyline { points, dashed } => Self::path(
+                points.clone(),
+                if *dashed {
+                    Dash::Reference
+                } else {
+                    Dash::Solid
+                },
+            ),
+            Primitive::Spline { curve, dashed } => Self::path(
+                cad_core::drawing::display_curve(curve)?,
+                if *dashed {
+                    Dash::Reference
+                } else {
+                    Dash::Solid
+                },
+            ),
+            Primitive::HiddenPolyline { points } => Self::path(points.clone(), Dash::Hidden),
+            Primitive::HiddenSpline { curve } => {
+                Self::path(cad_core::drawing::display_curve(curve)?, Dash::Hidden)
             }
             Primitive::Text { at, size, text } => Ok(Self::Text {
                 point: *at,
@@ -169,7 +190,7 @@ impl PreparedPrimitive {
             }),
         }
     }
-    fn path(points: Vec<[f64; 2]>, dashed: bool) -> Result<Self> {
+    fn path(points: Vec<[f64; 2]>, dash: Dash) -> Result<Self> {
         let mut bounds = [[f64::INFINITY; 2], [f64::NEG_INFINITY; 2]];
         for point in &points {
             for axis in 0..2 {
@@ -177,9 +198,11 @@ impl PreparedPrimitive {
                 bounds[1][axis] = bounds[1][axis].max(point[axis]);
             }
         }
-        let segments = dashed
-            .then(|| cad_core::drawing_strokes::reference_segments(&points))
-            .transpose()?;
+        let segments = match dash {
+            Dash::Solid => None,
+            Dash::Reference => Some(cad_core::drawing_strokes::reference_segments(&points)?),
+            Dash::Hidden => Some(cad_core::drawing_strokes::hidden_segments(&points)?),
+        };
         Ok(Self::Path {
             points,
             segments,

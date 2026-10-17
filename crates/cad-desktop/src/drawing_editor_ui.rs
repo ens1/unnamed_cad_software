@@ -129,6 +129,13 @@ fn choices(values: &[(&str, &str)]) -> Vec<Value> {
         .map(|(value, label)| choice(*label, *value))
         .collect()
 }
+fn line_display_choices() -> Vec<Value> {
+    choices(&[
+        ("hidden_lines_removed", "Hidden lines removed"),
+        ("hidden_lines_dashed", "Hidden lines dashed"),
+        ("wireframe", "Wireframe"),
+    ])
+}
 
 pub(crate) struct Fields<'a> {
     pub(crate) w: &'a Workspace,
@@ -812,6 +819,24 @@ fn sheet_fields(f: &mut Fields<'_>) {
             ("custom", "Custom views"),
         ]),
     );
+    let modes = views
+        .iter()
+        .filter(|key| key.as_str() != "section-z")
+        .map(|key| cad_core::drawing_visibility::mode_for(f.sheet, key))
+        .collect::<Vec<_>>();
+    if let Some(first) = modes.first() {
+        let same = modes.iter().all(|mode| mode == first);
+        let mut options = line_display_choices();
+        if !same {
+            options.push(choice("Mixed · edit individual views", "mixed"));
+        }
+        f.transient(
+            "line-display",
+            "Line display (all views)",
+            if same { json!(first) } else { json!("mixed") },
+            options,
+        );
+    }
     f.note(
         "projection-convention",
         "Third-angle projection · Top above Front, Right beside Front",
@@ -887,8 +912,10 @@ fn sheet_fields(f: &mut Fields<'_>) {
 }
 fn view_fields(f: &mut Fields<'_>) {
     f.group("views", "Included views");
+    // Placement controls only need projected extents. Full visibility is built
+    // by the paper worker; it must not block a field/menu interaction.
     let resolved = crate::drawing_ui::evaluation(f.w).and_then(|evaluation| {
-        build_sheet_preview(f.w.session.visible(), evaluation, f.sheet, 0).ok()
+        build_sheet_layout(f.w.session.visible(), evaluation, f.sheet, 0).ok()
     });
     let views = view_keys(f.sheet);
     f.note("projection-convention", if views.iter().any(|view| view == "front") {
@@ -916,6 +943,26 @@ fn view_fields(f: &mut Fields<'_>) {
             &format!("view-{key}"),
             &format!("{key} · placement and scale"),
         );
+        if key != "section-z" {
+            let mode = cad_core::drawing_visibility::mode_for(f.sheet, key);
+            f.emit(
+                &format!("/view_display_modes/{}", escape(key)),
+                "Line display",
+                json!(mode),
+                line_display_choices(),
+                None,
+            );
+            if let Some(element) = f.out.last_mut() {
+                element.data["default_json"] =
+                    json!(cad_core::drawing_visibility::DisplayMode::Wireframe);
+            }
+        } else {
+            f.note(
+                "section-line-display",
+                "Section contours use the current tessellated section. Hidden-line display applies to the other views.",
+                "approximate",
+            );
+        }
         if let Some(layout) = resolved.as_ref().and_then(|sheet| sheet.views.get(key))
             && let Some(scale) = layout.scale
         {
@@ -2590,7 +2637,7 @@ fn set_at(source: &mut Value, path: &str, value: Value) -> Result<()> {
 }
 fn default_view(w: &Workspace, sheet: &Drawing, key: &str) -> ViewLayout {
     if let Some(layout) = crate::drawing_ui::evaluation(w)
-        .and_then(|e| build_sheet(w.session.visible(), e, sheet).ok())
+        .and_then(|e| build_sheet_layout(w.session.visible(), e, sheet, 0).ok())
         .and_then(|s| s.views.get(key).cloned())
     {
         return ViewLayout {
@@ -2635,7 +2682,7 @@ fn optional_default(
                 let child = unescape(path.split('/').nth(2).unwrap_or("front"));
                 json!(
                     crate::drawing_ui::evaluation(w)
-                        .and_then(|evaluation| build_sheet_preview(
+                        .and_then(|evaluation| build_sheet_layout(
                             w.session.visible(),
                             evaluation,
                             sheet,
@@ -2787,12 +2834,29 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
                 set_views(&mut sheet, views)?;
                 publish(w, sheet);
             }
+            "line-display" => {
+                if value.as_str() == Some("mixed") {
+                    w.fields.insert("drawing-section".into(), "views".into());
+                    return Ok(());
+                }
+                let mode: cad_core::drawing_visibility::DisplayMode =
+                    serde_json::from_value(value)?;
+                let mut sheet = active_sheet(w).ok_or_else(|| invalid("Select a sheet"))?;
+                for key in view_keys(&sheet)
+                    .into_iter()
+                    .filter(|key| key != "section-z")
+                {
+                    sheet.view_display_modes.insert(key, mode);
+                }
+                validate_definition(&sheet)?;
+                publish(w, sheet);
+            }
             "scale" => {
                 let mut sheet = active_sheet(w).ok_or_else(|| invalid("Select a sheet"))?;
                 let evaluation = crate::drawing_ui::evaluation(w).ok_or_else(|| {
                     invalid("Wait for current model geometry before changing scale")
                 })?;
-                let resolved = build_sheet_preview(w.session.visible(), evaluation, &sheet, 0)?;
+                let resolved = build_sheet_layout(w.session.visible(), evaluation, &sheet, 0)?;
                 for key in view_keys(&sheet) {
                     let mut layout = sheet
                         .view_layouts

@@ -110,7 +110,7 @@ pub fn arrange(
     if matches!(request.mode, Mode::DistributeX | Mode::DistributeY) && annotations.len() < 3 {
         return Err(invalid("Distribution needs at least three annotations"));
     }
-    let paper = drawing::build_sheet_preview(document, evaluation, source, 0)?;
+    let paper = drawing::build_sheet_layout(document, evaluation, source, 0)?;
     let mut positions = BTreeMap::new();
     for annotation in annotations {
         if paper.diagnostics.contains_key(&annotation.id) {

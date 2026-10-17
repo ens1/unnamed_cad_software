@@ -12,6 +12,8 @@ use cad_core::{
 use monstertruck::modeling::*;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod native_contact;
+
 const MAX_COORDINATE: f64 = 1e12;
 const MAX_TRIANGLES: usize = 500_000;
 const MAX_DISTANCE_WORK: usize = 16_000_000;
@@ -39,6 +41,7 @@ struct Budget {
     native_edges: usize,
     native_work: usize,
     body_pairs: usize,
+    contact: native_contact::Budget,
 }
 struct ByteCounter {
     bytes: usize,
@@ -186,6 +189,7 @@ struct NativeBody {
     solid: Solid,
     bounds: Option<Bounds>,
     faces: usize,
+    contact: Option<native_contact::Body>,
 }
 fn admission(solid: &Solid, budget: &mut Budget) -> std::result::Result<usize, String> {
     let faces = solid.face_iter().take(4097).count();
@@ -247,11 +251,15 @@ fn native_solids(
             crate::native_trims::shell(boundary, linear_mm).map_err(message)?;
         }
         crate::validation::solid(&solid).map_err(message)?;
-        let bounds = native_bounds(&solid);
+        // Exact support admission is optional. A rejected proof must not hide
+        // a solid otherwise admitted for the native Boolean fallback.
+        let contact = native_contact::Body::new(&solid, &mut budget.contact).ok();
+        let bounds = contact.as_ref().and_then(native_contact::Body::bounds);
         prepared.push(NativeBody {
             solid,
             bounds,
             faces,
+            contact,
         });
     }
     Ok(prepared)
@@ -271,21 +279,6 @@ fn points_bounds(points: &[Point3]) -> Bounds {
         }
     }
     b
-}
-fn native_bounds(solid: &Solid) -> Option<Bounds> {
-    let enclosures = crate::native_bounds::solid(solid).ok()?;
-    let mut bounds = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
-    for enclosure in enclosures {
-        for (index, direction) in [Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()]
-            .into_iter()
-            .enumerate()
-        {
-            let (low, high) = enclosure.projection(Point3::origin(), direction).ok()?;
-            bounds[0][index] = bounds[0][index].min(low);
-            bounds[1][index] = bounds[1][index].max(high);
-        }
-    }
-    Some(bounds)
 }
 fn separated(a: Bounds, b: Bounds, tolerance: f64) -> bool {
     let magnitude = a
@@ -669,6 +662,8 @@ fn interference(
         }
     };
     let mut separated_count = 0;
+    let mut disjoint_count = 0;
+    let mut touching_count = 0;
     let mut incomplete = false;
     let mut volumes = Vec::new();
     'body_pairs: for a in first {
@@ -690,6 +685,26 @@ fn interference(
             {
                 separated_count += 1;
                 continue;
+            }
+            let contact = match (&a.contact, &b.contact) {
+                (Some(a), Some(b)) => native_contact::classify(a, b, &mut budget.contact),
+                _ => Ok(native_contact::Classification::Unresolved),
+            };
+            match contact {
+                Ok(native_contact::Classification::Separated) => {
+                    separated_count += 1;
+                    continue;
+                }
+                Ok(native_contact::Classification::Touching) => {
+                    touching_count += 1;
+                    continue;
+                }
+                Ok(native_contact::Classification::DisjointInteriors) => {
+                    disjoint_count += 1;
+                    continue;
+                }
+                Ok(native_contact::Classification::Unresolved) => {}
+                Err(error) => diagnostic(pair, message(error)),
             }
             let work = a.faces.saturating_mul(b.faces);
             budget.booleans = budget.booleans.saturating_add(1);
@@ -773,6 +788,13 @@ fn interference(
         }
     } else if separated_count == first.len() * second.len() {
         pair.interference = InterferenceStatus::SeparatedNativeHulls;
+    } else if separated_count + touching_count + disjoint_count == first.len() * second.len() {
+        if touching_count > 0 {
+            pair.interference = InterferenceStatus::TouchingNativeBoundaries;
+            pair.engineering_clearance_mm = Some(0.);
+        } else {
+            pair.interference = InterferenceStatus::DisjointNativeInteriors;
+        }
     } else if incomplete {
         pair.interference = InterferenceStatus::Unavailable;
     } else {
@@ -880,7 +902,7 @@ pub(crate) fn evaluate<K: KernelAdapter>(
             ));
         }
         let mut report = Report {
-            version: assembly_inspection::CONTRACT_VERSION,
+            version: assembly_inspection::REPORT_VERSION,
             assembly: assembly.id.clone(),
             configuration: configuration.clone(),
             inspection: definition.id.clone(),

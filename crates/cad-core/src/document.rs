@@ -1179,6 +1179,10 @@ pub struct Drawing {
     pub format: Option<crate::drawing::SheetFormat>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub view_layouts: BTreeMap<String, crate::drawing::ViewLayout>,
+    /// Per-view line visibility, independent from placement and paper scale.
+    /// An absent entry preserves the wireframe interpretation of older sources.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub view_display_modes: BTreeMap<String, crate::drawing_visibility::DisplayMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exploded_view: Option<Id>,
     /// Explicit drawing-only arrangement, relative to this sheet's model scope.

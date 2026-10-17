@@ -1981,6 +1981,9 @@ pub fn recommended_first_page(
         .ok_or_else(|| invalid("The table is no longer on this sheet"))?;
     *current = table.clone();
     current.segments.clear();
+    // This is a strict paper-fit decision. Surface visibility is unrelated and
+    // remains part of full worker validation and production output.
+    candidate.view_display_modes.clear();
     if crate::drawing::build_sheet(doc, e, &candidate).is_ok() {
         return Ok(0);
     }

@@ -1026,7 +1026,7 @@ pub fn workspace_semantics(w: &Workspace) -> Vec<cad_core::presentation::Semanti
         for (key, fidelity) in &paper.view_fidelity {
             out.push(SemanticElement {
                 id: format!("{}:view-info:{key}", paper.id), role: "drawing-view-info".into(), label: key.clone(),
-                value: Some(format!("{} · Hidden lines included", fidelity.description)),
+                value: Some(fidelity.description.clone()),
                 state: if fidelity.approximate { "approximate" } else { "ready" }.into(), commands: vec![],
                 relationships: vec![paper.id.clone()],
                 data: json!({"contract":"tcad.drawing-render-information","version":1,"view_key":key,"fidelity":fidelity,"projection":paper.projections.get(key)}),

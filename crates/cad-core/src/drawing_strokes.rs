@@ -1,7 +1,14 @@
 //! Bounded paper-mm reference dash geometry shared by desktop and vector exchange.
 use crate::{CadError, Result};
 pub const REFERENCE_PATTERN_MM: [f64; 4] = [4., 1., 1., 1.];
+pub const HIDDEN_PATTERN_MM: [f64; 2] = [2., 1.];
 pub fn reference_segments(points: &[[f64; 2]]) -> Result<Vec<[[f64; 2]; 2]>> {
+    patterned_segments(points, &REFERENCE_PATTERN_MM)
+}
+pub fn hidden_segments(points: &[[f64; 2]]) -> Result<Vec<[[f64; 2]; 2]>> {
+    patterned_segments(points, &HIDDEN_PATTERN_MM)
+}
+fn patterned_segments(points: &[[f64; 2]], pattern: &[f64]) -> Result<Vec<[[f64; 2]; 2]>> {
     if points.len() > 1_000_000
         || points
             .iter()
@@ -15,7 +22,7 @@ pub fn reference_segments(points: &[[f64; 2]]) -> Result<Vec<[[f64; 2]; 2]>> {
     }
     let mut segments = vec![];
     let mut phase = 0_usize;
-    let mut remaining = REFERENCE_PATTERN_MM[0];
+    let mut remaining = pattern[0];
     for pair in points.windows(2) {
         let delta = [pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]];
         let length = delta[0].hypot(delta[1]);
@@ -41,8 +48,8 @@ pub fn reference_segments(points: &[[f64; 2]]) -> Result<Vec<[[f64; 2]; 2]>> {
             position += step;
             remaining -= step;
             if remaining <= 1e-10 {
-                phase = (phase + 1) % REFERENCE_PATTERN_MM.len();
-                remaining = REFERENCE_PATTERN_MM[phase];
+                phase = (phase + 1) % pattern.len();
+                remaining = pattern[phase];
             }
         }
     }

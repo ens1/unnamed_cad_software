@@ -6,6 +6,8 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 pub const CONTRACT_VERSION: u32 = 1;
+/// Disposable evaluated results evolve independently of saved inspection intent.
+pub const REPORT_VERSION: u32 = 2;
 pub const MAX_TARGETS: usize = 64;
 pub const MAX_INSPECTIONS: usize = 32;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -75,13 +77,34 @@ pub struct InactiveTarget {
 #[serde(rename_all = "snake_case")]
 pub enum InterferenceStatus {
     NotRequested,
-    /// Conservative, finite, positive native carrier-control hulls separate.
+    /// Conservative carrier hulls or exact native supporting planes strictly separate.
     SeparatedNativeHulls,
+    /// Complete native carriers lie on opposite sides of a common plane, and
+    /// exact trimmed native boundaries supply a shared point. No volume overlaps.
+    TouchingNativeBoundaries,
+    /// Complete native support proofs exclude overlapping interiors, but no
+    /// exact shared boundary witness or strict separation was established.
+    DisjointNativeInteriors,
     /// A nonempty native Boolean common passed closed B-rep validation.
     ValidatedCommonSolid,
     /// Empty native output alone does not settle tangency or missed intersection.
     NoCommonSolidReturned,
     Unavailable,
+}
+impl InterferenceStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NotRequested => "Native interference not requested",
+            Self::SeparatedNativeHulls => "Native separation confirmed",
+            Self::TouchingNativeBoundaries => "Native contact confirmed; no volume overlaps",
+            Self::DisjointNativeInteriors => "No volume overlaps; contact or gap unresolved",
+            Self::ValidatedCommonSolid => "Native volume overlap confirmed",
+            Self::NoCommonSolidReturned => {
+                "No native common returned; contact and overlap unresolved"
+            }
+            Self::Unavailable => "Native interference check unavailable",
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FaceReference {
@@ -110,7 +133,8 @@ pub struct Pair {
     /// Bounded f64 signed-boundary volume for planar straight-edge common results.
     /// No exact arithmetic or certified numerical error bound is supplied.
     pub approximate_common_volume_mm3: Option<f64>,
-    /// A validated native volumetric common implies zero engineering clearance.
+    /// A validated native volumetric common or proven touching native boundaries
+    /// imply zero engineering clearance.
     /// Otherwise no native minimum-clearance certificate is supplied.
     pub engineering_clearance_mm: Option<f64>,
     pub boundary_distance: Option<BoundaryDistance>,
@@ -248,7 +272,7 @@ pub fn remove(doc: &mut Document, assembly: &str, id: &str) -> Result<()> {
 fn matching_report<'a>(doc: &Document, evaluation: &'a Evaluation, id: &str) -> Option<&'a Report> {
     let report = evaluation.assembly_inspections.get(id)?;
     let source = doc.assemblies.get(&doc.root)?.inspections.get(id)?;
-    (report.version == CONTRACT_VERSION
+    (report.version == REPORT_VERSION
         && report.inspection == id
         && report.assembly == doc.root
         && report.configuration.as_ref() == doc.active_configurations.get(&doc.root)
@@ -279,7 +303,7 @@ pub fn semantic_fields(
     for definition in assembly.inspections.values() {
         let report = evaluation.and_then(|e| matching_report(doc, e, &definition.id));
         let target = serde_json::json!({"kind":"assembly_inspection","assembly":owner,"inspection":definition.id});
-        output.push(SemanticElement{id:definition.id.clone(),role:"assembly-inspection".into(),label:definition.name.clone(),value:None,state:state.into(),commands:vec!["assembly.inspection-edit".into(),"assembly.inspection-delete".into()],relationships:vec![owner.into()],data:serde_json::json!({"contract":"tcad.assembly_inspection","version":CONTRACT_VERSION,"source":definition,"report":report,"target":target,"shared_draft":true,"requires_current_validation":true,"placements":"assembled_mate_solved","boundary_distance_precision":"approximate_without_certified_error_bound"})});
+        output.push(SemanticElement{id:definition.id.clone(),role:"assembly-inspection".into(),label:definition.name.clone(),value:None,state:state.into(),commands:vec!["assembly.inspection-edit".into(),"assembly.inspection-delete".into()],relationships:vec![owner.into()],data:serde_json::json!({"contract":"tcad.assembly_inspection","version":CONTRACT_VERSION,"report_version":REPORT_VERSION,"source":definition,"report":report,"target":target,"shared_draft":true,"requires_current_validation":true,"placements":"assembled_mate_solved","boundary_distance_precision":"approximate_without_certified_error_bound"})});
         for (field, label, expression) in [
             (
                 "clearance",
@@ -302,7 +326,7 @@ pub fn semantic_fields(
                     crate::occurrence_names::path_from(doc, owner, &target.path)
                         .unwrap_or_else(|| "Missing occurrence".into())
                 };
-                output.push(SemanticElement{id:format!("{}::{}",definition.id,pair.id),role:"inspection-pair".into(),label:format!("{} ↔ {}",name(&pair.first),name(&pair.second)),value:pair.boundary_distance.as_ref().map(|d|format!("{:.6} mm (approximate boundary distance)",d.distance_mm)),state:if pair.interference==InterferenceStatus::Unavailable||!pair.diagnostics.is_empty(){"uncertain".into()}else{state.into()},commands:vec!["assembly.inspection-highlight".into(),"assembly.inspection-select-first".into(),"assembly.inspection-select-second".into()],relationships:vec![definition.id.clone()],data:serde_json::json!({"target":pair_target,"result":pair,"assembled_occurrences":true,"clearance_error_bound":null})});
+                output.push(SemanticElement{id:format!("{}::{}",definition.id,pair.id),role:"inspection-pair".into(),label:format!("{} ↔ {}",name(&pair.first),name(&pair.second)),value:Some(pair.boundary_distance.as_ref().map_or_else(||pair.interference.label().into(),|d|format!("{} · {:.6} mm approximate boundary distance",pair.interference.label(),d.distance_mm))),state:if matches!(pair.interference,InterferenceStatus::Unavailable|InterferenceStatus::DisjointNativeInteriors)||!pair.diagnostics.is_empty(){"uncertain".into()}else{state.into()},commands:vec!["assembly.inspection-highlight".into(),"assembly.inspection-select-first".into(),"assembly.inspection-select-second".into()],relationships:vec![definition.id.clone()],data:serde_json::json!({"target":pair_target,"result":pair,"assembled_occurrences":true,"clearance_error_bound":null})});
             }
         }
     }

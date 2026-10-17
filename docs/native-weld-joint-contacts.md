@@ -80,3 +80,45 @@ frame's independently chosen crossbar offsets are not automatically changed to
 manufacture a joint. General transported spline beads, groove preparation,
 curved junctions and support patches outside the proven native carrier grammar
 remain broader kernel work outside this dogfood contact recovery.
+
+## Release review RR-26 — convex straight stock contact, October 17, 2026
+
+The saved release frame uses a sharp rectangular tube profile, miter end planes,
+and four straight members. Its top walls are single convex trapezoids bounded
+by native lines: sketch lines remain lines through the member placement and
+end-plane projection; the `between_caps` stock constructor joins those lines
+with exact line connectors and a planar face. This is established from the
+saved source and constructors, without evaluating or modifying the review part.
+
+The rejected Butt bead used the miter seam between top support faces 24 and 14,
+width 3 mm and crown 0.5 mm. General line/circle arrangements previously tried
+to solve fresh intersections between the root strip and its almost coincident
+miter boundary. End trims then exposed ill-conditioned crossing coordinates
+and near-parallel classifications even though this support family does not
+require an intersection solve.
+
+Straight root and toe curves now use a complete convex containment proof on
+eligible stock. The same proof checks all four corners of the deposited contact
+strip, so it covers the entire interior and both transverse ends. A convex
+stock face contains their convex hull; no intermediate sampling or display
+tessellation supplies that result. Two-face Butt assignments still require
+each full half-footprint on its own support before constructing deposited metal.
+
+Admission requires one continuous closed wire with 3–64 exact native line
+edges, matching topology/curve endpoints, finite coordinates, distinct
+vertices, and convexity proved against every edge using adaptive exact
+orientation. Holes, nonconvex trims, rational/curved boundaries and larger
+polygons retain the existing complete arrangement path. Directed-rounded
+carrier and boundary-distance bounds handle numerical contact inside a
+fraction of the existing 0.0000001 mm contact tolerance; that tolerance is not
+increased. A toe outside that tolerance is still rejected. In particular,
+removing both end trims from a diagonal miter can legitimately leave the bead
+overhanging the outer/inner corner: this work does not silently trim it or bridge
+missing stock.
+
+The visible native section, extrusion/revolution, section ancestry, positive
+volume and complete shell validation are unchanged. The validated draft is
+still required before Apply. The release frame and historical review evidence
+remain unchanged. Compilation and linting are the implementation checks;
+interactive bead acceptance and save/reopen have not been performed for this
+change and remain user acceptance work.

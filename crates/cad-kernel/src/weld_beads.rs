@@ -13,6 +13,8 @@ use cad_core::{
 use monstertruck::modeling::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+mod planar_patch;
+
 const EPS: f64 = 1e-7;
 const REL: f64 = 1e-10;
 fn invalid(message: impl ToString) -> CadError {
@@ -451,13 +453,32 @@ struct Support {
     face: Face,
     carrier: crate::analytic_offset::Carrier,
     side: f64,
+    planar_patch: Option<planar_patch::ConvexPatch>,
 }
 fn supports(faces: &[(Face, TopologyRef)]) -> Result<Vec<Support>> {
-    faces.iter().map(|(face,_)| {
-        let carrier=crate::analytic_offset::recognize(face)?.ok_or_else(|| unsupported("A joint support requires a proven plane or cylinder carrier"))?;
-        if !matches!(carrier,crate::analytic_offset::Carrier::Plane{..}|crate::analytic_offset::Carrier::Cone{slope:0.,..}) {return Err(unsupported("Fillet contact supports currently require planes or exact cylinders; conical/freeform toes need a different contact profile"));}
-        Ok(Support{face:face.clone(),carrier,side:crate::analytic_offset::side(face,carrier)?})
-    }).collect()
+    faces
+        .iter()
+        .map(|(face, _)| {
+            let carrier = crate::analytic_offset::recognize(face)?.ok_or_else(|| {
+                unsupported("A joint support requires a proven plane or cylinder carrier")
+            })?;
+            if !matches!(
+                carrier,
+                crate::analytic_offset::Carrier::Plane { .. }
+                    | crate::analytic_offset::Carrier::Cone { slope: 0., .. }
+            ) {
+                return Err(unsupported(
+                    "Fillet contact supports currently require planes or exact cylinders; conical/freeform toes need a different contact profile",
+                ));
+            }
+            Ok(Support {
+                face: face.clone(),
+                carrier,
+                side: crate::analytic_offset::side(face, carrier)?,
+                planar_patch: planar_patch::ConvexPatch::from_face(face, carrier)?,
+            })
+        })
+        .collect()
 }
 fn frame(
     definition: &Definition,
@@ -605,6 +626,12 @@ fn planar_contact(
     start: f64,
     end: f64,
 ) -> Result<()> {
+    if let (Some(patch), Path::Line { .. }) = (&support.planar_patch, path) {
+        let points = [path.point(start) + offset, path.point(end) + offset];
+        if patch.contains(&points)?.is_some() {
+            return Ok(());
+        }
+    }
     use crate::join::region::{Frame, Location, checked_intersections, locate};
     let crate::analytic_offset::Carrier::Plane { origin, normal } = support.carrier else {
         return Err(invalid("Expected a planar toe support"));
@@ -864,6 +891,17 @@ fn contact(support: &Support, path: &Path, offset: Vector3, start: f64, end: f64
 /// ends and interior cutouts. Root and toe curves alone do not exclude a hole
 /// lying entirely between them. Display tessellation never supplies this proof.
 fn footprint(support: &Support, path: &Path, toe: Vector3, start: f64, end: f64) -> Result<()> {
+    if let (Some(patch), Path::Line { .. }) = (&support.planar_patch, path) {
+        let a = path.point(start);
+        let b = path.point(end);
+        // A straight deposited root strip is the convex hull of its four
+        // corners. A proven convex native support therefore contains the
+        // entire strip iff it contains those corners; no artificial parallel
+        // ribbon/support intersection needs to be solved.
+        if patch.contains(&[a, b, b + toe, a + toe])?.is_some() {
+            return Ok(());
+        }
+    }
     contact(support, path, Vector3::zero(), start, end)?;
     contact(support, path, toe, start, end)?;
     let crate::analytic_offset::Carrier::Plane { origin, normal } = support.carrier else {

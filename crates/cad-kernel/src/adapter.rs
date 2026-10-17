@@ -1078,7 +1078,7 @@ impl KernelAdapter for MonstertruckAdapter {
         Ok(sketch)
     }
     fn fingerprint(&self) -> &str {
-        "monstertruck/0.4.1+6dba41312ccc;adapter/45;solver/tcad-native-lm/18"
+        "monstertruck/0.4.1+6dba41312ccc;adapter/46;solver/tcad-native-lm/18"
     }
     fn configure_tolerances(&self, modeling: &cad_core::tolerance::Modeling) -> Result<()> {
         modeling.validate()?;

@@ -28,6 +28,13 @@ custom scales use the existing f64 view layouts and validated draft. Existing
 per-view placement and parent alignment remain editable. Choosing a preset that
 removes an annotated view is rejected by drawing validation.
 
+**Line display (all views)** sets Hidden lines removed, Hidden lines dashed, or
+Wireframe on the sheet's ordinary projected views. Each view also has its own
+Line display field under Views. These are source-owned settings, so Apply,
+Cancel, undo, templates and exports retain the same choice. New sheets use
+Hidden lines removed. Existing sheets without saved choices retain Wireframe
+until edited. The tessellated Section Z contour keeps its separate behavior.
+
 The default dock pins Apply, Cancel Edit, PDF/DXF and Model actions above the
 scrolling properties. The sheet/view/annotation tree uses the dependency region
 once, with compact properties below it. Export requires an applied, current validated drawing.
@@ -49,10 +56,16 @@ and `view_fidelity` (per-view description, approximation and hidden-line status)
 The rendering information is separate from the paper primitives. Explicitly
 user-authored linked source fields in a title block remain honored.
 
-This cleanup does not add hidden-line removal or exact sections. Supported native
-edge carriers remain projected as exact vectors; unsupported carriers can be
-sampled, and the current section view remains tessellated. Drawing Information
-states those limits and whether hidden lines remain included. Invalid geometry,
+Visibility now splits supported native rational edge curves into visible and
+hidden pieces. Hidden pieces are omitted or drawn with short, even dashes;
+ghost components and construction references keep their distinct chain strokes.
+The desktop, PDF and DXF consume these same classified pieces. Native planar
+faces with closed straight trims use their polygon domains. Other faces use
+the evaluated surface tessellation, with sampled curved-face silhouettes.
+Drawing Information reports the method and tolerances, including approximate
+curved visibility. This is not a complete exact hidden-line solution for general
+curved surfaces. Native dimensions keep their source references independently
+of the display pieces. Section views remain tessellated. Invalid geometry,
 reference attachment and paper layout still block production export; preview
 repair diagnostics remain separate from production output.
 
