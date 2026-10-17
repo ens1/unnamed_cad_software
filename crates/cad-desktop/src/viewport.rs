@@ -82,16 +82,47 @@ pub struct Selection {
     pub point: [f64; 3],
 }
 const PICK_FILTER: &str = "model-pick-filter";
+fn pick_filter(w: &Workspace) -> &str {
+    if crate::weld_beads_ui::picking_support(w) {
+        "face"
+    } else {
+        w.fields
+            .get(PICK_FILTER)
+            .map(String::as_str)
+            .unwrap_or("all")
+    }
+}
 pub fn picking_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
     use cad_core::presentation::SemanticElement;
     let mut elements = Vec::new();
+    let support_pick = crate::weld_beads_ui::picking_support(w);
+    let current = pick_filter(w);
     for (value, label) in [
         ("all", "All geometry"),
         ("edge", "Edges"),
         ("face", "Faces"),
         ("reference", "Reference geometry"),
     ] {
-        elements.push(SemanticElement {id:format!("viewport.pick-filter/{value}"),role:"selection-filter".into(),label:label.into(),value:Some(value.into()),state:if w.fields.get(PICK_FILTER).map(String::as_str).unwrap_or("all")==value {"selected"} else {"ready"}.into(),commands:vec!["viewport.pick-filter".into()],relationships:vec!["workspace.viewport".into()],data:serde_json::json!({"contract":"tcad.model-picking","version":1,"document":w.session.visible().id,"filter":value,"geometry_changes":false})});
+        let data = serde_json::json!({"contract":"tcad.model-picking","version":1,"document":w.session.visible().id,"filter":value,"geometry_changes":false});
+        let mut action_data = data.clone();
+        action_data["actions"] = serde_json::json!([{"command":"viewport.pick-filter","label":label,"enabled":!support_pick,"disabled_reason":support_pick.then_some("Finish or stop picking the weld support faces to change the geometry filter"),"arguments":data}]);
+        elements.push(SemanticElement {
+            id: format!("viewport.pick-filter/{value}"),
+            role: "selection-filter".into(),
+            label: label.into(),
+            value: Some(value.into()),
+            state: if current == value {
+                "selected"
+            } else if support_pick {
+                "disabled"
+            } else {
+                "ready"
+            }
+            .into(),
+            commands: vec!["viewport.pick-filter".into()],
+            relationships: vec!["workspace.viewport".into()],
+            data: action_data,
+        });
     }
     for (index, candidate) in w.candidates.iter().enumerate() {
         elements.push(SemanticElement {id:format!("viewport.pick-candidate/{index}"),role:"selection-candidate".into(),label:format!("{} · {}",candidate.name,candidate.reference.topology),value:Some(candidate_label(w,candidate)),state:if index==w.candidate_index {"selected"}else{"ready"}.into(),commands:vec!["viewport.pick-candidate".into()],relationships:vec!["workspace.viewport".into()],data:serde_json::json!({"contract":"tcad.model-picking","version":1,"document":w.session.visible().id,"generation":w.session.generation,"index":index,"path":candidate.path,"reference":candidate.reference,"definition":candidate.definition,"body":candidate.body,"preview":"native-boundary-thumbnail","geometry_changes":false})});
@@ -109,6 +140,12 @@ pub fn picking_action(w: &mut Workspace, command: &str, data: Option<&serde_json
         return true;
     };
     if command == "viewport.pick-filter" {
+        if crate::weld_beads_ui::picking_support(w) {
+            w.status =
+                "Finish or stop picking the weld support faces to change the geometry filter"
+                    .into();
+            return true;
+        }
         if let Some(filter) = data
             .get("filter")
             .and_then(serde_json::Value::as_str)
@@ -154,11 +191,7 @@ fn candidate_label(w: &Workspace, candidate: &Selection) -> String {
     format!("{} · {}", names.join(" › "), candidate.reference.topology)
 }
 pub fn picking_controls(ui: &mut egui::Ui, w: &mut Workspace) {
-    let current = w
-        .fields
-        .get(PICK_FILTER)
-        .map(String::as_str)
-        .unwrap_or("all");
+    let current = pick_filter(w);
     let label = match current {
         "edge" => "Pick edges",
         "face" => "Pick faces",
@@ -176,7 +209,10 @@ pub fn picking_controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 &control.role,
                 &["compact"],
                 &control.label,
-                true,
+                control
+                    .action_descriptors()
+                    .iter()
+                    .any(|action| action.enabled),
                 control.state == "selected",
             )
             .clicked()
@@ -1088,10 +1124,10 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
     }
     hits.extend(crate::reference_ui::picks(w, rect, p, e));
     if !crate::component_pattern_ui::picking_direction(w) {
-        match w.fields.get(PICK_FILTER).map(String::as_str) {
-            Some("edge") => hits.retain(|hit| hit.reference.topology == "edge"),
-            Some("face") => hits.retain(|hit| hit.reference.topology == "face"),
-            Some("reference") => {
+        match pick_filter(w) {
+            "edge" => hits.retain(|hit| hit.reference.topology == "edge"),
+            "face" => hits.retain(|hit| hit.reference.topology == "face"),
+            "reference" => {
                 hits.retain(|hit| !matches!(hit.reference.topology.as_str(), "edge" | "face"))
             }
             _ => {}

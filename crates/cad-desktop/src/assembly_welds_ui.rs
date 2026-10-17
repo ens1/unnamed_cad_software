@@ -1156,11 +1156,17 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                         .action_descriptors()
                         .iter()
                         .any(|action| action.enabled),
-                    false,
+                    element.state == "selected",
                 )
                 .clicked() =>
             {
-                action(w, ACTION, Some(&element.data));
+                if let Some(descriptor) =
+                    element.action_descriptors().into_iter().find(|a| a.enabled)
+                {
+                    let mut target = element.clone();
+                    target.data = descriptor.arguments;
+                    crate::ui::semantic_action(w, &target, &descriptor.command);
+                }
             }
             _ => {}
         }

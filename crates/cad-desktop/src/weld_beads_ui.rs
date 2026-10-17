@@ -123,6 +123,22 @@ fn authoring(w: &Workspace) -> Option<(NodeRef, Definition, String, bool)> {
     ))
 }
 
+/// A support pick temporarily narrows viewport hits without changing the user's
+/// filter. Closing, cancelling, or completing this editor restores that filter.
+pub(crate) fn picking_support(w: &Workspace) -> bool {
+    let Some(pick) = w
+        .fields
+        .get(PICK)
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+    else {
+        return false;
+    };
+    matches!(pick["mode"].as_str(), Some("support-0" | "support-1"))
+        && authoring(w).is_some_and(|(owner, _, generation, _)| {
+            pick["owner"] == json!(owner) && pick["editor"] == generation
+        })
+}
+
 /// Selection intent is transient presentation state. Every source mutation
 /// still enters the shared validated feature/assembly draft and one undo step.
 pub(crate) fn pick_actions(w: &Workspace) -> Vec<SemanticElement> {
@@ -313,10 +329,14 @@ pub(crate) fn action(w: &mut Workspace, command: &str, data: Option<&serde_json:
                     return Err(cad_core::CadError::Invalid(w.status.clone()));
                 }
                 w.fields.remove(PICK);
+                w.candidates.clear();
+                w.candidate_index = 0;
                 w.status="Support face highlighted; seam and toe guides show the evaluated contact extent".into();
             }
             Some("stop") => {
                 w.fields.remove(PICK);
+                w.candidates.clear();
+                w.candidate_index = 0;
                 w.status = "Joint picking stopped; the current weld draft is unchanged".into();
             }
             Some("keep") => {
@@ -340,6 +360,8 @@ pub(crate) fn action(w: &mut Workspace, command: &str, data: Option<&serde_json:
                     "Butt / miter profile selected; native contact is being evaluated".into();
             }
             Some(mode @ ("seam" | "support-0" | "support-1")) => {
+                w.candidates.clear();
+                w.candidate_index = 0;
                 w.fields.insert(
                     PICK.into(),
                     json!({"owner":owner,"editor":generation,"mode":mode}).to_string(),
@@ -493,6 +515,8 @@ pub(crate) fn capture_selection(w: &mut Workspace) -> bool {
             w.status = "First support set; pick support face 2 to complete the fillet joint".into();
         } else {
             w.fields.remove(PICK);
+            w.candidates.clear();
+            w.candidate_index = 0;
             w.status =
                 "Weld joint source updated; inspecting current native contact and bead preview"
                     .into();
