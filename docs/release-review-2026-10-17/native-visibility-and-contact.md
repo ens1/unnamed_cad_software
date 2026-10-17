@@ -75,8 +75,12 @@ remain included.
 - `cargo fmt --all --check`: passed.
 - `cargo clippy --workspace --bins --lib --locked -- -D warnings`: passed.
 - `git diff --check`: passed.
+- `scripts/package-macos.sh`: passed, including `cargo build --workspace --locked`,
+  bundle metadata validation and strict executable/bundle signature checks.
 
-The full executable build and macOS package result will be recorded after
-packaging this source checkpoint. No tests, geometry probes, manual smoke runs
-or UI acceptance runs have been added or run. Recording remains stopped. The
-existing `proc-macro-error2` future Rust compatibility notice is unchanged.
+Source commit `f4c5d2c` is packaged at `dist/TCAD.app`. The bundle keeps the
+distinct executable names `TCAD`, `tcad-worker` and `tcad-cli`.
+
+No tests, geometry probes, manual smoke runs or UI acceptance runs have been
+added or run. Recording remains stopped. The existing `proc-macro-error2`
+future Rust compatibility notice is unchanged.
