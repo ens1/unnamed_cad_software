@@ -214,6 +214,9 @@ fn select_repository(w: &mut Workspace, repository: forge::Repository) {
 fn idle(w: &Workspace) -> bool {
     w.repositories.pending.is_none()
 }
+pub fn operation_pending(w: &Workspace) -> bool {
+    !idle(w)
+}
 fn notice(w: &mut Workspace, message: String) {
     if w.repositories.notices.last() != Some(&message) {
         w.repositories.notices.push(message);

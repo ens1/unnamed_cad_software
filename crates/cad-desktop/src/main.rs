@@ -59,6 +59,7 @@ mod presentation_controls;
 mod presentation_resources;
 mod production_ui;
 mod properties_ui;
+mod publish_ui;
 mod quantity_display;
 mod readme_preview_ui;
 mod reference_curves_ui;
@@ -156,6 +157,7 @@ pub struct Workspace {
     pub git_ui: git_ui::State,
     pub readme_preview: readme_preview_ui::State,
     pub repositories: repositories_ui::State,
+    pub publish: publish_ui::State,
     pub git_connections: git_connections_ui::State,
     pub content_repositories: content_repositories_ui::State,
     pub sketch_analysis: sketch_analysis_ui::State,
@@ -316,6 +318,7 @@ impl Workspace {
             git_ui: Default::default(),
             readme_preview: Default::default(),
             repositories: Default::default(),
+            publish: Default::default(),
             git_connections: Default::default(),
             content_repositories: Default::default(),
             sketch_analysis: sketch_analysis_ui::State::default(),
@@ -466,6 +469,10 @@ impl Workspace {
         navigation::stop(self);
     }
     pub fn dispatch(&mut self, c: cad_core::commands::Command) {
+        if publish_ui::busy(self) {
+            self.status = "Wait for Publish to finish or cancel it before editing".into();
+            return;
+        }
         if git_ui::busy(self) {
             self.status = "Wait for the Git operation to finish before editing".into();
             return;
@@ -722,6 +729,10 @@ impl Workspace {
         }
     }
     pub fn cancel(&mut self) {
+        if publish_ui::busy(self) {
+            self.status = "Use Cancel Publish to stop the current publication".into();
+            return;
+        }
         git_ui::cancel_preview(self);
         component_fork_ui::cancel(self);
         feature_transfer_ui::cancel(self);
@@ -772,6 +783,11 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn replace(&mut self, d: Document, path: Option<PathBuf>) {
+        if publish_ui::busy(self) {
+            self.status =
+                "Wait for Publish to finish or cancel it before opening another project".into();
+            return;
+        }
         if git_ui::busy(self) {
             self.status = "Wait for Git to finish before opening another project".into();
             return;
@@ -859,6 +875,10 @@ impl Workspace {
         (self.dialog.is_some() || self.recovery_draft.is_some()) && !self.manager_tree
     }
     pub fn start_tool(&mut self) {
+        if publish_ui::busy(self) {
+            self.status = "Wait for Publish to finish or cancel it before editing".into();
+            return;
+        }
         if self.tool_checkpoint.is_none() {
             quantity_display::clear_errors(self);
         }
@@ -874,6 +894,10 @@ impl Workspace {
         self.confirm_requested = false;
     }
     pub fn cancel_tool(&mut self) {
+        if publish_ui::busy(self) {
+            self.status = "Use Cancel Publish to stop the current publication".into();
+            return;
+        }
         git_ui::cancel_preview(self);
         component_fork_ui::cancel(self);
         feature_transfer_ui::cancel(self);
@@ -960,6 +984,10 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn confirm_tool(&mut self) {
+        if publish_ui::busy(self) {
+            self.status = "Wait for Publish to finish or cancel it before applying an edit".into();
+            return;
+        }
         if !component_fork_ui::current_source_is_valid(self)
             || !feature_transfer_ui::ready_to_confirm(self)
         {
@@ -1317,6 +1345,7 @@ fn poll_workers(mut w: ResMut<Workspace>) {
     feature_transfer_ui::poll(&mut w);
     readme_preview_ui::poll(&mut w);
     repositories_ui::poll(&mut w);
+    publish_ui::poll(&mut w);
     git_connections_ui::poll(&mut w);
     content_repositories_ui::poll(&mut w);
     sketch3d_ui::poll(&mut w);

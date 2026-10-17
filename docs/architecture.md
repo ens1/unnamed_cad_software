@@ -5,7 +5,7 @@ TCAD's document and command schemas are the product boundary. No Bevy, egui, cgm
 | Contract | Current implementation | Replacement responsibility |
 |---|---|---|
 | Document + commands | `cad-core` JSON DTOs | Preserve stable IDs, units, graph semantics, explicit schema migrations |
-| Geometry service | Framed protocol v3 | Preserve request identity, cancellation, diagnostics, backend identity, derived mesh contracts |
+| Geometry service | Framed protocol v4 | Preserve request identity, cancellation, diagnostics, backend identity, derived mesh contracts |
 | Operation/mesh adapter | Monstertruck 0.4.1, adapter 22 | Implement operations, exact B-rep validation, reference reconstruction, tessellation and disposable localized operation previews; report unsupported cases |
 | Constraint solver | Native scaled damped SVD solver v12 | Record solver identity, report convergence, residual and degrees of freedom |
 | Sketch handles | Application-owned handle and drag-target contracts v2 | Preserve stable targets, f64 plane coordinates, engineering constraints and explicit unsupported capability errors |

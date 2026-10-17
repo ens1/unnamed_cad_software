@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     io::{Read, Write},
 };
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const MAX_FRAME: usize = 256 * 1024 * 1024;
 pub const OPERATION_PREVIEW_VERSION: u32 = 3;
 pub const BODY_COUNTS_VERSION: u32 = 1;
@@ -288,6 +288,14 @@ pub struct EvaluatedCircle {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum WorkerRequest {
+    PublishGenerate {
+        identity: RequestIdentity,
+        document: Document,
+        project_root: String,
+        staging_directory: String,
+        preferences: Box<crate::publication::Preferences>,
+        display_tolerance_mm: f64,
+    },
     ReadmePreview {
         identity: RequestIdentity,
         document: Document,
@@ -356,6 +364,10 @@ pub enum WorkerRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkerResponse {
+    PublishGenerated {
+        identity: RequestIdentity,
+        package: Box<crate::publication::GeneratedPackage>,
+    },
     ReadmePreview {
         identity: RequestIdentity,
         preview: Box<crate::readme_preview::Preview>,

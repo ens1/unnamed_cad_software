@@ -97,6 +97,7 @@ fn request_id(r: &WorkerRequest) -> Option<RequestIdentity> {
     match r {
         WorkerRequest::DisplayMesh { request } => Some(request.identity.clone()),
         WorkerRequest::AnalyzeSketch { identity, .. }
+        | WorkerRequest::PublishGenerate { identity, .. }
         | WorkerRequest::ReadmePreview { identity, .. }
         | WorkerRequest::SolveSketch3d { identity, .. }
         | WorkerRequest::ManipulateAssembly { identity, .. }
@@ -109,7 +110,7 @@ fn request_id(r: &WorkerRequest) -> Option<RequestIdentity> {
 }
 fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerResponse>) {
     let mut process: Option<Process> = None;
-    let mut active: Option<(RequestIdentity, Instant)> = None;
+    let mut active: Option<(RequestIdentity, Instant, Duration)> = None;
     let mut queue = std::collections::VecDeque::new();
     loop {
         match requests.recv_timeout(Duration::from_millis(8)) {
@@ -175,7 +176,7 @@ fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerRes
                     }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    if let Some((identity, _)) = active.take() {
+                    if let Some((identity, _, _)) = active.take() {
                         let _ = output.send(WorkerResponse::Error {
                             identity: Some(identity),
                             message: "Worker exited unexpectedly; retry to start a fresh process"
@@ -189,11 +190,17 @@ fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerRes
         }
         if active
             .as_ref()
-            .is_some_and(|(_, started)| started.elapsed() > Duration::from_secs(120))
+            .is_some_and(|(_, started, deadline)| started.elapsed() > *deadline)
         {
-            let identity = active.take().map(|a| a.0);
+            let (identity, _, deadline) = active.take().expect("expired active worker request");
             process = None;
-            let _=output.send(WorkerResponse::Error{identity,message:"Geometry exceeded the 120 second deadline. The worker was terminated; reduce complexity or retry.".into()});
+            let _ = output.send(WorkerResponse::Error {
+                identity: Some(identity),
+                message: format!(
+                    "Geometry exceeded the {} second deadline. The worker was terminated; reduce complexity or retry.",
+                    deadline.as_secs()
+                ),
+            });
         }
         if active.is_none()
             && let Some(r) = queue.pop_front()
@@ -209,8 +216,14 @@ fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerRes
                 }
             }
             if let Some(p) = &mut process {
+                let deadline =
+                    Duration::from_secs(if matches!(&r, WorkerRequest::PublishGenerate { .. }) {
+                        600
+                    } else {
+                        120
+                    });
                 match write_frame(&mut p.input, &r) {
-                    Ok(()) => active = identity.map(|i| (i, Instant::now())),
+                    Ok(()) => active = identity.map(|i| (i, Instant::now(), deadline)),
                     Err(e) => {
                         let _ = output.send(WorkerResponse::Error {
                             identity,

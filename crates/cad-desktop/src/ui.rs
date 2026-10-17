@@ -230,6 +230,20 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
         }
         return;
     }
+    if crate::publish_ui::busy(w) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            crate::publish_ui::action(w, "publish.cancel", None);
+        }
+        return;
+    }
+    if w.dialog.as_deref() == Some("publish") {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            crate::publish_ui::action(w, "publish.close", None);
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter)) {
+            crate::publish_ui::action(w, "publish.run", None);
+        }
+        return;
+    }
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
         crate::settings::open(w, None);
     }
@@ -743,6 +757,7 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     registry.register("repositories-editor", |ui, w, _| {
         crate::repositories_ui::show(ui, w)
     });
+    registry.register("publish-editor", |ui, w, _| crate::publish_ui::show(ui, w));
     registry.register("git-connections-editor", |ui, w, _| {
         crate::git_connections_ui::show(ui, w)
     });
@@ -1009,6 +1024,13 @@ pub(crate) fn semantic_element(
     }
 }
 pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
+    if crate::publish_ui::action(w, command, Some(&element.data)) {
+        return;
+    }
+    if crate::publish_ui::busy(w) {
+        w.status = "Wait for Publish to finish or cancel it before using another command".into();
+        return;
+    }
     if command == "content-repositories" || command.starts_with("content-repositories.") {
         crate::content_repositories_ui::action(w, command, Some(&element.data));
         return;
@@ -1257,6 +1279,10 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
     }
 }
 pub(crate) fn history_command(w: &mut Workspace, redo: bool) {
+    if crate::publish_ui::busy(w) {
+        w.status = "Wait for Publish to finish or cancel it before changing history".into();
+        return;
+    }
     w.selection_popup = None;
     if crate::drawing_interaction_ui::active(w) {
         crate::drawing_interaction_ui::escape(w);
@@ -2181,6 +2207,13 @@ fn reference_repair_blocks(w: &mut Workspace, command: &str) -> bool {
 }
 
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if crate::publish_ui::action(w, cmd, None) {
+        return;
+    }
+    if crate::publish_ui::busy(w) {
+        w.status = "Wait for Publish to finish or cancel it before using another command".into();
+        return;
+    }
     if cmd == "content-repositories" || cmd.starts_with("content-repositories.") {
         crate::content_repositories_ui::action(w, cmd, None);
         return;
@@ -2589,6 +2622,10 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
     }
 }
 pub(crate) fn save(w: &mut Workspace, choose: bool) -> bool {
+    if crate::publish_ui::busy(w) {
+        w.status = "Wait for Publish to finish or cancel it before saving".into();
+        return false;
+    }
     if crate::git_ui::busy(w) {
         w.status = "Wait for the Git operation to finish before saving".into();
         return false;
@@ -2696,6 +2733,10 @@ pub(crate) fn save_now(w: &mut Workspace, choose: bool) -> bool {
     false
 }
 fn save_committed_to(w: &mut Workspace, path: std::path::PathBuf) -> bool {
+    if crate::publish_ui::busy(w) {
+        w.status = "Wait for Publish to finish or cancel it before saving".into();
+        return false;
+    }
     if crate::git_ui::busy(w) {
         w.status = "Wait for the Git operation to finish before saving".into();
         return false;
@@ -3547,6 +3588,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "configurations" => "Configurations and Equations",
             "versions" => "Design versions",
             "repositories" => "Git Repositories",
+            "publish" => "Publish",
             "git-connections" => "Git Connections",
             "content-repositories" => "Content Libraries",
             "feature-transfer" => "Transfer Selected Features",
@@ -3568,7 +3610,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "properties" => "Model Properties",
             _ => "Command search",
         };
-        let title = if w.tool_checkpoint.is_some() {
+        let title = if w.tool_checkpoint.is_some() && dialog != "publish" {
             operation_title.as_str()
         } else {
             title
@@ -3612,6 +3654,8 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         {
             if dialog == "sketch-block-library" {
                 crate::sketch_block_library_ui::close(w);
+            } else if dialog == "publish" {
+                crate::publish_ui::action(w, "publish.close", None);
             } else {
                 w.dialog = None;
                 w.manager_tree = true;
@@ -3641,7 +3685,12 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         ) || (w.tool_checkpoint.is_some() || w.session.draft.is_some())
             && !matches!(
                 dialog.as_str(),
-                "drawings" | "materials" | "standard-parts" | "camera-views" | "commands"
+                "drawings"
+                    | "materials"
+                    | "standard-parts"
+                    | "camera-views"
+                    | "commands"
+                    | "publish"
             ))
     {
         crate::presentation_controls::inspector_section(
@@ -3703,6 +3752,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 "component-insert" => crate::components_ui::show(ui, w),
                 "versions" => versions(ui, w),
                 "repositories" => crate::repositories_ui::show(ui, w),
+                "publish" => crate::publish_ui::show(ui, w),
                 "git-connections" => crate::git_connections_ui::show(ui, w),
                 "content-repositories" => crate::content_repositories_ui::show(ui, w),
                 "feature-transfer" => crate::feature_transfer_ui::show(ui, w),

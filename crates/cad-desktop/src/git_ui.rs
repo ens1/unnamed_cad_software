@@ -85,6 +85,9 @@ pub fn busy(w: &Workspace) -> bool {
         .as_ref()
         .is_some_and(|pending| pending.branch_switch)
 }
+pub fn operation_pending(w: &Workspace) -> bool {
+    w.git_ui.pending.is_some()
+}
 pub fn recovery_pending(w: &Workspace) -> bool {
     w.git_ui
         .report

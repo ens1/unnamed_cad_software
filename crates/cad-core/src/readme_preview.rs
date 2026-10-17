@@ -264,14 +264,19 @@ fn thumbnail(triangles: &[Triangle]) -> Result<Vec<u8>> {
 }
 /// Replace only our marked section. Malformed or duplicate markers require user repair.
 pub fn update_markdown(existing: &str, preview: &Preview) -> Result<String> {
+    update_markdown_block(existing, &preview.markdown)
+}
+/// Share the same marked-section replacement rule with repository publication.
+/// Callers supply a generated, complete TCAD preview block, never user prose.
+pub fn update_markdown_block(existing: &str, markdown: &str) -> Result<String> {
     let starts: Vec<_> = existing.match_indices(START).collect();
     let ends: Vec<_> = existing.match_indices(END).collect();
     match (starts.as_slice(), ends.as_slice()) {
-        ([], []) => Ok(format!("{}\n\n{}", existing.trim_end(), preview.markdown)),
+        ([], []) => Ok(format!("{}\n\n{}", existing.trim_end(), markdown)),
         ([(start, _)], [(end, _)]) if end > start => Ok(format!(
             "{}{}{}",
             &existing[..*start],
-            preview.markdown.trim_end(),
+            markdown.trim_end(),
             &existing[end + END.len()..]
         )),
         _ => Err(invalid(

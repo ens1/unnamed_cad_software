@@ -20,7 +20,8 @@ Open **Workspace → Git Repositories** or **File → Open Git Repository**.
 **Create a local repository** starts an empty repository with a chosen first
 branch. It needs no account or remote. To copy the current saved model into a new
 local repository, use **Save or publish current model → New local repository**.
-Use **Versions** for later commits, branches, fetch, merges, and push.
+Use **Publish** to generate and push the model and its selected outputs together.
+Use **Versions** for separate commits, branches, fetch, merges, and push.
 
 Opening rechecks definitions and resource hashes. Scans skip hidden and build
 folders, symlinks, and invalid model files; notices explain rejected projects
@@ -80,7 +81,45 @@ back to local configuration; TCAD reports that fallback. Environment tokens take
 precedence and must be removed before changing sign-in. See the official
 [GitHub CLI sign-in documentation](https://cli.github.com/manual/gh_auth_login).
 
-## Publish a model
+## Publish the project and generated files
+
+Use **Publish** in the top bar or **File → Publish**. The first click opens setup.
+Choose the repository URL, branch, project folder inside the repository, Git
+connection, and output files. Enter your Git author name and email if they are
+not already set. Then click **Publish**. Use **File → Publish Settings** to change
+these choices later, or **Save choices** to store them without uploading.
+
+Later clicks use the saved choices. TCAD saves the applied model, generates every
+selected output from the same validated source, commits source and outputs
+together, then pushes to the chosen branch. Finish or cancel a modeling edit
+first; Publish does not silently apply a draft.
+
+Available outputs are drawing PDF, drawing DXF, BOM CSV, STEP, STL, sketch-profile
+DXF, sheet-metal flat-pattern DXF, and weldment cut-list CSV. Drawing outputs use
+saved drawing sheets. If no sheets exist, TCAD makes a standard projection sheet;
+it does not invent dimensions or tolerances. Outputs use the current model
+configuration. Selecting a flat pattern or cut list requires matching fabrication
+data. A generation error stops publication before a commit or upload.
+
+The shared `tcad-publish.json` file records the destination and outputs. Connection
+choices, credentials, local checkout paths, and retry receipts stay on the
+computer. Published source, `outputs/`, and `publication.json` go in the selected
+project folder. The manifest records the source fingerprint, backend, accuracy,
+and output hashes. **Show published files** opens the retained local copy.
+
+Publication uses a separate Git working copy. It preserves the original model
+checkout's branch and staged work. Existing branch history and unrelated remote
+files are retained. TCAD removes only outputs it previously managed, checks for
+conflicting project changes, and never force-pushes. Review and merge the target
+branch in your forge; TCAD does not impose a separate release process.
+
+If upload fails after the commit, **Retry upload** sends that exact commit without
+generating the files again. Cancellation cannot undo a push that already finished.
+The status reports the retained folder and whether the commit reached the remote.
+See [One-action Publish](one-action-publish.md) for the file contract and recovery
+details.
+
+## Copy a model into a new working copy
 
 Save and finish the current model first. In **Save or publish current model**:
 
@@ -96,8 +135,8 @@ Save and finish the current model first. In **Save or publish current model**:
    confirm that you checked its access before publishing. Public GitHub publishing
    requires explicit public disclosure acknowledgment.
 5. Publish, or create the local model repository. **Open saved working copy**
-   continues editing there. Use **Versions → Save and commit**, then
-   **Push current branch** for later remote updates.
+   continues editing there. Use the top-bar **Publish** for later updates with
+   generated files, or **Versions** for separate Git operations.
 
 Only the chosen model's manifest, definitions, referenced resources, shared
 presentation, and current generated README preview are copied. The source model

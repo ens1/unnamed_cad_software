@@ -1,5 +1,6 @@
 //! Bounded, forge-neutral model transfer with optional forge-specific publication guards.
 //! Remote checkouts are new directories. The source model is never changed.
+pub mod publication;
 use crate::{
     CadError, Document, Id, Result,
     forge::{CancelToken, GitHub},
@@ -160,7 +161,7 @@ fn check_cancel(cancel: &CancelToken) -> Result<()> {
     }
 }
 
-fn relative_path(value: &str) -> Result<PathBuf> {
+pub(crate) fn relative_path(value: &str) -> Result<PathBuf> {
     if value.is_empty()
         || value.len() > 4096
         || value.contains('\\')
@@ -616,7 +617,7 @@ fn github_name(url: &str) -> Result<String> {
     Ok(name.into())
 }
 
-fn branch_name(branch: &str) -> Result<()> {
+pub(crate) fn branch_name(branch: &str) -> Result<()> {
     if branch.is_empty()
         || branch.len() > 1024
         || branch.starts_with('-')
@@ -1395,6 +1396,27 @@ fn add_presentation_files(snapshot: &mut Snapshot) -> Result<()> {
                 snapshot.files.insert(name.into());
             }
         }
+    }
+    Ok(())
+}
+
+/// Copy shared presentation data into a fresh model snapshot without following
+/// symlinks or importing machine-local preferences.
+pub fn copy_shared_presentation(source_root: &Path, destination_root: &Path) -> Result<()> {
+    let mut source = Snapshot {
+        root: canonical_directory(source_root)?,
+        document: Document::empty("Presentation snapshot"),
+        files: BTreeSet::new(),
+    };
+    add_presentation_files(&mut source)?;
+    let destination = canonical_directory(destination_root)?;
+    let cancel = CancelToken::default();
+    for path in source.files {
+        copy_new_file(
+            &checked_path(&source.root, &path)?,
+            &destination.join(path),
+            &cancel,
+        )?;
     }
     Ok(())
 }

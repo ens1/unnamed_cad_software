@@ -21,6 +21,7 @@ fn run() -> Result<()> {
         let identity = match &request {
             WorkerRequest::DisplayMesh { request } => Some(request.identity.clone()),
             WorkerRequest::AnalyzeSketch { identity, .. }
+            | WorkerRequest::PublishGenerate { identity, .. }
             | WorkerRequest::ReadmePreview { identity, .. }
             | WorkerRequest::SolveSketch3d { identity, .. }
             | WorkerRequest::ManipulateAssembly { identity, .. }
@@ -31,6 +32,26 @@ fn run() -> Result<()> {
             WorkerRequest::Shutdown => break,
         };
         let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match request {
+            WorkerRequest::PublishGenerate {
+                identity,
+                document,
+                project_root,
+                staging_directory,
+                preferences,
+                display_tolerance_mm,
+            } => cad_core::publication::generate(
+                &mut evaluator,
+                &identity,
+                &document,
+                std::path::Path::new(&project_root),
+                std::path::Path::new(&staging_directory),
+                &preferences,
+                display_tolerance_mm,
+            )
+            .map(|package| WorkerResponse::PublishGenerated {
+                identity,
+                package: Box::new(package),
+            }),
             WorkerRequest::ReadmePreview {
                 identity,
                 document,

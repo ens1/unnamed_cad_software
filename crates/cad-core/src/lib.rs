@@ -50,6 +50,7 @@ pub mod presentation;
 pub mod production;
 pub mod protocol;
 pub mod provenance;
+pub mod publication;
 pub mod readme_preview;
 pub mod reference_curves;
 pub mod reference_geometry;

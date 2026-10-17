@@ -1078,6 +1078,8 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("file.recover", "Recover local work"),
     ("file.save", "Save"),
     ("file.save-as", "Save as"),
+    ("file.publish", "Publish"),
+    ("publish.settings", "Publish settings"),
     ("file.import", "Import STEP"),
     ("file.export", "Export"),
     ("file.export-flat-pattern", "Export Flat Pattern DXF"),

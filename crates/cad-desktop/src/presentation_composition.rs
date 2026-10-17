@@ -393,6 +393,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::feature_transfer_ui::semantics(w));
     elements.extend(crate::git_ui::semantics(w));
     elements.extend(crate::repositories_ui::semantics(w));
+    elements.extend(crate::publish_ui::semantics(w));
     elements.extend(crate::git_connections_ui::semantics(w));
     elements.extend(crate::content_repositories_ui::semantics(w));
     elements.extend(crate::assembly_tree_ui::semantics(w));
@@ -761,6 +762,13 @@ impl ValueAdapters {
         element: &SemanticElement,
         value: serde_json::Value,
     ) -> cad_core::Result<()> {
+        if crate::publish_ui::busy(w)
+            && element.data.get("setter").and_then(|value| value.as_str()) != Some("publish")
+        {
+            return Err(cad_core::CadError::Invalid(
+                "Wait for Publish to finish or cancel it before changing fields".into(),
+            ));
+        }
         if w.settings.is_some()
             && !matches!(
                 element.data.get("setter").and_then(|value| value.as_str()),
@@ -844,6 +852,11 @@ fn value_adapters() -> ValueAdapters {
         "repositories",
         crate::repositories_ui::set_value,
         crate::repositories_ui::current_value,
+    );
+    adapters.register(
+        "publish",
+        crate::publish_ui::set_value,
+        crate::publish_ui::current_value,
     );
     adapters.register(
         "git-connections",

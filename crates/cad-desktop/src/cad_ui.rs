@@ -220,7 +220,8 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "repositories.open",
             "file.save",
             "file.save-as",
-            "repositories.publish",
+            "file.publish",
+            "publish.settings",
             "document.rename",
             "file.import",
             "file.export",
@@ -634,6 +635,8 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
     };
     for (command, label) in cad_core::presentation::command_catalog() {
         let enabled = match command {
+            "file.publish" => publish_available(w),
+            "publish.settings" => true,
             "sketch.new-3d" => !blocked && !sketching,
             "draft.apply" => confirmation_available(w),
             "draft.cancel" => w.tool_checkpoint.is_some() || w.session.draft.is_some() || sketching,
@@ -1131,6 +1134,18 @@ pub fn confirmation_available(w: &Workspace) -> bool {
     confirmation_disabled_reason(w).is_none()
 }
 
+fn publish_available(w: &Workspace) -> bool {
+    crate::publish_ui::busy(w)
+        || (!crate::git_ui::operation_pending(w)
+            && !crate::repositories_ui::operation_pending(w)
+            && !crate::readme_preview_ui::busy(w)
+            && !crate::drawing_interaction_ui::active(w)
+            && w.settings.is_none()
+            && w.tool_checkpoint.is_none()
+            && w.session.draft.is_none()
+            && w.sketch.is_none())
+}
+
 pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("TCAD").strong());
@@ -1142,13 +1157,15 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
                 ("Open Git Repository…", "repositories.open"),
                 ("Save  ⌘S", "file.save"),
                 ("Save As…", "file.save-as"),
-                ("Publish Model…", "repositories.publish"),
+                ("Publish", "file.publish"),
+                ("Publish Settings…", "publish.settings"),
                 ("Rename Document…", "document.rename"),
                 ("Import STEP…", "file.import"),
                 ("Export…", "file.export"),
                 ("Recover Local Work…", "file.recover"),
             ] {
-                if menu_action(ui, command, label, true).clicked() {
+                let enabled = command != "file.publish" || publish_available(w);
+                if menu_action(ui, command, label, enabled).clicked() {
                     ui::action(w, command);
                     ui.close();
                 }
@@ -1310,6 +1327,17 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if command_button(ui, "commands", "Find a command  ⌘K", true).clicked() {
                 w.open_editor("commands");
+            }
+            if command_button(
+                ui,
+                "file.publish",
+                if crate::publish_ui::busy(w) { "Publishing…" } else { "Publish" },
+                publish_available(w),
+            )
+            .on_hover_text("Generate the selected outputs, commit the project, and push to its saved repository and branch")
+            .clicked()
+            {
+                ui::action(w, "file.publish");
             }
         });
     });
