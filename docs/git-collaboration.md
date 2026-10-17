@@ -75,6 +75,20 @@ only provides the workflow and background jobs. The `tcad.repositories-ui`
 semantic contract exposes fields, actions, choices, review, and progress separately
 from the `repositories-editor` renderer. Themes can rearrange and restyle them.
 
+The repository workflow was compiled and packaged on 2026-10-16. Formatting,
+`cargo clippy --workspace --lib --bins --locked -- -D warnings`, packaging-script
+syntax, and notice-collector compilation passed. `scripts/package-macos.sh`
+completed the locked workspace build, verified the helper archive checksum,
+signed all four executables and the application, and verified the resulting
+`dist/TCAD.app`. No tests, manual smoke checks, or live authentication, creation,
+download, or publish acceptance checks were run. Interactive acceptance remains
+with the user.
+
+Current transfer limits are 100 MiB per file and 1 GiB for a model plus its shared
+presentation. Git LFS and automatic submodule retrieval are not provided by this
+workflow. Publishing into an existing repo uses an existing branch and a new model
+folder. Create other branches in Versions after opening a working copy.
+
 ## Versions
 
 Open **Workspace → Versions**.
