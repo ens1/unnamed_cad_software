@@ -1,5 +1,12 @@
 # Implementation handoff — 2026-10-10
 
+## Repository status update — 2026-10-24
+
+The user made TCAD public and authorized publishing all completed work to
+`main`. This supersedes the private-repository instructions in the historical
+checkpoints below. Follow the current [repository instructions](../AGENTS.md).
+New user model repositories still default to private.
+
 ## Latest kernel foundation checkpoint — 2026-10-14
 
 Read [kernel foundation](kernel-foundation-2026-10-14.md) for this checkpoint's
