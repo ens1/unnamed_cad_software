@@ -19,16 +19,17 @@ Bundle executables must have filenames distinct on case-insensitive filesystems:
 ## Repository workflow
 
 The canonical repository is `https://github.com/ens1/unnamed_cad_software.git`.
-Keep TCAD private until the user explicitly changes that preference. Commit
-cohesive implementation changes regularly, including substantial completed
-checkpoints during longer tasks, and push completed commits to this private
-origin. Use descriptive messages and record the compilation, formatting and
-linting actually performed; do not introduce or run tests. Preserve unrelated
+The user made TCAD public on 2026-10-24. Commit cohesive implementation changes
+regularly, including substantial completed checkpoints during longer tasks,
+and push completed commits to this origin. Keep newly created user model
+repositories private by default. Use descriptive messages and record the
+compilation, formatting and linting actually performed; do not introduce or run
+tests. Preserve unrelated
 user changes and never rewrite published history without explicit authorization.
 
-The current Rust workspace is one private monorepo. Additional repositories and
+The current Rust workspace is one public monorepo. Additional repositories and
 public upstream dependency forks are authorized when engineering needs justify
 them. Retain upstream licenses and pin dependency revisions. Public forks must
-contain the relevant dependency work without exposing private TCAD source or
-design data. Do not create extra repositories merely to separate existing
-replaceable crate boundaries.
+contain the relevant dependency work without exposing private design data.
+Do not create extra repositories merely to separate existing replaceable crate
+boundaries.
