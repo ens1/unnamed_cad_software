@@ -74,6 +74,7 @@ impl Worker {
                 if sender.send((job.stamp, report)).is_err() {
                     return;
                 }
+                crate::redraw::wake();
             }
         });
         Self { queue, replies }

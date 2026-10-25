@@ -254,7 +254,9 @@ fn submit(
     set_status(w, label);
     std::thread::spawn(move || {
         let result = work(worker_cancel, sender.clone()).map_err(|error| error.to_string());
-        let _ = sender.send(Event::Finished(result));
+        if sender.send(Event::Finished(result)).is_ok() {
+            crate::redraw::wake();
+        }
     });
 }
 fn safe_to_leave(w: &Workspace) -> Result<()> {
@@ -592,7 +594,9 @@ fn review(w: &mut Workspace) -> Result<()> {
             if let Some(url) = url {
                 let remote =
                     models::inspect_remote(&url, review.connection.as_ref(), &cancel, |message| {
-                        let _ = sender.send(Event::Status(message.into()));
+                        if sender.send(Event::Status(message.into())).is_ok() {
+                            crate::redraw::wake();
+                        }
                     })?;
                 reviewed_branch(&mut review, remote)?;
             } else if review.branch.is_none() {
@@ -631,7 +635,9 @@ fn publish(w: &mut Workspace) -> Result<()> {
                     &review.source_request()?,
                     &cancel,
                     |message| {
-                        let _ = sender.send(Event::Status(message.into()));
+                        if sender.send(Event::Status(message.into())).is_ok() {
+                            crate::redraw::wake();
+                        }
                     },
                 )?;
                 return Ok(Outcome::Published(result));
@@ -648,7 +654,9 @@ fn publish(w: &mut Workspace) -> Result<()> {
                     let repository = match &review.destination {
                         Destination::New(request) => {
                             let repository = github.create(request, &cancel)?;
-                            let _ = sender.send(Event::Created(repository.clone()));
+                            if sender.send(Event::Created(repository.clone())).is_ok() {
+                                crate::redraw::wake();
+                            }
                             repository
                         }
                         Destination::Existing(repository) => {
@@ -699,7 +707,9 @@ fn publish(w: &mut Workspace) -> Result<()> {
             };
             let published =
                 models::publish_model(&request, review.connection.as_ref(), &cancel, |message| {
-                    let _ = sender.send(Event::Status(message.into()));
+                    if sender.send(Event::Status(message.into())).is_ok() {
+                        crate::redraw::wake();
+                    }
                 })?;
             Ok(Outcome::Published(published))
         },
@@ -829,7 +839,9 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
         "repositories.login" => {
             submit(w, false, "Starting browser sign-in…", |cancel, sender| {
                 let account = GitHub::discover()?.login(&cancel, &mut |progress| {
-                    let _ = sender.send(Event::Progress(progress));
+                    if sender.send(Event::Progress(progress)).is_ok() {
+                        crate::redraw::wake();
+                    }
                 })?;
                 Ok(Outcome::Account(account))
             })
@@ -931,7 +943,9 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
                         connection.as_ref(),
                         &cancel,
                         |message| {
-                            let _ = sender.send(Event::Status(message.into()));
+                            if sender.send(Event::Status(message.into())).is_ok() {
+                                crate::redraw::wake();
+                            }
                         },
                     )?;
                     Ok(Outcome::Checkout(
@@ -956,7 +970,9 @@ fn perform(w: &mut Workspace, command: &str, args: Option<&Value>) -> Result<()>
                 "Creating a local repository…",
                 move |cancel, sender| {
                     models::initialize_local_repository(&root, &branch, &cancel, |message| {
-                        let _ = sender.send(Event::Status(message.into()));
+                        if sender.send(Event::Status(message.into())).is_ok() {
+                            crate::redraw::wake();
+                        }
                     })?;
                     Ok(Outcome::Initialized(root, branch))
                 },

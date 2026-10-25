@@ -181,7 +181,9 @@ fn submit(
     w.git_connections.pending = Some(cancel);
     status(w, message);
     std::thread::spawn(move || {
-        let _ = sender.send(work(worker));
+        if sender.send(work(worker)).is_ok() {
+            crate::redraw::wake();
+        }
     });
 }
 pub fn poll(w: &mut Workspace) {

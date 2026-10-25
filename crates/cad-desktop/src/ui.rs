@@ -172,7 +172,12 @@ pub fn workspace_ui(
     crate::selection_ui::show(ctx, &mut w);
     crate::settings_ui::show(ctx, &mut w);
     crate::navigation::finish_ui(&mut w);
-    ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    // UI edits happen after worker polling. Wake once at the validation deadline
+    // instead of rendering the entire workspace continuously while it is idle.
+    let validation_delay = std::time::Duration::from_millis(161);
+    if w.changed.elapsed() < validation_delay {
+        crate::redraw::request_after(validation_delay.saturating_sub(w.changed.elapsed()));
+    }
     Ok(())
 }
 pub(crate) fn color(s: &str) -> Option<Color32> {

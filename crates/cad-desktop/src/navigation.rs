@@ -319,6 +319,14 @@ pub fn begin_ui(w: &mut Workspace, ctx: &egui::Context) {
     }
 }
 pub fn finish_ui(w: &mut Workspace) {
+    if w.gesture
+        .as_ref()
+        .is_some_and(|gesture| !gesture.pointer_drag)
+        && let Some(last) = w.navigation_input.last
+        && last.elapsed() < QUIET
+    {
+        crate::redraw::request_after(QUIET.saturating_sub(last.elapsed()));
+    }
     if w.navigation_input
         .events
         .iter()

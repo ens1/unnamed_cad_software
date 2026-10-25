@@ -230,10 +230,12 @@ pub fn poll(w: &mut Workspace) {
     // Zoom-only changes wait for the bounded current job, then request the
     // latest level. This preserves its native cache without accepting stale
     // tessellation into the viewport or the modeling session.
-    if w.display_mesh.pending.is_some()
-        || w.display_mesh.attempted == w.display_mesh.generation
-        || w.display_mesh.changed.elapsed().as_millis() < 180
-    {
+    if w.display_mesh.pending.is_some() || w.display_mesh.attempted == w.display_mesh.generation {
+        return;
+    }
+    let debounce = std::time::Duration::from_millis(180);
+    if w.display_mesh.changed.elapsed() < debounce {
+        crate::redraw::request_after(debounce.saturating_sub(w.display_mesh.changed.elapsed()));
         return;
     }
     if w.display_mesh

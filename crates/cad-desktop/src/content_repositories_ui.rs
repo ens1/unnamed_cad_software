@@ -217,7 +217,9 @@ fn start_pack_download(w: &mut Workspace, id: &str) -> Result<()> {
         move |cancel, tx| {
             let repository =
                 libraries::download_pack(pack.id, connection.as_ref(), &cancel, |message| {
-                    let _ = tx.send(Event::Progress(message.into()));
+                    if tx.send(Event::Progress(message.into())).is_ok() {
+                        crate::redraw::wake();
+                    }
                 })?;
             Ok(Outcome::Changed(
                 repository.id,
@@ -261,7 +263,9 @@ fn submit(
     status(w, label);
     std::thread::spawn(move || {
         let result = work(worker, tx.clone()).map_err(|e| e.to_string());
-        let _ = tx.send(Event::Done(Box::new(result)));
+        if tx.send(Event::Done(Box::new(result))).is_ok() {
+            crate::redraw::wake();
+        }
     });
 }
 fn refresh(w: &mut Workspace) {
@@ -659,7 +663,9 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                         connection.as_ref(),
                         &cancel,
                         |s| {
-                            let _ = tx.send(Event::Progress(s.into()));
+                            if tx.send(Event::Progress(s.into())).is_ok() {
+                                crate::redraw::wake();
+                            }
                         },
                     )?;
                     Ok(Outcome::Changed(r.id, "Library cloned and enabled.".into()))
@@ -679,7 +685,9 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                         &author,
                         &cancel,
                         |s| {
-                            let _ = tx.send(Event::Progress(s.into()));
+                            if tx.send(Event::Progress(s.into())).is_ok() {
+                                crate::redraw::wake();
+                            }
                         },
                     )?;
                     Ok(Outcome::Changed(
@@ -700,7 +708,9 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                         connection.as_ref(),
                         &cancel,
                         |s| {
-                            let _ = tx.send(Event::Progress(s.into()));
+                            if tx.send(Event::Progress(s.into())).is_ok() {
+                                crate::redraw::wake();
+                            }
                         },
                     )?;
                     Ok(Outcome::Changed(r.id,"Fork created and disabled. Disable the original, then enable your copy to avoid duplicate catalog IDs.".into()))
@@ -722,7 +732,9 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                             connection.as_ref(),
                             &cancel,
                             |s| {
-                                let _ = tx.send(Event::Progress(s.into()));
+                                if tx.send(Event::Progress(s.into())).is_ok() {
+                                    crate::redraw::wake();
+                                }
                             },
                         )?))
                     },
@@ -764,7 +776,9 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                 };
                 submit(w, "Saving library version…", move |cancel, tx| {
                     let r = libraries::commit_changes(&request, &cancel, |s| {
-                        let _ = tx.send(Event::Progress(s.into()));
+                        if tx.send(Event::Progress(s.into())).is_ok() {
+                            crate::redraw::wake();
+                        }
                     })?;
                     Ok(Outcome::Changed(
                         r.repository.id,
@@ -893,7 +907,9 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                         }
                         let remote =
                             models::inspect_remote(&url, connection.as_ref(), &cancel, |s| {
-                                let _ = tx.send(Event::Progress(s.into()));
+                                if tx.send(Event::Progress(s.into())).is_ok() {
+                                    crate::redraw::wake();
+                                }
                             })?;
                         let tip = remote
                             .branches
@@ -934,7 +950,9 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                             connection.as_ref(),
                             &cancel,
                             |s| {
-                                let _ = tx.send(Event::Progress(s.into()));
+                                if tx.send(Event::Progress(s.into())).is_ok() {
+                                    crate::redraw::wake();
+                                }
                             },
                         )?;
                         Ok(Outcome::Changed(

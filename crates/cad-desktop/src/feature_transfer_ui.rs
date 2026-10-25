@@ -221,7 +221,9 @@ fn load(w: &mut Workspace, local: bool) {
                 })))
             })()
             .map_err(|error| error.to_string());
-            let _ = sender.send(result);
+            if sender.send(result).is_ok() {
+                crate::redraw::wake();
+            }
         });
         w.status = "Reading the source revision without changing the working branch".into();
     }
@@ -270,7 +272,9 @@ fn preview(w: &mut Workspace) {
                     Ok(Reply::Preview(Box::new(candidate)))
                 })()
                 .map_err(|error| error.to_string());
-                let _ = sender.send(result);
+                if sender.send(result).is_ok() {
+                    crate::redraw::wake();
+                }
             });
             w.status = "Preparing selected features and their required files".into();
         }

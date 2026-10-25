@@ -131,7 +131,12 @@ fn submit(
         document: w.session.visible().id.clone(),
     });
     std::thread::spawn(move || {
-        let _ = sender.send(work().map_err(|error| error.to_string()));
+        if sender
+            .send(work().map_err(|error| error.to_string()))
+            .is_ok()
+        {
+            crate::redraw::wake();
+        }
     });
     w.status = "Git operation running".into();
 }

@@ -88,6 +88,8 @@ impl Worker {
                         return;
                     }
                     queue.reply = Some((job.stamp, report));
+                    drop(queue);
+                    crate::redraw::wake();
                 }
             })
             .map_err(|error| format!("Could not start tolerance calculation: {error}"))?;

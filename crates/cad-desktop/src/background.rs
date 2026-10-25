@@ -20,8 +20,10 @@ impl Jobs {
         let (out, replies) = mpsc::channel();
         std::thread::spawn(move || {
             while let Ok(Job::Recovery { path, data }) = requests.recv() {
-                if let Err(error) = atomic_write(&path, &data) {
-                    let _ = out.send((false, format!("Recovery save: {error}")));
+                if let Err(error) = atomic_write(&path, &data)
+                    && out.send((false, format!("Recovery save: {error}"))).is_ok()
+                {
+                    crate::redraw::wake();
                 }
             }
         });

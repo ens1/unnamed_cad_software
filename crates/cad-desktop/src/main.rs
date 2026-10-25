@@ -62,6 +62,7 @@ mod properties_ui;
 mod publish_ui;
 mod quantity_display;
 mod readme_preview_ui;
+mod redraw;
 mod reference_curves_ui;
 mod reference_repair_ui;
 mod reference_ui;
@@ -1299,6 +1300,7 @@ fn main() {
         .add_plugins(render_appearance::FinishRenderPlugin)
         .init_resource::<part_edges::Cache>()
         .add_plugins(EguiPlugin::default())
+        .add_plugins(redraw::RedrawPlugin)
         .add_systems(Startup, setup)
         .add_systems(
             Update,
@@ -1486,6 +1488,13 @@ fn poll_workers(mut w: ResMut<Workspace>) {
     let identity = w.session.identity();
     let preview_key = operation_preview::request_key(&w);
     history::reconcile(&mut w);
+    if (w.requested.as_ref() != Some(&identity) || w.requested_preview != preview_key)
+        && w.changed.elapsed().as_millis() <= 160
+    {
+        redraw::request_after(
+            std::time::Duration::from_millis(161).saturating_sub(w.changed.elapsed()),
+        );
+    }
     if (w.requested.as_ref() != Some(&identity) || w.requested_preview != preview_key)
         && w.changed.elapsed().as_millis() > 160
     {

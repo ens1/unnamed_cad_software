@@ -266,7 +266,9 @@ fn load_context(w: &mut Workspace) {
             })
         })()
         .map_err(|error| error.to_string());
-        let _ = sender.send(Event::Metadata(key, result));
+        if sender.send(Event::Metadata(key, result)).is_ok() {
+            crate::redraw::wake();
+        }
     });
 }
 fn open(w: &mut Workspace) {
@@ -480,10 +482,20 @@ fn start_git(w: &mut Workspace, package: publication::GeneratedPackage) -> Resul
     let sender = w.publish.sender.clone();
     std::thread::spawn(move || {
         let result = publisher::publish(&request, job.connection.as_ref(), &cancel, |message| {
-            let _ = sender.send(Event::Progress(sequence, message.into()));
+            if sender
+                .send(Event::Progress(sequence, message.into()))
+                .is_ok()
+            {
+                crate::redraw::wake();
+            }
         })
         .map_err(|error| error.to_string());
-        let _ = sender.send(Event::Published(sequence, Box::new(result)));
+        if sender
+            .send(Event::Published(sequence, Box::new(result)))
+            .is_ok()
+        {
+            crate::redraw::wake();
+        }
     });
     status(w, "Committing the model and generated files, then pushing…");
     Ok(())
@@ -531,11 +543,21 @@ fn retry(w: &mut Workspace) -> Result<()> {
             connection.as_ref(),
             &worker_cancel,
             |message| {
-                let _ = sender.send(Event::Progress(sequence, message.into()));
+                if sender
+                    .send(Event::Progress(sequence, message.into()))
+                    .is_ok()
+                {
+                    crate::redraw::wake();
+                }
             },
         )
         .map_err(|error| error.to_string());
-        let _ = sender.send(Event::Published(sequence, Box::new(result)));
+        if sender
+            .send(Event::Published(sequence, Box::new(result)))
+            .is_ok()
+        {
+            crate::redraw::wake();
+        }
     });
     status(w, "Uploading the saved publication commit…");
     Ok(())

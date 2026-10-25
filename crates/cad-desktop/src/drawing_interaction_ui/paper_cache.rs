@@ -55,6 +55,8 @@ impl PaperWorker {
                     && let Ok(mut reply) = thread.reply.lock()
                 {
                     *reply = Some((ticket, result));
+                    drop(reply);
+                    crate::redraw::wake();
                 }
             }
         });

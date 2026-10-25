@@ -670,6 +670,15 @@ pub fn poll(w: &mut Workspace) {
         state.confirm_after_solve = false;
     }
     if (state.values != state.submitted || state.needs_solve)
+        && state.capture.is_none()
+        && state.changed.elapsed().as_millis() < 60
+        && state.error.is_none()
+    {
+        crate::redraw::request_after(
+            std::time::Duration::from_millis(60).saturating_sub(state.changed.elapsed()),
+        );
+    }
+    if (state.values != state.submitted || state.needs_solve)
         && (state.capture.is_some() || state.changed.elapsed().as_millis() >= 60)
         && state.error.is_none()
     {

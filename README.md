@@ -23,6 +23,13 @@ The worker executable must sit beside the desktop executable. `TCAD_WORKER` can 
 The macOS bundle contains `TCAD` (desktop), `tcad-worker` (geometry), and `tcad-cli` (command line), plus `tcad-gh` and `tcad-git-askpass` for account and key operations. These names must remain distinct even on case-insensitive filesystems.
 `./scripts/package-macos.sh` builds a fresh bundle, ad-hoc signs its nested executables and completed resources, verifies the signatures, then replaces `dist/TCAD.app`. A failed build or signature check preserves the existing package. Fresh executable files prevent invalid cached code-signature pages when rebuilding on macOS.
 
+The desktop uses event-driven redraws. Input and completed background work wake
+the UI; delayed updates share one sleeping scheduler. A 400 ms maintenance
+update keeps external theme changes and recovery saves responsive. Idle geometry
+worker controllers sleep until another request arrives. This replaces the
+continuous redraw and idle worker polling that caused high CPU/GPU use. Actual
+power use after this change remains subject to interactive acceptance.
+
 ## Git collaboration
 
 **Publish** in the top bar saves the applied model, generates its selected

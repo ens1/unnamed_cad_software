@@ -481,7 +481,9 @@ pub fn setup(commands: &mut Commands, images: &mut Assets<Image>, runtime: &mut 
     let sender = runtime.sender.clone();
     std::thread::spawn(move || {
         let (diffuse, specular) = studio_maps();
-        let _ = sender.send(Reply::Studio(diffuse, specular));
+        if sender.send(Reply::Studio(diffuse, specular)).is_ok() {
+            crate::redraw::wake();
+        }
     });
     commands.insert_resource(GlobalAmbientLight {
         brightness: 0.0,
@@ -616,7 +618,12 @@ pub fn poll_assets(
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(|| crate::texture_assets::builtin_height(kind))
                 .unwrap_or_else(|_| Err("Repository texture decoder failed".into()));
-            let _ = sender.send(Reply::BuiltinHeight(generation, kind, result));
+            if sender
+                .send(Reply::BuiltinHeight(generation, kind, result))
+                .is_ok()
+            {
+                crate::redraw::wake();
+            }
         });
     }
     runtime.select_environment(w.session.visible(), &root);
@@ -762,7 +769,9 @@ pub fn poll_assets(
                 }
             })
             .unwrap_or_else(|_| Err("Image decoder rejected the texture unexpectedly".into()));
-            let _ = sender.send(Reply::Texture(request.key, result));
+            if sender.send(Reply::Texture(request.key, result)).is_ok() {
+                crate::redraw::wake();
+            }
         });
     }
     if runtime.environment_loading.is_none()
@@ -793,7 +802,9 @@ pub fn poll_assets(
                         .into(),
                 )
             });
-            let _ = sender.send(Reply::Environment(key, result));
+            if sender.send(Reply::Environment(key, result)).is_ok() {
+                crate::redraw::wake();
+            }
         });
     }
     let info = runtime.environment_info(w.session.visible(), &root);

@@ -152,6 +152,16 @@ pub fn poll(w: &mut Workspace) {
         }
     }
     if !w.sketch_analysis.submitted
+        && w.sketch_analysis.context.is_some()
+        && w.sketch_analysis.source.is_some()
+        && w.sketch_analysis.changed.elapsed().as_millis() < 90
+    {
+        crate::redraw::request_after(
+            std::time::Duration::from_millis(90)
+                .saturating_sub(w.sketch_analysis.changed.elapsed()),
+        );
+    }
+    if !w.sketch_analysis.submitted
         && w.sketch_analysis.changed.elapsed().as_millis() >= 90
         && let (Some(context), Some(source)) = (
             w.sketch_analysis.context.as_ref(),

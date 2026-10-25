@@ -53,6 +53,7 @@ impl ReportWorker {
                     if output.send((job.key, Arc::new(report))).is_err() {
                         break;
                     }
+                    crate::redraw::wake();
                 }
             })?;
         Ok(Self { sender, receiver })

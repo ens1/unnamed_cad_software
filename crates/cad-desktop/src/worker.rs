@@ -108,12 +108,29 @@ fn request_id(r: &WorkerRequest) -> Option<RequestIdentity> {
         _ => None,
     }
 }
+fn deliver(output: &Sender<WorkerResponse>, response: WorkerResponse) {
+    if output.send(response).is_ok() {
+        crate::redraw::wake();
+    }
+}
 fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerResponse>) {
     let mut process: Option<Process> = None;
     let mut active: Option<(RequestIdentity, Instant, Duration)> = None;
     let mut queue = std::collections::VecDeque::new();
     loop {
-        match requests.recv_timeout(Duration::from_millis(8)) {
+        // A persistent process has nothing to supervise until another request
+        // arrives. Keep polling only while work or a queued request remains;
+        // otherwise every unused WorkerClient wakes its thread about 125 times/sec.
+        // A queued request must bypass the blocking receive after a launch or
+        // write failure so it can still run without further user input.
+        let incoming = if active.is_none() && queue.is_empty() {
+            requests
+                .recv()
+                .map_err(|_| mpsc::RecvTimeoutError::Disconnected)
+        } else {
+            requests.recv_timeout(Duration::from_millis(8))
+        };
+        match incoming {
             Ok(r) => {
                 let mut incoming = vec![r];
                 incoming.extend(requests.try_iter());
@@ -164,24 +181,31 @@ fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerRes
                     let identity = active.take().map(|a| a.0);
                     match reply {
                         Ok(r) => {
-                            let _ = output.send(r);
+                            deliver(&output, r);
                         }
                         Err(e) => {
-                            let _ = output.send(WorkerResponse::Error {
-                                identity,
-                                message: format!("Worker disconnected: {e}"),
-                            });
+                            deliver(
+                                &output,
+                                WorkerResponse::Error {
+                                    identity,
+                                    message: format!("Worker disconnected: {e}"),
+                                },
+                            );
                             process = None;
                         }
                     }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     if let Some((identity, _, _)) = active.take() {
-                        let _ = output.send(WorkerResponse::Error {
-                            identity: Some(identity),
-                            message: "Worker exited unexpectedly; retry to start a fresh process"
-                                .into(),
-                        });
+                        deliver(
+                            &output,
+                            WorkerResponse::Error {
+                                identity: Some(identity),
+                                message:
+                                    "Worker exited unexpectedly; retry to start a fresh process"
+                                        .into(),
+                            },
+                        );
                     }
                     process = None;
                 }
@@ -194,13 +218,16 @@ fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerRes
         {
             let (identity, _, deadline) = active.take().expect("expired active worker request");
             process = None;
-            let _ = output.send(WorkerResponse::Error {
-                identity: Some(identity),
-                message: format!(
-                    "Geometry exceeded the {} second deadline. The worker was terminated; reduce complexity or retry.",
-                    deadline.as_secs()
-                ),
-            });
+            deliver(
+                &output,
+                WorkerResponse::Error {
+                    identity: Some(identity),
+                    message: format!(
+                        "Geometry exceeded the {} second deadline. The worker was terminated; reduce complexity or retry.",
+                        deadline.as_secs()
+                    ),
+                },
+            );
         }
         if active.is_none()
             && let Some(r) = queue.pop_front()
@@ -210,7 +237,15 @@ fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerRes
                 match spawn() {
                     Ok(p) => process = Some(p),
                     Err(e) => {
-                        let _=output.send(WorkerResponse::Error{identity,message:format!("Cannot launch geometry worker: {e}. Build the workspace or set TCAD_WORKER.")});
+                        deliver(
+                            &output,
+                            WorkerResponse::Error {
+                                identity,
+                                message: format!(
+                                    "Cannot launch geometry worker: {e}. Build the workspace or set TCAD_WORKER."
+                                ),
+                            },
+                        );
                         continue;
                     }
                 }
@@ -225,10 +260,13 @@ fn supervise(requests: Receiver<Option<WorkerRequest>>, output: Sender<WorkerRes
                 match write_frame(&mut p.input, &r) {
                     Ok(()) => active = identity.map(|i| (i, Instant::now(), deadline)),
                     Err(e) => {
-                        let _ = output.send(WorkerResponse::Error {
-                            identity,
-                            message: e.to_string(),
-                        });
+                        deliver(
+                            &output,
+                            WorkerResponse::Error {
+                                identity,
+                                message: e.to_string(),
+                            },
+                        );
                         process = None;
                     }
                 }
