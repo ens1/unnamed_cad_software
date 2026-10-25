@@ -980,6 +980,7 @@ pub fn escape(w: &mut Workspace) -> bool {
         s.clicks.clear();
         s.click_join.clear();
         s.tool = Tool::Select;
+        w.status = "Sketch tool stopped; completed geometry retained. Escape again exits and keeps the sketch.".into();
         return true;
     }
     false
@@ -2406,8 +2407,13 @@ fn universe_pick(
 ) -> Option<cad_core::sketch_actions::SketchEntity> {
     use cad_core::sketch_actions::SketchEntity;
     let project = |point| viewport::project(w, rect, world(frame.0, frame.1, point));
-    if project([0.; 2]).is_some_and(|position| position.distance(pointer) < 9.) {
+    if w.view.visibility.origins
+        && project([0.; 2]).is_some_and(|position| position.distance(pointer) < 9.)
+    {
         return Some(SketchEntity::Origin);
+    }
+    if !w.view.visibility.axes {
+        return None;
     }
     let distance = |a, b| -> Option<f32> {
         let a = project(a)?;
@@ -2583,6 +2589,9 @@ fn draw_geometry(
     };
     if !geometry.polylines.is_empty() {
         for path in &geometry.polylines {
+            if !crate::sketch_overlay::member_visible(w, path.construction) {
+                continue;
+            }
             draw(
                 &path.points,
                 path.closed,
@@ -2602,6 +2611,9 @@ fn draw_geometry(
                 ),
             );
         }
+        return;
+    }
+    if !w.view.visibility.sketch_lines {
         return;
     }
     let points = geometry
@@ -2632,6 +2644,9 @@ fn draw_origin_plane(
     matrix: &[[f64; 4]; 4],
     color: Color32,
 ) {
+    if !w.view.visibility.planes {
+        return;
+    }
     if w.sketch.is_none()
         && matches!(
             crate::sketch_overlay::mode(w, false),
@@ -2820,6 +2835,9 @@ pub fn pick(w: &Workspace, rect: egui::Rect, pointer: egui::Pos2) -> Option<Sket
             }
             let xray = crate::sketch_overlay::xray(w, true, &props);
             let contours = if geometry.polylines.is_empty() {
+                if !w.view.visibility.sketch_lines {
+                    continue;
+                }
                 std::iter::once((
                     geometry
                         .profile_order
@@ -2839,6 +2857,7 @@ pub fn pick(w: &Workspace, rect: egui::Rect, pointer: egui::Pos2) -> Option<Sket
                 geometry
                     .polylines
                     .iter()
+                    .filter(|path| crate::sketch_overlay::member_visible(w, path.construction))
                     .map(|path| (path.points.clone(), path.closed))
                     .collect()
             };
@@ -2974,7 +2993,9 @@ pub fn overlay(
                 } else {
                     w.status = "Choose a planar face or an origin plane".into();
                 }
-            } else if let Some(s) = &w.sketch {
+            } else if w.view.visibility.planes
+                && let Some(s) = &w.sketch
+            {
                 let matrix = s.matrix;
                 let size = (w.view.distance as f64 * 30.).max(20.);
                 let chosen = ["Top Plane", "Front Plane", "Right Plane"]
@@ -3004,6 +3025,9 @@ pub fn overlay(
             )
             .unwrap_or_default()
             {
+                if !crate::sketch_overlay::member_visible(w, path.construction) {
+                    continue;
+                }
                 draw_polyline(
                     w,
                     ui,
@@ -3037,10 +3061,14 @@ pub fn overlay(
                 let suppressed =
                     cad_core::sketch_transform::suppressed_points(&sketch_definition(s));
                 let pointer = pointer?;
+                let displayed = display_definition(s);
                 s.points
                     .iter()
                     .enumerate()
-                    .filter(|(index, _)| !suppressed.contains(&s.keys[*index]))
+                    .filter(|(index, _)| {
+                        !suppressed.contains(&s.keys[*index])
+                            && crate::sketch_overlay::point_visible(w, &displayed, &s.keys[*index])
+                    })
                     .filter_map(|(index, point)| {
                         let pos = viewport::project(w, r, world(&plane, &matrix, *point))?;
                         let distance = pointer.distance(pos);
@@ -3053,6 +3081,7 @@ pub fn overlay(
         None
     };
     let origin_snap = entity_snap
+        && w.view.visibility.origins
         && w.sketch.as_ref().is_some_and(|s| s.tool != Tool::Select)
         && pointer.is_some_and(|pointer| {
             viewport::project(w, r, world(&plane, &matrix, [0.; 2])).is_some_and(|origin| {
@@ -3127,7 +3156,7 @@ pub fn overlay(
     }
     let extent = (w.view.distance as f64 * 70.).clamp(20., 100000.);
     let spacing = 10f64.powf((extent / 12.).log10().floor());
-    for i in -12..=12 {
+    for i in (-12..=12).filter(|_| w.view.visibility.sketch_grid) {
         let d = i as f64 * spacing;
         draw_polyline(
             w,
@@ -3164,44 +3193,47 @@ pub fn overlay(
     let y_selected = selected_axis(cad_core::sketch_actions::SketchEntity::YAxis);
     let x_problem = problems.contains(cad_core::sketch_actions::X_AXIS);
     let y_problem = problems.contains(cad_core::sketch_actions::Y_AXIS);
-    draw_polyline(
-        w,
-        ui,
-        r,
-        (&plane, &matrix),
-        &[[-extent, 0.], [extent, 0.]],
-        false,
-        Stroke::new(
-            if x_selected || x_problem { 3.5 } else { 1. },
-            if x_selected {
-                accent
-            } else if x_problem {
-                ui.visuals().error_fg_color
-            } else {
-                Color32::from_rgba_unmultiplied(190, 65, 65, 120)
-            },
-        ),
-    );
-    draw_polyline(
-        w,
-        ui,
-        r,
-        (&plane, &matrix),
-        &[[0., -extent], [0., extent]],
-        false,
-        Stroke::new(
-            if y_selected || y_problem { 3.5 } else { 1. },
-            if y_selected {
-                accent
-            } else if y_problem {
-                ui.visuals().error_fg_color
-            } else {
-                Color32::from_rgba_unmultiplied(65, 140, 65, 120)
-            },
-        ),
-    );
+    if w.view.visibility.axes {
+        draw_polyline(
+            w,
+            ui,
+            r,
+            (&plane, &matrix),
+            &[[-extent, 0.], [extent, 0.]],
+            false,
+            Stroke::new(
+                if x_selected || x_problem { 3.5 } else { 1. },
+                if x_selected {
+                    accent
+                } else if x_problem {
+                    ui.visuals().error_fg_color
+                } else {
+                    Color32::from_rgba_unmultiplied(190, 65, 65, 120)
+                },
+            ),
+        );
+        draw_polyline(
+            w,
+            ui,
+            r,
+            (&plane, &matrix),
+            &[[0., -extent], [0., extent]],
+            false,
+            Stroke::new(
+                if y_selected || y_problem { 3.5 } else { 1. },
+                if y_selected {
+                    accent
+                } else if y_problem {
+                    ui.visuals().error_fg_color
+                } else {
+                    Color32::from_rgba_unmultiplied(65, 140, 65, 120)
+                },
+            ),
+        );
+    }
     let origin_selected = selected_axis(cad_core::sketch_actions::SketchEntity::Origin);
-    if (origin_selected || problems.contains(cad_core::sketch_actions::ORIGIN))
+    if w.view.visibility.origins
+        && (origin_selected || problems.contains(cad_core::sketch_actions::ORIGIN))
         && let Some(origin) = viewport::project(w, r, world(&plane, &matrix, [0., 0.]))
     {
         ui.painter().with_clip_rect(r).circle_stroke(
@@ -3226,6 +3258,9 @@ pub fn overlay(
             &display_definition(s),
         ) {
             for path in paths {
+                if !crate::sketch_overlay::member_visible(w, path.construction) {
+                    continue;
+                }
                 let selected = related.contains(&path.member) || s.selection.iter().any(|e| matches!(e, cad_core::sketch_actions::SketchEntity::Member { member } if member == &path.member));
                 let unsatisfied = problems.contains(&path.member);
                 draw_polyline(
@@ -3253,6 +3288,24 @@ pub fn overlay(
                             blue
                         },
                     ),
+                );
+            }
+        }
+        let source = display_definition(s);
+        for (member_id, member) in &source.members {
+            if !crate::sketch_overlay::member_visible(w, member.construction) {
+                continue;
+            }
+            if let SketchCurve::Line { start, end } = &member.curve
+                && let (Some(a), Some(b)) = (source.points.get(start), source.points.get(end))
+            {
+                let center = std::array::from_fn(|axis| (a[axis] + b[axis]) * 0.5);
+                crate::sketch_overlay::midpoint(
+                    w,
+                    ui,
+                    r,
+                    &format!("{}::midpoint/{member_id}", s.sketch_id),
+                    world(&plane, &matrix, center),
                 );
             }
         }
@@ -3559,16 +3612,19 @@ pub fn overlay(
     handle_clicked |= crate::sketch_handles::overlay(w, ui, r);
     let mut selection_click = None;
     let mut placed_hole_center = None;
+    let displayed_points = w.sketch.as_ref().map(display_definition);
     let suppressed_points = w
         .sketch
         .as_ref()
         .map(|s| cad_core::sketch_transform::suppressed_points(&sketch_definition(s)))
         .unwrap_or_default();
     for (index, p) in points.iter().enumerate() {
-        if w.sketch
-            .as_ref()
-            .is_some_and(|s| suppressed_points.contains(&s.keys[index]))
-        {
+        if w.sketch.as_ref().is_some_and(|s| {
+            suppressed_points.contains(&s.keys[index])
+                || displayed_points.as_ref().is_some_and(|source| {
+                    !crate::sketch_overlay::point_visible(w, source, &s.keys[index])
+                })
+        }) {
             continue;
         }
         if let Some(pos) = viewport::project(w, r, world(&plane, &matrix, *p)) {

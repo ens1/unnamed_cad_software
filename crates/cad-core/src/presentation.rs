@@ -1518,6 +1518,38 @@ impl OverlayVisibility {
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewportVisibility {
+    pub sketch_lines: bool,
+    pub construction: bool,
+    pub sketch_points: bool,
+    pub sketch_midpoints: bool,
+    pub planes: bool,
+    pub axes: bool,
+    pub origins: bool,
+    pub reference_points: bool,
+    pub sketch_grid: bool,
+    pub centerlines: bool,
+    pub edge_midpoints: bool,
+}
+impl Default for ViewportVisibility {
+    fn default() -> Self {
+        Self {
+            sketch_lines: true,
+            construction: true,
+            sketch_points: true,
+            sketch_midpoints: true,
+            planes: true,
+            axes: true,
+            origins: true,
+            reference_points: true,
+            sketch_grid: true,
+            centerlines: true,
+            edge_midpoints: true,
+        }
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PresentationState {
     #[serde(default)]
     pub display_quality: crate::display_mesh::Quality,
@@ -1532,6 +1564,9 @@ pub struct PresentationState {
     pub sketch_annotations: BTreeMap<Id, [f32; 2]>,
     #[serde(default = "default_sketch_annotation_visibility")]
     pub sketch_annotation_visibility: [bool; 2],
+    /// Saved optical layers, independent from geometry, selection filters and themes.
+    #[serde(default)]
+    pub visibility: ViewportVisibility,
     /// Optical sketch/reference display controls; they never suppress CAD features.
     #[serde(default)]
     pub sketch_overlay_mode: OverlayVisibility,
@@ -1617,6 +1652,7 @@ impl Default for PresentationState {
             display_state: None,
             sketch_annotations: BTreeMap::new(),
             sketch_annotation_visibility: default_sketch_annotation_visibility(),
+            visibility: ViewportVisibility::default(),
             sketch_overlay_mode: OverlayVisibility::Auto,
             reference_overlay_mode: OverlayVisibility::Auto,
             sketch_overlay_xray: false,

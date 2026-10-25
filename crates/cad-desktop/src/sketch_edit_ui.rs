@@ -2241,6 +2241,9 @@ pub fn curve_edit_overlay(
     let project = |p| viewport::project(w, rect, sketch::world(&plane, &matrix, p));
     let mut picked: Option<(f32, Id)> = None;
     for path in &original {
+        if !crate::sketch_overlay::member_visible(w, path.construction) {
+            continue;
+        }
         let selected = target.as_ref() == Some(&path.member);
         for pair in path.points.windows(2) {
             if let (Some(a), Some(b)) = (project(pair[0]), project(pair[1])) {
@@ -2265,6 +2268,9 @@ pub fn curve_edit_overlay(
         }
     }
     for path in preview {
+        if !crate::sketch_overlay::member_visible(w, path.construction) {
+            continue;
+        }
         for pair in path.points.windows(2) {
             if let (Some(a), Some(b)) = (project(pair[0]), project(pair[1])) {
                 painter.line_segment(

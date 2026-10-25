@@ -434,16 +434,18 @@ fn query(
         .map(|settings| &settings.application)
         .unwrap_or(&w.application_preferences);
     let viewport_style = viewport::style(w);
-    let circles = enabled(
-        &viewport_style,
-        "hover-centerlines",
-        application.hover_centerlines,
-    );
-    let midpoints = enabled(
-        &viewport_style,
-        "hover-midpoints",
-        application.hover_midpoints,
-    );
+    let circles = w.view.visibility.centerlines
+        && enabled(
+            &viewport_style,
+            "hover-centerlines",
+            application.hover_centerlines,
+        );
+    let midpoints = w.view.visibility.edge_midpoints
+        && enabled(
+            &viewport_style,
+            "hover-midpoints",
+            application.hover_midpoints,
+        );
     if !circles && !midpoints {
         return None;
     }

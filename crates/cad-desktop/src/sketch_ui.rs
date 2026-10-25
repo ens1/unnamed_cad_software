@@ -2069,7 +2069,7 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, r: egui::Rect) -> bool 
                 "ready"
             },
         );
-        if props.get("display").is_some_and(|v| v == "none") {
+        if crate::sketch_overlay::hidden(&props) {
             continue;
         }
         let number = |key: &str, default: f32| {

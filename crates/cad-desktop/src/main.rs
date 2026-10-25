@@ -99,6 +99,7 @@ mod tolerance_stacks_ui;
 mod ui;
 mod viewport;
 mod viewport_guides;
+mod visibility_storage;
 mod weld_beads_ui;
 mod worker;
 mod workspace_controls;
@@ -145,6 +146,7 @@ fn initial_part_context(document: &Document) -> Option<cad_core::Id> {
 pub struct Workspace {
     pub session: Session,
     pub view: PresentationState,
+    pub visibility_diagnostic: Option<String>,
     pub project: Option<PathBuf>,
     pub layout: LayoutDocument,
     pub theme: Theme,
@@ -276,6 +278,13 @@ impl Workspace {
         {
             view = saved;
         }
+        let visibility_diagnostic = if reset {
+            None
+        } else {
+            project
+                .as_deref()
+                .and_then(|project| visibility_storage::restore(project, &doc.id, &mut view))
+        };
         view.navigation = application_preferences.navigation.clone();
         view.ui_scale = application_preferences.ui_scale;
         view.library_favorites = application_preferences.library_favorites.clone();
@@ -309,6 +318,7 @@ impl Workspace {
         let mut workspace = Self {
             session: Session::new(doc, BACKEND),
             view,
+            visibility_diagnostic,
             project,
             layout,
             theme,
@@ -402,6 +412,9 @@ impl Workspace {
         if !reset {
             workspace.presentation_resources.watch =
                 workspace.application_preferences.watch_presentation_files;
+        }
+        if let Some(diagnostic) = &workspace.visibility_diagnostic {
+            workspace.status = diagnostic.clone();
         }
         workspace
     }
@@ -831,6 +844,9 @@ impl Workspace {
         self.view.active_part = initial_part_context(&self.session.committed);
         self.view.library_favorites = self.application_preferences.library_favorites.clone();
         self.view.library_recent = self.application_preferences.library_recent.clone();
+        self.visibility_diagnostic = self.project.as_deref().and_then(|project| {
+            visibility_storage::restore(project, &self.session.committed.id, &mut self.view)
+        });
         self.activate_context(self.view.active_part.clone(), None);
         self.requested = None;
         self.changed = Instant::now();
@@ -853,6 +869,9 @@ impl Workspace {
             recovery_directory().join(format!("{}.json", self.session.committed.id));
         self.last_recovery.clear();
         self.last_recovery_write = Instant::now();
+        if let Some(diagnostic) = &self.visibility_diagnostic {
+            self.status = diagnostic.clone();
+        }
     }
     pub fn isolate(&mut self) {
         navigation::stop(self);
@@ -860,9 +879,11 @@ impl Workspace {
             if let Some(v) = self.before_isolation.take() {
                 let navigation = self.view.navigation.clone();
                 let ui_scale = self.view.ui_scale;
+                let optical = visibility_storage::OpticalState::capture(&self.view);
                 self.view = v;
                 self.view.navigation = navigation;
                 self.view.ui_scale = ui_scale;
+                optical.apply(&mut self.view);
             }
         } else {
             self.before_isolation = Some(self.view.clone());

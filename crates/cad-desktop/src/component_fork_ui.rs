@@ -61,7 +61,9 @@ pub fn current_source_is_valid(w: &Workspace) -> bool {
 }
 pub fn cancel(w: &mut Workspace) {
     if let Some(state) = w.component_fork.take() {
+        let optical = crate::visibility_storage::OpticalState::capture(&w.view);
         w.view = state.starting_view;
+        optical.apply(&mut w.view);
         w.selected = state.starting_selection;
         w.selected_component = state.starting_component;
         w.rendered_key.clear();

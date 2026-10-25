@@ -479,7 +479,7 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bo
                     "ready"
                 },
             );
-            if props.get("display").is_some_and(|value| value == "none") {
+            if crate::sketch_overlay::hidden(&props) {
                 continue;
             }
             let number = |key: &str, default: f32| {

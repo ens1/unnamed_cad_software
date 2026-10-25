@@ -1469,7 +1469,10 @@ fn visible(
     reference: &EvaluatedReference,
     evaluation: &cad_core::protocol::Evaluation,
 ) -> bool {
-    if reference.version != CONTRACT_VERSION || !viewport::visible(w, instance) {
+    if reference.version != CONTRACT_VERSION
+        || !viewport::visible(w, instance)
+        || !crate::sketch_overlay::reference_visible(w, reference.geometry.topology())
+    {
         return false;
     }
     match crate::sketch_overlay::mode(w, false) {
@@ -1567,6 +1570,16 @@ pub fn picks(
                 continue;
             }
             for (geometry, role, label) in pick_elements(reference) {
+                let visible = if matches!(reference.geometry, Geometry::CoordinateSystem { .. })
+                    && matches!(geometry, Geometry::Point { .. })
+                {
+                    w.view.visibility.origins
+                } else {
+                    crate::sketch_overlay::reference_visible(w, geometry.topology())
+                };
+                if !visible {
+                    continue;
+                }
                 if w.sketch.as_ref().is_some_and(|s| s.choosing_plane)
                     && !matches!(geometry, Geometry::Plane { .. })
                 {
@@ -1772,7 +1785,10 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                         (OriginAxis::X, "X", "--coordinate-x"),
                         (OriginAxis::Y, "Y", "--coordinate-y"),
                         (OriginAxis::Z, "Z", "--coordinate-z"),
-                    ] {
+                    ]
+                    .into_iter()
+                    .filter(|_| w.view.visibility.axes)
+                    {
                         let axis = frame.axis(axis);
                         let endpoints = [-length, length].map(|distance| {
                             std::array::from_fn(|index| {
@@ -1802,14 +1818,18 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                             );
                         }
                     }
-                    for plane in [OriginPlane::Top, OriginPlane::Front, OriginPlane::Right] {
+                    for plane in [OriginPlane::Top, OriginPlane::Front, OriginPlane::Right]
+                        .into_iter()
+                        .filter(|_| w.view.visibility.planes)
+                    {
                         outline(
                             plane_corners(&frame.plane(plane), length),
                             egui::Stroke::new(stroke.width, color.gamma_multiply(0.3)),
                             &mut remaining,
                         );
                     }
-                    if visible_point(frame.origin, &mut remaining)
+                    if w.view.visibility.origins
+                        && visible_point(frame.origin, &mut remaining)
                         && let Some(point) = project(frame.origin)
                     {
                         painter.circle_stroke(point, 4., stroke);

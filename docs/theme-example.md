@@ -1,4 +1,25 @@
-# Nocturne presentation example
+# Optional presentation examples
+
+The [theme repository](https://github.com/ens1/tcad-themes) includes three complete
+presentations. Install or update it through **Content Libraries**, then select a
+theme under **Settings → Application → Themes**. Classic Orange remains the only
+bundled theme. Each optional theme is editable CSS and layout JSON; none changes
+modeling behavior or installs sample geometry.
+
+- **Fusion 360-inspired** (`fusion-360/`) uses a pale canvas, blue selection, top
+  tools, a persistent left browser, a right operation inspector, and a bottom
+  history/navigation strip.
+- **SolidWorks-inspired** (`solidworks/`) uses a compact gray command bar, a left
+  tree/property manager, square controls, warm selected tabs, and a light blue
+  canvas.
+- **Nocturne** (`nocturne/`) demonstrates a larger departure from the default,
+  described below.
+
+The two CAD-inspired themes share `cad-controls.css` within the repository.
+Each package retains its own layout, palette, and control sizing. Loading or
+exporting a package resolves its local stylesheet dependencies.
+
+## Nocturne
 
 Nocturne is an optional presentation package in the starter theme repository, under `nocturne/`. Clone that repository through **Content Libraries**, then choose Nocturne in **Settings → Themes**. Only Classic Orange ships in the application.
 It uses the same document, commands, selection, draft validation, and undo history

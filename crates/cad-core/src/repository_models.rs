@@ -1337,8 +1337,10 @@ pub fn clone_repository(
 }
 
 fn add_presentation_files(snapshot: &mut Snapshot) -> Result<()> {
-    if snapshot.root.join("ui/workspace.json").is_file() {
-        snapshot.files.insert("ui/workspace.json".into());
+    for path in ["ui/workspace.json", "ui/visibility.json"] {
+        if snapshot.root.join(path).is_file() {
+            snapshot.files.insert(path.into());
+        }
     }
     let package = "ui/presentation.json";
     if snapshot.root.join(package).is_file() {

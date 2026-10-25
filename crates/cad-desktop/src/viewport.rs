@@ -2939,7 +2939,7 @@ fn spatial_edge_style(
         cad_core::presentation::OverlayVisibility::Auto => !selected,
         cad_core::presentation::OverlayVisibility::All => false,
     };
-    if editing || hidden {
+    if editing || hidden || !crate::sketch_overlay::member_visible(w, construction) {
         properties.insert("display".into(), "none".into());
     }
     if construction {

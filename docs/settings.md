@@ -36,7 +36,11 @@ Repeated personal-default validation retains at most 1024 process-local successf
 **Application → Themes** provides a picker for **Classic · Orange**, installed
 repository themes, and imported packages. Classic is the only bundled theme.
 Use **Download theme pack** or **View theme pack…** to install a theme repository;
-the optional starter theme repository contains **Nocturne · Violet**. Picking a theme previews its whole
+the optional starter theme repository contains **Nocturne · Violet**,
+**Fusion 360-inspired**, and **SolidWorks-inspired**. Fusion uses a left browser,
+right operation inspector, blue selection, and bottom history strip. SolidWorks
+uses a compact gray command bar, a left tree/property manager, square controls,
+and a light blue canvas. Their layout and CSS files remain editable. Picking a theme previews its whole
 layout and styling immediately. **Load theme…** accepts a presentation manifest,
 CSS stylesheet, or JSON theme; a stylesheet keeps the current layout. Imported
 themes are copied into the personal library with their local dependencies so

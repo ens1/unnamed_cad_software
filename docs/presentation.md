@@ -10,6 +10,13 @@ The optional `editing` object overrides `width_logical_px`, `height_logical_px`,
 
 Modeling editors use the common validated preview transaction. The compact orange Apply action waits for the matching evaluation and commits one undoable change. The sketch editor remains open while validation is pending or fails, retaining fields for correction. Further edits cancel the queued confirmation and update the preview. Cancel restores the session checkpoint taken when the operation started, retaining any edits that predated the operation. Existing Apply/Cancel command bindings remain available for custom layouts and general document edits.
 
+In planar and 3D sketches, **Escape** stops the current drawing tool, closes a
+popup, or cancels the current unfinished gesture first. From Select, **Escape**
+finishes the sketch and keeps its edits through the same validation path as
+**Exit Sketch**. Pending validation keeps the editor open; errors retain the
+sketch for correction. **Cancel** still discards the sketch operation. Finishing
+a sketch updates the document; use Save to write it to disk.
+
 Operation previews draw one neutral evaluated result with localized added and
 removed material. An additive extrude highlights its new volume; cuts, chamfers,
 and other subtractive edits highlight the removed volume. Existing feature
@@ -72,6 +79,26 @@ History stations now invoke the view-only `history.inspect` command. A matching 
 History is feature-sequence inspection using current parameter values, separate from Git revision comparison. A pending/failed evaluation, missing/incompatible cache or non-causal feature order reports an explicit reason instead of rebuilding on click or substituting final geometry. Normal evaluation prepares the caches once. Inspection cannot start during an active modeling operation. The cursor is transient and saved projects reopen at Latest. Semantic `history-station` IDs are `history:definition-id::feature-id`; they expose the versioned target, index, availability and disabled reason. Bind `history-view` for the inspection label and Return to Latest action in a custom layout.
 
 The Size menu controls UI scale (0.75–1.5) and toolbar height (60–130 logical pixels), with Compact and Comfortable presets. Toolbars scroll horizontally; tree, history and controls scroll vertically. These controls edit presentation state/layout without changing the source model. `ui/workspace.json` stores UI scale, toolbar setting, graph scope, graph positions, pan/zoom, sketch annotation positions and dimension/relation visibility. Save presentation writes the current resized layout and state. Arbitrary saved layout heights are respected until the user explicitly changes sizing.
+
+**View → Show / Hide** controls sketch lines and curves, construction geometry,
+points and handles, straight-line midpoint markers, dimensions, relations,
+sketch grid, planes, axes, origins, reference points, and hover center/midpoint
+guides. Normal Save and Save As write these choices to `ui/visibility.json`;
+Open restores them without changing the camera or theme. The small, versioned
+file carries the document identity, and older `ui/workspace.json` files remain
+readable. Invalid visibility files leave the model usable and show a notice in
+Show / Hide. These choices change
+display and viewport picking, without deleting geometry, suppressing features,
+or removing constraints. A hidden category stays hidden even when a theme gives
+it a visible style. The existing Auto/Show all/Hide overlays controls still
+choose which saved sketches and reference features are displayed. Hover guides
+also respect the application preferences in Settings.
+
+The category commands use `viewport.visibility.<category>` and publish the
+`viewport-visibility-toggle` role for custom menus or layouts. Dimension and
+relation switches share the sketch editor's existing visibility state. Midpoint
+markers are derived display guides, not added sketch entities. Drawing previews
+remain visible while placing new geometry, even when its category is hidden.
 
 The viewport has a clickable view cube and leaders for the selected feature/value or geometry measurement. Pinned assembly component references have separate labels; edit-in-place offers Ghost others, Hide others and Finish Editing in the viewport. These views have independent registered renderers and semantic bindings, in addition to their default viewport overlay placement. New documents stay empty and use the user's own part names.
 

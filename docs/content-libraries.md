@@ -43,7 +43,7 @@ The initial sources are private and require access:
 | --- | --- |
 | Structural profiles | [tcad-weldment-profiles](https://github.com/ens1/tcad-weldment-profiles) |
 | Grayscale maps and 80 finish presets | [tcad-textures](https://github.com/ens1/tcad-textures) |
-| Nocturne presentation package | [tcad-themes](https://github.com/ens1/tcad-themes) |
+| Nocturne, Fusion 360-inspired, and SolidWorks-inspired themes | [tcad-themes](https://github.com/ens1/tcad-themes) |
 | Engineering materials | [tcad-materials](https://github.com/ens1/tcad-materials) |
 | Standard hardware | [tcad-standard-parts](https://github.com/ens1/tcad-standard-parts) |
 

@@ -228,6 +228,7 @@ fn project_files(root: &Path, manifest: &str) -> Result<BTreeSet<String>> {
     }
     for path in [
         "ui/workspace.json",
+        "ui/visibility.json",
         "README.md",
         "previews/model.stl",
         "previews/model.svg",

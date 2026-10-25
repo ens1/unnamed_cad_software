@@ -482,6 +482,9 @@ fn snap(
     };
     let mut best = None;
     for (id, value) in &definition.points {
+        if !crate::sketch_overlay::point3d_visible(w, &definition, id) {
+            continue;
+        }
         if let Some(position) = viewport::project(w, rect, transform(&matrix, *value)) {
             let distance = position.distance(cursor);
             if distance <= 9. && best.as_ref().is_none_or(|(_, _, prior)| distance < *prior) {
@@ -489,7 +492,8 @@ fn snap(
             }
         }
     }
-    if let Some(position) = viewport::project(w, rect, transform(&matrix, [0.; 3]))
+    if w.view.visibility.origins
+        && let Some(position) = viewport::project(w, rect, transform(&matrix, [0.; 3]))
         && position.distance(cursor) <= 9.
         && best
             .as_ref()
@@ -3143,6 +3147,13 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         return vec![];
     };
     let mut out = vec![group(w, "tools", "3D Sketch")];
+    for (id, member) in &definition.members {
+        if let Curve::Line { start, end } = &member.curve {
+            let visible = w.view.visibility.sketch_midpoints
+                && crate::sketch_overlay::member_visible(w, member.construction);
+            out.push(SemanticElement { id: format!("sketch3d:{}/midpoint/{id}", state.feature), role: "sketch-midpoint".into(), label: "Line midpoint".into(), value: None, state: if visible { "ready" } else { "hidden" }.into(), commands: vec![], relationships: vec![state.feature.clone(), id.clone()], data: json!({"contract":"tcad.viewport-visibility","version":1,"visible":visible,"anchor":{"kind":"member_midpoint","member":id,"endpoints":[start,end]},"selectable":false,"classes":["viewport-overlay"]}) });
+        }
+    }
     out.push(field(
         w,
         "name",
@@ -3871,6 +3882,9 @@ struct Hit {
     distance: f32,
 }
 fn axis_handles(w: &Workspace, rect: egui::Rect) -> Vec<(Id, Axis, [f64; 3], [f64; 3])> {
+    if !w.view.visibility.sketch_points || !w.view.visibility.axes {
+        return vec![];
+    }
     let Some(state) = w.sketch3d.as_ref() else {
         return vec![];
     };
@@ -3891,6 +3905,9 @@ fn axis_handles(w: &Workspace, rect: egui::Rect) -> Vec<(Id, Axis, [f64; 3], [f6
     else {
         return vec![];
     };
+    if !crate::sketch_overlay::point3d_visible(w, &definition, &point.0) {
+        return vec![];
+    }
     let mut out = vec![];
     for index in 0..3 {
         let a = transform(&matrix, point.1);
@@ -4009,7 +4026,7 @@ fn hit(w: &Workspace, rect: egui::Rect, cursor: egui::Pos2, handles: bool) -> Op
                 .any(|member| member.construction && member.curve.points().contains(&id)),
             _ => true,
         };
-        if !allowed {
+        if !allowed || !crate::sketch_overlay::point3d_visible(w, &definition, id) {
             continue;
         }
         if let Some(point) = viewport::project(w, rect, transform(&matrix, *point)) {
@@ -4031,6 +4048,7 @@ fn hit(w: &Workspace, rect: egui::Rect, cursor: egui::Pos2, handles: bool) -> Op
         return best;
     }
     if best.is_none()
+        && w.view.visibility.origins
         && crate::sketch_overlay::pick_reference(w)
         && let Some(origin) = viewport::project(w, rect, transform(&matrix, [0.; 3]))
         && origin.distance(cursor) <= 8.
@@ -4235,7 +4253,7 @@ fn draw(w: &Workspace, ui: &mut egui::Ui, rect: egui::Rect) {
         &["viewport-guide", "spatial-workplane"],
         "ready",
     );
-    if shown(&plane_props) {
+    if w.view.visibility.planes && shown(&plane_props) {
         let span = cad_core::expression::value(
             w.session.visible(),
             &state.owner,
@@ -4273,7 +4291,9 @@ fn draw(w: &Workspace, ui: &mut egui::Ui, rect: egui::Rect) {
     }
     if let Some(evaluation) = display_evaluation(w) {
         for line in &evaluation.polylines {
-            if !definition.members.contains_key(&line.member) {
+            if !definition.members.contains_key(&line.member)
+                || !crate::sketch_overlay::member_visible(w, line.construction)
+            {
                 continue;
             }
             let selected = state.selection.contains(&Entity::Member {
@@ -4334,6 +4354,9 @@ fn draw(w: &Workspace, ui: &mut egui::Ui, rect: egui::Rect) {
         }
     } else {
         for (id, member) in &definition.members {
+            if !crate::sketch_overlay::member_visible(w, member.construction) {
+                continue;
+            }
             if let Curve::Line { start, end } = &member.curve
                 && let (Some(a), Some(b)) =
                     (definition.points.get(start), definition.points.get(end))
@@ -4362,6 +4385,9 @@ fn draw(w: &Workspace, ui: &mut egui::Ui, rect: egui::Rect) {
         }
     }
     for (id, point) in &definition.points {
+        if !crate::sketch_overlay::point3d_visible(w, &definition, id) {
+            continue;
+        }
         let selected = state
             .selection
             .contains(&Entity::Point { point: id.clone() });
@@ -4397,6 +4423,23 @@ fn draw(w: &Workspace, ui: &mut egui::Ui, rect: egui::Rect) {
             controls::number(&props, "handle-size", if selected { 4.5 } else { 2.7 }),
             color,
         );
+    }
+    for (member_id, member) in &definition.members {
+        if !crate::sketch_overlay::member_visible(w, member.construction) {
+            continue;
+        }
+        if let Curve::Line { start, end } = &member.curve
+            && let (Some(a), Some(b)) = (definition.points.get(start), definition.points.get(end))
+        {
+            let center = std::array::from_fn(|axis| (a[axis] + b[axis]) * 0.5);
+            crate::sketch_overlay::midpoint(
+                w,
+                ui,
+                rect,
+                &format!("sketch3d:{}/midpoint/{member_id}", state.feature),
+                transform(&matrix, center),
+            );
+        }
     }
     for (id, axis, a, b) in axis_handles(w, rect) {
         let props = overlay_properties(
@@ -4435,7 +4478,9 @@ fn draw(w: &Workspace, ui: &mut egui::Ui, rect: egui::Rect) {
             );
         }
     }
-    if let Some(origin) = viewport::project(w, rect, transform(&matrix, [0.; 3])) {
+    if w.view.visibility.origins
+        && let Some(origin) = viewport::project(w, rect, transform(&matrix, [0.; 3]))
+    {
         let props = overlay_properties(
             w,
             "origin",
@@ -4571,7 +4616,7 @@ pub fn escape(w: &mut Workspace) -> bool {
             state.tool = Tool::Select;
             state.popup = None;
             state.hover = None;
-            w.status = "Current member ended; earlier sketch geometry retained".into();
+            w.status = "Sketch tool stopped; completed geometry retained. Escape again exits and keeps the sketch.".into();
             return true;
         }
         if state.popup.take().is_some() {
@@ -5006,8 +5051,15 @@ struct InactivePoint {
     position: [f64; 3],
     selected: bool,
 }
+pub fn visibility_changed(w: &mut Workspace) {
+    if let Some(state) = &mut w.sketch3d {
+        state.popup = None;
+        state.hover = None;
+        state.snap_target = None;
+    }
+}
 fn inactive_points(w: &Workspace) -> Vec<InactivePoint> {
-    if active(w) {
+    if active(w) || !w.view.visibility.sketch_points {
         return vec![];
     }
     let mode = crate::sketch_overlay::mode(w, true);
@@ -5165,6 +5217,7 @@ pub fn toolbar(ui: &mut egui::Ui, w: &mut Workspace) {
     if !active(w) {
         return;
     }
+    crate::sketch_overlay::visibility_controls(ui, w);
     for tool in [
         Tool::Select,
         Tool::Line,

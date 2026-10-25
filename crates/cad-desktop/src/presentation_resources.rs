@@ -1071,11 +1071,13 @@ pub fn save_project(w: &mut Workspace) {
             &directory.join("workspace.json"),
             &serde_json::to_vec_pretty(&w.view)?,
         )?;
+        crate::visibility_storage::save(&w.root(), &w.session.committed.id, &w.view)?;
         Ok(())
     });
     match result {
         Ok(()) => {
             let root = w.root();
+            w.visibility_diagnostic = None;
             reload(w, Target::Project(root));
             if w.presentation_resources.diagnostic.is_none() {
                 w.status = "Saved validated presentation package to project ui/".into();

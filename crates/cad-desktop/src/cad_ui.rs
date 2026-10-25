@@ -247,6 +247,7 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             return items;
         }
         "View" => vec![
+            "viewport.visibility-menu",
             "viewport.orientation.front",
             "viewport.orientation.back",
             "viewport.orientation.top",
@@ -4092,6 +4093,7 @@ pub fn measure(w: &mut Workspace) {
     }
 }
 pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    crate::sketch_overlay::visibility_controls(ui, w);
     crate::display_states_ui::view_controls(ui, w);
     crate::exploded_views_ui::view_controls(ui, w);
     for (label, orbit) in [

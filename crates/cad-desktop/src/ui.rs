@@ -277,10 +277,6 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
     });
     if shortcuts.0 {
         crate::navigation::stop(w);
-        let canceling_drag = w
-            .sketch
-            .as_ref()
-            .is_some_and(|s| s.drag.is_some() || s.edit.is_some());
         if w.dialog.as_deref() == Some("sketch-block-library") {
             crate::sketch_block_library_ui::close(w);
         } else if crate::command_palette::escape(w)
@@ -304,9 +300,16 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
             });
         } else if crate::sketch::escape(w) {
-            if !canceling_drag {
-                w.status = "Sketch tool stopped. Select another tool or Exit Sketch.".into();
-            }
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+            });
+        } else if w.sketch.is_some() || crate::sketch3d_ui::active(w) {
+            // Escape ends a completed sketch through the same validated command
+            // as Exit Sketch. Only explicit Cancel restores the tool checkpoint.
+            ctx.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+            });
+            w.confirm_tool();
         } else if w.view.history_cursor.is_some() && w.dialog.is_none() {
             crate::history::latest(w);
         } else if w.tool_checkpoint.is_some() {
@@ -2801,6 +2804,12 @@ fn save_committed_to(w: &mut Workspace, path: std::path::PathBuf) -> bool {
         Ok(()) => {
             let saved_path = path.display().to_string();
             let project_changed = w.project.as_ref() != Some(&path);
+            w.visibility_diagnostic =
+                crate::visibility_storage::save(&path, &w.session.committed.id, &w.view)
+                    .err()
+                    .map(|error| {
+                        format!("Model saved, but viewport visibility could not be saved: {error}")
+                    });
             w.project = Some(path);
             if project_changed {
                 crate::git_ui::reset(w);
@@ -2812,6 +2821,10 @@ fn save_committed_to(w: &mut Workspace, path: std::path::PathBuf) -> bool {
             } else {
                 format!("Saved project to {saved_path}")
             };
+            if let Some(diagnostic) = &w.visibility_diagnostic {
+                w.status.push_str(". ");
+                w.status.push_str(diagnostic);
+            }
             return true;
         }
         Err(e) => w.status = e.to_string(),

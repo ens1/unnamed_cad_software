@@ -242,6 +242,9 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
     let painter = ui.painter().with_clip_rect(rect);
     if crate::sketch_relations_ui::motion_display(w) && active_id.is_none() {
         for (key, motion) in &point_motion {
+            if !crate::sketch_overlay::point_visible(w, &display, key) {
+                continue;
+            }
             if !selection.is_empty() && !motion_keys.contains(key) {
                 continue;
             }
@@ -331,6 +334,11 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
     }
     // A selected spline exposes its actual control polygon, not tessellation vertices.
     for (key, member) in &display.members {
+        if !w.view.visibility.sketch_points
+            || !crate::sketch_overlay::member_visible(w, member.construction)
+        {
+            continue;
+        }
         if let SketchCurve::Bezier { points } | SketchCurve::Nurbs { points, .. } = &member.curve
             && selection.iter().any(|e| {
                 matches!(e, SketchEntity::Member { member } if member == key)
@@ -373,6 +381,21 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
     }
     for mut handle in list {
         let entity = handle.target.entity();
+        if !w.view.visibility.sketch_points
+            || match &entity {
+                SketchEntity::Point { point } => {
+                    !crate::sketch_overlay::point_visible(w, &source, point)
+                }
+                SketchEntity::Member { member } => {
+                    source.members.get(member).is_some_and(|member| {
+                        !crate::sketch_overlay::member_visible(w, member.construction)
+                    })
+                }
+                _ => false,
+            }
+        {
+            continue;
+        }
         let motion = match &entity {
             SketchEntity::Point { point } => point_motion.get(point),
             _ => None,
@@ -441,7 +464,7 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
                 movement.unwrap_or("ready")
             },
         );
-        if props.get("display").is_some_and(|v| v == "none") && !dragging {
+        if crate::sketch_overlay::hidden(&props) && !dragging {
             continue;
         }
         let number = |key: &str, default: f32| {

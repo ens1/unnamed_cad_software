@@ -6,6 +6,228 @@ use std::collections::BTreeMap;
 
 pub const CONTRACT_VERSION: u32 = 1;
 pub const DEPTH_WORK: usize = 240_000;
+const LAYERS: &[(&str, &str)] = &[
+    ("sketch-lines", "Sketch lines and curves"),
+    ("construction", "Construction geometry"),
+    ("sketch-points", "Sketch points and handles"),
+    ("sketch-midpoints", "Sketch line midpoints"),
+    ("dimensions", "Sketch dimensions"),
+    ("relations", "Sketch relations"),
+    ("planes", "Planes"),
+    ("axes", "Axes"),
+    ("origins", "Origins"),
+    ("reference-points", "Reference points"),
+    ("sketch-grid", "Sketch grid"),
+    ("centerlines", "Circular center guides on hover"),
+    ("edge-midpoints", "Edge midpoint guides on hover"),
+];
+fn layer_mut<'a>(w: &'a mut Workspace, layer: &str) -> Option<&'a mut bool> {
+    let visibility = &mut w.view.visibility;
+    Some(match layer {
+        "sketch-lines" => &mut visibility.sketch_lines,
+        "construction" => &mut visibility.construction,
+        "sketch-points" => &mut visibility.sketch_points,
+        "sketch-midpoints" => &mut visibility.sketch_midpoints,
+        "dimensions" => &mut w.view.sketch_annotation_visibility[0],
+        "relations" => &mut w.view.sketch_annotation_visibility[1],
+        "planes" => &mut visibility.planes,
+        "axes" => &mut visibility.axes,
+        "origins" => &mut visibility.origins,
+        "reference-points" => &mut visibility.reference_points,
+        "sketch-grid" => &mut visibility.sketch_grid,
+        "centerlines" => &mut visibility.centerlines,
+        "edge-midpoints" => &mut visibility.edge_midpoints,
+        _ => return None,
+    })
+}
+fn layer(w: &Workspace, layer: &str) -> bool {
+    let visibility = &w.view.visibility;
+    match layer {
+        "sketch-lines" => visibility.sketch_lines,
+        "construction" => visibility.construction,
+        "sketch-points" => visibility.sketch_points,
+        "sketch-midpoints" => visibility.sketch_midpoints,
+        "dimensions" => w.view.sketch_annotation_visibility[0],
+        "relations" => w.view.sketch_annotation_visibility[1],
+        "planes" => visibility.planes,
+        "axes" => visibility.axes,
+        "origins" => visibility.origins,
+        "reference-points" => visibility.reference_points,
+        "sketch-grid" => visibility.sketch_grid,
+        "centerlines" => visibility.centerlines,
+        "edge-midpoints" => visibility.edge_midpoints,
+        _ => false,
+    }
+}
+pub fn member_visible(w: &Workspace, construction: bool) -> bool {
+    if construction {
+        w.view.visibility.construction
+    } else {
+        w.view.visibility.sketch_lines
+    }
+}
+pub fn point_visible(w: &Workspace, source: &cad_core::Sketch, point: &str) -> bool {
+    if w.view.visibility.sketch_lines && w.view.visibility.construction {
+        return w.view.visibility.sketch_points;
+    }
+    w.view.visibility.sketch_points
+        && (source
+            .members
+            .values()
+            .all(|member| !member.curve.points().contains(&point))
+            || source.members.values().any(|member| {
+                member_visible(w, member.construction) && member.curve.points().contains(&point)
+            }))
+}
+pub fn point3d_visible(
+    w: &Workspace,
+    source: &cad_core::sketch3d::Definition,
+    point: &str,
+) -> bool {
+    if w.view.visibility.sketch_lines && w.view.visibility.construction {
+        return w.view.visibility.sketch_points;
+    }
+    w.view.visibility.sketch_points
+        && (source
+            .members
+            .values()
+            .all(|member| !member.curve.points().iter().any(|id| id.as_str() == point))
+            || source.members.values().any(|member| {
+                member_visible(w, member.construction)
+                    && member.curve.points().iter().any(|id| id.as_str() == point)
+            }))
+}
+pub fn reference_visible(w: &Workspace, topology: &str) -> bool {
+    match topology {
+        "plane" => w.view.visibility.planes,
+        "axis" => w.view.visibility.axes,
+        "point" => w.view.visibility.reference_points,
+        "coordinate_system" => {
+            w.view.visibility.axes || w.view.visibility.origins || w.view.visibility.planes
+        }
+        _ => true,
+    }
+}
+pub fn midpoint(w: &Workspace, ui: &egui::Ui, rect: egui::Rect, id: &str, point: [f64; 3]) {
+    if !w.view.visibility.sketch_midpoints {
+        return;
+    }
+    let props = properties(w, id, "sketch-midpoint", false);
+    if hidden(&props) {
+        return;
+    }
+    let Some(point) = viewport::project(w, rect, point) else {
+        return;
+    };
+    let color = props
+        .get("color")
+        .and_then(|value| crate::ui::color(value))
+        .unwrap_or_else(|| ui.visuals().weak_text_color());
+    let size = controls::number(&props, "size", 3.).clamp(1., 12.);
+    let points = [
+        egui::vec2(0., -size),
+        egui::vec2(size, 0.),
+        egui::vec2(0., size),
+        egui::vec2(-size, 0.),
+        egui::vec2(0., -size),
+    ]
+    .map(|offset| point + offset);
+    ui.painter().with_clip_rect(rect).add(egui::Shape::line(
+        points.to_vec(),
+        egui::Stroke::new(controls::number(&props, "stroke-width", 1.), color),
+    ));
+}
+pub fn visibility_controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    controls::menu_button(ui, "viewport.visibility-menu", "Show / Hide", |ui| {
+        if let Some(diagnostic) = &w.visibility_diagnostic {
+            controls::label(
+                ui,
+                "viewport.visibility-storage-diagnostic",
+                "diagnostic",
+                &["warning"],
+                diagnostic,
+                "warning",
+            );
+            ui.separator();
+        }
+        for (group, label, keys) in [
+            (
+                "sketch",
+                "Sketch",
+                &[
+                    "sketch-lines",
+                    "construction",
+                    "sketch-points",
+                    "sketch-midpoints",
+                    "dimensions",
+                    "relations",
+                    "sketch-grid",
+                ][..],
+            ),
+            (
+                "references",
+                "Reference geometry",
+                &["planes", "axes", "origins", "reference-points"][..],
+            ),
+            (
+                "hover",
+                "Hover guides",
+                &["centerlines", "edge-midpoints"][..],
+            ),
+        ] {
+            if group != "sketch" {
+                ui.separator();
+            }
+            controls::label(
+                ui,
+                &format!("viewport.visibility-group.{group}"),
+                "menu-group",
+                &[],
+                label,
+                "ready",
+            );
+            for key in keys {
+                let label = LAYERS
+                    .iter()
+                    .find(|(candidate, _)| candidate == key)
+                    .map(|(_, label)| *label)
+                    .unwrap_or(key);
+                let command = format!("viewport.visibility.{key}");
+                let visible = layer(w, key);
+                if controls::button(
+                    ui,
+                    &command,
+                    "viewport-visibility-toggle",
+                    &["menu-action"],
+                    &format!("{} {label}", if visible { "✓" } else { "  " }),
+                    true,
+                    visible,
+                )
+                .clicked()
+                {
+                    action(w, &command);
+                }
+            }
+        }
+        ui.separator();
+        if controls::button(
+            ui,
+            "viewport.visibility.restore",
+            "viewport-action",
+            &["menu-action"],
+            "Show all categories",
+            true,
+            false,
+        )
+        .clicked()
+        {
+            action(w, "viewport.visibility.restore");
+        }
+        ui.small("Saved with this project. Hidden items cannot be picked in the viewport. Drawing previews stay visible while placing new geometry.");
+        ui.small("Sketch outlines and References control which saved features are shown. Hover guides also respect Settings and theme preferences.");
+    });
+}
+
 pub fn pick_filter(w: &Workspace) -> &str {
     w.fields
         .get("sketch-pick-filter")
@@ -14,6 +236,9 @@ pub fn pick_filter(w: &Workspace) -> &str {
         .unwrap_or("all")
 }
 pub fn pick_point(w: &Workspace, source: &cad_core::Sketch, point: &str) -> bool {
+    if !point_visible(w, source, point) {
+        return false;
+    }
     match pick_filter(w) {
         "members" => false,
         "construction" => source
@@ -24,6 +249,9 @@ pub fn pick_point(w: &Workspace, source: &cad_core::Sketch, point: &str) -> bool
     }
 }
 pub fn pick_member(w: &Workspace, construction: bool) -> bool {
+    if !member_visible(w, construction) {
+        return false;
+    }
     match pick_filter(w) {
         "points" => false,
         "construction" => construction,
@@ -92,7 +320,32 @@ pub fn hidden(props: &BTreeMap<String, String>) -> bool {
             .get("visibility")
             .is_some_and(|value| value == "hidden")
 }
+fn clear_pick_cache(w: &mut Workspace) {
+    w.hover_guide = None;
+    w.hover_cache = Default::default();
+    w.candidates.clear();
+    w.candidate_index = 0;
+    w.selection_popup = None;
+    w.fields.remove("sketch-snap-target");
+    crate::sketch3d_ui::visibility_changed(w);
+    if let Some(sketch) = &mut w.sketch {
+        sketch.pick_candidates.clear();
+        sketch.pick_index = 0;
+    }
+}
 pub fn action(w: &mut Workspace, command: &str) -> bool {
+    if let Some(layer) = command.strip_prefix("viewport.visibility.") {
+        if layer == "restore" {
+            w.view.visibility = Default::default();
+            w.view.sketch_annotation_visibility = [true; 2];
+        } else if let Some(value) = layer_mut(w, layer) {
+            *value = !*value;
+        } else {
+            return false;
+        }
+        clear_pick_cache(w);
+        return true;
+    }
     if crate::display_mesh::action(w, command) {
         return true;
     }
@@ -127,10 +380,60 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
     }
     w.hover_guide = None;
     w.hover_cache = Default::default();
+    if command.starts_with("viewport.sketches.")
+        || command.starts_with("viewport.references.")
+        || matches!(command, "viewport.sketch-xray" | "viewport.reference-xray")
+    {
+        clear_pick_cache(w);
+    }
     true
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = crate::display_mesh::semantics(w);
+    if let Some(diagnostic) = &w.visibility_diagnostic {
+        elements.push(SemanticElement { id: "viewport.visibility-storage-diagnostic".into(), role: "diagnostic".into(), label: diagnostic.clone(), value: None, state: "warning".into(), commands: vec![], relationships: vec!["viewport.visibility-menu".into()], data: serde_json::json!({"contract":"tcad.viewport-visibility","version":1,"classes":["warning"]}) });
+    }
+    if let Some(sketch) = &w.sketch {
+        for (id, member) in &sketch.members {
+            if let cad_core::SketchCurve::Line { start, end } = &member.curve {
+                let visible =
+                    w.view.visibility.sketch_midpoints && member_visible(w, member.construction);
+                elements.push(SemanticElement { id: format!("{}::midpoint/{id}", sketch.sketch_id), role: "sketch-midpoint".into(), label: "Line midpoint".into(), value: None, state: if visible { "ready" } else { "hidden" }.into(), commands: vec![], relationships: vec![sketch.sketch_id.clone(), id.clone()], data: serde_json::json!({"contract":"tcad.viewport-visibility","version":1,"visible":visible,"anchor":{"kind":"member_midpoint","member":id,"endpoints":[start,end]},"selectable":false,"classes":["viewport-overlay"]}) });
+            }
+        }
+    }
+    elements.push(SemanticElement { id: "viewport.visibility-menu".into(), role: "menu".into(), label: "Show / Hide".into(), value: None, state: "ready".into(), commands: vec![], relationships: vec!["workspace.viewport".into()], data: serde_json::json!({"contract":"tcad.viewport-visibility","version":1,"children":LAYERS.iter().map(|(key, _)| format!("viewport.visibility.{key}")).chain(std::iter::once("viewport.visibility.restore".into())).collect::<Vec<_>>()}) });
+    for (key, label) in [
+        ("sketch", "Sketch"),
+        ("references", "Reference geometry"),
+        ("hover", "Hover guides"),
+    ] {
+        elements.push(SemanticElement {
+            id: format!("viewport.visibility-group.{key}"),
+            role: "menu-group".into(),
+            label: label.into(),
+            value: None,
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec!["viewport.visibility-menu".into()],
+            data: serde_json::json!({"geometry_changes":false}),
+        });
+    }
+    for &(key, label) in LAYERS {
+        let visible = layer(w, key);
+        let command = format!("viewport.visibility.{key}");
+        elements.push(SemanticElement { id: command.clone(), role: "viewport-visibility-toggle".into(), label: label.into(), value: Some(visible.to_string()), state: if visible { "selected" } else { "ready" }.into(), commands: vec![command], relationships: vec!["workspace.viewport".into()], data: serde_json::json!({"contract":"tcad.viewport-visibility","version":1,"layer":key,"visible":visible,"saved":"project_presentation","geometry_changes":false,"enabled":true,"classes":["menu-action"]}) });
+    }
+    elements.push(SemanticElement {
+        id: "viewport.visibility.restore".into(),
+        role: "viewport-action".into(),
+        label: "Show all visibility categories".into(),
+        value: None,
+        state: "ready".into(),
+        commands: vec!["viewport.visibility.restore".into()],
+        relationships: vec!["workspace.viewport".into()],
+        data: serde_json::json!({"enabled":true,"geometry_changes":false}),
+    });
     for (sketches, label, role, prefix) in [
         (
             true,
@@ -268,6 +571,7 @@ pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     }
 }
 pub fn snap_controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    visibility_controls(ui, w);
     if controls::button(ui, "sketch.snap-entities", "sketch-snap-setting", &["sketch-control"], "Snap entities", true, w.view.sketch_entity_snap)
         .on_hover_text("Join the highlighted endpoint, or save Coincident with Origin when the origin is highlighted. Hold Alt for independent placement; Alt also bypasses grid snapping.").clicked() {
         action(w, "sketch.snap-entities");
