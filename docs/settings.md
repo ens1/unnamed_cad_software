@@ -35,6 +35,16 @@ Repeated personal-default validation retains at most 1024 process-local successf
 
 **Application → Themes** provides a picker for **Classic · Orange**, installed
 repository themes, and imported packages. Classic is the only bundled theme.
+
+**View → Themes** and **Workspace → Themes** list installed choices by name,
+including Fusion 360-inspired, SolidWorks-inspired and Nocturne from the optional
+theme pack. A menu choice applies and saves the personal default immediately.
+If Settings is already open, the choice joins its preview instead; Apply saves it
+and Cancel restores the starting presentation. A save failure restores the prior
+presentation. **Get more themes…** opens the pack library; **Refresh installed
+themes** reloads local manifests without downloading or switching the active theme.
+Opening the Settings theme picker also refreshes installed packs in the background.
+
 Use **Download theme pack** or **View theme pack…** to install a theme repository;
 the optional starter theme repository contains **Nocturne · Violet**,
 **Fusion 360-inspired**, and **SolidWorks-inspired**. Fusion uses a left browser,

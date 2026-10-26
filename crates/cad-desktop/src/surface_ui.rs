@@ -39,7 +39,7 @@ pub fn preset(w: &mut Workspace, name: &str) {
     if w.sketch.is_some() {
         w.after_confirm = Some(name.into());
         w.confirm_tool();
-        if w.sketch.is_some() {
+        if w.sketch.is_some() && !w.confirm_requested {
             w.after_confirm = None;
         }
         return;

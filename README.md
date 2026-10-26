@@ -245,7 +245,10 @@ and theme files.
 
 The optional [theme pack](https://github.com/ens1/tcad-themes) also includes
 **Fusion 360-inspired** and **SolidWorks-inspired** layouts and styles. Install or
-update it in **Content Libraries**, then choose the theme in Settings. All layout,
+update it in **Content Libraries**, then choose it directly under **View → Themes**
+or **Workspace → Themes**. Menu choices apply and remember the theme immediately;
+**Settings → Themes** retains preview, Apply and Cancel. **Refresh installed themes**
+reloads the local pack list without restarting. All layout,
 colors, sizes, and control shapes remain editable; Classic is always available
 without the pack. See [theme examples](docs/theme-example.md).
 

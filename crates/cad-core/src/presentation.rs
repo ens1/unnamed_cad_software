@@ -1193,6 +1193,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("settings.model", "Model Settings…"),
     ("settings.application", "Application Preferences…"),
     ("settings.themes", "Choose Theme…"),
+    ("settings.theme-refresh", "Refresh Installed Themes"),
     ("settings.apply", "Apply Settings"),
     ("settings.ok", "Save Settings and Close"),
     ("settings.cancel", "Cancel Settings"),

@@ -706,7 +706,22 @@ pub fn semantic_action(
     if action(w, command) {
         return true;
     }
-    if !command.starts_with("drawing.") {
+    // Other drawing adapters own paper gestures, annotation tools and editor
+    // actions. Claim only this adapter's commands so semantic menus and command
+    // search can reach those handlers through the shared dispatch chain.
+    if !matches!(
+        command,
+        "drawing.tree-select"
+            | "drawing.sheet-edit"
+            | "drawing.sheet-preview"
+            | "drawing.annotation-delete"
+            | "drawing.sheet-template-save"
+            | "drawing.sheet-format-load"
+            | "drawing.sheet-delete"
+            | "drawing.sheet-duplicate"
+            | "drawing.sheet-up"
+            | "drawing.sheet-down"
+    ) {
         return false;
     }
     if !drawing_context(w) {
@@ -727,6 +742,7 @@ pub fn semantic_action(
         .filter(|key| w.session.visible().drawings.iter().any(|s| &s.id == key))
         .map(str::to_string)
     else {
+        w.status = "Select a current drawing sheet before using this command".into();
         return true;
     };
     select_sheet(w, &key);
@@ -777,19 +793,25 @@ pub fn semantic_action(
     match command {
         "drawing.sheet-edit" | "drawing.sheet-preview" => {}
         "drawing.annotation-delete" => {
-            let annotation_id = element
+            let Some(annotation_id) = element
                 .data
                 .get("annotation_id")
-                .and_then(serde_json::Value::as_str);
-            if let Some(mut sheet) = sheet_source(w, &key)
-                && let Some(id) = annotation_id
-            {
-                let old = sheet.entities.len();
-                sheet.entities.retain(|entity| entity.id != id);
-                if old != sheet.entities.len() {
-                    put(w, sheet);
-                }
+                .and_then(serde_json::Value::as_str)
+            else {
+                w.status = "Select a drawing annotation to delete".into();
+                return true;
+            };
+            let Some(mut sheet) = sheet_source(w, &key) else {
+                w.status = "The selected drawing sheet is no longer available".into();
+                return true;
+            };
+            let old = sheet.entities.len();
+            sheet.entities.retain(|entity| entity.id != annotation_id);
+            if old == sheet.entities.len() {
+                w.status = "The selected drawing annotation is no longer available".into();
+                return true;
             }
+            put(w, sheet);
         }
         "drawing.sheet-template-save" => save_template(w, &key),
         "drawing.sheet-format-load" => load_template(w, Some(&key)),
@@ -825,7 +847,15 @@ pub fn semantic_action(
                     drawing: key.clone(),
                     index: index + 1,
                 },
-                _ => return true,
+                _ => {
+                    w.status = if command == "drawing.sheet-up" {
+                        "This is already the first drawing sheet"
+                    } else {
+                        "This is already the last drawing sheet"
+                    }
+                    .into();
+                    return true;
+                }
             };
             w.start_tool();
             w.dispatch(command);

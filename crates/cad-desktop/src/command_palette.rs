@@ -80,7 +80,15 @@ fn group(command: &str) -> String {
     .into()
 }
 fn target_label(w: &Workspace, source: &SemanticElement, action: &ActionDescriptor) -> String {
-    let mut label = action.label.clone();
+    let mut label = if action.label == source.label {
+        cad_core::presentation::command_catalog()
+            .into_iter()
+            .find(|(command, _)| *command == action.command)
+            .map(|(_, label)| label.to_owned())
+            .unwrap_or_else(|| action.label.clone())
+    } else {
+        action.label.clone()
+    };
     let document = w.session.visible();
     let target = ["finish", "material", "view", "sensor", "stack", "library"]
         .into_iter()
@@ -109,6 +117,10 @@ fn target_label(w: &Workspace, source: &SemanticElement, action: &ActionDescript
             | "tolerance-stack-term"
             | "sketch-library-entry"
             | "camera-view"
+            | "drawing-sheet"
+            | "drawing-annotation"
+            | "exploded-view"
+            | "explode-step"
     );
     let target = target.or_else(|| bound_record.then_some(source.label.as_str()));
     if let Some(target) = target.filter(|target| !target.is_empty())
@@ -144,6 +156,37 @@ fn relevant(w: &Workspace, source: &SemanticElement, action: &ActionDescriptor) 
         _ => false,
     }
 }
+// A catalog name alone cannot execute an action that needs a saved object.
+// Keep it discoverable, but require a bound result below or the owning editor.
+fn unbound_reason(command: &str) -> Option<&'static str> {
+    match command {
+        "drawing.sheet-edit"
+        | "drawing.sheet-preview"
+        | "drawing.sheet-duplicate"
+        | "drawing.sheet-delete"
+        | "drawing.sheet-up"
+        | "drawing.sheet-down"
+        | "drawing.sheet-template-save"
+        | "drawing.sheet-format-load" => {
+            Some("Create a drawing sheet first, then choose its named command")
+        }
+        "drawing.annotation-delete" => Some("Select an annotation in a drawing sheet first"),
+        "assembly.exploded-edit" | "assembly.exploded-show" | "assembly.exploded-step" => {
+            Some("Create an exploded view first, then choose its named command")
+        }
+        "assembly.inspection-edit" | "assembly.inspection-delete" => {
+            Some("Choose a saved inspection in Assembly and Mates")
+        }
+        "assembly.inspection-highlight"
+        | "assembly.inspection-select-first"
+        | "assembly.inspection-select-second" => {
+            Some("Choose a result pair in the assembly inspection")
+        }
+        "reference.repair-station" => Some("Choose an upstream station in Repair References"),
+        "navigation.set" => Some("Choose a preference in Navigation Settings"),
+        _ => None,
+    }
+}
 fn candidates(w: &Workspace) -> Vec<Candidate> {
     let chrome = crate::cad_ui::semantics(w);
     let mut out = BTreeMap::new();
@@ -162,11 +205,15 @@ fn candidates(w: &Workspace) -> Vec<Candidate> {
                 relationships: vec![],
                 data: json!({}),
             });
-        if let Some(action) = source
+        if let Some(mut action) = source
             .action_descriptors()
             .into_iter()
             .find(|action| action.command == command)
         {
+            if let Some(reason) = unbound_reason(command) {
+                action.enabled = false;
+                action.disabled_reason = Some(reason.into());
+            }
             out.insert(
                 command.to_owned(),
                 Candidate {
@@ -183,6 +230,22 @@ fn candidates(w: &Workspace) -> Vec<Candidate> {
     let mut dynamic: BTreeMap<String, BTreeMap<String, Candidate>> = BTreeMap::new();
     for source in crate::materials_ui::semantics(w)
         .into_iter()
+        .chain(crate::theme_library::semantics(w))
+        .chain(
+            cad_core::drawing::semantic_elements(w.session.visible(), "ready")
+                .into_iter()
+                .filter(|element| {
+                    matches!(
+                        element.role.as_str(),
+                        "drawing-sheet" | "drawing-annotation"
+                    )
+                }),
+        )
+        .chain(cad_core::exploded_views::semantic_elements(
+            w.session.visible(),
+            None,
+            "ready",
+        ))
         .chain(crate::camera_views_ui::elements(w))
         .chain(crate::drawing_interaction_ui::semantics(w))
         .chain(crate::inspection_ui::semantics(w))
@@ -205,6 +268,10 @@ fn candidates(w: &Workspace) -> Vec<Candidate> {
                 | "tolerance-stack-term"
                 | "sketch-library-entry"
                 | "camera-view"
+                | "drawing-sheet"
+                | "drawing-annotation"
+                | "exploded-view"
+                | "explode-step"
         );
         if !(source.id.starts_with("command:")
             || source.role == "command"
@@ -253,6 +320,12 @@ fn candidates(w: &Workspace) -> Vec<Candidate> {
                 action,
                 context: true,
             });
+        }
+    }
+    for candidate in &mut result {
+        if let Some(reason) = crate::cad_ui::command_disabled_reason(w, &candidate.action.command) {
+            candidate.action.enabled = false;
+            candidate.action.disabled_reason = Some(reason.into());
         }
     }
     result

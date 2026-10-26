@@ -18,6 +18,10 @@ pub struct State {
 }
 
 pub fn open(w: &mut Workspace, category: Option<&str>) {
+    if category == Some("application.themes") {
+        crate::theme_library::refresh(w);
+        crate::content_repositories_ui::refresh_for_themes(w);
+    }
     if crate::drawing_interaction_ui::active(w) {
         crate::drawing_interaction_ui::escape(w);
     }
@@ -27,6 +31,7 @@ pub fn open(w: &mut Workspace, category: Option<&str>) {
     if let Some(state) = &mut w.settings {
         if let Some(category) = category {
             state.category = category.into();
+            state.search.clear();
         }
         return;
     }
@@ -385,6 +390,12 @@ pub fn save_live_application(w: &mut Workspace) {
 }
 
 pub fn action(w: &mut Workspace, command: &str) -> bool {
+    if let Some(id) = command.strip_prefix("settings.theme-select:") {
+        if let Err(error) = crate::theme_library::choose(w, id) {
+            fail(w, format!("Could not apply theme: {error}"));
+        }
+        return true;
+    }
     if let Some(category) = command.strip_prefix("settings.open.") {
         open(w, Some(category));
         return true;
@@ -393,6 +404,11 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
         "settings" => open(w, None),
         "settings.model" => open(w, Some("model.units")),
         "settings.application" => open(w, Some("application.interface")),
+        "settings.themes" => open(w, Some("application.themes")),
+        "settings.theme-refresh" => {
+            crate::theme_library::refresh(w);
+            crate::content_repositories_ui::refresh_for_themes(w);
+        }
         "controls" | "navigation.preferences" => open(w, Some("application.navigation")),
         "settings.apply" => apply(w, false),
         "settings.ok" => apply(w, true),

@@ -897,6 +897,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ("settings.presentation", "Layout and theme…"),
         ("settings.theme-load", "Load theme…"),
         ("settings.theme-export", "Export theme…"),
+        ("settings.theme-refresh", "Refresh installed themes"),
         ("content-repositories", "Get libraries…"),
         (
             "content-repositories.download-themes",
@@ -1206,7 +1207,7 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                             controls::label(ui,"settings:theme-description","settings-description",&[],&choice.description,"ready");
                                         }
                                         ui.horizontal_wrapped(|ui| {
-                                            for (command,label) in [("settings.theme-load","Load theme…"),("settings.theme-export","Export theme…"),("settings.presentation","Edit layout and style…")] {
+                                            for (command,label) in [("settings.theme-load","Load theme…"),("settings.theme-refresh","Refresh installed themes"),("settings.theme-export","Export theme…"),("settings.presentation","Edit layout and style…")] {
                                                 if controls::button(ui,&format!("command:{command}"),"settings-action",&[],label,!pending,false).clicked() {settings::action(w,command);}
                                             }
                                         });

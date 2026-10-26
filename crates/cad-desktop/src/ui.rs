@@ -1032,6 +1032,12 @@ pub(crate) fn semantic_element(
     }
 }
 pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
+    if command.starts_with("sketch.")
+        && let Some(reason) = crate::cad_ui::command_disabled_reason(w, command)
+    {
+        w.status = reason.into();
+        return;
+    }
     if crate::publish_ui::action(w, command, Some(&element.data)) {
         return;
     }
@@ -1287,6 +1293,17 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
     }
 }
 pub(crate) fn history_command(w: &mut Workspace, redo: bool) {
+    if let Some(reason) = crate::cad_ui::command_disabled_reason(
+        w,
+        if redo {
+            "document.redo"
+        } else {
+            "document.undo"
+        },
+    ) {
+        w.status = reason.into();
+        return;
+    }
     if crate::publish_ui::busy(w) {
         w.status = "Wait for Publish to finish or cancel it before changing history".into();
         return;
@@ -1295,10 +1312,19 @@ pub(crate) fn history_command(w: &mut Workspace, redo: bool) {
     if crate::drawing_interaction_ui::active(w) {
         crate::drawing_interaction_ui::escape(w);
     } else if w.sketch.is_some() {
+        if redo {
+            w.status = "Redo is unavailable while editing a planar sketch".into();
+            return;
+        }
         crate::sketch::undo_point(w);
     } else if crate::sketch3d_ui::active(w) {
         crate::sketch3d_ui::history_command(w, redo);
     } else if w.tool_checkpoint.is_some() {
+        if redo {
+            w.status =
+                "Finish or cancel the current operation before redoing a model change".into();
+            return;
+        }
         w.cancel_tool();
     } else if redo {
         w.session.redo();
@@ -2216,6 +2242,12 @@ fn reference_repair_blocks(w: &mut Workspace, command: &str) -> bool {
 }
 
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if cmd.starts_with("sketch.")
+        && let Some(reason) = crate::cad_ui::command_disabled_reason(w, cmd)
+    {
+        w.status = reason.into();
+        return;
+    }
     if crate::publish_ui::action(w, cmd, None) {
         return;
     }
@@ -2284,6 +2316,8 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || crate::display_states_ui::handle_command(w, cmd, None)
         || crate::materials_ui::action(w, cmd, None)
         || crate::finish_library_ui::action(w, cmd, None)
+        || crate::sketch_block_library_ui::action(w, cmd, None)
+        || crate::inspection_ui::action(w, cmd, None)
         || crate::drawing_ui::action(w, cmd)
         || crate::components_ui::action(w, cmd)
         || crate::reference_repair_ui::action(w, cmd, None)
@@ -2414,6 +2448,10 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
             | "sketch.toggle-construction"
             | "sketch.delete-selection"
     ) || cmd.starts_with("sketch.relation.")
+        || (cad_core::modeling_tools::SKETCH_TOOLS
+            .iter()
+            .any(|tool| tool.0 == cmd)
+            && crate::sketch::tool_for_command(cmd).is_none())
     {
         if w.sketch.is_none() && !matches!(cmd, "sketch.cancel" | "sketch.finish") {
             let existing = w
@@ -2606,7 +2644,6 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
             w.source_text = serde_json::to_string_pretty(w.session.visible()).unwrap_or_default();
             w.open_editor("source");
         }
-        "settings.themes" => crate::settings::open(w, Some("application.themes")),
         "presentation" => w.open_editor("presentation"),
         "versions" => {
             w.open_editor("versions");

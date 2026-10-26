@@ -38,6 +38,7 @@ pub struct State {
     downloading_pack: Option<String>,
     clipboard: Option<String>,
     refreshing: bool,
+    theme_refresh_requested: bool,
     queued_download: Option<String>,
 }
 enum Event {
@@ -155,10 +156,12 @@ fn kind(w: &Workspace, key: &str) -> Result<ContentKind> {
 }
 fn status(w: &mut Workspace, message: impl Into<String>) {
     let message = message.into();
-    if w.settings
-        .as_ref()
-        .is_some_and(|settings| settings.category == "application.libraries")
-    {
+    if w.settings.as_ref().is_some_and(|settings| {
+        matches!(
+            settings.category.as_str(),
+            "application.libraries" | "application.themes"
+        )
+    }) {
         w.status = message.clone();
     }
     w.content_repositories.status = message;
@@ -313,6 +316,19 @@ fn refresh(w: &mut Workspace) {
     });
     w.content_repositories.refreshing = !idle(w);
 }
+/// Refresh local pack manifests when opening the theme picker without moving
+/// the user into library management or replacing an in-flight library job.
+pub fn refresh_for_themes(w: &mut Workspace) {
+    if !idle(w) && !w.content_repositories.refreshing {
+        w.status = "Wait for the library operation to finish, then refresh themes".into();
+        return;
+    }
+    w.content_repositories.theme_refresh_requested = true;
+    if idle(w) {
+        refresh(w);
+    }
+    w.status = "Refreshing installed themes…".into();
+}
 pub fn poll(w: &mut Workspace) {
     if !w.content_repositories.initialized {
         w.content_repositories.initialized = true;
@@ -342,6 +358,8 @@ pub fn poll(w: &mut Workspace) {
         match event {
             Event::Progress(message) => status(w, message),
             Event::Done(result) => {
+                let theme_refresh =
+                    std::mem::take(&mut w.content_repositories.theme_refresh_requested);
                 w.content_repositories.pending = None;
                 w.content_repositories.refreshing = false;
                 let downloaded = w.content_repositories.downloading_pack.take();
@@ -359,6 +377,9 @@ pub fn poll(w: &mut Workspace) {
                             error
                         };
                         w.content_repositories.outcome_notice = Some(error.clone());
+                        if theme_refresh {
+                            w.status = format!("Could not refresh themes: {error}");
+                        }
                         status(w, error);
                     }
                     Ok(Outcome::Refresh(registry, notices, author, directory, ready)) => {
@@ -406,6 +427,12 @@ pub fn poll(w: &mut Workspace) {
                             w,
                             "Libraries refreshed. Saved models and the active theme keep their current data.",
                         );
+                        if theme_refresh {
+                            w.status = format!(
+                                "Themes refreshed: {} choices available in View → Themes",
+                                crate::theme_library::choices(w).len()
+                            );
+                        }
                     }
                     Ok(Outcome::Changed(id, message)) => {
                         if w.content_repositories.selected != id {

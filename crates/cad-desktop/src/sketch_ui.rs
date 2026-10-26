@@ -1665,6 +1665,13 @@ pub fn action(w: &mut Workspace, command: &str) {
                 }
             }
         }
+        _ if cad_core::modeling_tools::SKETCH_TOOLS
+            .iter()
+            .any(|tool| tool.0 == command)
+            && sketch::tool_for_command(command).is_none() =>
+        {
+            w.status = format!("Sketch action is unavailable in this editor: {command}");
+        }
         _ => crate::ui::action(w, command),
     }
 }

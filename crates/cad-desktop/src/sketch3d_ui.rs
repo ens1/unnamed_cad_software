@@ -943,6 +943,15 @@ fn publish(w: &mut Workspace, definition: Definition) -> Result<()> {
 pub fn undo(w: &mut Workspace) -> bool {
     history_command(w, false)
 }
+pub fn history_available(w: &Workspace, redo: bool) -> bool {
+    w.sketch3d.as_ref().is_some_and(|state| {
+        if redo {
+            !state.redo.is_empty()
+        } else {
+            !state.history.is_empty()
+        }
+    })
+}
 pub fn history_command(w: &mut Workspace, redo: bool) -> bool {
     if !active(w) {
         return false;
@@ -2633,6 +2642,13 @@ pub fn tool_supported(command: &str) -> bool {
     matches!(
         command,
         "sketch.new-3d"
+            | "sketch.line"
+            | "sketch.point"
+            | "sketch.arc"
+            | "sketch.circle"
+            | "sketch.spline"
+            | "sketch.nurbs"
+            | "sketch.interpolating-spline"
             | "sketch.select"
             | "sketch.dimension"
             | "sketch.smart-dimension"
@@ -2666,13 +2682,15 @@ pub fn action(w: &mut Workspace, command: &str, payload: Option<&Value>) -> bool
     }
     let alias = match command {
         "sketch.select" => Some("tool/select"),
-        "sketch.tool.polyline" | "sketch.tool.line" => Some("tool/line"),
-        "sketch.tool.point" => Some("tool/point"),
-        "sketch.tool.arc" => Some("tool/arc"),
-        "sketch.tool.circle" => Some("tool/circle"),
-        "sketch.tool.spline" | "sketch.tool.bezier" => Some("tool/bezier"),
-        "sketch.tool.nurbs" => Some("tool/nurbs"),
-        "sketch.tool.interpolating-spline" => Some("tool/interpolating_spline"),
+        "sketch.line" | "sketch.tool.polyline" | "sketch.tool.line" => Some("tool/line"),
+        "sketch.point" | "sketch.tool.point" => Some("tool/point"),
+        "sketch.arc" | "sketch.tool.arc" => Some("tool/arc"),
+        "sketch.circle" | "sketch.tool.circle" => Some("tool/circle"),
+        "sketch.spline" | "sketch.tool.spline" | "sketch.tool.bezier" => Some("tool/bezier"),
+        "sketch.nurbs" | "sketch.tool.nurbs" => Some("tool/nurbs"),
+        "sketch.interpolating-spline" | "sketch.tool.interpolating-spline" => {
+            Some("tool/interpolating_spline")
+        }
         "sketch.dimension" | "sketch.smart-dimension" => Some("smart-dimension"),
         "sketch.finish-dimension" => Some("finish-dimension"),
         "sketch.cancel-dimension" => Some("cancel-dimension"),

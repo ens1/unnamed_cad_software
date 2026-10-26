@@ -1,6 +1,7 @@
 //! Personal presentation choices contain a complete layout/style pair. They
 //! remain separate from CAD source and can be previewed and cancelled together.
 use crate::{Workspace, presentation_resources as resources};
+use bevy_egui::egui;
 use cad_core::{
     CadError, Result,
     persistence::atomic_write,
@@ -155,8 +156,8 @@ pub fn refresh(w: &mut Workspace) {
         }
         entries.push(Entry { choice: Choice {
             id: format!("repository:{}:{}", repository.repository_id, repository.entry.id),
-            name: format!("{} · {}", repository.entry.name, repository.repository_name),
-            description: "Installed Git repository theme. Edit its layout and CSS files in the checkout; valid saves reload when presentation watching is enabled.".into(),
+            name: repository.entry.name.clone(),
+            description: format!("From {}. Edit its layout and CSS files in the checkout; valid saves reload when presentation watching is enabled.", repository.repository_name),
         }, manifest: repository.path.clone(), repository: Some(repository) });
     }
     entries.sort_by(|left, right| {
@@ -236,6 +237,113 @@ pub fn selected(w: &Workspace) -> String {
     w.presentation_resources.library.selected.clone()
 }
 
+/// Theme choices are ordinary semantic actions, usable from a menu, command
+/// search or a user-authored layout. Inventory reads stay outside UI frames.
+pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+    use cad_core::presentation::SemanticElement;
+    use serde_json::json;
+    let selected = selected(w);
+    let busy_reason = if crate::publish_ui::busy(w) {
+        Some("Wait for Publish to finish")
+    } else if crate::git_ui::busy(w) {
+        Some("Wait for the Git operation to finish")
+    } else if crate::drawing_interaction_ui::active(w) {
+        Some("Finish or cancel the drawing gesture")
+    } else if w.settings.as_ref().is_some_and(|state| state.pending) {
+        Some("Wait for settings validation to finish")
+    } else {
+        None
+    };
+    let mut out = Vec::new();
+    for choice in choices(w) {
+        let installed = choice.id == "classic"
+            || w.presentation_resources
+                .library
+                .entries
+                .iter()
+                .any(|entry| entry.choice.id == choice.id);
+        let reason = busy_reason.or_else(|| {
+            (!installed).then_some(
+                "This is your saved presentation. Reconnect its theme pack to select it again.",
+            )
+        });
+        let command = format!("settings.theme-select:{}", choice.id);
+        out.push(SemanticElement {
+            id: format!("theme-choice:{}", choice.id),
+            role: "theme-action".into(),
+            label: choice.name,
+            value: Some(choice.description.clone()),
+            state: if reason.is_some() { "disabled" } else if choice.id == selected { "selected" } else { "ready" }.into(),
+            commands: vec![command.clone()],
+            relationships: vec!["menu/Themes".into()],
+            data: json!({"theme":choice.id,"selected":choice.id == selected,"presentation_only":true,"actions":[{"command":command,"enabled":reason.is_none(),"disabled_reason":reason}],"description":choice.description}),
+        });
+    }
+    for (command, label) in [
+        ("settings.themes", "Theme settings…"),
+        ("settings.theme-load", "Load theme from file…"),
+        ("settings.theme-refresh", "Refresh installed themes"),
+        ("content-repositories.show-themes", "Get more themes…"),
+    ] {
+        out.push(SemanticElement {
+            id: format!("theme-menu:{command}"), role: "theme-action".into(), label: label.into(),
+            value: None, state: if busy_reason.is_some() { "disabled" } else { "ready" }.into(),
+            commands: vec![command.into()], relationships: vec!["menu/Themes".into()],
+            data: json!({"presentation_only":true,"management":true,"actions":[{"command":command,"enabled":busy_reason.is_none(),"disabled_reason":busy_reason}]}),
+        });
+    }
+    out.push(SemanticElement {
+        id: "menu/Themes".into(), role: "menu".into(), label: "Themes".into(), value: None,
+        state: "ready".into(), commands: vec![], relationships: vec![],
+        data: json!({"items":out.iter().map(|element|element.id.clone()).collect::<Vec<_>>(),"presentation_only":true}),
+    });
+    out
+}
+
+pub fn menu(ui: &mut egui::Ui, w: &mut Workspace, id: &str) {
+    let elements = semantics(w);
+    crate::presentation_controls::menu_button(ui, id, "Themes", |ui| {
+        let mut management = false;
+        egui::ScrollArea::vertical()
+            .max_height(360.)
+            .show(ui, |ui| {
+                for element in elements
+                    .iter()
+                    .filter(|element| element.role == "theme-action")
+                {
+                    if element.data["management"] == true && !management {
+                        ui.separator();
+                        management = true;
+                    }
+                    let Some(action) = element.action_descriptors().into_iter().next() else {
+                        continue;
+                    };
+                    let response = crate::presentation_controls::button(
+                        ui,
+                        &element.id,
+                        "menu-action",
+                        &["menu-item", "theme-choice"],
+                        &element.label,
+                        action.enabled,
+                        element.data["selected"] == true,
+                    )
+                    .on_disabled_hover_text(
+                        action.disabled_reason.as_deref().unwrap_or(&element.label),
+                    );
+                    let response = if let Some(description) = &element.value {
+                        response.on_hover_text(description)
+                    } else {
+                        response
+                    };
+                    if response.clicked() {
+                        crate::ui::action(w, &action.command);
+                        ui.close();
+                    }
+                }
+            });
+    });
+}
+
 fn bundled(id: &str) -> Result<resources::Candidate> {
     let (layout, theme, active_layout) = match id {
         "classic" => (default_layout(), default_theme(), "instrument-rail"),
@@ -287,6 +395,42 @@ pub fn select(w: &mut Workspace, id: &str) -> Result<()> {
     resources::validate(w, &candidate)?;
     resources::install_library(w, candidate, manifest);
     w.status = "Theme preview updated; model, draft, selection and camera retained".into();
+    Ok(())
+}
+
+/// A menu choice is a personal preference, not a modeling transaction. Inside
+/// Settings it joins the existing preview; outside Settings it saves directly.
+pub fn choose(w: &mut Workspace, id: &str) -> Result<()> {
+    if w.settings.is_some() {
+        return crate::settings::set_theme(w, id);
+    }
+    let checkpoint = capture(w);
+    let watch = w.presentation_resources.watch;
+    let result = (|| {
+        select(w, id)?;
+        w.presentation_resources.watch = watch;
+        let pending = prepare_selected(w)?;
+        if let Err(error) = commit_selected(&pending) {
+            return match rollback_selected(&pending) {
+                Ok(()) => Err(error),
+                Err(rollback) => Err(invalid(format!(
+                    "{error}; could not restore the saved preference: {rollback}"
+                ))),
+            };
+        }
+        finish_selected(w, &pending);
+        Ok(())
+    })();
+    if let Err(error) = result {
+        restore(w, checkpoint);
+        return Err(error);
+    }
+    let name = choices(w)
+        .into_iter()
+        .find(|choice| choice.id == id)
+        .map(|choice| choice.name)
+        .unwrap_or_else(|| "Selected theme".into());
+    w.status = format!("{name} applied and saved as your default theme");
     Ok(())
 }
 

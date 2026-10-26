@@ -233,6 +233,20 @@ Portable package schema 1 is `{ "schema_version": 1, "name": "...", "inherit_def
 **Settings → Application → Themes** previews Classic, installed repository themes and personal library choices. Load a complete manifest to replace both layout and styling, or load a CSS/JSON theme to retain the current layout. Apply saves the selection as the personal presentation default; Cancel restores the presentation and its reload sources. Optional themes come from **Content Libraries**, which can clone any compatible repository or register an editable checkout. Installed theme imports stay within that checkout. Valid watched edits remain live after Apply; a personal snapshot remains available if the repository is removed. The optional [Nocturne package](theme-example.md) demonstrates alternate docking, control sizes and shapes, colors, typography, and viewport overlays using editable resources. The native picker publishes `settings:field:presentation:theme` and registered settings actions, so a custom composition can host the same controls.
 
 
+Direct choices in **View → Themes** and **Workspace → Themes** apply and remember
+a personal theme immediately, or join the existing Settings preview if it is open.
+The `menu/Themes`, `theme-choice:<identity>` and `theme-menu:<command>` descriptors
+expose the same installed choices and actions to custom layouts and command search.
+`settings.theme-select:<identity>` uses the same validated loader and recoverable
+personal snapshot. `settings.theme-refresh` refreshes local library manifests in
+the background. It does not download updates or replace the active presentation.
+
+Native menus, semantic menus and command search share prerequisite checks and
+disabled reasons. Semantic menus retain action arguments, including drawing
+sheet/annotation and exploded-view identities. The Show / Hide menu exposes its
+visibility children through the same semantic path. Planar-sketch Redo is
+explicitly unavailable until local redo is implemented; it never calls Undo.
+
 Fillet and Chamfer maintain an explicit edge set. Command/Ctrl/Shift-click
 preselection on one body seeds a new edge feature; while its editor is open,
 plain clicks add and modified clicks toggle edges. Add, individual Remove and
