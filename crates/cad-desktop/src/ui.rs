@@ -2841,7 +2841,7 @@ fn export(w: &mut Workspace, release: bool) {
         draft: None,
         edit: 0,
         source: doc.fingerprint(),
-        backend: BACKEND.into(),
+        backend: w.session.backend.clone(),
     };
     let root = w.root().to_string_lossy().into();
     if release {
@@ -4525,7 +4525,7 @@ pub(crate) fn export_format(w: &mut Workspace, format: &str, name: &str) {
                 draft: None,
                 edit: 0,
                 source: d.fingerprint(),
-                backend: BACKEND.into(),
+                backend: w.session.backend.clone(),
             },
             document: d,
             project_root: w.root().to_string_lossy().into(),
@@ -4703,7 +4703,7 @@ pub(crate) fn compare(w: &mut Workspace, d: Document, root: PathBuf) {
         draft: None,
         edit: 0,
         source: d.fingerprint(),
-        backend: BACKEND.into(),
+        backend: w.session.backend.clone(),
     };
     w.compare_document = Some(d.clone());
     w.compare_worker.submit(WorkerRequest::Evaluate {

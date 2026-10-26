@@ -6,8 +6,8 @@ TCAD's document and command schemas are the product boundary. No Bevy, egui, cgm
 |---|---|---|
 | Document + commands | `cad-core` JSON DTOs | Preserve stable IDs, units, graph semantics, explicit schema migrations |
 | Geometry service | Framed protocol v4 | Preserve request identity, cancellation, diagnostics, backend identity, derived mesh contracts |
-| Operation/mesh adapter | Monstertruck 0.4.1, adapter 22 | Implement operations, exact B-rep validation, reference reconstruction, tessellation and disposable localized operation previews; report unsupported cases |
-| Constraint solver | Native scaled damped SVD solver v12 | Record solver identity, report convergence, residual and degrees of freedom |
+| Operation/mesh adapter | Monstertruck; identity in the [bundled profile](../crates/cad-runtime-profile/src/lib.rs) | Implement operations, exact B-rep validation, reference reconstruction, tessellation and disposable localized operation previews; report unsupported cases |
+| Constraint solver | Native scaled damped SVD solver; identity in the bundled profile | Record solver identity, report convergence, residual and degrees of freedom |
 | Sketch handles | Application-owned handle and drag-target contracts v2 | Preserve stable targets, f64 plane coordinates, engineering constraints and explicit unsupported capability errors |
 | Project store | Recoverable multi-file JSON store v1 | Preserve deterministic definitions, relative resources and crash recovery |
 | Feature-history display | Application-owned stage/cache contract v1 | Preserve source identity, body branches, sketch visibility, configuration geometry and view-only inspection commands |
@@ -21,6 +21,20 @@ TCAD's document and command schemas are the product boundary. No Bevy, egui, cgm
 `cad-core` owns definitions, expressions, solvers, persistence, transactions, semantic presentation, manufacturing metadata/exports, release manifests, and semantic diffs/merges. `cad-kernel` contains all vendor geometry. `cad-worker` is a persistent native geometry process. `cad-desktop` adapts domain commands and derived geometry to windows, gestures and widgets. `cad-cli` uses the same core and geometry evaluator without the renderer.
 
 Evaluation identity includes protocol version, worker generation, committed base revision, draft ID, draft edit number, source SHA-256, and backend fingerprint. A result must match all fields. Suppressed operations alias input provenance explicitly. Failed rebuilds invalidate the prior cache key before adapter histories change.
+
+`cad-runtime-profile` is a dependency-free composition module containing the
+bundled backend and native-solver identities. The desktop, Monstertruck adapter,
+and native solver compile these same constants. It contains no geometry types
+or vendor dependencies and does not link the kernel into the desktop. Change
+evaluation identities here when adapter/solver semantics change; the protocol
+still treats a backend identity as an opaque implementation choice. Desktop
+exports and comparisons take their identity from the active session.
+
+The worker checks protocol and backend identity before dispatching every
+request, including imports and file exports. An incompatible binary pair leaves
+the draft open and reports a short restart/reinstall instruction, with exact
+versions in the diagnostic details. It never bypasses validation or rewrites
+request identities to accept a mismatched evaluation.
 
 Superseded active evaluations terminate their worker; subsequent requests create a fresh process. Idle workers are reused. Deadlines isolate runaway work. A distinct export worker prevents an export from replacing a preview. Geometry panics are caught in the worker and invalidate the evaluator.
 

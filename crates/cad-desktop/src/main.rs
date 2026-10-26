@@ -120,7 +120,7 @@ use cad_core::{
     protocol::*,
 };
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
-const BACKEND: &str = "monstertruck/0.4.1+6dba41312ccc;adapter/45;solver/tcad-native-lm/18";
+const BACKEND: &str = cad_runtime_profile::BUNDLED_BACKEND;
 fn initial_part_context(document: &Document) -> Option<cad_core::Id> {
     if document.parts.contains_key(&document.root) {
         return Some(document.root.clone());

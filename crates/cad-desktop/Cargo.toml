@@ -9,6 +9,7 @@ name = "tcad-desktop"
 path = "src/main.rs"
 
 [dependencies]
+cad-runtime-profile.workspace = true
 cad-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

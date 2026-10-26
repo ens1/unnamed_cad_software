@@ -2223,6 +2223,7 @@ dependencies = [
 name = "cad-core"
 version = "0.1.0"
 dependencies = [
+ "cad-runtime-profile",
  "nalgebra",
  "num-rational",
  "num-traits",
@@ -2243,6 +2244,7 @@ dependencies = [
  "bevy",
  "bevy_egui",
  "cad-core",
+ "cad-runtime-profile",
  "half",
  "image",
  "rfd",
@@ -2257,6 +2259,7 @@ name = "cad-kernel"
 version = "0.1.0"
 dependencies = [
  "cad-core",
+ "cad-runtime-profile",
  "monstertruck",
  "nalgebra",
  "num-bigint",
@@ -2268,6 +2271,10 @@ dependencies = [
  "sha2",
  "step-p21",
 ]
+
+[[package]]
+name = "cad-runtime-profile"
+version = "0.1.0"
 
 [[package]]
 name = "cad-worker"

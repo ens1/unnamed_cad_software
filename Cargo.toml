@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/cad-core", "crates/cad-kernel", "crates/cad-worker", "crates/cad-cli", "crates/cad-desktop"]
+members = ["crates/cad-runtime-profile", "crates/cad-core", "crates/cad-kernel", "crates/cad-worker", "crates/cad-cli", "crates/cad-desktop"]
 default-members = ["crates/cad-desktop", "crates/cad-worker", "crates/cad-cli"]
 
 [workspace.package]
@@ -10,6 +10,7 @@ license = "WTFPL"
 rust-version = "1.99"
 
 [workspace.dependencies]
+cad-runtime-profile = { path = "crates/cad-runtime-profile" }
 cad-core = { path = "crates/cad-core" }
 cad-kernel = { path = "crates/cad-kernel" }
 serde = { version = "1.0", features = ["derive", "rc"] }

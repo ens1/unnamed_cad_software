@@ -31,6 +31,29 @@ fn run() -> Result<()> {
             | WorkerRequest::Import { identity, .. } => Some(identity.clone()),
             WorkerRequest::Shutdown => break,
         };
+        // Reject incompatible application/worker pairs before any handler can
+        // change files or turn a version mismatch into a sketch-source error.
+        // Keep the caller's identity so the desktop can attach this diagnostic
+        // to the current draft without accepting an incompatible evaluation.
+        if let Some(request_identity) = &identity
+            && (request_identity.protocol != PROTOCOL_VERSION
+                || request_identity.backend != evaluator.fingerprint())
+        {
+            write_frame(
+                &mut output,
+                &WorkerResponse::Error {
+                    identity: identity.clone(),
+                    message: format!(
+                        "TCAD and its geometry worker use different versions. Restart TCAD to load the installed update.\nIf this continues, reinstall TCAD.\nRequested protocol {}, backend {}; running protocol {}, backend {}.",
+                        request_identity.protocol,
+                        request_identity.backend,
+                        PROTOCOL_VERSION,
+                        evaluator.fingerprint()
+                    ),
+                },
+            )?;
+            continue;
+        }
         let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match request {
             WorkerRequest::PublishGenerate {
                 identity,
