@@ -214,7 +214,7 @@ pub fn project(session: &Session, view: &PresentationState, editing: bool) -> Ve
                 value: reason.clone().or_else(|| Some(format!("Station {} · {}",index+1,feature.operation.name()))),
                 state: if reason.is_some() { "disabled" } else if selected { "selected" } else { "available" }.into(),
                 commands: vec!["history.inspect".into()], relationships: vec![part.id.clone(),feature.id.clone()],
-                data: serde_json::json!({"version":CONTRACT_VERSION,"target":target,"index":index,"enabled":reason.is_none(),"disabled_reason":reason,"suppressed":feature.suppressed}),
+                data: serde_json::json!({"version":CONTRACT_VERSION,"target":target,"index":index,"enabled":reason.is_none(),"disabled_reason":reason,"suppressed":feature.suppressed,"operation_kind":feature.operation.name(),"icon_command":format!("feature.{}",feature.operation.name().to_lowercase().replace(' ', "-"))}),
             });
         }
     }

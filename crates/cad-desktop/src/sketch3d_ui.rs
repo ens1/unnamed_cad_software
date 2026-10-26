@@ -2638,6 +2638,43 @@ fn delete_selection(w: &mut Workspace) -> Result<()> {
     }
     Ok(())
 }
+/// Project current spatial tool state for any semantic command placement.
+pub fn tool_selected(w: &Workspace, command: &str) -> bool {
+    let Some(state) = w.sketch3d.as_ref().filter(|_| active(w)) else {
+        return false;
+    };
+    let tool = match command {
+        "sketch.select" | "sketch.tool.select" => Some(Tool::Select),
+        "sketch.line" | "sketch.tool.polyline" | "sketch.tool.line" => Some(Tool::Line),
+        "sketch.point" | "sketch.tool.point" => Some(Tool::Point),
+        "sketch.arc" | "sketch.tool.arc" => Some(Tool::Arc),
+        "sketch.circle" | "sketch.tool.circle" => Some(Tool::Circle),
+        "sketch.spline" | "sketch.tool.spline" | "sketch.tool.bezier" => Some(Tool::Bezier),
+        "sketch.nurbs" | "sketch.tool.nurbs" => Some(Tool::Nurbs),
+        "sketch.interpolating-spline" | "sketch.tool.interpolating-spline" => {
+            Some(Tool::InterpolatingSpline)
+        }
+        "sketch.dimension" | "sketch.smart-dimension" => Some(Tool::Dimension),
+        "sketch.construction" | "sketch.toggle-construction" => {
+            let selected = members_selected(w);
+            return if selected.is_empty() {
+                state.construction
+            } else {
+                source_ref(w).is_some_and(|definition| {
+                    selected.iter().all(|id| {
+                        definition
+                            .members
+                            .get(id)
+                            .is_some_and(|member| member.construction)
+                    })
+                })
+            };
+        }
+        _ => None,
+    };
+    tool == Some(state.tool)
+}
+
 pub fn tool_supported(command: &str) -> bool {
     matches!(
         command,
@@ -2656,8 +2693,10 @@ pub fn tool_supported(command: &str) -> bool {
             | "sketch.finish-dimension"
             | "sketch.cancel-dimension"
             | "sketch.construction"
+            | "sketch.toggle-construction"
             | "sketch.undo"
             | "sketch.delete"
+            | "sketch.tool.select"
             | "sketch.tool.polyline"
             | "sketch.tool.line"
             | "sketch.tool.point"
@@ -2681,7 +2720,7 @@ pub fn action(w: &mut Workspace, command: &str, payload: Option<&Value>) -> bool
         return false;
     }
     let alias = match command {
-        "sketch.select" => Some("tool/select"),
+        "sketch.select" | "sketch.tool.select" => Some("tool/select"),
         "sketch.line" | "sketch.tool.polyline" | "sketch.tool.line" => Some("tool/line"),
         "sketch.point" | "sketch.tool.point" => Some("tool/point"),
         "sketch.arc" | "sketch.tool.arc" => Some("tool/arc"),
@@ -2694,7 +2733,7 @@ pub fn action(w: &mut Workspace, command: &str, payload: Option<&Value>) -> bool
         "sketch.dimension" | "sketch.smart-dimension" => Some("smart-dimension"),
         "sketch.finish-dimension" => Some("finish-dimension"),
         "sketch.cancel-dimension" => Some("cancel-dimension"),
-        "sketch.construction" => Some("make-construction"),
+        "sketch.construction" | "sketch.toggle-construction" => Some("make-construction"),
         "sketch.delete" => Some("delete"),
         "sketch.undo" => {
             undo(w);

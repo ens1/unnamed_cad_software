@@ -225,6 +225,66 @@ impl LayoutDocument {
                     "Layout {id} cannot combine repeated template and static children"
                 )));
             }
+            if let Some(ribbon) = &node.ribbon {
+                if !matches!(ribbon.tabs_position.as_str(), "top" | "bottom")
+                    || ribbon.pages.is_empty()
+                    || ribbon.pages.len() > 32
+                {
+                    return Err(invalid(format!(
+                        "Ribbon {id} needs 1–32 pages and top or bottom tabs"
+                    )));
+                }
+                let mut pages = BTreeSet::new();
+                for page in &ribbon.pages {
+                    if page.id.is_empty()
+                        || !pages.insert(&page.id)
+                        || page.label.trim().is_empty()
+                        || !matches!(
+                            page.command_tab.as_str(),
+                            "Features" | "Sketch" | "Assembly" | "Drawing" | "Evaluate" | "Graph"
+                        )
+                        || page.groups.is_empty()
+                        || page.groups.len() > 32
+                    {
+                        return Err(invalid(format!(
+                            "Ribbon {id} has an invalid or repeated page {}",
+                            page.id
+                        )));
+                    }
+                    let mut groups = BTreeSet::new();
+                    for group in &page.groups {
+                        let mut commands = BTreeSet::new();
+                        for command in &group.commands {
+                            let identity = command.id.as_deref().unwrap_or(&command.command);
+                            if identity.trim().is_empty() || !commands.insert(identity) {
+                                return Err(invalid(format!(
+                                    "Ribbon {id} group {} has duplicate or empty command placement identities",
+                                    group.id
+                                )));
+                            }
+                        }
+                        if group.id.is_empty()
+                            || !groups.insert(&group.id)
+                            || group.label.trim().is_empty()
+                            || group.commands.len() > 64
+                            || group.commands.is_empty() && group.menu.is_none()
+                            || group
+                                .commands
+                                .iter()
+                                .any(|command| command.command.trim().is_empty())
+                            || group
+                                .menu
+                                .as_ref()
+                                .is_some_and(|menu| menu.trim().is_empty())
+                        {
+                            return Err(invalid(format!(
+                                "Ribbon {id} has an invalid group {}",
+                                group.id
+                            )));
+                        }
+                    }
+                }
+            }
             for (index, child) in node.children.iter().enumerate() {
                 walk(
                     child,

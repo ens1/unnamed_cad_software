@@ -1,5 +1,72 @@
 # Semantic presentation, layouts and themes
 
+## User-authored ribbons and workspace chrome
+
+The `command-ribbon` adapter consumes a public `ribbon` layout definition. It
+does not select behavior from a theme name. Authors control page names, ordering,
+grouping, prominent commands, labels, classes, full-command menus, and whether
+tabs sit above or below the tools. Each page selects an existing semantic
+command context; several pages can share one context, such as separate Solid,
+Surface, and Sheet Metal pages using `Features`.
+
+```json
+{
+  "id": "my-command-ribbon",
+  "role": "command-ribbon",
+  "height_logical_px": 120,
+  "padding_logical_px": [0, 0, 0, 0],
+  "ribbon": {
+    "tabs_position": "bottom",
+    "pages": [{
+      "id": "solids",
+      "label": "Solid tools",
+      "command_tab": "Features",
+      "groups": [{
+        "id": "create",
+        "label": "Create",
+        "commands": [
+          {"command": "sketch.new", "label": "Create Sketch"},
+          {"id": "boss", "command": "feature.extrude", "label": "Extrude", "classes": ["prominent"]}
+        ],
+        "menu": "menu/create"
+      }]
+    }]
+  }
+}
+```
+
+The current contexts are `Features`, `Sketch`, `Assembly`, `Drawing`, `Evaluate`,
+and `Graph`. Context changes retain the existing sketch, drawing, and model
+transaction guards. A creation button that becomes Finish Sketch uses its current
+semantic label and validation state. Ribbon selection is presentation state;
+it does not add features or undo entries.
+
+Style `ribbon-tab`, `ribbon-group`, `ribbon-action`, `ribbon-group-menu`, and
+`ribbon-group-label`. Group padding, fill, border, and sizing are presentation
+properties. Individual actions have stable IDs of the form
+`ribbon:<placement>:<page>:<group>:command:<item-id-or-command>`. Reordering a
+command does not change its identity. Give repeated commands in one group
+different `id` values. These controls are also published as semantic descriptors,
+so a theme may bind them elsewhere instead of using the whole ribbon adapter.
+Invalid pages, duplicate IDs, or unavailable commands/menus reject the candidate
+presentation and retain the previous one.
+
+Use the unbound `model-browser` role for a tree that stays visible beside an
+independently placed task editor. `dependency-view` retains the compact tree/task
+behavior for layouts that share one dock. The semantic
+`command:presentation.manager-edit` returns to the current properties without
+changing the operation. The `feature-timeline` role provides compact cached
+history stations with operation icons, full tooltips, and Return to Latest.
+History inspection remains unavailable during active edits. Authors can also
+repeat `history-station` bindings using `icon-action` or their own ordinary
+action layout instead of this adapter.
+
+Application bars can be composed from individual `menu/file`, `menu/edit`,
+`menu/view`, and other menu bindings plus command and document-name bindings.
+Unbound `presentation-label` nodes display authored headings. There is no
+required Fusion, SolidWorks, or Classic menu arrangement. All these facilities
+are available to third-party theme repositories.
+
 The workspace is a composition of semantic components. Geometry and application transactions do not depend on the layout. The bundled resources are `assets/ui/layout.json` and `assets/ui/theme.css`; Classic and its editable stylesheet use this one source. JSON themes remain supported for imports and portable package exports. Project packages are saved under `ui/`; personal defaults live in TCAD’s application-support presentation directory. The default layout has conventional CAD command tabs above a left feature tree/property manager and a shared model viewport. The reference images guide the spacious viewport, quiet surfaces, restrained selection cues, and in-place editing; the sample names and geometry are examples, not startup content.
 
 A component has `role`, optional `bind`, optional `command`, and optional `widget` and `label`. Nodes can override these bindings. A field or command binding takes precedence over a native composite role, so replacing an editor does not require privileged widget names. Recognized workspace roles are `document-context`, `command-manager`, `status-bar`, `view-navigation`, `dependency-view`, `property-manager`, `preview-status`, `apply-action`, `cancel-action`, and `model-viewport`. `command-manager` provides Features, Sketch, Assembly, Evaluate, and Graph tabs. Its semantic tool catalog groups modeling under Create, Remove, Modify, Pattern and Reference, and sketching under Draw, Shapes, Curves, Reference and Constraints. `dependency-view` provides the feature tree, numbered History stations, or dependency cards. The graph workspace places cards below the shared viewport; its Assembly scope shows components, mates, and the assembly result. Cards have explicit ports, draggable placement, pan/zoom and contextual edit actions. `property-manager` hosts the active tool editor beside the model; `parameter-instrument` remains a compatible alias. Tool groups can use `assembly-editor`, `materials-editor`, `appearances-editor`, `lighting-editor`, `drawings-editor`, `manufacturing-editor`, `versions-editor`, `review-editor`, `bom-view`, `presentation-editor`, `sketch-editor`, or `library-editor`. A sketch editor provides controls; its geometry always appears in the model viewport. Generic components can bind a semantic entity ID, bind `definition-uuid::parameter-id`, or invoke a registered command. Parameter duplicates edit the same domain parameter and draft.
@@ -626,3 +693,44 @@ publishes `production-report-status` instead of old rows. Rows retain their
 existing semantic identities and their exact source hash. Errors publish
 `production-error`. The default panel and custom layouts consume the same rows;
 the cache does not authorize source mutations, Apply or export.
+
+## Command icon controls
+
+Any layout author can set `widget: "icon-action"` on a command binding to display
+an icon-only action, or `widget: "icon-label"` for a stacked icon and label. These
+widgets use the same command, selected state, availability, disabled reason and
+target arguments as `widget: "action"`. A node's `label` overrides the visible
+caption; the complete caption remains available to accessibility and hover help
+when it is hidden or elided. Unknown commands receive a neutral action symbol
+and retain their label. No icon changes command behavior.
+Explicit `\n` breaks in a caption remain separate lines; ellipsis and alignment
+apply to each line, so a narrow tile does not discard its second authored line.
+
+The shared native button adapter accepts the portable style property
+`icon-position: left | top | only`. It overrides the widget's default arrangement
+and works on other icon-bearing controls, including command ribbons. `icon-size`,
+`gap`, `width`, `height`, padding, colors, borders and hit sizes remain separately
+styleable. Text-only controls remain text-only even when `icon-position` is set.
+
+```json
+{
+  "id": "my-save-button",
+  "role": "quick-action",
+  "bind": "command:file.save",
+  "widget": "icon-action",
+  "label": "Save project",
+  "width_logical_px": 30,
+  "height_logical_px": 30
+}
+```
+
+```css
+.icon-label { icon-position: top; icon-size: 24px; height: 62px; }
+.icon-action { icon-position: only; icon-size: 18px; width: 30px; height: 30px; }
+```
+
+Native symbols are original vector artwork in the replaceable desktop adapter.
+Semantic actions may expose `icon_command` as a command-family hint, for example
+when a history inspection station represents an extrusion. The inspection action
+and its target remain unchanged. Layouts can still use text controls for the same
+binding, and the normal application command path owns all edits and validation.

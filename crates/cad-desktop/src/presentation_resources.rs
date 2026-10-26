@@ -458,8 +458,13 @@ pub(crate) fn validate(w: &Workspace, candidate: &Candidate) -> Result<()> {
     // Resolve against the same semantic snapshot used by the desktop adapter.
     // Resource syntax alone cannot prove scoped variables or repeated placement
     // identities: both depend on the candidate's actual composition.
-    let semantics = crate::presentation_composition::semantics(w);
-    let expanded = candidate.layout.expand_semantics(&semantics)?;
+    let mut base_semantics = crate::presentation_composition::semantics(w);
+    // The active presentation's own ribbons are not part of a candidate package.
+    // Project the candidate before expanding its bound controls and selectors.
+    base_semantics.retain(|element| element.data["contract"] != "tcad.command-ribbon");
+    crate::command_chrome::validate(&candidate.layout, &base_semantics)?;
+    let candidate_ribbons =
+        crate::command_chrome::semantics_for_layout(w, &candidate.layout, &base_semantics);
     let mut controls = crate::cad_ui::semantics(w);
     let mut settings_controls = crate::settings_ui::semantics(w);
     for element in &mut settings_controls {
@@ -479,7 +484,7 @@ pub(crate) fn validate(w: &Workspace, candidate: &Candidate) -> Result<()> {
                 element
             }),
     );
-    let controls: BTreeMap<_, _> = controls
+    let base_controls: BTreeMap<_, _> = controls
         .into_iter()
         .map(|element| (element.id.clone(), element))
         .collect();
@@ -496,7 +501,15 @@ pub(crate) fn validate(w: &Workspace, candidate: &Candidate) -> Result<()> {
         candidate.theme.properties_checked_for(target)?;
         Ok(())
     };
-    for name in expanded.layouts.keys() {
+    for name in candidate.layout.layouts.keys() {
+        let ribbon_controls = candidate_ribbons
+            .iter()
+            .filter(|element| element.data["composition"].as_str() == Some(name.as_str()));
+        let mut semantics = base_semantics.clone();
+        semantics.extend(ribbon_controls.clone().cloned());
+        let expanded = candidate.layout.expand_semantics(&semantics)?;
+        let mut controls = base_controls.clone();
+        controls.extend(ribbon_controls.map(|element| (element.id.clone(), element.clone())));
         // Native settings is an overlay over the workspace rather than a
         // viewport region. Check its actual ancestor chain independently of
         // whether a custom layout additionally binds the same fields.
@@ -621,11 +634,15 @@ fn check_control(
             ))?;
         }
     }
-    if element.role == "menu" {
+    if matches!(
+        element.role.as_str(),
+        "menu" | "ribbon-group-menu" | "ribbon-group"
+    ) {
         let menu = parent.child(&element.id, &element.role, &classes, "ready");
         for id in element
             .data
             .get("items")
+            .or_else(|| element.data.get("children"))
             .and_then(Value::as_array)
             .into_iter()
             .flatten()

@@ -659,6 +659,26 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     let mut registry = crate::presentation_composition::Registry::default();
     registry.register("document-context", |ui, w, _| context(ui, w));
     registry.register("command-manager", |ui, w, _| crate::cad_ui::commands(ui, w));
+    registry.register("command-ribbon", crate::command_chrome::ribbon);
+    registry.register("feature-timeline", crate::command_chrome::timeline);
+    registry.register("model-browser", |ui, w, _| {
+        crate::cad_ui::model_browser(ui, w)
+    });
+    registry.register("presentation-label", |ui, w, context| {
+        let label = context
+            .layout
+            .binding_for_in(&w.view.active_layout, context.region)
+            .and_then(|binding| binding.label)
+            .unwrap_or_default();
+        crate::presentation_controls::label(
+            ui,
+            &context.region.id,
+            "presentation-label",
+            &[],
+            &label,
+            "ready",
+        );
+    });
     registry.register("status-bar", |ui, w, _| crate::cad_ui::status(ui, w));
     registry.register("view-navigation", |ui, w, _| navigation(ui, w));
     registry.register("dependency-view", |ui, w, _| dependencies(ui, w));
@@ -844,32 +864,53 @@ pub(crate) fn semantic_command(
     command: &str,
     descriptor: Option<&SemanticElement>,
 ) {
-    let enabled = descriptor.is_none_or(|element| element.state != "disabled");
-    let label = descriptor
-        .map(|element| element.label.as_str())
+    let binding = w.layout.binding_for_in(&w.view.active_layout, region);
+    let widget = binding
+        .as_ref()
+        .and_then(|binding| binding.widget.as_deref());
+    let icon_widget = matches!(widget, Some("icon-action" | "icon-label"));
+    let reason = crate::cad_ui::command_disabled_reason(w, command);
+    let enabled = descriptor.is_none_or(|element| element.state != "disabled") && reason.is_none();
+    let label = binding
+        .as_ref()
+        .and_then(|binding| binding.label.as_deref())
+        .or_else(|| descriptor.map(|element| element.label.as_str()))
         .unwrap_or(command);
     let role = match command {
         "draft.apply" => "apply-action",
         "draft.cancel" => "cancel-action",
         _ => "command-action",
     };
-    let response = crate::presentation_controls::button(
+    let mut classes = region
+        .classes
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    classes.push("semantic-control");
+    if let Some(widget) = widget.filter(|_| icon_widget) {
+        classes.push(widget);
+    }
+    let draw = |painter: &egui::Painter, center, size, color| {
+        crate::command_icons::paint(painter, center, size, color, command);
+    };
+    let response = crate::presentation_controls::icon_button(
         ui,
         &region.id,
         role,
-        &["semantic-control"],
+        &classes,
         label,
         enabled,
-        false,
+        descriptor.is_some_and(|element| element.state == "selected"),
+        icon_widget.then_some(&draw as crate::presentation_controls::IconPainter<'_>),
     )
     .on_hover_text(
-        descriptor
-            .and_then(|element| element.value.as_deref())
+        reason
+            .or_else(|| descriptor.and_then(|element| element.value.as_deref()))
             .unwrap_or(label),
     )
     .on_disabled_hover_text(
-        descriptor
-            .and_then(|element| element.value.as_deref())
+        reason
+            .or_else(|| descriptor.and_then(|element| element.value.as_deref()))
             .unwrap_or(label),
     );
     if response.clicked() {
@@ -885,6 +926,8 @@ pub(crate) fn semantic_element(
     element: &SemanticElement,
 ) {
     let widget = binding.widget.as_deref().unwrap_or("auto");
+    let icon_widget = matches!(widget, "icon-action" | "icon-label");
+    let action_widget = widget == "action" || icon_widget;
     if element.data["theme_preview"] == true
         && matches!(element.role.as_str(), "apply-action" | "cancel-action")
     {
@@ -900,16 +943,24 @@ pub(crate) fn semantic_element(
         .on_hover_text("Appearance preview; no model changes");
         return;
     }
-    if element.role == "menu" {
-        crate::cad_ui::semantic_menu(ui, w, element);
+    if matches!(element.role.as_str(), "menu" | "ribbon-group-menu") {
+        crate::cad_ui::semantic_menu_as(ui, w, element, &element.id, &element.role);
         return;
     }
     if widget == "label" || widget == "value" {
-        ui.label(if widget == "value" {
+        let label = if widget == "value" {
             element.value.as_deref().unwrap_or(&element.label)
         } else {
             binding.label.as_deref().unwrap_or(&element.label)
-        });
+        };
+        crate::presentation_controls::label(
+            ui,
+            &element.id,
+            &element.role,
+            &["semantic-control"],
+            label,
+            &element.state,
+        );
         return;
     }
     if widget == "auto" && crate::selection_ui::render_edge_row(ui, w, element) {
@@ -982,12 +1033,10 @@ pub(crate) fn semantic_element(
         semantic_field(ui, w, element);
         return;
     }
-    if widget != "action" {
+    if !action_widget {
         ui.label(binding.label.as_deref().unwrap_or(&element.label));
     }
-    if widget != "action"
-        && let Some(value) = &element.value
-    {
+    if !action_widget && let Some(value) = &element.value {
         ui.small(value);
     }
     let mut classes = element
@@ -999,6 +1048,9 @@ pub(crate) fn semantic_element(
         .filter_map(Value::as_str)
         .collect::<Vec<_>>();
     classes.push("semantic-control");
+    if icon_widget {
+        classes.push(widget);
+    }
     for descriptor in element.action_descriptors() {
         let command = &descriptor.command;
         let label = cad_core::presentation::command_catalog()
@@ -1006,12 +1058,16 @@ pub(crate) fn semantic_element(
             .find(|(id, _)| *id == command)
             .map(|(_, label)| label)
             .unwrap_or(&descriptor.label);
-        let label = if widget == "action" || element.role == "selection-action" {
+        let label = if action_widget || element.role == "selection-action" {
             binding.label.as_deref().unwrap_or(&element.label)
         } else {
             label
         };
-        let response = crate::presentation_controls::button(
+        let icon_command = element.data["icon_command"].as_str().unwrap_or(command);
+        let draw = |painter: &egui::Painter, center, size, color| {
+            crate::command_icons::paint(painter, center, size, color, icon_command);
+        };
+        let response = crate::presentation_controls::icon_button(
             ui,
             &element.id,
             &element.role,
@@ -1019,14 +1075,16 @@ pub(crate) fn semantic_element(
             label,
             descriptor.enabled,
             element.state == "selected",
+            icon_widget.then_some(&draw as crate::presentation_controls::IconPainter<'_>),
         )
+        .on_hover_text(element.value.as_deref().unwrap_or(label))
         .on_disabled_hover_text(descriptor.disabled_reason.as_deref().unwrap_or(label));
         if response.clicked() {
             let mut target = element.clone();
             target.data = descriptor.arguments;
             semantic_action(w, &target, command);
         }
-        if widget == "action" {
+        if action_widget {
             break;
         }
     }
@@ -1072,6 +1130,9 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
     }
     if w.settings.is_some() {
         w.status = "Apply or cancel Settings before using another command".into();
+        return;
+    }
+    if crate::command_chrome::action(w, command, &element.data) {
         return;
     }
     if crate::repositories_ui::action(w, command, Some(&element.data))

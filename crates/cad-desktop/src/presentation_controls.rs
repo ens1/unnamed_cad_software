@@ -466,20 +466,49 @@ pub fn icon_button(
                 ui.visuals().weak_text_color()
             }
         });
-    let galley = ui
-        .painter()
-        .layout_no_wrap(label.into(), font.clone(), color);
+    // Authored line breaks belong to the layout, including ribbon captions.
+    // Lay out each line separately so ellipsis cannot wrap the first line and
+    // consume the space reserved for a later line.
+    let lines = label
+        .split('\n')
+        .map(|line| {
+            ui.painter()
+                .layout_no_wrap(line.into(), font.clone(), color)
+        })
+        .collect::<Vec<_>>();
+    let text_size = |lines: &[std::sync::Arc<egui::Galley>]| {
+        lines.iter().fold(egui::Vec2::ZERO, |size, line| {
+            egui::vec2(size.x.max(line.size().x), size.y + line.size().y)
+        })
+    };
     let pad = padding(&props, ui.spacing().button_padding);
     let icon_size = icon
         .map(|_| number(&props, "icon-size", font.size * 1.45).max(0.))
         .unwrap_or(0.);
-    let icon_gap = if icon.is_some() {
+    let icon_position = if icon.is_none() {
+        "left"
+    } else {
+        props.get("icon-position").map(String::as_str).unwrap_or(
+            if classes.contains(&"icon-action") {
+                "only"
+            } else if classes.contains(&"icon-label") {
+                "top"
+            } else {
+                "left"
+            },
+        )
+    };
+    let icon_gap = if icon.is_some() && icon_position != "only" {
         number(&props, "gap", 4.).max(0.)
     } else {
         0.
     };
-    let natural =
-        galley.size() + egui::vec2(pad[1] + pad[3] + icon_size + icon_gap, pad[0] + pad[2]);
+    let content_size = |text: egui::Vec2| match icon_position {
+        "only" => egui::vec2(icon_size, icon_size),
+        "top" => egui::vec2(text.x.max(icon_size), icon_size + icon_gap + text.y),
+        _ => egui::vec2(text.x + icon_size + icon_gap, text.y.max(icon_size)),
+    };
+    let natural = content_size(text_size(&lines)) + egui::vec2(pad[1] + pad[3], pad[0] + pad[2]);
     // A popup's first, invisible pass measures its content. Resolving a
     // percentage here would turn egui's provisional area width into the final
     // menu width (600 px by default). Relative widths have no established
@@ -520,27 +549,38 @@ pub fn icon_button(
         .max(0.);
     // Text overflow is an opt-in presentation choice. Keep the full source label
     // in semantic/accessibility data even when a narrow control elides its text.
-    let galley = if props
+    let lines = if props
         .get("text-overflow")
         .is_some_and(|value| value == "ellipsis")
     {
-        let mut job = egui::text::LayoutJob::single_section(
-            label.into(),
-            egui::TextFormat {
-                font_id: font,
-                color,
-                ..Default::default()
-            },
-        );
-        job.wrap.max_width = (visual.x - pad[1] - pad[3] - icon_size - icon_gap).max(0.);
-        job.wrap.max_rows = 1;
-        job.wrap.break_anywhere = true;
-        job.break_on_newline = false;
-        ui.painter().layout_job(job)
+        let leading_icon = if icon_position == "left" {
+            icon_size + icon_gap
+        } else {
+            0.
+        };
+        label
+            .split('\n')
+            .map(|line| {
+                let mut job = egui::text::LayoutJob::single_section(
+                    line.into(),
+                    egui::TextFormat {
+                        font_id: font.clone(),
+                        color,
+                        ..Default::default()
+                    },
+                );
+                job.wrap.max_width = (visual.x - pad[1] - pad[3] - leading_icon).max(0.);
+                job.wrap.max_rows = 1;
+                job.wrap.break_anywhere = true;
+                job.break_on_newline = false;
+                ui.painter().layout_job(job)
+            })
+            .collect::<Vec<_>>()
     } else {
-        galley
+        lines
     };
-    let elided = galley.elided;
+    let text_size = text_size(&lines);
+    let elided = lines.iter().any(|line| line.elided);
     let minimum = number(&props, "min-target-size", ui.spacing().interact_size.y).max(0.);
     let hit = egui::vec2(
         visual.x.max(number(&props, "hit-width", minimum)),
@@ -611,30 +651,49 @@ pub fn icon_button(
             egui::StrokeKind::Inside,
         );
         let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
-        let content_width = galley.size().x + icon_size + icon_gap;
+        let content = content_size(text_size);
         let left = match actual.get("text-align").map(String::as_str) {
             Some("left" | "start") => rect.left() + pad[3],
-            Some("right" | "end") => rect.right() - pad[1] - content_width,
-            _ => rect.center().x - content_width * 0.5,
+            Some("right" | "end") => rect.right() - pad[1] - content.x,
+            _ => rect.center().x - content.x * 0.5,
         };
+        let top = rect.center().y - content.y * 0.5;
         if let Some(icon) = icon {
-            icon(
-                &painter,
-                egui::pos2(left + icon_size * 0.5, rect.center().y),
-                icon_size,
-                color.gamma_multiply(opacity),
-            );
+            let center = match icon_position {
+                "top" => egui::pos2(left + content.x * 0.5, top + icon_size * 0.5),
+                _ => egui::pos2(left + icon_size * 0.5, rect.center().y),
+            };
+            icon(&painter, center, icon_size, color.gamma_multiply(opacity));
         }
-        painter.galley_with_override_text_color(
-            egui::pos2(
-                left + icon_size + icon_gap,
-                rect.center().y - galley.size().y * 0.5,
-            ),
-            galley,
-            color.gamma_multiply(opacity),
-        );
+        if icon_position != "only" {
+            let mut position = if icon_position == "top" {
+                egui::pos2(
+                    left + (content.x - text_size.x) * 0.5,
+                    top + icon_size + icon_gap,
+                )
+            } else {
+                egui::pos2(
+                    left + icon_size + icon_gap,
+                    rect.center().y - text_size.y * 0.5,
+                )
+            };
+            for line in lines {
+                let offset = match actual.get("text-align").map(String::as_str) {
+                    Some("left" | "start") => 0.,
+                    Some("right" | "end") => text_size.x - line.size().x,
+                    _ => (text_size.x - line.size().x) * 0.5,
+                };
+                let height = line.size().y;
+                painter.galley_with_override_text_color(
+                    position + egui::vec2(offset, 0.),
+                    line,
+                    color.gamma_multiply(opacity),
+                );
+                position.y += height;
+            }
+        }
     }
-    if elided || natural.x > visual.x || natural.y > visual.y {
+    if icon_position == "only" || elided || natural.x > visual.x || natural.y > visual.y {
         response.on_hover_text(label)
     } else {
         response
@@ -1103,13 +1162,23 @@ pub fn menu_button<R>(
     label: &str,
     content: impl FnOnce(&mut egui::Ui) -> R,
 ) {
-    let response = button(ui, id, "menu", &["menu-heading"], label, true, false);
+    menu_button_as(ui, id, "menu", label, content);
+}
+
+pub fn menu_button_as<R>(
+    ui: &mut egui::Ui,
+    id: &str,
+    role: &str,
+    label: &str,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) {
+    let response = button(ui, id, role, &["menu-heading"], label, true, false);
     let target = STYLES.with(|snapshot| {
         let snapshot = snapshot.borrow();
         snapshot
             .target
             .clone()
-            .map(|parent| parent.child(id, "menu", &["menu-heading".into()], "ready"))
+            .map(|parent| parent.child(id, role, &["menu-heading".into()], "ready"))
     });
     let content = |ui: &mut egui::Ui| {
         if let Some(target) = target {

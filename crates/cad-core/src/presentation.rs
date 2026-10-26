@@ -1390,6 +1390,47 @@ pub struct RepeatBinding {
     #[serde(default)]
     pub limit: Option<usize>,
 }
+/// A user-authored command surface. Pages select existing semantic contexts;
+/// groups arrange existing commands without owning modeling state or behavior.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RibbonDefinition {
+    #[serde(default = "ribbon_tabs_position")]
+    pub tabs_position: String,
+    pub pages: Vec<RibbonPage>,
+}
+fn ribbon_tabs_position() -> String {
+    "top".into()
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RibbonPage {
+    pub id: String,
+    pub label: String,
+    pub command_tab: String,
+    pub groups: Vec<RibbonGroup>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RibbonGroup {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub commands: Vec<RibbonCommand>,
+    #[serde(default)]
+    pub menu: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RibbonCommand {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub command: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub classes: Vec<String>,
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LayoutNode {
     #[serde(default)]
@@ -1436,6 +1477,8 @@ pub struct LayoutNode {
     pub repeat: Option<RepeatBinding>,
     #[serde(default)]
     pub template: Option<Box<LayoutNode>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ribbon: Option<RibbonDefinition>,
     #[serde(default)]
     pub gap_logical_px: Option<f32>,
     /// Insets use CSS ordering: top, right, bottom, left.
@@ -1553,6 +1596,8 @@ impl Default for ViewportVisibility {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PresentationState {
     #[serde(default)]
+    pub ribbon_pages: BTreeMap<String, String>,
+    #[serde(default)]
     pub display_quality: crate::display_mesh::Quality,
     /// Transient feature-history inspection. Saved projects reopen at Latest.
     #[serde(skip)]
@@ -1647,6 +1692,7 @@ fn default_toolbar_height() -> f32 {
 impl Default for PresentationState {
     fn default() -> Self {
         Self {
+            ribbon_pages: BTreeMap::new(),
             display_quality: Default::default(),
             history_cursor: None,
             exploded_view: None,

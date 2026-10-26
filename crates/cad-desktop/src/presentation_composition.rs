@@ -261,8 +261,17 @@ pub fn render(
                         }
                     }
                 } else {
+                    let node = self.layout.node_for_in(&w.view.active_layout, &region.id);
+                    let binding = self.layout.binding_for_in(&w.view.active_layout, region);
+                    let scalar = binding.as_ref().is_some_and(|binding| {
+                        binding.command.is_some()
+                            || matches!(
+                                binding.widget.as_deref(),
+                                Some("action" | "icon-action" | "icon-label" | "label" | "value")
+                            )
+                    });
                     let padding = props.get("padding").map(String::as_str).unwrap_or(
-                        if region.role == "model-viewport" {
+                        if region.role == "model-viewport" || scalar {
                             "0"
                         } else {
                             "4px"
@@ -272,13 +281,17 @@ pub fn render(
                         .split_whitespace()
                         .filter_map(|value| value.trim_end_matches("px").parse::<f32>().ok())
                         .collect::<Vec<_>>();
-                    let [top, right, bottom, left] = match values.as_slice() {
-                        [all] => [*all; 4],
-                        [vertical, horizontal] => [*vertical, *horizontal, *vertical, *horizontal],
-                        [top, horizontal, bottom] => [*top, *horizontal, *bottom, *horizontal],
-                        [top, right, bottom, left] => [*top, *right, *bottom, *left],
-                        _ => [0.; 4],
-                    };
+                    let [top, right, bottom, left] = node
+                        .and_then(|node| node.padding_logical_px)
+                        .unwrap_or(match values.as_slice() {
+                            [all] => [*all; 4],
+                            [vertical, horizontal] => {
+                                [*vertical, *horizontal, *vertical, *horizontal]
+                            }
+                            [top, horizontal, bottom] => [*top, *horizontal, *bottom, *horizontal],
+                            [top, right, bottom, left] => [*top, *right, *bottom, *left],
+                            _ => [0.; 4],
+                        });
                     let content = egui::Rect::from_min_max(
                         rect.min + egui::vec2(left, top),
                         rect.max - egui::vec2(right, bottom),
@@ -600,6 +613,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         }
     }
     crate::appearances_ui::reconcile_semantics(w, &mut elements);
+    elements.extend(crate::command_chrome::semantics(w, &elements));
     for element in &mut elements {
         crate::quantity_display::publish(&w.session.visible().settings, element);
     }

@@ -11,6 +11,8 @@ mod body_filter_ui;
 mod body_inventory;
 mod cad_ui;
 mod camera_views_ui;
+mod command_chrome;
+mod command_icons;
 mod command_palette;
 mod component_fork_ui;
 mod component_pattern_ui;

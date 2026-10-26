@@ -428,9 +428,19 @@ pub fn semantic_menu(
     w: &mut Workspace,
     element: &cad_core::presentation::SemanticElement,
 ) {
+    semantic_menu_as(ui, w, element, &element.id, "menu");
+}
+
+pub fn semantic_menu_as(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    element: &cad_core::presentation::SemanticElement,
+    id: &str,
+    role: &str,
+) {
     let mut snapshot = semantics(w);
     snapshot.extend(crate::sketch_overlay::semantics(w));
-    controls::menu_button(ui, &element.id, &element.label, |ui| {
+    controls::menu_button_as(ui, id, role, &element.label, |ui| {
         for item in element
             .data
             .get("items")
@@ -586,6 +596,16 @@ pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
         }
         return true;
     }
+    if command == "presentation.manager-edit" {
+        if w.tool_checkpoint.is_some()
+            || w.session.draft.is_some()
+            || w.sketch.is_some()
+            || w.dialog.is_some()
+        {
+            w.manager_tree = false;
+        }
+        return true;
+    }
     if let Some(name) = command.strip_prefix("presentation.command-tab.")
         && let Some(tab) = [
             "Features", "Sketch", "Assembly", "Drawing", "Evaluate", "Graph",
@@ -670,6 +690,7 @@ pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
 pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
     let mut out = vec![];
     let sketching = w.sketch.is_some();
+    let spatial_sketching = crate::sketch3d_ui::active(w);
     let blocked = w.tool_checkpoint.is_some() && !sketching;
     let has_body = w
         .view
@@ -686,7 +707,12 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
         let reason = if command.is_empty() {
             None
         } else {
-            command_disabled_reason(w, &command)
+            command_disabled_reason(w, &command).or_else(|| {
+                (spatial_sketching
+                    && command.starts_with("sketch.")
+                    && crate::sketch3d_ui::captured(w))
+                .then_some("Release or cancel the active spatial handle first")
+            })
         };
         let enabled = enabled && reason.is_none();
         out.push(cad_core::presentation::SemanticElement { id, role:role.into(), label:label.into(), value: (!enabled).then(|| reason.unwrap_or("Finish the active operation or create the required geometry first").into()), state:if !enabled {"disabled"} else if selected {"selected"} else {"ready"}.into(), commands:if command.is_empty() {vec![]} else {vec![command]}, relationships:vec![parent.into()], data:serde_json::json!({"presentation_control":true,"accessibility_label":label,"parent":parent,"classes":match role { "menu-action"=>vec!["menu-item"], "command-action"=>vec!["toolbar-control"], "menu"=>vec!["menu-heading"], "command-tab"|"navigation-action"=>vec!["selectable"], _=>vec![] }}) });
@@ -717,20 +743,27 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
                 label,
                 command.into(),
                 enabled,
-                false,
+                spatial_sketching && crate::sketch3d_ui::tool_selected(w, command),
                 parent,
             );
         }
     }
     for (name, label, tool) in SKETCH_DRAWING_TOOLS {
         let command = format!("sketch.tool.{name}");
+        let enabled =
+            !blocked || (spatial_sketching && crate::sketch3d_ui::tool_supported(&command));
+        let selected = if spatial_sketching {
+            crate::sketch3d_ui::tool_selected(w, &command)
+        } else {
+            w.sketch.as_ref().is_some_and(|s| s.tool == *tool)
+        };
         publish(
             format!("command-toolbar/{command}"),
             "command-action",
             label,
             command,
-            !blocked,
-            w.sketch.as_ref().is_some_and(|s| s.tool == *tool),
+            enabled,
+            selected,
             "command-manager",
         );
     }
@@ -747,6 +780,18 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             "command-manager",
         );
     }
+    publish(
+        "command:presentation.manager-edit".into(),
+        "command",
+        "Active properties",
+        "presentation.manager-edit".into(),
+        w.tool_checkpoint.is_some()
+            || w.session.draft.is_some()
+            || w.sketch.is_some()
+            || w.dialog.is_some(),
+        w.editing_manager(),
+        "view-navigation",
+    );
     for (label, mode) in [
         ("Model", "Model"),
         ("History", "History"),
@@ -975,23 +1020,30 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             .any(|command| command == "draft.apply")
         {
             element.label = confirmation_label(w);
-            element.data["completion_scope"] = serde_json::json!(if w.sketch.is_some() {
-                "sketch"
-            } else if w.dialog.as_deref() == Some("component-insert") {
-                "component"
-            } else if crate::drawing_ui::is_workspace(w) {
-                "drawing"
-            } else {
-                "feature"
-            });
+            element.data["completion_scope"] =
+                serde_json::json!(if sketching || spatial_sketching {
+                    "sketch"
+                } else if w.dialog.as_deref() == Some("component-insert") {
+                    "component"
+                } else if crate::drawing_ui::is_workspace(w) {
+                    "drawing"
+                } else {
+                    "feature"
+                });
         }
         if element.role == "menu" {
             let items = menu_items(&element.label, w);
             element.data["items"] = serde_json::json!(items);
         }
-        if sketching && w.command_tab == "Sketch" && element.id == "command-toolbar/sketch.new" {
+        if (sketching || spatial_sketching)
+            && w.command_tab == "Sketch"
+            && (element.id == "command-toolbar/sketch.new"
+                || (spatial_sketching && element.id == "command-toolbar/sketch.new-3d"))
+        {
             element.label = confirmation_label(w);
             element.commands = vec!["draft.apply".into()];
+            element.data["accessibility_label"] = serde_json::json!(element.label);
+            element.data["completion_scope"] = serde_json::json!("sketch");
             element.state = if confirmation_available(w) {
                 "selected"
             } else {
@@ -2054,7 +2106,20 @@ pub fn navigation(ui: &mut egui::Ui, w: &mut Workspace) {
     });
 }
 pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
-    if w.editing_manager() {
+    tree_contents(ui, w, false);
+}
+/// Independently placed browsers keep the tree visible beside a task editor.
+pub fn model_browser(ui: &mut egui::Ui, w: &mut Workspace) {
+    if crate::drawing_ui::is_workspace(w) {
+        crate::drawing_ui::tree(ui, w);
+    } else {
+        tree_contents(ui, w, true);
+    }
+}
+fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
+    let task_active =
+        w.tool_checkpoint.is_some() || w.sketch.is_some() || w.session.draft.is_some();
+    if w.editing_manager() && !persistent {
         let open = crate::workspace_controls::history_open(w);
         if controls::button(
             ui,
@@ -2112,7 +2177,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
             let response = ui.add(
                 egui::Label::new(RichText::new(&doc.name).strong()).sense(egui::Sense::click()),
             );
-            if response.clicked() {
+            if response.clicked() && !task_active {
                 crate::selection_ui::object_selected(
                     w,
                     cad_core::selection_actions::SelectionTarget::Object {
@@ -2193,7 +2258,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
             let response = ui.add(
                 egui::Label::new(RichText::new(&part.name).strong()).sense(egui::Sense::click()),
             );
-            if response.clicked() {
+            if response.clicked() && !task_active {
                 crate::selection_ui::object_selected(
                     w,
                     cad_core::selection_actions::SelectionTarget::Object {
@@ -2354,22 +2419,29 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                     },
                     |ui| {
                         for name in ["Front Plane", "Top Plane", "Right Plane"] {
+                            let choosing_plane = w
+                                .sketch
+                                .as_ref()
+                                .is_some_and(|sketch| sketch.choosing_plane);
+                            let can_choose_plane = !task_active || choosing_plane;
                             let response = controls::button(
                                 ui,
                                 &format!("reference:{}::{name}", part.id),
                                 "reference-plane",
                                 &["feature-tree-row"],
                                 &format!("▱  {name}"),
-                                true,
+                                can_choose_plane,
                                 w.active_plane.as_deref() == Some(name),
                             );
                             if response.clicked() {
                                 w.selected = None;
-                                w.view.active_node = None;
+                                if !choosing_plane {
+                                    w.view.active_node = None;
+                                }
                                 sketch::choose_origin(w, name);
                                 w.status =
                                     format!("{name} selected. Choose a sketch or viewing action.");
-                                if !response.double_clicked() {
+                                if !choosing_plane && !response.double_clicked() {
                                     crate::selection_ui::object_selected(
                                         w,
                                         cad_core::selection_actions::SelectionTarget::Reference {
@@ -2383,7 +2455,13 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                                 ui::action(w, "sketch.new");
                             }
                             response.context_menu(|ui| {
-                                if ui.button("Sketch on this plane").clicked() {
+                                if ui
+                                    .add_enabled(
+                                        can_choose_plane,
+                                        egui::Button::new("Sketch on this plane"),
+                                    )
+                                    .clicked()
+                                {
                                     sketch::choose_origin(w, name);
                                     if w.sketch.is_none() {
                                         ui::action(w, "sketch.new");
@@ -2398,7 +2476,7 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
                             "reference-origin",
                             &["feature-tree-row"],
                             "+  Origin",
-                            true,
+                            !task_active,
                             false,
                         );
                         if response.clicked() {
