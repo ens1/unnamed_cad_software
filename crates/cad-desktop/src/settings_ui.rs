@@ -913,6 +913,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         });
     }
     elements.extend(fields(w));
+    elements.extend(crate::theme_library::inventory_semantics(w));
     elements
 }
 
@@ -1112,7 +1113,8 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                         controls::label(ui,&format!("settings:scope:{scope}"),"settings-scope",&[],scope,"ready");
                                         for (id,label,_) in CATEGORIES.iter().filter(|(_,_,group)| *group == scope) {
                                             if controls::button(ui,&format!("settings:category:{id}"),"settings-category",&[],label,!pending,category == *id && search.is_empty()).clicked() {
-                                                if let Some(state) = &mut w.settings { state.category = (*id).into(); state.search.clear(); }
+                                                settings::open(w, Some(id));
+                                                ui.ctx().request_repaint();
                                                 ui.close();
                                             }
                                         }
@@ -1131,8 +1133,9 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                 for scope in ["Model", "Application"] {
                                     controls::label(ui,&format!("settings:scope:{scope}"),"settings-scope",&[],scope,"ready");
                                     for (id,label,group) in CATEGORIES.iter().filter(|(_,_,group)|*group == scope) {
-                                        if controls::button(ui,&format!("settings:category:{id}"),"settings-category",&[],label,!pending,category == *id && search.is_empty()).on_hover_text(format!("{group}: {label}")).clicked()
-                                            && let Some(state) = &mut w.settings {state.category = (*id).into();state.search.clear();
+                                        if controls::button(ui,&format!("settings:category:{id}"),"settings-category",&[],label,!pending,category == *id && search.is_empty()).on_hover_text(format!("{group}: {label}")).clicked() {
+                                            settings::open(w, Some(id));
+                                            ui.ctx().request_repaint();
                                         }
                                     }
                                     ui.add_space(8.);
@@ -1194,6 +1197,9 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                         settings::action(w,"settings.presentation");
                                     }
                                     if *id == "application.themes" {
+                                        for notice in crate::theme_library::inventory_semantics(w) {
+                                            controls::label(ui,&notice.id,&notice.role,&[],&notice.label,&notice.state);
+                                        }
                                         if let Some(notice) = crate::theme_library::fallback_notice(w) {
                                             controls::label(ui,&notice.id,&notice.role,&[],&notice.label,&notice.state);
                                         }
@@ -1201,7 +1207,6 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                         for (command,label) in [("content-repositories.download-themes","Download themes pack"),("content-repositories.show-themes","View theme pack…")] {
                                             if controls::button(ui,&format!("command:{command}"),"settings-action",&[],label,!pending,false).clicked() {crate::content_repositories_ui::action(w,command,None);}
                                         }
-                                        crate::workspace_controls::confirmation_preview(ui);
                                         let selected = crate::theme_library::selected(w);
                                         if let Some(choice) = crate::theme_library::choices(w).into_iter().find(|choice|choice.id == selected) {
                                             controls::label(ui,"settings:theme-description","settings-description",&[],&choice.description,"ready");

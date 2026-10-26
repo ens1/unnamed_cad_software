@@ -44,6 +44,11 @@ and Cancel restores the starting presentation. A save failure restores the prior
 presentation. **Get more themes…** opens the pack library; **Refresh installed
 themes** reloads local manifests without downloading or switching the active theme.
 Opening the Settings theme picker also refreshes installed packs in the background.
+This includes selecting Themes from the Settings sidebar or compact category picker.
+The Themes panel shows loading, disabled-pack, and failed-library notices beside
+the choices, including the source error if a pack cannot load. A refresh replaces
+old inventory notices. The completion-control samples belong only to the advanced
+layout/style editor, not the ordinary Themes settings panel.
 
 Use **Download theme pack** or **View theme pack…** to install a theme repository;
 the optional starter theme repository contains **Nocturne · Violet**,

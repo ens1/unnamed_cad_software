@@ -522,7 +522,7 @@ pub(crate) fn validation_summary(w: &Workspace) -> (&'static str, &'static str) 
 
 pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut out = Vec::new();
-    if w.dialog.as_deref() == Some("presentation") || w.settings.is_some() {
+    if w.dialog.as_deref() == Some("presentation") {
         for (id, role, label) in [
             (
                 "workspace.theme-confirmation-preview",

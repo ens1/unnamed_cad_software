@@ -148,7 +148,12 @@ of engineering material properties.
 Manifests and images use bounded reads, relative paths, SHA-256 fingerprints, and
 explicit supported data types. Symlinks, escaping imports, executable payloads,
 submodules, nested repositories, and automatic hooks are rejected. Theme imports
-stay within their checkout even after it is unregistered. Refresh caches catalog
+resolve relative to the importing file and may use sibling resources such as
+`../shared/cad-controls.css`. They must stay within their checkout even after it
+is unregistered; manifest entry paths remain strictly relative without `..`.
+The Themes picker shows cached pack status and loading errors through the
+`theme-library-status` and `theme-library-diagnostic` semantic roles.
+Refresh caches catalog
 content by generation; worker tasks keep Git transfers away from the model thread.
 Library controls expose semantic roles `content-library-field`,
 `content-library-action`, `content-library-information`, and

@@ -39,6 +39,7 @@ pub struct State {
     clipboard: Option<String>,
     refreshing: bool,
     theme_refresh_requested: bool,
+    theme_refresh_error: Option<String>,
     queued_download: Option<String>,
 }
 enum Event {
@@ -272,6 +273,7 @@ fn submit(
     });
 }
 fn refresh(w: &mut Workspace) {
+    w.content_repositories.theme_refresh_error = None;
     submit(w, "Reading installed libraries…", |cancel, _| {
         let snapshot = libraries::refresh_catalog_with_cancel(&cancel)?;
         let ready = snapshot
@@ -315,6 +317,10 @@ fn refresh(w: &mut Workspace) {
         ))
     });
     w.content_repositories.refreshing = !idle(w);
+    if idle(w) {
+        w.content_repositories.theme_refresh_requested = false;
+        w.content_repositories.theme_refresh_error = Some(w.content_repositories.status.clone());
+    }
 }
 /// Refresh local pack manifests when opening the theme picker without moving
 /// the user into library management or replacing an in-flight library job.
@@ -327,8 +333,129 @@ pub fn refresh_for_themes(w: &mut Workspace) {
     if idle(w) {
         refresh(w);
     }
-    w.status = "Refreshing installed themes…".into();
+    if w.content_repositories.refreshing {
+        w.status = "Refreshing installed themes…".into();
+    }
 }
+
+/// Theme inventory status uses the last completed library scan. Rendering a
+/// settings frame never reads repositories or starts another refresh.
+pub fn theme_inventory_semantics(w: &Workspace) -> Vec<SemanticElement> {
+    let state = &w.content_repositories;
+    let refreshing =
+        state.refreshing || (!state.initialized && state.theme_refresh_error.is_none());
+    let mut out = Vec::new();
+    let element = |id: String, label: String, severity: &str, diagnostic: bool| SemanticElement {
+        id: format!("settings:theme-library:{id}"),
+        role: if diagnostic {
+            "theme-library-diagnostic"
+        } else {
+            "theme-library-status"
+        }
+        .into(),
+        label,
+        value: None,
+        state: severity.into(),
+        commands: vec![
+            "content-repositories.show-themes".into(),
+            "settings.theme-refresh".into(),
+        ],
+        relationships: vec!["settings:category:application.themes".into()],
+        data: json!({"contract":"tcad.theme-library-status","version":1,"presentation_only":true,"blocks_modeling":false}),
+    };
+    if refreshing {
+        out.push(element(
+            "refresh".into(),
+            "Reading installed themes…".into(),
+            "pending",
+            false,
+        ));
+    } else if state.pending.is_some() {
+        out.push(element(
+            "refresh".into(),
+            format!(
+                "{} The theme list shows the last completed refresh.",
+                state.status
+            ),
+            "pending",
+            false,
+        ));
+    }
+    if let Some(error) = &state.theme_refresh_error {
+        out.push(element(
+            "refresh-error".into(),
+            format!("Could not refresh installed themes: {error}. The last available theme list is retained. Refresh to retry."),
+            "warning",
+            true,
+        ));
+    }
+    let repositories = state
+        .registry
+        .repositories
+        .iter()
+        .filter(|repository| {
+            repository
+                .manifest
+                .entries
+                .iter()
+                .any(|entry| entry.kind == ContentKind::Themes)
+        })
+        .collect::<Vec<_>>();
+    if repositories.is_empty() && !refreshing && state.theme_refresh_error.is_none() {
+        out.push(element(
+            "empty".into(),
+            "No theme repositories are installed. Classic and any themes loaded from files remain available. Download a theme pack or add a repository in Content Libraries.".into(),
+            "ready",
+            false,
+        ));
+    }
+    for repository in repositories {
+        let ready = state.ready_repositories.contains(&repository.id);
+        let (severity, message) = if !repository.enabled {
+            (
+                "warning",
+                format!(
+                    "{} is disabled. Enable it in Content Libraries to use its themes.",
+                    repository.manifest.name
+                ),
+            )
+        } else if refreshing {
+            (
+                "pending",
+                format!("{}: checking installed themes…", repository.manifest.name),
+            )
+        } else if ready {
+            ("ready", format!("{}: available.", repository.manifest.name))
+        } else {
+            (
+                "warning",
+                format!(
+                    "{} could not be loaded. Open Content Libraries for details, or refresh after fixing its files.",
+                    repository.manifest.name
+                ),
+            )
+        };
+        out.push(element(repository.id.clone(), message, severity, false));
+        if repository.enabled && !refreshing {
+            let prefix = format!("{}: ", repository.manifest.name);
+            for (index, notice) in state
+                .notices
+                .iter()
+                .filter(|notice| notice.starts_with(&prefix))
+                .enumerate()
+            {
+                out.push(element(
+                    format!("{}:diagnostic:{index}", repository.id),
+                    notice.clone(),
+                    "warning",
+                    true,
+                ));
+            }
+        }
+    }
+    out
+}
+
 pub fn poll(w: &mut Workspace) {
     if !w.content_repositories.initialized {
         w.content_repositories.initialized = true;
@@ -360,6 +487,7 @@ pub fn poll(w: &mut Workspace) {
             Event::Done(result) => {
                 let theme_refresh =
                     std::mem::take(&mut w.content_repositories.theme_refresh_requested);
+                let was_refreshing = w.content_repositories.refreshing;
                 w.content_repositories.pending = None;
                 w.content_repositories.refreshing = false;
                 let downloaded = w.content_repositories.downloading_pack.take();
@@ -376,6 +504,9 @@ pub fn poll(w: &mut Workspace) {
                         } else {
                             error
                         };
+                        if was_refreshing {
+                            w.content_repositories.theme_refresh_error = Some(error.clone());
+                        }
                         w.content_repositories.outcome_notice = Some(error.clone());
                         if theme_refresh {
                             w.status = format!("Could not refresh themes: {error}");
@@ -383,6 +514,8 @@ pub fn poll(w: &mut Workspace) {
                         status(w, error);
                     }
                     Ok(Outcome::Refresh(registry, notices, author, directory, ready)) => {
+                        w.content_repositories.theme_refresh_error = None;
+                        let warning_count = notices.len();
                         w.content_repositories.registry = registry;
                         w.content_repositories.notices = notices;
                         w.content_repositories.library_directory = directory.clone();
@@ -425,13 +558,22 @@ pub fn poll(w: &mut Workspace) {
                         crate::theme_library::refresh(w);
                         status(
                             w,
-                            "Libraries refreshed. Saved models and the active theme keep their current data.",
+                            if warning_count == 0 {
+                                "Libraries refreshed. Saved models and the active theme keep their current data.".to_owned()
+                            } else {
+                                format!(
+                                    "Libraries refreshed with {warning_count} warning(s). Review the library notices below."
+                                )
+                            },
                         );
                         if theme_refresh {
-                            w.status = format!(
-                                "Themes refreshed: {} choices available in View → Themes",
-                                crate::theme_library::choices(w).len()
-                            );
+                            w.status = if warning_count == 0 {
+                                "Installed themes refreshed. Choose a theme in Settings or View → Themes.".into()
+                            } else {
+                                format!(
+                                    "Themes refreshed with {warning_count} library warning(s). Review Theme Settings or Content Libraries for details."
+                                )
+                            };
                         }
                     }
                     Ok(Outcome::Changed(id, message)) => {
@@ -489,14 +631,19 @@ pub fn poll(w: &mut Workspace) {
         }
     }
     if disconnected && !completed && w.content_repositories.pending.is_some() {
+        let was_refreshing = w.content_repositories.refreshing;
         w.content_repositories.pending = None;
         w.content_repositories.refreshing = false;
+        w.content_repositories.theme_refresh_requested = false;
         w.content_repositories.queued_download = None;
         w.content_repositories.downloading_pack = None;
         if let Ok(mut slot) = w.content_repositories.receiver.lock() {
             *slot = None;
         }
         let message = "The library worker stopped before reporting a result. Local files were retained; refresh the list before retrying.";
+        if was_refreshing {
+            w.content_repositories.theme_refresh_error = Some(message.into());
+        }
         w.content_repositories.outcome_notice = Some(message.into());
         status(w, message);
     }

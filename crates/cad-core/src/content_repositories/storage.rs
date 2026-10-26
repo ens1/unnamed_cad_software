@@ -448,6 +448,55 @@ pub(super) fn validate_resources(
     Ok(())
 }
 
+/// Theme imports are relative to the containing file, so sibling resources can
+/// use `../shared/...`. Normalize before checking files, without permitting a
+/// reference to leave the checkout or weakening manifest-entry path rules.
+fn theme_reference_path(source: &str, reference: &str) -> Result<PathBuf> {
+    if reference.is_empty()
+        || reference.len() > 4096
+        || reference.contains('\\')
+        || reference.chars().any(char::is_control)
+    {
+        return Err(invalid(
+            "Theme references must be portable relative file paths",
+        ));
+    }
+    let source = relative_path(source)?;
+    let mut resolved = source
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .to_path_buf();
+    for component in Path::new(reference).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !resolved.pop() {
+                    return Err(invalid(
+                        "Theme references must stay inside their repository",
+                    ));
+                }
+            }
+            Component::Normal(name) => {
+                let name = name
+                    .to_str()
+                    .ok_or_else(|| invalid("Theme references must use UTF-8"))?;
+                // Validate every named component, including ones a later `..`
+                // removes, so reserved Git/cache folders remain unavailable.
+                relative_path(name)?;
+                resolved.push(name);
+            }
+            Component::Prefix(_) | Component::RootDir => {
+                return Err(invalid("Theme references must use relative file paths"));
+            }
+        }
+    }
+    relative_path(
+        resolved
+            .to_str()
+            .ok_or_else(|| invalid("Theme references must use UTF-8"))?,
+    )
+}
+
 fn validate_theme_references(root: &Path, entry: &str, ignored: &BTreeSet<String>) -> Result<()> {
     let mut queue = vec![entry.to_owned()];
     let mut seen = BTreeSet::new();
@@ -524,10 +573,7 @@ fn validate_theme_references(root: &Path, entry: &str, ignored: &BTreeSet<String
             }
         }
         for reference in references {
-            let relative = Path::new(&relative)
-                .parent()
-                .unwrap_or_else(|| Path::new(""))
-                .join(relative_path(&reference)?);
+            let relative = theme_reference_path(&relative, &reference)?;
             let name = relative
                 .to_str()
                 .ok_or_else(|| invalid("Theme paths must use UTF-8"))?

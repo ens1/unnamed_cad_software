@@ -31,6 +31,7 @@ struct Entry {
 pub struct State {
     pub selected: String,
     entries: Vec<Entry>,
+    inventory_diagnostics: Vec<String>,
 }
 
 impl Default for State {
@@ -38,6 +39,7 @@ impl Default for State {
         Self {
             selected: "classic".into(),
             entries: Vec::new(),
+            inventory_diagnostics: Vec::new(),
         }
     }
 }
@@ -168,9 +170,29 @@ pub fn refresh(w: &mut Workspace) {
             .then_with(|| left.choice.id.cmp(&right.choice.id))
     });
     w.presentation_resources.library.entries = entries;
-    if !errors.is_empty() {
-        w.presentation_resources.diagnostic = Some(format!("Theme library: {}", errors.join("; ")));
-    }
+    w.presentation_resources.library.inventory_diagnostics = errors;
+}
+
+/// Inventory notices belong to the picker, independently of presentation
+/// validation. A successful refresh replaces stale notices without hiding a
+/// separate error in the currently selected theme.
+pub fn inventory_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
+    let mut out = crate::content_repositories_ui::theme_inventory_semantics(w);
+    out.extend(
+        w.presentation_resources.library.inventory_diagnostics.iter().enumerate().map(|(index, error)| {
+            cad_core::presentation::SemanticElement {
+                id: format!("settings:theme-library:personal:{index}"),
+                role: "theme-library-diagnostic".into(),
+                label: format!("Personal themes: {error}"),
+                value: None,
+                state: "warning".into(),
+                commands: vec!["settings.theme-refresh".into(), "settings.theme-load".into()],
+                relationships: vec!["settings:category:application.themes".into()],
+                data: serde_json::json!({"contract":"tcad.theme-library-status","version":1,"category":"application.themes","presentation_only":true,"blocks_modeling":false}),
+            }
+        }),
+    );
+    out
 }
 
 pub fn choices(w: &Workspace) -> Vec<Choice> {
