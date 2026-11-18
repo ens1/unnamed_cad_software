@@ -10,6 +10,11 @@ pub(crate) fn matches_occurrence(
     item: &PaperItem,
     path: &[Id],
 ) -> bool {
+    // Both callers have verified the leaf definition and configuration against
+    // evaluated geometry. A sheet of that definition has no relative path.
+    if item.path.is_empty() && item.definition == sheet.definition {
+        return true;
+    }
     let Some(prefix) = path.strip_suffix(item.path.as_slice()) else {
         return false;
     };
@@ -90,7 +95,7 @@ pub(crate) fn unchanged_feature(w: &Workspace) -> bool {
                     .active_part
                     .as_ref()
                     .and_then(|id| w.session.visible().parts.get(id))
-                    .is_some_and(|part| part.features.iter().any(|f| *f == source))
+                    .is_some_and(|part| part.features.contains(&source))
         })
 }
 
