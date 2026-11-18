@@ -20,7 +20,9 @@ Overall size follows the current part extents. Local sizes use the construction 
 
 Recognition covers verifiable overall extents, parallel face spacings, prismatic pockets and steps, principal-axis hole locations, cylindrical diameters and lands, cylindrical fillet radii, measured chamfer setbacks, and conical sizes and included angles with surviving transverse rims. Oblique straight sides on a principal-plane profile can also supply corner coordinates. The model inspector lists omitted measurements when available evidence is insufficient. Freeform surfaces, interrupted features and complex intersections can need additional dimensioning.
 
-A sheet stores callout placement. Moving a label changes its position on paper. **Edit in model** opens its source requirement. Use the sketch or feature editor to change the geometry that supplies a nominal size.
+A sheet stores callout placement. Moving a label changes its position on paper. **Edit in model** opens its source requirement. Click a finished size on the model, or choose **What sets this size?** in Model Dimensions. A bore can lead straight to its diameter. For the cube with a full-face cut, **Overall height** offers both the boss depth and the cut depth. Choose which one to edit. The preview updates the model and its finished size. **Finish** commits the edit and **Cancel** restores the starting model.
+
+The source field shows the authored expression. An existing configuration override is edited in the selected configuration. A field marked **Base part** affects every configuration that inherits it. TCAD traces supported straight extrusion caps, dimensioned rectangle widths and heights, sketch circles, cylindrical fillets and designed holes. More complex or ambiguous measurements show their supporting features for inspection.
 
 New part sheets and automatic PDF and drawing DXF exports include the model callouts by default. When callouts need more room, TCAD adds numbered continuation pages. Existing sheets can enable **Show model dimensions and datums**. The STEP geometry exporter does not currently write semantic PMI.
 

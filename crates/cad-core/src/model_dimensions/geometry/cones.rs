@@ -214,6 +214,7 @@ pub(super) fn add(
             ] {
                 if let Some(id) = out.id(family, &group) {
                     out.dimensions.push(Characteristic {
+                        drivers: vec![],
                         id,
                         label: label.into(),
                         kind: Kind::Linear,
@@ -248,6 +249,7 @@ pub(super) fn add(
                 let center = cn(rim);
                 let d = radial * radius(rim);
                 out.dimensions.push(Characteristic {
+                    drivers: vec![],
                     id,
                     label: label.into(),
                     kind: Kind::Diameter,
@@ -262,6 +264,7 @@ pub(super) fn add(
         if let Some(id) = out.id("cone-included-angle", &group) {
             let d = radial * radius(large);
             out.dimensions.push(Characteristic {
+                drivers: vec![],
                 id,
                 label: if countersink {
                     "Countersink included angle"

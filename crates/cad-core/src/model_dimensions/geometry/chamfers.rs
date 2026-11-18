@@ -177,6 +177,7 @@ pub(super) fn add(
                     && let Some(id) = result.id("chamfer-angle", &[i, support])
                 {
                     result.dimensions.push(Characteristic {
+                        drivers: vec![],
                         id,
                         label: "Chamfer angle".into(),
                         kind: Kind::Angle,
@@ -198,6 +199,7 @@ pub(super) fn add(
                 |a| format!("Chamfer setback ({})", ["X", "Y", "Z"][a]),
             );
             result.dimensions.push(Characteristic {
+                drivers: vec![],
                 id,
                 label,
                 kind: Kind::Linear,

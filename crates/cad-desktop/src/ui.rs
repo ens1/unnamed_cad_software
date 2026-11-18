@@ -1916,7 +1916,9 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 {
                     w.fields.insert(key.clone(), current.clone());
                     if display != current
-                        || request_focus && element.data["setter"] == "feature-handle-dimension"
+                        || request_focus
+                            && (element.data["setter"] == "feature-handle-dimension"
+                                || element.data["select_on_focus"] == true)
                     {
                         crate::presentation_controls::select_exact_source(ui, edit_id, &current);
                     }

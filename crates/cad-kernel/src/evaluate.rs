@@ -1361,10 +1361,12 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             .filter(|p| !p.outputs.is_empty() || p.model_dimensions.has_requirements())
         {
             let (mesh, bodies, surfaces) =
-                self.output_with_measurements(p, display_tolerance_mm, true)?;
+                self.output_mesh(p, display_tolerance_mm, FaceMetadata::Measurements)?;
             model_dimensions.insert(
                 p.id.clone(),
-                cad_core::model_dimensions::evaluate(p, &mesh, &solved),
+                cad_core::model_dimensions::evaluate_with_sketches(
+                    p, &mesh, &solved, &p.id, &sketches,
+                ),
             );
             if !p.outputs.is_empty() {
                 meshes.insert(p.id.clone(), mesh);
@@ -1466,10 +1468,16 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 self.focused_preview(part, &key, display_tolerance_mm);
                 if !part.outputs.is_empty() || part.model_dimensions.has_requirements() {
                     let (mesh, bodies, surfaces) =
-                        self.output_with_measurements(part, display_tolerance_mm, true)?;
+                        self.output_mesh(part, display_tolerance_mm, FaceMetadata::Measurements)?;
                     model_dimensions.insert(
                         key.clone(),
-                        cad_core::model_dimensions::evaluate(part, &mesh, &configured_solved),
+                        cad_core::model_dimensions::evaluate_with_sketches(
+                            part,
+                            &mesh,
+                            &configured_solved,
+                            &key,
+                            &sketches,
+                        ),
                     );
                     if !part.outputs.is_empty() {
                         meshes.insert(key.clone(), mesh);

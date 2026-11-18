@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod datums;
+pub mod drivers;
 pub mod geometry;
 pub(crate) mod remap;
 pub use datums::{Datum, DatumCarrier, datum_eligible};
@@ -77,6 +78,8 @@ pub struct Characteristic {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plane_normal: Option<[f64; 3]>,
     pub supports: Vec<TopologyRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drivers: Vec<drivers::DrivingValue>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
@@ -341,7 +344,18 @@ pub struct Report {
 }
 
 pub fn evaluate(part: &Part, mesh: &MeshData, document: &Document) -> Report {
-    let (dimensions, coverage) = geometry::infer(part, mesh, document);
+    evaluate_with_sketches(part, mesh, document, &part.id, &BTreeMap::new())
+}
+
+pub fn evaluate_with_sketches(
+    part: &Part,
+    mesh: &MeshData,
+    document: &Document,
+    mesh_key: &str,
+    sketches: &BTreeMap<String, crate::protocol::EvaluatedSketch>,
+) -> Report {
+    let (mut dimensions, coverage) = geometry::infer(part, mesh, document);
+    drivers::resolve(&mut dimensions, part, mesh, document, mesh_key, sketches);
     let mut report = Report {
         dimensions,
         coverage,

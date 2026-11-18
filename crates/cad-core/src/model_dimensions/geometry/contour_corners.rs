@@ -79,6 +79,7 @@ pub(super) fn add(
                 continue;
             };
             result.dimensions.push(Characteristic {
+                drivers: vec![],
                 id,
                 label: format!("Corner location {}", name.to_ascii_uppercase()),
                 kind: Kind::Linear,

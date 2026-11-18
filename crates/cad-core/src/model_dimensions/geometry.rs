@@ -145,6 +145,7 @@ fn overall(faces: &[&FaceRange], axis: usize, tolerance: f64) -> Option<(Extent,
             low_faces: ends[0].clone(),
         },
         Characteristic {
+            drivers: vec![],
             id: format!("overall/{}", AXES[axis]),
             label: ["Overall width", "Overall depth", "Overall height"][axis].into(),
             kind: Kind::Linear,
@@ -362,6 +363,7 @@ impl Characteristics<'_> {
         let mid = anchor(wall_face).unwrap_or(pa);
         let start = mid + n * (pa - mid).dot(&n);
         self.dimensions.push(Characteristic {
+            drivers: vec![],
             id,
             label: label.into(),
             kind: Kind::Linear,
@@ -397,6 +399,7 @@ impl Characteristics<'_> {
                 end[axis] = lo;
                 if let Some(id) = self.id(&format!("face-location-{}", AXES[axis]), &[left]) {
                     self.dimensions.push(Characteristic {
+                        drivers: vec![],
                         id,
                         label: format!("Face location {}", AXES[axis].to_uppercase()),
                         kind: Kind::Linear,
@@ -479,6 +482,7 @@ impl Characteristics<'_> {
             "Outside diameter"
         };
         self.dimensions.push(Characteristic {
+            drivers: vec![],
             id,
             label: label.into(),
             kind,
@@ -526,6 +530,7 @@ impl Characteristics<'_> {
                     continue;
                 };
                 self.dimensions.push(Characteristic {
+                    drivers: vec![],
                     id,
                     label: format!("Axis location {}", AXES[i].to_uppercase()),
                     kind: Kind::Linear,

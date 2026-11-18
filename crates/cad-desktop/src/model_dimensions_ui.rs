@@ -1,4 +1,5 @@
 //! Model-owned finished requirements in the property manager and on the selected occurrence.
+mod sources;
 use crate::{Workspace, presentation_controls as controls, viewport};
 use bevy_egui::egui;
 use cad_core::{
@@ -75,25 +76,37 @@ struct Context<'a> {
     instance: &'a PlacedPart,
     mesh: Option<&'a MeshData>,
     report: &'a Report,
+    retained: Option<Characteristic>,
+    source_only: bool,
 }
 fn context(w: &Workspace) -> Option<Context<'_>> {
     let id = owner(w)?;
-    // Typing one allowance can produce several pending worker revisions. Keep
-    // the stable editor and its text focus on the opening geometry while every
-    // intervening edit was a requirement edit made by this tool. New geometry
-    // picks and datum changes still require the current worker result.
-    let eval = current_geometry(w).or_else(|| {
+    // Keep the current input reachable between worker revisions. A failed source
+    // edit may reuse its last binding for correction; only a fresh measurement
+    // can supply a viewport callout or a new requirement.
+    let current = current_geometry(w);
+    let editing = w.fields.get(sources::EDITING).filter(|_| {
+        active(w)
+            && w.fields.get("mbd-geometry-epoch").map(String::as_str)
+                == Some(w.session.source_epoch())
+    });
+    let eval = current.or_else(|| {
         if !active(w)
             || w.fields.get("mbd-geometry-epoch").map(String::as_str)
                 != Some(w.session.source_epoch())
-            || !w.session.draft.as_ref().is_some_and(|draft| draft.pending)
+            || !w
+                .session
+                .draft
+                .as_ref()
+                .is_some_and(|draft| draft.pending || editing.is_some())
         {
             return None;
         }
-        w.tool_checkpoint
-            .as_ref()?
-            .evaluation
+        w.session
+            .draft
             .as_ref()
+            .and_then(|draft| draft.last_valid_evaluation.as_ref())
+            .or_else(|| w.tool_checkpoint.as_ref()?.evaluation.as_ref())
             .filter(|e| e.valid || e.geometry_valid)
     })?;
     let path: Option<Vec<String>> = active(w)
@@ -131,11 +144,19 @@ fn context(w: &Workspace) -> Option<Context<'_>> {
         return None;
     }
     let key = cad_core::history::mesh_key(instance);
+    let report = eval.model_dimensions.get(key)?;
+    let retained = editing
+        .filter(|id| !report.dimensions.iter().any(|d| &d.id == *id))
+        .and_then(|_| w.fields.get("mbd-source-measurement"))
+        .and_then(|data| serde_json::from_str(data).ok());
+    let source_only = retained.is_some() || editing.is_some() && current.is_none();
     Some(Context {
+        retained,
+        source_only,
         part: w.session.visible().parts.get(id)?,
         instance,
         mesh: eval.meshes.get(key),
-        report: eval.model_dimensions.get(key)?,
+        report,
     })
 }
 impl Context<'_> {
@@ -186,6 +207,9 @@ impl Context<'_> {
             .then_some(&face.reference)
     }
     fn focused(&self, w: &Workspace) -> Option<&Characteristic> {
+        if let Some(retained) = &self.retained {
+            return Some(retained);
+        }
         let dimensions = &self.report.dimensions;
         dimensions
             .iter()
@@ -226,12 +250,17 @@ impl Context<'_> {
 fn select_dimension(w: &mut Workspace, id: &str) {
     if w.fields.get(DIMENSION).is_none_or(|v| v != id) {
         w.fields.remove(UNEQUAL);
+        sources::reset(w);
     }
     w.fields.insert(DIMENSION.into(), id.into());
 }
 pub(crate) fn accepts_pick(w: &mut Workspace, pick: &viewport::Selection) -> bool {
+    if context(w).is_some_and(|ctx| ctx.source_only) {
+        w.status = "Finish the current size edit before picking another face".into();
+        return false;
+    }
     if !crate::quantity_display::source_fields_valid(w) {
-        w.status = "Correct the current tolerance before selecting another face".into();
+        w.status = "Correct the current value before selecting another face".into();
         return false;
     }
     let path: Option<Vec<String>> = w
@@ -557,6 +586,29 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     if !active(w) {
         return elements;
     }
+    if ctx.source_only {
+        if let Some(dim) = ctx.focused(w) {
+            let label = if ctx.retained.is_some() && current_geometry(w).is_some() {
+                "This size disappears in the preview. Adjust the source or cancel to restore it."
+            } else if w.session.draft.as_ref().is_some_and(|d| d.pending) {
+                "Updating finished size…"
+            } else {
+                "Preview unavailable. Adjust the driving value or cancel."
+            };
+            elements.push(SemanticElement {
+                id: "model-dimensions:source-status".into(),
+                role: "model-size-source-note".into(),
+                label: label.into(),
+                value: None,
+                state: "preview".into(),
+                commands: vec![],
+                relationships: vec![ctx.part.id.clone()],
+                data: ctx.bind(w, json!({"characteristic":dim.id,"category":"size-source"})),
+            });
+            elements.extend(sources::elements(w, &ctx, dim));
+        }
+        return elements;
+    }
     for (kind, entries) in [
         ("review", &ctx.report.issues),
         ("coverage", &ctx.report.coverage),
@@ -586,6 +638,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             dimension_choices,
             true,
         ));
+        elements.extend(sources::elements(w, &ctx, d));
         let mode = mode(w, &ctx, d);
         elements.push(field(
             "mode",
@@ -816,6 +869,9 @@ pub(crate) fn current_value(w: &Workspace, e: &SemanticElement) -> Option<Value>
         return None;
     }
     if e.data["field"] == "datum-label" {
+        if ctx.source_only {
+            return None;
+        }
         return Some(json!(
             w.fields
                 .get("mbd-datum-letter")
@@ -825,6 +881,12 @@ pub(crate) fn current_value(w: &Workspace, e: &SemanticElement) -> Option<Value>
     }
     let d = ctx.focused(w)?;
     if e.data["field"] != "dimension" && e.data["characteristic"] != d.id {
+        return None;
+    }
+    if matches!(e.data["field"].as_str(), Some("source" | "source-value")) {
+        return sources::current(w, &ctx, d, &e.data);
+    }
+    if ctx.source_only {
         return None;
     }
     let a = mbd::effective_tolerance(ctx.part, &w.session.visible().settings, d);
@@ -837,12 +899,16 @@ pub(crate) fn current_value(w: &Workspace, e: &SemanticElement) -> Option<Value>
     })
 }
 fn submit(w: &mut Workspace, part: String, edit: Edit) -> Result<()> {
+    dispatch(w, Command::EditModelDimensions { part, edit })
+}
+fn dispatch(w: &mut Workspace, command: Command) -> Result<()> {
     let prior = w.session.source_epoch().to_string();
-    w.dispatch(Command::EditModelDimensions { part, edit });
+    let geometry_current = current_geometry(w).is_some();
+    w.dispatch(command);
     if prior == w.session.source_epoch() {
         return Err(CadError::Invalid(w.status.clone()));
     }
-    if w.fields.get("mbd-geometry-epoch") == Some(&prior) {
+    if geometry_current || w.fields.get("mbd-geometry-epoch") == Some(&prior) {
         w.fields
             .insert("mbd-geometry-epoch".into(), w.session.source_epoch().into());
     }
@@ -878,12 +944,15 @@ pub(crate) fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) ->
     let id = dimension.id.clone();
     let label = dimension.label.clone();
     let field = e.data["field"].as_str().unwrap_or("");
+    if matches!(field, "source" | "source-value") {
+        return sources::update(w, &e.data, text);
+    }
     if field == "dimension" {
         if w.fields.keys().any(|key| {
             key.starts_with("presentation-field-error:model-dimensions:")
                 && !key.starts_with("presentation-field-error:model-dimensions:dimension:")
         }) {
-            return Err(invalid("Correct the current tolerance first"));
+            return Err(invalid("Correct the current value first"));
         }
         if !ctx.report.dimensions.iter().any(|d| d.id == text) {
             return Err(invalid("The dimension is unavailable"));
@@ -996,12 +1065,26 @@ fn run(w: &mut Workspace, key: &str, data: &Value) -> Result<()> {
     if key == "inspection.model-dimensions" {
         return begin(w, None);
     }
+    if key == "mbd.show-source" {
+        let ctx = context(w)
+            .filter(|ctx| active(w) && ctx.is_current(w, data))
+            .ok_or_else(|| invalid("Select the finished dimension again"))?;
+        let dim = ctx
+            .focused(w)
+            .filter(|dim| data["characteristic"] == dim.id)
+            .ok_or_else(|| invalid("Select the finished dimension again"))?;
+        let id = dim.id.clone();
+        select_dimension(w, &id);
+        sources::reveal(w, &id);
+        sources::focus(w);
+        return Ok(());
+    }
     if matches!(
         key,
         "mbd.inspect-size" | "mbd.inspect-datum" | "mbd.locate-datum"
     ) {
         if !crate::quantity_display::source_fields_valid(w) {
-            return Err(invalid("Correct the current tolerance first"));
+            return Err(invalid("Correct the current value first"));
         }
         let ctx = context(w)
             .filter(|ctx| ctx.is_current(w, data))
@@ -1014,7 +1097,10 @@ fn run(w: &mut Workspace, key: &str, data: &Value) -> Result<()> {
                 .find(|d| data["characteristic"] == d.id)
                 .ok_or_else(|| invalid("The dimension is no longer available"))?;
             let id = dim.id.clone();
-            return begin(w, Some(&id));
+            begin(w, Some(&id))?;
+            sources::reveal(w, &id);
+            sources::focus(w);
+            return Ok(());
         }
         let d = ctx
             .report
@@ -1219,15 +1305,33 @@ pub(crate) fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     let empty = ctx.report.dimensions.is_empty();
     let has_face = ctx.eligible_face(w).is_some();
     let linked = !ctx.writable(w);
+    let source_only = ctx.source_only;
     let elements = semantics(w);
-    if empty {
+    if empty && !source_only {
         ui.weak("No finished sizes available.");
     }
-    for element in elements
-        .iter()
-        .filter(|e| e.role == "model-dimension-field")
-    {
-        crate::ui::semantic_field(ui, w, element);
+    for element in &elements {
+        if element.role == "model-dimension-field" {
+            crate::ui::semantic_field(ui, w, element);
+        } else if element
+            .commands
+            .first()
+            .is_some_and(|c| c == "mbd.show-source")
+        {
+            draw_action(ui, w, element);
+        } else if element.role == "model-size-source-note" {
+            controls::label(
+                ui,
+                &element.id,
+                &element.role,
+                &[],
+                &element.label,
+                &element.state,
+            );
+        }
+    }
+    if source_only {
+        return;
     }
     for element in elements.iter().filter(|e| {
         e.commands
@@ -1325,7 +1429,8 @@ pub(crate) fn show(ui: &mut egui::Ui, w: &mut Workspace) {
 
 // Expose the same semantic callouts to themes and to the default viewport.
 fn callouts(w: &Workspace, ctx: &Context<'_>) -> Vec<SemanticElement> {
-    if !w.view.visibility.model_dimensions || !viewport::visible(w, ctx.instance) {
+    if ctx.source_only || !w.view.visibility.model_dimensions || !viewport::visible(w, ctx.instance)
+    {
         return vec![];
     }
     let dimensions: Vec<_> = if active(w) {

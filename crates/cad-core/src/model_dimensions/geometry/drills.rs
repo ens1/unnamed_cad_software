@@ -223,6 +223,7 @@ fn bore(
         }
     }
     out.dimensions.push(Characteristic {
+        drivers: vec![],
         id,
         label: "Bore depth".into(),
         kind: Kind::Linear,
