@@ -8,6 +8,12 @@ use cad_core::{
     sketch_topology::{self, Contour, ContourStatus},
 };
 
+mod viewport_picking;
+pub(crate) use viewport_picking::{
+    arm_target, cancel_replacement, input_evaluation, input_feature, picking_target,
+    target_direction, viewport,
+};
+
 const DEFERRED: &str = "tcad:contour-preset:";
 const ACTION: &str = "contours.edit:";
 
@@ -179,23 +185,26 @@ fn evaluated_source<'a>(
     w: &'a Workspace,
     profile: &NodeRef,
 ) -> Option<&'a cad_core::protocol::EvaluatedSketch> {
-    let identity = w.session.identity();
-    let evaluation = w
-        .session
-        .draft
-        .as_ref()
-        .and_then(|draft| draft.evaluation.as_ref())
-        .or(w.session.evaluation.as_ref())
-        .filter(|evaluation| evaluation.identity == identity)?;
+    let evaluation = if input_feature(w).is_some() {
+        crate::viewport::selection_evaluation(w)?
+    } else {
+        let identity = w.session.identity();
+        w.session
+            .draft
+            .as_ref()
+            .and_then(|draft| draft.evaluation.as_ref())
+            .or(w.session.evaluation.as_ref())
+            .filter(|evaluation| evaluation.identity == identity)?
+    };
     let key = evaluation
         .instances
         .iter()
         .find(|instance| {
             instance.definition == profile.definition
-                && w.view
-                    .active_instance
-                    .as_ref()
-                    .is_none_or(|id| instance.path.contains(id))
+                && w.view.active_instance.as_ref().is_none_or(|id| {
+                    instance.path.contains(id)
+                        || instance.path.is_empty() && id == &instance.definition
+                })
         })
         .map(|instance| {
             if instance.mesh_key.is_empty() {
@@ -506,10 +515,38 @@ pub(crate) fn fields(
         && selections
             .iter()
             .all(|selection| selection.outer_members.is_empty());
+    let listed_count;
     let label = if none_selected {
-        "Contours · Choose contours"
+        "Contours · Pick a region"
     } else if !selections.is_empty() {
-        "Contours · Custom selection"
+        let count = profiles
+            .iter()
+            .filter_map(|profile| evaluated_source(w, profile).map(|source| (profile, source)))
+            .map(|(profile, source)| {
+                source
+                    .material_regions
+                    .iter()
+                    .filter(|region| {
+                        selections.iter().any(|s| {
+                            &s.profile == profile
+                                && s.outer_members.iter().any(|member| {
+                                    region.outer_members.contains(member)
+                                        || region
+                                            .hole_members
+                                            .iter()
+                                            .any(|hole| hole.contains(member))
+                                })
+                        })
+                    })
+                    .count()
+            })
+            .sum::<usize>();
+        if thin || count == 0 {
+            "Contours · Custom selection"
+        } else {
+            listed_count = format!("Contours · {count} selected");
+            &listed_count
+        }
     } else if thin {
         "Contours · All"
     } else {
@@ -525,6 +562,16 @@ pub(crate) fn fields(
         |ui| {
             let sources = choices(w, doc, profiles, thin);
             let before = selections.clone();
+            if !thin && input_feature(w).is_some() {
+                controls::label(
+                    ui,
+                    "contours.region-hint",
+                    "context-hint",
+                    &[],
+                    "Click shaded regions on the model to choose them.",
+                    "ready",
+                );
+            }
             contour_list(ui, doc, profiles, selections, thin, &sources);
             changed = *selections != before;
         },
@@ -573,7 +620,7 @@ fn contour_list(
         .clicked()
             && selections.is_empty()
         {
-            *selections = select_all(sources, thin);
+            *selections = clear(sources);
         }
     });
     if !selections.is_empty() {
@@ -736,6 +783,8 @@ enum Change {
     SelectAll,
     Clear,
     Toggle { profile: NodeRef, member: Id },
+    Pick { profile: NodeRef, member: Id },
+    Target { second: bool },
     Move { index: usize, up: bool },
     Remove { index: usize },
 }
@@ -749,12 +798,13 @@ fn apply_change(
         Change::All => selections.clear(),
         Change::Selected => {
             if selections.is_empty() {
-                *selections = select_all(sources, thin);
+                *selections = clear(sources);
             }
         }
         Change::SelectAll => *selections = select_all(sources, thin),
         Change::Clear => *selections = clear(sources),
-        Change::Toggle { profile, member } => {
+        Change::Target { .. } => {}
+        Change::Pick { profile, member } | Change::Toggle { profile, member } => {
             if let Some((source, contour)) = sources
                 .iter()
                 .find(|source| &source.profile == profile)
@@ -767,6 +817,9 @@ fn apply_change(
                 })
                 && enabled(source, contour, thin)
             {
+                if matches!(change, Change::Pick { .. }) && selections.is_empty() {
+                    *selections = clear(sources);
+                }
                 toggle(sources, selections, profile, contour, thin);
             }
         }
@@ -794,13 +847,17 @@ fn apply_change(
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Action {
     document: Id,
+    editor: Option<String>,
+    epoch: String,
     feature: Id,
     feature_source: String,
     change: Change,
 }
-fn command(doc: &Document, feature: &Feature, change: Change) -> String {
+fn command(w: &Workspace, feature: &Feature, change: Change) -> String {
     serde_json::to_string(&Action {
-        document: doc.id.clone(),
+        document: w.session.visible().id.clone(),
+        epoch: w.session.source_epoch().into(),
+        editor: w.fields.get("feature-editor-generation").cloned(),
         feature: feature.id.clone(),
         feature_source: serde_json::to_string(&feature.operation).unwrap_or_default(),
         change,
@@ -833,10 +890,16 @@ pub(crate) fn action(w: &mut Workspace, name: &str) -> bool {
         return true;
     };
     if action.document != doc.id
+        || action.epoch != w.session.source_epoch()
+        || action.editor.as_ref() != w.fields.get("feature-editor-generation")
         || action.feature != feature.id
         || serde_json::to_string(&feature.operation).ok().as_deref()
             != Some(action.feature_source.as_str())
     {
+        return true;
+    }
+    if let Change::Target { second } = action.change {
+        arm_target(w, second);
         return true;
     }
     let Some((profiles, selections, thin)) = definition_mut(&mut feature.operation) else {
@@ -845,7 +908,7 @@ pub(crate) fn action(w: &mut Workspace, name: &str) -> bool {
     let sources = choices(w, &doc, &profiles, thin);
     if matches!(
         action.change,
-        Change::Selected | Change::SelectAll | Change::Toggle { .. }
+        Change::Selected | Change::SelectAll | Change::Toggle { .. } | Change::Pick { .. }
     ) && !ready(&sources)
     {
         return true;
@@ -889,7 +952,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 "ready"
             }
             .into(),
-            commands: vec![command(&doc, &feature, change)],
+            commands: vec![command(w, &feature, change)],
             relationships: vec!["property-manager".into()],
             data,
         });
@@ -936,6 +999,27 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     }
     for source in &sources {
         for (index, contour) in source.contours.iter().enumerate() {
+            if !thin
+                && matches!(feature.operation, Operation::Extrude { .. })
+                && enabled(source, contour, false)
+            {
+                publish(
+                    format!(
+                        "extrude.region.{}.{}",
+                        source.profile.node, contour.members[0]
+                    ),
+                    "profile-region",
+                    format!("Region {}", index + 1),
+                    !selections.is_empty()
+                        && included(&selections, &source.profile, contour, false),
+                    true,
+                    Change::Pick {
+                        profile: source.profile.clone(),
+                        member: contour.members[0].clone(),
+                    },
+                    serde_json::json!({"profile":source.profile,"members":contour.members,"geometry":"closed_material","retains_holes":true,"viewport":true}),
+                );
+            }
             publish(
                 format!(
                     "contours.option.{}.{}",
@@ -1004,6 +1088,26 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 true,
                 Change::Remove { index },
                 serde_json::json!({"presentation_control":true,"selection":selection,"order":index}),
+            );
+        }
+    }
+    if let Operation::Extrude { options, .. } = &feature.operation {
+        for (second, end) in std::iter::once((false, &options.end))
+            .chain(options.direction2.iter().map(|end| (true, &end.end)))
+        {
+            let label = match end {
+                cad_core::ExtrudeEnd::UpToFace => "Pick end face",
+                cad_core::ExtrudeEnd::UpToVertex => "Pick end vertex",
+                _ => continue,
+            };
+            publish(
+                format!("extrude.target.{}", if second { 2 } else { 1 }),
+                "selection-input",
+                label.into(),
+                false,
+                true,
+                Change::Target { second },
+                serde_json::json!({"direction":if second {2} else {1}}),
             );
         }
     }

@@ -1606,11 +1606,18 @@ impl ExtentContext<'_> {
                 offset,
             )?,
             ExtrudeEnd::UpToVertex => {
-                let (profile, point) = end
-                    .target_vertex
-                    .as_ref()
-                    .ok_or_else(|| invalid("Select an end sketch vertex"))?;
-                let point = sketch_vertex(self.adapter, self.doc, profile, point, self.inputs)?;
+                let point = match (&end.target_vertex, &end.target_point) {
+                    (Some((profile, point)), None) => {
+                        sketch_vertex(self.adapter, self.doc, profile, point, self.inputs)?
+                    }
+                    (None, Some(source)) => Point3::from(self.adapter.resolve_surface_point(
+                        self.doc,
+                        &self.owner.definition,
+                        source,
+                        self.inputs,
+                    )?),
+                    _ => return Err(invalid("Select one end vertex")),
+                };
                 project_face(start, self.axis, &axis_plane(point, self.axis)?, offset)?
             }
             ExtrudeEnd::UpToNext | ExtrudeEnd::UpToBody => {
@@ -1989,6 +1996,7 @@ pub(crate) fn operation(
         target: options.target.clone(),
         target_body: options.target_body.clone(),
         target_vertex: options.target_vertex.clone(),
+        target_point: options.target_point.clone(),
         end_offset: options.end_offset.clone(),
     };
     let second = if let Some(end) = &options.direction2 {

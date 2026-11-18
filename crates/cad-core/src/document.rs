@@ -154,6 +154,9 @@ pub struct ExtrudeOptions {
     /// Stable sketch point identity for an Up to Vertex end condition.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_vertex: Option<(NodeRef, Id)>,
+    /// Persistent model vertex, through its native edge and constructor endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_point: Option<Box<crate::reference_geometry::PointSource>>,
 }
 fn zero_length() -> Expr {
     "0 mm".into()
@@ -176,6 +179,7 @@ impl Default for ExtrudeOptions {
             thin: None,
             draft: None,
             target_vertex: None,
+            target_point: None,
         }
     }
 }

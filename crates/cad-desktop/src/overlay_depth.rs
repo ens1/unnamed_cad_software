@@ -268,7 +268,10 @@ fn key(w: &Workspace, rect: Rect) -> String {
         w.view.history_cursor,
         crate::selection_ui::edge_feature(w).map(|f| f.id),
         w.display_mesh.epoch,
-        w.edge_selection_path
+        (
+            &w.edge_selection_path,
+            crate::contours_ui::input_feature(w).map(|f| &f.id)
+        )
     )
 }
 impl Index {
@@ -393,7 +396,11 @@ impl Index {
             let input_meshes = input
                 .map(|i| viewport::selection_meshes(w, evaluation, i))
                 .unwrap_or_default();
-            let (instance, meshes) = if let Some(i) = input.filter(|_| !input_meshes.is_empty()) {
+            let (instance, meshes) = if let Some(i) = input.filter(|i| {
+                !input_meshes.is_empty()
+                    || (crate::contours_ui::input_feature(w).is_some()
+                        && w.view.active_part.as_ref() == Some(&i.definition))
+            }) {
                 (i, input_meshes)
             } else {
                 (display, viewport::display_meshes(w, displayed, display))
@@ -562,19 +569,42 @@ pub fn segments(
     endpoints: [[f64; 3]; 2],
     work: &mut usize,
 ) -> Vec<[Pos2; 2]> {
-    let Some(a) = point(w, rect, endpoints[0]) else {
-        return Vec::new();
-    };
-    let Some(b) = point(w, rect, endpoints[1]) else {
-        return Vec::new();
-    };
+    segments_batch(w, rect, std::iter::once(endpoints), work)
+}
+
+pub(crate) fn segments_batch(
+    w: &Workspace,
+    rect: Rect,
+    lines: impl IntoIterator<Item = [[f64; 3]; 2]>,
+    work: &mut usize,
+) -> Vec<[Pos2; 2]> {
     let Ok(mut cache) = w.overlay_depth.lock() else {
-        return Vec::new();
+        return vec![];
     };
     let cache = cache.index(w, rect);
     if !cache.complete {
-        return Vec::new();
+        return vec![];
     }
+    let mut result = Vec::new();
+    for [start, end] in lines {
+        if *work == 0 {
+            break;
+        }
+        let (Some(a), Some(b)) = (point(w, rect, start), point(w, rect, end)) else {
+            continue;
+        };
+        result.extend(visible_segments(cache, rect, a, b, work));
+    }
+    result
+}
+
+fn visible_segments(
+    cache: &Index,
+    rect: Rect,
+    a: Point,
+    b: Point,
+    work: &mut usize,
+) -> Vec<[Pos2; 2]> {
     let Some(candidates) = cache.candidates(rect, a, b, work) else {
         return Vec::new();
     };

@@ -5,7 +5,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const CONTRACT_VERSION: u32 = 3;
+pub const CONTRACT_VERSION: u32 = 4;
 
 /// A source reference, independent of evaluated geometry or widget state.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -58,6 +58,9 @@ pub struct DirectionEnd {
     pub target_body: Option<NodeRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_vertex: Option<(NodeRef, Id)>,
+    /// Persistent model vertex, through its native edge and constructor endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_point: Option<Box<crate::reference_geometry::PointSource>>,
     #[serde(default = "zero")]
     pub end_offset: Expr,
 }
@@ -72,6 +75,7 @@ impl Default for DirectionEnd {
             target: None,
             target_body: None,
             target_vertex: None,
+            target_point: None,
             end_offset: zero(),
         }
     }
@@ -89,10 +93,20 @@ impl DirectionEnd {
                 .as_ref()
                 .map(|(profile, _)| profile.clone()),
         );
+        dependencies.extend(
+            self.target_point
+                .iter()
+                .flat_map(|point| point.dependencies()),
+        );
         dependencies
     }
     pub fn expressions(&self) -> Vec<&Expr> {
         let mut values = vec![&self.end_offset];
+        values.extend(
+            self.target_point
+                .iter()
+                .flat_map(|point| point.expressions()),
+        );
         if self.end == ExtrudeEnd::Blind {
             values.push(&self.distance);
         }
@@ -101,6 +115,12 @@ impl DirectionEnd {
 }
 pub fn dependencies(options: &ExtrudeOptions) -> Vec<NodeRef> {
     let mut dependencies = options.start.dependencies();
+    dependencies.extend(
+        options
+            .target_point
+            .iter()
+            .flat_map(|point| point.dependencies()),
+    );
     dependencies.extend(options.scope.iter().cloned());
     dependencies.extend(
         options
@@ -121,6 +141,12 @@ pub fn expressions(options: &ExtrudeOptions) -> Vec<&Expr> {
         .start
         .expressions()
         .into_iter()
+        .chain(
+            options
+                .target_point
+                .iter()
+                .flat_map(|point| point.expressions()),
+        )
         .chain(
             options
                 .direction2
@@ -304,5 +330,5 @@ fn section_semantics(
 }
 
 fn choices(options: &ExtrudeOptions) -> serde_json::Value {
-    serde_json::json!({"direction":["sketch_normal","specified_vector"],"start":["sketch_plane","face","vertex","point"],"start_offset_direction":"extrusion_axis","start_point":"associative_point_source_projection_along_axis","edge_point_parameter":"native_constructor_oriented_parameter_0_to_1","end":["blind","mid_plane","through_all","through_all_both","up_to_face","up_to_vertex","up_to_next","up_to_body"],"direction2_end":["blind","through_all","up_to_face","up_to_vertex","up_to_next","up_to_body"],"independent_ends":true,"scope":"explicit_feature_outputs_all_contained_bodies","end_face_geometry":["planar_carrier","bounded_separable_positive_rational_graph_patch"],"curved_end_section":"one_rectangle_normal_to_axis","curved_end_domain":"full_four_sided_patch_without_holes_or_existing_trims","end_offset_direction":"end_face_normal","curved_end_offset":"zero_or_authored_exact_offset_surface","next_body_termination":"one_complete_nearest_forward_bounded_face","end_vertex_geometry":"sketch_point","thin_modes":["one_side","two_side","mid_plane"],"thin_enabled":options.thin.is_some(),"draft_enabled":options.draft.is_some(),"thin_geometry":["line","arc","circle"],"thin_open_ends":"flat","draft_geometry":["line"],"draft_neutral":"sketch_plane"})
+    serde_json::json!({"direction":["sketch_normal","specified_vector"],"start":["sketch_plane","face","vertex","point"],"start_offset_direction":"extrusion_axis","start_point":"associative_point_source_projection_along_axis","edge_point_parameter":"native_constructor_oriented_parameter_0_to_1","end":["blind","mid_plane","through_all","through_all_both","up_to_face","up_to_vertex","up_to_next","up_to_body"],"direction2_end":["blind","through_all","up_to_face","up_to_vertex","up_to_next","up_to_body"],"independent_ends":true,"scope":"explicit_feature_outputs_all_contained_bodies","end_face_geometry":["planar_carrier","bounded_separable_positive_rational_graph_patch"],"curved_end_section":"one_rectangle_normal_to_axis","curved_end_domain":"full_four_sided_patch_without_holes_or_existing_trims","end_offset_direction":"end_face_normal","curved_end_offset":"zero_or_authored_exact_offset_surface","next_body_termination":"one_complete_nearest_forward_bounded_face","end_vertex_geometry":["sketch_point","native_edge_endpoint"],"thin_modes":["one_side","two_side","mid_plane"],"thin_enabled":options.thin.is_some(),"draft_enabled":options.draft.is_some(),"thin_geometry":["line","arc","circle"],"thin_open_ends":"flat","draft_geometry":["line"],"draft_neutral":"sketch_plane"})
 }

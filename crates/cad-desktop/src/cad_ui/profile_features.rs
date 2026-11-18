@@ -90,6 +90,7 @@ pub(super) fn fields(
     w: &Workspace,
     doc: &Document,
     feature: &mut Feature,
+    requested: &mut Option<bool>,
 ) -> bool {
     let mut changed = false;
     match &mut feature.operation {
@@ -114,14 +115,16 @@ pub(super) fn fields(
                 target: options.target.clone(),
                 target_body: options.target_body.clone(),
                 target_vertex: options.target_vertex.clone(),
+                target_point: options.target_point.clone(),
                 end_offset: options.end_offset.clone(),
             };
-            changed |= extrusion_end_fields(ui, w, doc, &feature.id, &mut first, true);
+            changed |= extrusion_end_fields(ui, w, doc, &feature.id, &mut first, true, requested);
             options.end = first.end;
             *distance = first.distance;
             options.target = first.target;
             options.target_body = first.target_body;
             options.target_vertex = first.target_vertex;
+            options.target_point = first.target_point;
             options.end_offset = first.end_offset;
 
             if prior_end != options.end
@@ -274,7 +277,15 @@ pub(super) fn fields(
                         };
                         if ui
                             .push_id("direction-two", |ui| {
-                                extrusion_end_fields(ui, w, doc, &feature.id, &mut end, false)
+                                extrusion_end_fields(
+                                    ui,
+                                    w,
+                                    doc,
+                                    &feature.id,
+                                    &mut end,
+                                    false,
+                                    requested,
+                                )
                             })
                             .inner
                         {
@@ -284,7 +295,15 @@ pub(super) fn fields(
                         }
                     } else if let Some(end) = &mut options.direction2 {
                         ui.push_id("direction-two", |ui| {
-                            changed |= extrusion_end_fields(ui, w, doc, &feature.id, end, false);
+                            changed |= extrusion_end_fields(
+                                ui,
+                                w,
+                                doc,
+                                &feature.id,
+                                end,
+                                false,
+                                requested,
+                            );
                         });
                     }
                 },
@@ -505,6 +524,7 @@ fn extrusion_end_fields(
     current: &str,
     end: &mut cad_core::extrusion::DirectionEnd,
     combined: bool,
+    requested: &mut Option<bool>,
 ) -> bool {
     use cad_core::ExtrudeEnd;
     let mut changed = false;
@@ -546,8 +566,18 @@ fn extrusion_end_fields(
         }
         if end.end != ExtrudeEnd::UpToVertex {
             end.target_vertex = None;
+            end.target_point = None;
         }
     }
+    if before != end.end && matches!(end.end, ExtrudeEnd::UpToFace | ExtrudeEnd::UpToVertex) {
+        *requested = Some(!combined);
+    }
+    let armed = crate::contours_ui::target_direction(w) == Some(!combined);
+    let target_control = if combined {
+        "extrude.target.1"
+    } else {
+        "extrude.target.2"
+    };
     match end.end {
         ExtrudeEnd::Blind | ExtrudeEnd::MidPlane => {
             let label = if end.end == ExtrudeEnd::MidPlane {
@@ -576,20 +606,55 @@ fn extrusion_end_fields(
             } else {
                 ui.label("Select an end face or plane.");
             }
-            if let Some(selected) = w.selected.as_ref().filter(|s| {
-                matches!(s.reference.topology.as_str(), "face" | "plane")
-                    && s.reference.producer.node != current
-            }) && ui.button("Use selected face or plane").clicked()
+            if end.target.is_some()
+                && controls::button(
+                    ui,
+                    target_control,
+                    "selection-input",
+                    &["modeling-action"],
+                    if armed {
+                        "Pick a replacement face…"
+                    } else {
+                        "Change end face"
+                    },
+                    true,
+                    armed,
+                )
+                .clicked()
             {
-                end.target = Some(selected.reference.clone());
-                end.target_body = Some(crate::reference_ui::selected_body(w, selected));
-                changed = true;
+                *requested = Some(!combined);
             }
             changed |= expression(ui, "Offset from End Face", &mut end.end_offset);
         }
         ExtrudeEnd::UpToVertex => {
-            changed |=
-                extrusion_vertex_field(ui, doc, current, "End Vertex", &mut end.target_vertex);
+            if end.target_point.is_some() {
+                ui.label("Model vertex");
+            } else if extrusion_vertex_field(ui, doc, current, "End vertex", &mut end.target_vertex)
+            {
+                end.target_point = None;
+                changed = true;
+            }
+            if end.target_point.is_some() || end.target_vertex.is_some() {
+                if controls::button(
+                    ui,
+                    target_control,
+                    "selection-input",
+                    &["modeling-action"],
+                    if armed {
+                        "Pick a replacement vertex…"
+                    } else {
+                        "Change end vertex"
+                    },
+                    true,
+                    armed,
+                )
+                .clicked()
+                {
+                    *requested = Some(!combined);
+                }
+            } else {
+                ui.label("Pick an end vertex on the model.");
+            }
             changed |= expression(ui, "Offset from End Vertex", &mut end.end_offset);
         }
         ExtrudeEnd::UpToBody => {
