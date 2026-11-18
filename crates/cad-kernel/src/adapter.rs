@@ -2753,11 +2753,7 @@ impl KernelAdapter for MonstertruckAdapter {
                     },
                     start,
                     count: mesh.indices.len() - start,
-                    plane: if matches!(face.surface(), Surface::Plane(_)) {
-                        Some(cad_plane(face))
-                    } else {
-                        None
-                    },
+                    plane: sketch_support_plane(face, self.modeling_tolerances().linear_mm),
                     reference: TopologyRef {
                         producer: self
                             .histories
@@ -3769,6 +3765,52 @@ pub(crate) fn cad_plane(face: &Face) -> CadPlane {
         v: [v.x, v.y, v.z],
     }
 }
+
+/// A sketch attaches to the supporting plane, whose extent is independent
+/// of the trim wires. Imported planar faces can carry a spline surface.
+/// Use the same oriented frame for picking, rebuilding, and extrusion ends.
+pub(crate) fn sketch_support_plane(face: &Face, tolerance: f64) -> Option<CadPlane> {
+    let surface = face.oriented_surface();
+    let domain = match &surface {
+        Surface::Plane(_) => return Some(cad_plane(face)),
+        Surface::BsplineSurface(patch) => patch.range_tuple(),
+        Surface::NurbsSurface(patch) => patch.range_tuple(),
+        _ => return None,
+    };
+    let ((ua, ub), (va, vb)) = domain;
+    let (u, v) = (0.5 * ua + 0.5 * ub, 0.5 * va + 0.5 * vb);
+    let origin = surface.subs(u, v);
+    let normal = surface.normal(u, v).normalize();
+    let along = surface.uder(u, v).normalize();
+    if !origin.to_vec().is_finite() || !normal.is_finite() || !along.is_finite() {
+        return None;
+    }
+    // Positive rational weights place the whole patch inside its control
+    // hull. Honor numeric roundoff, capped by the document modeling residual.
+    let coplanar = |point: Point3| {
+        let delta = point - origin;
+        let roundoff =
+            64. * f64::EPSILON * (point.to_vec().magnitude() + origin.to_vec().magnitude()).max(1.);
+        point.to_vec().is_finite() && delta.dot(normal).abs() <= tolerance.min(roundoff)
+    };
+    let planar =
+        match &surface {
+            Surface::BsplineSurface(patch) => patch
+                .control_points()
+                .iter()
+                .flatten()
+                .all(|p| coplanar(*p)),
+            Surface::NurbsSurface(patch) => patch.control_points().iter().flatten().all(|p| {
+                p.w.is_finite() && p.w > 0. && coplanar(Point3::from_vec(p.truncate() / p.w))
+            }),
+            _ => unreachable!(),
+        };
+    planar.then(|| CadPlane {
+        origin: origin.into(),
+        u: along.into(),
+        v: normal.cross(along).into(),
+    })
+}
 impl MonstertruckAdapter {
     fn reference_plane(
         &self,
@@ -3788,10 +3830,11 @@ impl MonstertruckAdapter {
                     for face in shell.iter() {
                         if let Some(source) = history.faces.get(&face.id())
                             && matches_reference(source, reference, &wanted)?
-                            && matches!(face.surface(), Surface::Plane(_))
-                            && !matches.iter().any(|f: &Face| f.id() == face.id())
+                            && !matches.iter().any(|(id, _)| *id == face.id())
+                            && let Some(plane) =
+                                sketch_support_plane(face, self.modeling_tolerances().linear_mm)
                         {
-                            matches.push(face.clone());
+                            matches.push((face.id(), plane));
                         }
                     }
                 }
@@ -3804,7 +3847,7 @@ impl MonstertruckAdapter {
                 matches.len()
             )));
         }
-        Ok(cad_plane(&matches[0]))
+        Ok(matches.remove(0).1)
     }
 }
 

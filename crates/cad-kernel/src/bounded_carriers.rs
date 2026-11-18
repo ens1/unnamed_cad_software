@@ -4,6 +4,36 @@ use monstertruck::{geometry::prelude::TryIntoHomogeneousBsplineCurve, modeling::
 fn unsupported(message: &str) -> CadError {
     CadError::Unsupported(format!("Boundary traversal: {message}"))
 }
+
+/// Keep an interval expressed in the original carrier's parameters. A native
+/// line resets its domain to [0, 1] after each cut; spline knots stay in place.
+pub(crate) fn interval(mut curve: Curve, low: f64, high: f64) -> Result<Curve> {
+    let (start, end) = curve.range_tuple();
+    if !(start <= low && low < high && high <= end) {
+        return Err(unsupported("The trim interval is outside its source edge"));
+    }
+    if low == start && high == end {
+        return Ok(curve);
+    }
+    if let Curve::Line(line) = curve {
+        let first = if low == start { line.0 } else { line.subs(low) };
+        let last = if high == end { line.1 } else { line.subs(high) };
+        return Ok(Curve::Line(Line(first, last)));
+    }
+    if !matches!(curve, Curve::BsplineCurve(_) | Curve::NurbsCurve(_)) {
+        return Err(unsupported(
+            "Cannot trim this native carrier by its source parameters",
+        ));
+    }
+    if high < end {
+        curve.cut(high);
+    }
+    if low > start {
+        curve = curve.cut(low);
+    }
+    Ok(curve)
+}
+
 pub(crate) fn spans(curve: &Curve) -> Result<Vec<Vec<Vector4>>> {
     if !matches!(
         curve,

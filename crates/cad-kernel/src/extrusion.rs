@@ -1564,8 +1564,11 @@ impl ExtentContext<'_> {
             target,
             self.inputs,
         )?;
-        if matches!(target.surface(), Surface::Plane(_)) {
-            project_face(section, self.axis, &cap_plane(&target)?, offset)
+        if let Some(plane) = crate::adapter::sketch_support_plane(
+            &target,
+            self.adapter.modeling_tolerances().linear_mm,
+        ) {
+            project_face(section, self.axis, &plane, offset)
         } else {
             if offset.abs() > 1e-12 {
                 return Err(CadError::Unsupported("Normal offsets of a curved extrusion end require an exact offset carrier; use zero offset or a separately authored offset surface".into()));
@@ -1585,24 +1588,10 @@ impl ExtentContext<'_> {
                 builder::translated(start, self.axis * positive(self.length(&end.distance)?)?)
             }
             ExtrudeEnd::ThroughAll => {
-                if self.scope.is_empty() {
-                    return Err(invalid("Through All requires an explicit solid-body scope"));
-                }
-                let upper = self
-                    .scope
-                    .iter()
-                    .map(crate::adapter::solid_control_points)
-                    .collect::<Result<Vec<_>>>()?
-                    .into_iter()
-                    .flatten()
-                    .map(|p| p.to_vec().dot(self.axis))
-                    .fold(f64::NEG_INFINITY, f64::max);
                 let origin = anchor(start)?;
+                let (_, upper) = scope_extent(self.scope, origin, self.axis)?;
                 let plane = axis_plane(
-                    origin
-                        + self.axis
-                            * (upper - origin.to_vec().dot(self.axis)
-                                + (self.tolerance * 4.).max(0.001)),
+                    origin + self.axis * (upper + (self.tolerance * 4.).max(0.001)),
                     self.axis,
                 )?;
                 project_face(start, self.axis, &plane, 0.)?
@@ -1709,6 +1698,22 @@ impl ExtentContext<'_> {
         Err(CadError::Unsupported("Several termination faces overlap in the extrusion direction; exact piecewise end-face construction is required".into()))
     }
 }
+fn scope_extent(scope: &[Solid], origin: Point3, axis: Vector3) -> Result<(f64, f64)> {
+    let mut low = f64::INFINITY;
+    let mut high = f64::NEG_INFINITY;
+    for solid in scope {
+        for face in crate::native_bounds::solid(solid)? {
+            let (minimum, maximum) = face.projection(origin, axis)?;
+            low = low.min(minimum);
+            high = high.max(maximum);
+        }
+    }
+    if low > high {
+        return Err(invalid("Through All requires an explicit solid-body scope"));
+    }
+    Ok((low, high))
+}
+
 fn axis_plane(origin: Point3, axis: Vector3) -> Result<Plane> {
     let u = unit(axis.cross(if axis.x.abs() < 0.8 {
         Vector3::unit_x()
@@ -2071,28 +2076,11 @@ pub(crate) fn operation(
                         "Through All Both starts from the sketch plane; use two independent Through All ends for a referenced start",
                     ));
                 }
-                let controls = scope
-                    .iter()
-                    .map(crate::adapter::solid_control_points)
-                    .collect::<Result<Vec<_>>>()?
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>();
-                if controls.is_empty() {
-                    return Err(invalid("Through All Both requires an explicit solid scope"));
-                }
                 let origin = anchor(section)?;
                 let margin = (tolerance * 4.).max(0.001);
-                let lo = controls
-                    .iter()
-                    .map(|p| (*p - origin).dot(axis))
-                    .fold(f64::INFINITY, f64::min)
-                    - margin;
-                let hi = controls
-                    .iter()
-                    .map(|p| (*p - origin).dot(axis))
-                    .fold(f64::NEG_INFINITY, f64::max)
-                    + margin;
+                let (minimum, maximum) = scope_extent(&scope, origin, axis)?;
+                let lo = minimum - margin;
+                let hi = maximum + margin;
                 (
                     project_face(section, axis, &axis_plane(origin + axis * lo, axis)?, 0.)?,
                     project_face(section, axis, &axis_plane(origin + axis * hi, axis)?, 0.)?,

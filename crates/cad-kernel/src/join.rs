@@ -1,6 +1,8 @@
 //! Join opposing planar contact faces without asking a volume Boolean to
 //! classify coincident caps. All boundaries retain their native carriers.
 use crate::adapter::MonstertruckAdapter;
+use crate::native_bounds::Enclosure;
+use crate::planar::BoundaryPlane as PlaneFace;
 use cad_core::{CadError, NodeRef, Result};
 use monstertruck::modeling::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -37,11 +39,6 @@ fn invalid(message: impl std::fmt::Display) -> CadError {
 fn unsupported(message: &str) -> CadError {
     CadError::Unsupported(format!("Planar boss join: {message}"))
 }
-fn finite(point: Point3) -> bool {
-    [point.x, point.y, point.z]
-        .into_iter()
-        .all(|value| value.is_finite() && value.abs() <= 1e12)
-}
 fn admit(work: &mut usize, a: usize, b: usize) -> Result<()> {
     *work = a
         .checked_mul(b)
@@ -65,78 +62,62 @@ fn preflight(solid: &Solid) -> Result<()> {
     crate::split::control_cost(solid, MAX_CONTROLS)?;
     Ok(())
 }
-fn hull(solid: &Solid) -> Result<Option<Vec<Point3>>> {
-    // Conversion of an analytic/implicit surface is not a contact proof.
-    // Native spline surfaces have exact positive homogeneous control hulls.
-    if solid.face_iter().any(|face| {
-        !matches!(
-            face.surface(),
-            Surface::Plane(_) | Surface::BsplineSurface(_) | Surface::NurbsSurface(_)
-        )
-    }) {
-        return Ok(None);
-    }
-    let points = match crate::adapter::solid_control_points(solid) {
-        Ok(points) => points,
+type FaceBound = (FaceId, Enclosure);
+
+fn bounds(solid: &Solid) -> Result<Option<Vec<FaceBound>>> {
+    let enclosures = match crate::native_bounds::solid(solid) {
+        Ok(enclosures) => enclosures,
         Err(CadError::Unsupported(_)) => return Ok(None),
         Err(error) => return Err(error),
     };
-    if points.is_empty() || points.iter().any(|point| !finite(*point)) {
-        return Err(invalid("A finite positive native control hull is required"));
+    if enclosures
+        .iter()
+        .flat_map(Enclosure::points)
+        .any(|p| [p.x, p.y, p.z].into_iter().any(|value| value.abs() > 1e12))
+    {
+        return Err(unsupported(
+            "The contact exceeds its bounded coordinate range",
+        ));
     }
-    Ok(Some(points))
+    Ok(Some(
+        solid.face_iter().map(Face::id).zip(enclosures).collect(),
+    ))
 }
-struct PlaneFace {
-    face: Face,
+
+fn bounds_range(
+    faces: &[FaceBound],
     origin: Point3,
-    normal: Vector3,
+    axis: Vector3,
+    work: &mut usize,
+) -> Result<(f64, f64)> {
+    let mut low = f64::INFINITY;
+    let mut high = f64::NEG_INFINITY;
+    for (_, bound) in faces {
+        admit(work, bound.len(), 1)?;
+        let (minimum, maximum) = bound.projection(origin, axis)?;
+        low = low.min(minimum);
+        high = high.max(maximum);
+    }
+    Ok((low, high))
 }
 fn planar_faces(
     solid: &Solid,
-    hull: &[Point3],
+    bounds: &[FaceBound],
     require_support: bool,
     work: &mut usize,
 ) -> Result<Vec<PlaneFace>> {
     let mut result = Vec::new();
     for face in solid.face_iter() {
-        let Some(vertex) = face.vertex_iter().next() else {
+        let Some(plane) = crate::planar::boundary_plane(face)? else {
             continue;
         };
-        let origin = vertex.point();
-        let normal = face.oriented_surface().normal(0., 0.);
-        let length = normal.magnitude();
-        if !length.is_finite() || length < 1e-12 {
-            continue;
-        }
-        let normal = normal / length;
-        let controls = match crate::extrusion::face_hull(face) {
-            Ok(controls) => controls,
-            Err(CadError::Unsupported(_)) => continue,
-            Err(error) => return Err(error),
-        };
-        if !controls
-            .iter()
-            .all(|point| (*point - origin).dot(normal).abs() <= EPS)
-        {
-            continue;
-        }
         if require_support {
-            admit(work, hull.len(), 2)?;
-            if !hull
-                .iter()
-                .all(|point| (*point - origin).dot(normal) <= EPS)
-                || !hull
-                    .iter()
-                    .any(|point| (*point - origin).dot(normal) < -EPS)
-            {
+            let (low, high) = bounds_range(bounds, plane.origin, plane.normal, work)?;
+            if high > EPS || low >= -EPS {
                 continue;
             }
         }
-        result.push(PlaneFace {
-            face: face.clone(),
-            origin,
-            normal,
-        });
+        result.push(plane);
     }
     Ok(result)
 }
@@ -199,12 +180,11 @@ fn projection_range(points: &[Point3], origin: Point3, axis: Vector3) -> (f64, f
 }
 fn local_clear(
     support: &PlaneFace,
-    stock_faces: &[(FaceId, Vec<Point3>)],
-    tool_hull: &[Point3],
+    stock_faces: &[FaceBound],
+    tool_faces: &[FaceBound],
     work: &mut usize,
 ) -> Result<bool> {
     let [u, v] = frame(support.normal);
-    admit(work, tool_hull.len(), 5)?;
     let axes = [
         Vector3::unit_x(),
         Vector3::unit_y(),
@@ -212,23 +192,27 @@ fn local_clear(
         u,
         v,
     ];
-    let tool_ranges = axes.map(|axis| projection_range(tool_hull, support.origin, axis));
-    for (face, controls) in stock_faces {
+    let mut tool_ranges = Vec::with_capacity(axes.len());
+    for axis in axes {
+        tool_ranges.push(bounds_range(tool_faces, support.origin, axis, work)?);
+    }
+    for (face, bound) in stock_faces {
         if *face == support.face.id() {
             continue;
         }
-        admit(work, controls.len(), 6)?;
-        if controls
-            .iter()
-            .all(|point| (*point - support.origin).dot(support.normal) <= EPS)
-        {
+        admit(work, bound.len(), axes.len() + 1)?;
+        if bound.projection(support.origin, support.normal)?.1 <= EPS {
             continue;
         }
-        if !axes.into_iter().enumerate().any(|(index, axis)| {
-            let (alo, ahi) = projection_range(controls, support.origin, axis);
-            let (blo, bhi) = tool_ranges[index];
-            ahi < blo - EPS || bhi < alo - EPS
-        }) {
+        let mut separated = false;
+        for (axis, &(blo, bhi)) in axes.iter().zip(&tool_ranges) {
+            let (alo, ahi) = bound.projection(support.origin, *axis)?;
+            if ahi < blo - EPS || bhi < alo - EPS {
+                separated = true;
+                break;
+            }
+        }
+        if !separated {
             return Ok(false);
         }
     }
@@ -577,13 +561,12 @@ pub(crate) fn contact(stock: &Solid, tool: &Solid) -> Result<Option<ContactOutpu
     }
     preflight(stock)?;
     preflight(tool)?;
-    let (Some(stock_hull), Some(tool_hull)) = (hull(stock)?, hull(tool)?) else {
+    let (Some(stock_faces), Some(tool_faces)) = (bounds(stock)?, bounds(tool)?) else {
         return Ok(None);
     };
     let mut hull_work = 0;
-    let stock_planes = planar_faces(stock, &stock_hull, false, &mut hull_work)?;
-    let tool_planes = planar_faces(tool, &tool_hull, true, &mut hull_work)?;
-    let mut stock_faces = None;
+    let stock_planes = planar_faces(stock, &stock_faces, false, &mut hull_work)?;
+    let tool_planes = planar_faces(tool, &tool_faces, true, &mut hull_work)?;
     let mut work = stock_planes
         .len()
         .checked_mul(tool_planes.len())
@@ -601,38 +584,18 @@ pub(crate) fn contact(stock: &Solid, tool: &Solid) -> Result<Option<ContactOutpu
             {
                 continue;
             }
-            admit(&mut hull_work, stock_hull.len() + tool_hull.len(), 1)?;
             // The tool occupies only the outgoing side of its contact cap.
-            if !tool_hull
-                .iter()
-                .all(|point| (*point - support.origin).dot(support.normal) >= -EPS)
-            {
+            if bounds_range(&tool_faces, support.origin, support.normal, &mut hull_work)?.0 < -EPS {
                 continue;
             }
-            if !stock_hull
-                .iter()
-                .all(|point| (*point - support.origin).dot(support.normal) <= EPS)
-            {
-                if stock_faces.is_none() {
-                    stock_faces = Some(
-                        stock
-                            .face_iter()
-                            .map(|face| Ok((face.id(), crate::extrusion::face_hull(face)?)))
-                            .collect::<Result<Vec<_>>>()?,
-                    );
-                }
+            if bounds_range(&stock_faces, support.origin, support.normal, &mut hull_work)?.1 > EPS {
                 // On a stepped stock or after another boss, a globally
                 // supporting plane is unavailable. Every old boundary on the
                 // outgoing side must instead be strictly separated from the
                 // entire connected tool's exact native hull. Together with an
                 // outgoing contact in the exposed face this rules out crossing
                 // into old material anywhere along the new boss.
-                if !local_clear(
-                    support,
-                    stock_faces.as_ref().unwrap(),
-                    &tool_hull,
-                    &mut hull_work,
-                )? {
+                if !local_clear(support, &stock_faces, &tool_faces, &mut hull_work)? {
                     continue;
                 }
             }

@@ -106,6 +106,182 @@ struct Stock {
 fn height(frame: &Frame, p: Point3) -> f64 {
     (p - frame.origin).dot(frame.normal)
 }
+
+/// A partial cap join can split one end of an existing wall while its other
+/// end remains a single edge. Recognize the original extrusion strip only if
+/// both horizontal chains traverse its full native interval once, in order.
+fn same_chain(whole: &Edge, chain: &[Edge], control_count: &mut usize) -> Result<bool> {
+    if let [edge] = chain {
+        return crate::join::matching_edge(whole, edge);
+    }
+    let curve = whole.oriented_curve();
+    let controls = crate::extrusion::curve_hull(&curve)?.len();
+    *control_count = control_count.saturating_add(controls.saturating_mul(chain.len()));
+    if *control_count > MAX_CONTROLS {
+        return Ok(false);
+    }
+    let (mut previous, end) = curve.range_tuple();
+    for (i, edge) in chain.iter().enumerate() {
+        let next = if i + 1 == chain.len() {
+            end
+        } else if let Some(next) = curve.search_parameter(edge.back().point(), None, 100) {
+            next
+        } else {
+            return Ok(false);
+        };
+        if !(previous < next && next <= end)
+            || curve.subs(previous).distance(edge.front().point()) > EPS
+            || curve.subs(next).distance(edge.back().point()) > EPS
+        {
+            return Ok(false);
+        }
+        let piece = crate::bounded_carriers::interval(curve.clone(), previous, next)?;
+        let piece = Edge::try_new(edge.front(), edge.back(), piece).map_err(invalid)?;
+        if !crate::join::matching_edge(&piece, edge)? {
+            return Ok(false);
+        }
+        previous = next;
+    }
+    Ok(!chain.is_empty())
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum StripRun {
+    Lower,
+    Rising,
+    Upper,
+    Falling,
+}
+
+fn segmented_strip(
+    wire: &Wire,
+    frame: &Frame,
+    control_count: &mut usize,
+) -> Result<Option<(f64, f64, Edge)>> {
+    if wire.len() > 1024 {
+        return Ok(None);
+    }
+    let mut low = f64::INFINITY;
+    let mut high = f64::NEG_INFINITY;
+    for edge in wire {
+        let p = edge.front().point();
+        if !finite(p) {
+            return Ok(None);
+        }
+        let z = height(frame, p);
+        low = low.min(z);
+        high = high.max(z);
+    }
+    if high - low <= EPS {
+        return Ok(None);
+    }
+    // The four runs around an oriented strip are bottom, up, top, down.
+    let mut runs = Vec::with_capacity(wire.len());
+    for edge in wire {
+        let a = edge.front().point();
+        let b = edge.back().point();
+        let az = height(frame, a);
+        let bz = height(frame, b);
+        let controls = match crate::extrusion::curve_hull(&edge.curve()) {
+            Ok(points) => points,
+            Err(CadError::Unsupported(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        *control_count = control_count.saturating_add(controls.len());
+        if *control_count > MAX_CONTROLS || controls.iter().any(|p| !finite(*p)) {
+            return Ok(None);
+        }
+        let run = if (bz - az).abs() <= EPS {
+            let (run, z) = if (az - low).abs() <= EPS {
+                (StripRun::Lower, low)
+            } else if (az - high).abs() <= EPS {
+                (StripRun::Upper, high)
+            } else {
+                return Ok(None);
+            };
+            if controls.iter().any(|p| (height(frame, *p) - z).abs() > EPS)
+                || frame.segment(edge)?.is_none()
+            {
+                return Ok(None);
+            }
+            run
+        } else {
+            if (b - a).cross(frame.normal).magnitude() > EPS
+                || crate::bounded_carriers::line(&edge.curve()).is_err()
+            {
+                return Ok(None);
+            }
+            if az < bz {
+                StripRun::Rising
+            } else {
+                StripRun::Falling
+            }
+        };
+        runs.push((run, edge));
+    }
+    let Some(start) = (0..runs.len()).find(|&i| {
+        runs[i].0 == StripRun::Lower
+            && runs[(i + runs.len() - 1) % runs.len()].0 == StripRun::Falling
+    }) else {
+        return Ok(None);
+    };
+    runs.rotate_left(start);
+    let mut groups = runs.chunk_by(|a, b| a.0 == b.0);
+    let [Some(bottom), Some(up), Some(top), Some(down), None] =
+        std::array::from_fn(|_| groups.next())
+    else {
+        return Ok(None);
+    };
+    if up[0].0 != StripRun::Rising || top[0].0 != StripRun::Upper || down[0].0 != StripRun::Falling
+    {
+        return Ok(None);
+    }
+    let delta = frame.normal * (high - low);
+    let lower: Vec<_> = bottom.iter().map(|p| p.1.clone()).collect();
+    let upper: Vec<_> = top.iter().rev().map(|p| p.1.inverse()).collect();
+    for (run, anchor) in [(up, lower.last().unwrap().back()), (down, lower[0].front())] {
+        if run.iter().any(|(_, edge)| {
+            (edge.front().point() - anchor.point())
+                .cross(frame.normal)
+                .magnitude()
+                > EPS
+                || (edge.back().point() - anchor.point())
+                    .cross(frame.normal)
+                    .magnitude()
+                    > EPS
+        }) {
+            return Ok(None);
+        }
+    }
+    let whole = match (&lower[..], &upper[..]) {
+        ([edge], _) => edge.clone(),
+        (_, [edge]) => builder::translated(edge, -delta),
+        _ => {
+            let first = &lower[0];
+            let front = first.front();
+            let back = lower.last().unwrap().back();
+            if front.point().distance(back.point()) <= EPS {
+                return Ok(None);
+            }
+            if crate::bounded_carriers::line(&first.curve()).is_ok() {
+                builder::line(front, back)
+            } else {
+                let through = first.back().point();
+                let Ok(edge) = builder::try_circle_arc(front, back, through) else {
+                    return Ok(None);
+                };
+                edge
+            }
+        }
+    };
+    if (lower.len() != 1 && !same_chain(&whole, &lower, control_count)?)
+        || !same_chain(&builder::translated(&whole, delta), &upper, control_count)?
+    {
+        return Ok(None);
+    }
+    Ok(Some((low, high, whole)))
+}
+
 fn recognize(body: &Solid, side: usize, frame: &Frame) -> Result<Option<Stock>> {
     let mut walls = Vec::new();
     let mut caps = Vec::new();
@@ -143,67 +319,22 @@ fn recognize(body: &Solid, side: usize, frame: &Frame) -> Result<Option<Stock>> 
             }
         }
         let boundaries = face.boundaries();
-        if boundaries.len() != 1 || boundaries[0].len() != 4 || !translation(face, frame.normal) {
+        if boundaries.len() != 1 || !translation(face, frame.normal) {
             return Ok(None);
         }
-        let mut horizontal = Vec::new();
-        let mut vertical = 0;
-        for edge in &boundaries[0] {
-            let a = edge.front().point();
-            let b = edge.back().point();
-            if !finite(a) || !finite(b) {
-                return Ok(None);
-            }
-            let az = height(frame, a);
-            let bz = height(frame, b);
-            if (az - bz).abs() <= EPS {
-                let points = match crate::extrusion::curve_hull(&edge.curve()) {
-                    Ok(points) => points,
-                    Err(CadError::Unsupported(_)) => return Ok(None),
-                    Err(error) => return Err(error),
-                };
-                control_count = control_count.saturating_add(points.len());
-                if control_count > MAX_CONTROLS {
-                    return Ok(None);
-                }
-                if points
-                    .iter()
-                    .any(|p| !finite(*p) || (height(frame, *p) - az).abs() > EPS)
-                    || frame.segment(edge)?.is_none()
-                {
-                    return Ok(None);
-                }
-                horizontal.push((az, edge.clone()));
-            } else if crate::bounded_carriers::line(&edge.curve()).is_ok()
-                && (b - a).cross(frame.normal).magnitude() <= EPS
-            {
-                vertical += 1;
-            } else {
-                return Ok(None);
-            }
-        }
-        if horizontal.len() != 2 || vertical != 2 {
+        let Some((low, high, lower)) = segmented_strip(&boundaries[0], frame, &mut control_count)?
+        else {
             return Ok(None);
-        }
-        horizontal.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let (low, lower) = &horizontal[0];
-        let (high, upper) = &horizontal[1];
-        if high - low <= EPS {
-            return Ok(None);
-        }
-        let translated = builder::translated(lower, frame.normal * (high - low));
-        if !crate::join::matching_edge(&translated, &upper.inverse())? {
-            return Ok(None);
-        }
-        let edge = builder::translated(lower, -frame.normal * *low);
+        };
+        let edge = builder::translated(&lower, -frame.normal * low);
         // A source's forward direction is always its oriented lower coedge.
         let edge =
             Edge::try_new(edge.front(), edge.back(), edge.oriented_curve()).map_err(invalid)?;
         walls.push(Wall {
             face: face.clone(),
             edge,
-            low: *low,
-            high: *high,
+            low,
+            high,
             side,
         });
     }
@@ -516,14 +647,7 @@ fn arrangement(walls: &[Wall], frame: &Frame, work: &mut usize) -> Result<Arrang
             if controls > MAX_CONTROLS {
                 return Err(unsupported("split curves exceed their control budget"));
             }
-            let mut curve = source.edge.curve();
-            let (start, end) = curve.range_tuple();
-            if hi < end {
-                curve.cut(hi);
-            }
-            if lo > start {
-                curve = curve.cut(lo);
-            }
+            let curve = crate::bounded_carriers::interval(source.edge.curve(), lo, hi)?;
             let edge = Edge::try_new(&vertices[a], &vertices[b], curve).map_err(invalid)?;
             let candidates = endpoints
                 .get(&(edge.front().id(), edge.back().id()))

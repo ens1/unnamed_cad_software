@@ -589,14 +589,8 @@ pub(super) fn contact(
             }
             let front = &vertices.values[a];
             let back = &vertices.values[b];
-            let mut curve = source.edge.curve();
-            let (start, end) = curve.range_tuple();
-            if hi < end {
-                curve.cut(hi);
-            }
-            if lo > start {
-                curve = curve.cut(lo);
-            }
+            let original = source.edge.curve();
+            let (start, end) = original.range_tuple();
             let edge = if lo == start
                 && hi == end
                 && front.id() == source.edge.front().id()
@@ -604,7 +598,8 @@ pub(super) fn contact(
             {
                 source.edge.clone()
             } else {
-                Edge::try_new(front, back, curve).map_err(invalid)?
+                let interval = crate::bounded_carriers::interval(original, lo, hi)?;
+                Edge::try_new(front, back, interval).map_err(invalid)?
             };
             let candidates = by_endpoints
                 .get(&(front.id(), back.id()))
