@@ -832,7 +832,7 @@ pub(crate) fn shortcuts(w: &Workspace) -> [(&'static str, &'static str, &'static
             },
         ),
         ("zoom", "Zoom", "Pinch or Ctrl + scroll"),
-        ("fit-model", "Fit model", "F"),
+        ("fit-model", "Zoom to Fit", "F"),
         ("fit-selection", "Fit selection", "Shift + F"),
     ]
 }

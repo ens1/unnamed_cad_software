@@ -44,6 +44,7 @@ enum Symbol {
     Pattern,
     Mirror,
     Plane,
+    SketchPlane(Orientation),
     Axis,
     Dimension,
     Assembly,
@@ -59,11 +60,14 @@ enum Symbol {
     Appearance,
     Search,
     Fit,
+    Filter,
+    Help,
     ZoomIn,
     ZoomOut,
     Check,
     Close,
     History,
+    Latest,
     Model,
     Edit,
     Graph,
@@ -107,21 +111,29 @@ fn symbol(command: &str) -> Symbol {
         "history" if command.starts_with("presentation.navigation.") => Symbol::History,
         "flow" if command.starts_with("presentation.navigation.") => Symbol::Graph,
         "arrange" if command.starts_with("graph.") => Symbol::Graph,
-        "manager-edit" => Symbol::Edit,
-        "apply" | "finish" | "confirm" => Symbol::Check,
+        "manager-edit" | "edit" | "edit-in-place" | "isolate" if command != "selection.isolate" => {
+            Symbol::Edit
+        }
+        "apply" | "finish" | "confirm" | "finish-editing" => Symbol::Check,
+        "pick-filter" => Symbol::Filter,
+        "navigation-help" | "gesture-help" => Symbol::Help,
+        "sketch-front" => Symbol::SketchPlane(Orientation::Front),
+        "sketch-top" => Symbol::SketchPlane(Orientation::Top),
+        "sketch-right" => Symbol::SketchPlane(Orientation::Right),
         "cancel" | "close" => Symbol::Close,
         "undo" => Symbol::Undo,
         "redo" => Symbol::Redo,
         "save" | "save-as" | "publish" => Symbol::Save,
         "open" => Symbol::Open,
         "new-part" => Symbol::New,
-        "new" if command.starts_with("file.") => Symbol::New,
+        "new" if command.starts_with("file.") || command == "part.new" => Symbol::New,
         "settings" | "controls" => Symbol::Settings,
         "appearances" | "materials" | "lighting" => Symbol::Appearance,
         "commands" => Symbol::Search,
         "fit" | "fit-selection" | "fit-sketch" | "fit-support" | "fit-part-context" => Symbol::Fit,
         "zoom-in" => Symbol::ZoomIn,
         "zoom-out" => Symbol::ZoomOut,
+        "latest" if command == "history.latest" => Symbol::Latest,
         "latest" | "inspect" => Symbol::History,
         "select" => Symbol::Select,
         "line" | "polyline" | "centerline" | "midpoint-line" => Symbol::Line,
@@ -359,6 +371,20 @@ pub fn paint(painter: &egui::Painter, center: Pos2, size: f32, color: Color32, c
             path(&[(4., -7.), (10., 7.), (4., 7.)], true);
         }
         Symbol::Plane => path(&[(-10., 3.), (-3., -7.), (10., -3.), (3., 7.)], true),
+        Symbol::SketchPlane(side) => {
+            let face = match side {
+                Orientation::Top => [(-9., -4.), (0., -9.), (9., -4.), (0., 1.)],
+                Orientation::Right => [(0., 1.), (9., -4.), (9., 6.), (0., 11.)],
+                _ => [(-9., -4.), (0., 1.), (0., 11.), (-9., 6.)],
+            };
+            cube();
+            let points = face.map(|(x, y)| at(x, y)).to_vec();
+            painter.add(egui::Shape::convex_polygon(
+                points,
+                color.gamma_multiply(0.35),
+                stroke,
+            ));
+        }
         Symbol::Axis => {
             line((-10., 8.), (9., -9.));
             circle(0., 0., 5.);
@@ -479,6 +505,33 @@ pub fn paint(painter: &egui::Painter, center: Pos2, size: f32, color: Color32, c
             }
             rect((-4., -4.), (4., 4.));
         }
+        Symbol::Filter => path(
+            &[
+                (-10., -8.),
+                (10., -8.),
+                (3., 0.),
+                (3., 7.),
+                (-2., 10.),
+                (-2., 0.),
+            ],
+            true,
+        ),
+        Symbol::Help => {
+            circle(0., 0., 10.);
+            path(
+                &[
+                    (-3.5, -4.),
+                    (-2., -6.),
+                    (1., -6.),
+                    (3.5, -4.),
+                    (3., -1.5),
+                    (0., 1.),
+                    (0., 3.),
+                ],
+                false,
+            );
+            painter.circle_filled(at(0., 6.), scale, color);
+        }
         Symbol::Check => path(&[(-9., 0.), (-3., 7.), (10., -8.)], false),
         Symbol::Close => {
             line((-7., -7.), (7., 7.));
@@ -487,6 +540,10 @@ pub fn paint(painter: &egui::Painter, center: Pos2, size: f32, color: Color32, c
         Symbol::History => {
             circle(0., 0., 9.);
             path(&[(0., -6.), (0., 0.), (5., 3.)], false);
+        }
+        Symbol::Latest => {
+            arrow((-10., 0.), (5., 0.));
+            line((9., -8.), (9., 8.));
         }
         Symbol::Model => {
             line((-8., -8.), (-8., 9.));

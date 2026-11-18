@@ -797,6 +797,15 @@ pub(crate) fn choose(w: &mut Workspace, plane: Plane, reference: Option<Topology
 }
 pub fn choose_origin(w: &mut Workspace, name: &str) {
     w.active_plane = Some(name.into());
+    // An explicit datum pick supersedes an earlier face or reference plane.
+    w.selected = None;
+    w.geometry_selection.clear();
+    w.candidates.clear();
+    w.context_selection = None;
+    if w.sketch.is_none() {
+        w.view.active_node = None;
+        w.selected_feature_path = None;
+    }
     if w.sketch.as_ref().is_some_and(|s| s.choosing_plane) {
         choose(w, plane(name), None);
     }
@@ -1741,14 +1750,12 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     if w.sketch.as_ref().is_some_and(|s| s.choosing_plane) {
         ui.horizontal_wrapped(|ui| {
             for name in ORIGIN_PLANES {
-                if crate::presentation_controls::button(
+                if crate::sketch_ui::plane_button(
                     ui,
                     &format!("{section_id}::plane:{name}"),
                     "sketch-plane-action",
-                    &["modeling-action", "compact"],
+                    &["modeling-action", "plane-choice", "compact"],
                     name,
-                    true,
-                    false,
                 )
                 .clicked()
                 {

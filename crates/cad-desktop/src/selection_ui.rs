@@ -682,10 +682,62 @@ pub(crate) fn edge_controls(w: &Workspace) -> Vec<cad_core::presentation::Semant
             id: command.clone(), role:"edge-selection-action".into(), label:format!("Remove edge {}", index + 1),
             value:Some(format!("Remove {label} from this feature")), state:"ready".into(), commands:vec![command],
             relationships:vec![feature.id.clone()],
-            data:serde_json::json!({"presentation_control":true,"feature":feature.id,"edge":edge,"input_body":body,"inline_parent":row,"classes":["property-control","edge-remove"]}),
+            data:serde_json::json!({"presentation_control":true,"feature":feature.id,"edge":edge,"input_body":body,"inline_parent":row,"icon_command":"close","classes":["property-control","edge-remove"]}),
         });
     }
     out
+}
+
+/// The row itself focuses the edge. Removal stays a separate, named control.
+fn edge_row_contents(
+    ui: &mut egui::Ui,
+    key: &str,
+    label: &str,
+    summary: &str,
+    resolved: bool,
+    active: bool,
+) -> Option<String> {
+    let focus = format!("selection.edge-focus/{key}");
+    let remove = format!("selection.edge-remove/{key}");
+    let text = if summary == "Edge" || summary.is_empty() {
+        label.to_owned()
+    } else {
+        format!("{label} · {summary}")
+    };
+    ui.horizontal_wrapped(|ui| {
+        let response = controls::button(
+            ui,
+            &focus,
+            "edge-selection-action",
+            &["property-control", "edge-focus"],
+            &text,
+            resolved,
+            active,
+        )
+        .on_hover_text(format!("Focus {label}"))
+        .on_disabled_hover_text("Wait for current input geometry or repair this edge reference");
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, resolved, format!("Focus {text}"))
+        });
+        let remove_response = controls::icon_button(
+            ui,
+            &remove,
+            "edge-selection-action",
+            &["property-control", "edge-remove", "icon-action"],
+            &format!("Remove {label}"),
+            true,
+            false,
+            Some(&|p, c, s, color| crate::command_icons::paint(p, c, s, color, "close")),
+        );
+        if remove_response.clicked() {
+            Some(remove)
+        } else if response.clicked() {
+            Some(focus)
+        } else {
+            None
+        }
+    })
+    .inner
 }
 
 /// Compact bundled composition over the ordinary row and action descriptors.
@@ -732,6 +784,16 @@ pub(crate) fn render_edge_row(
             )
         }
     });
+    let Some(key) = element.id.strip_prefix("edge-selection/") else {
+        return false;
+    };
+    let resolved = element.data["nativeEdge"]["resolved"]
+        .as_bool()
+        .unwrap_or(false);
+    let active = element.data["feature"]
+        .as_str()
+        .zip(w.selected.as_ref())
+        .is_some_and(|(feature, pick)| edge_key(feature, &pick.reference) == key);
     let mut clicked = None;
     let mut render = |ui: &mut egui::Ui| {
         ui.scope(|ui| {
@@ -744,44 +806,14 @@ pub(crate) fn render_edge_row(
                 ui.set_min_height(size.y);
             }
             controls::frame_from_properties(ui, &props).show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    let text = element
-                        .value
-                        .as_ref()
-                        .map(|summary| format!("{} · {summary}", element.label))
-                        .unwrap_or_else(|| element.label.clone());
-                    controls::label(
-                        ui,
-                        &format!("{}:label", element.id),
-                        "edge-selection-label",
-                        &classes,
-                        &text,
-                        &element.state,
-                    );
-                    for action in element.action_descriptors() {
-                        let focus = action.command.starts_with("selection.edge-focus/");
-                        let action_classes = [
-                            "property-control",
-                            if focus { "edge-focus" } else { "edge-remove" },
-                        ];
-                        let response = controls::button(
-                            ui,
-                            &action.command,
-                            "edge-selection-action",
-                            &action_classes,
-                            &action.label,
-                            action.enabled,
-                            false,
-                        )
-                        .on_hover_text(format!("{} {}", action.label, element.label))
-                        .on_disabled_hover_text(
-                            action.disabled_reason.as_deref().unwrap_or(&action.label),
-                        );
-                        if response.clicked() {
-                            clicked = Some(action.command);
-                        }
-                    }
-                });
+                clicked = edge_row_contents(
+                    ui,
+                    key,
+                    &element.label,
+                    element.value.as_deref().unwrap_or(""),
+                    resolved,
+                    active,
+                );
             });
         });
     };
@@ -1035,57 +1067,18 @@ pub(crate) fn edge_picker(
         let key = edge_key(feature, edge);
         let (summary, metadata) = edge_summary(w, body, edge);
         let resolved = metadata["resolved"].as_bool().unwrap_or(false);
-        ui.push_id(&key, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                controls::label(
-                    ui,
-                    &format!("edge-selection/{key}:label"),
-                    "edge-selection-label",
-                    &["property-control", "edge-selection-row"],
-                    &format!("Edge {} · {summary}", index + 1),
-                    if resolved { "selected" } else { "unresolved" },
-                );
-                let active = w
-                    .selected
-                    .as_ref()
-                    .is_some_and(|pick| same_edge(&pick.reference, edge));
-                if controls::button(
-                    ui,
-                    &format!("selection.edge-focus/{key}"),
-                    "edge-selection-action",
-                    &["property-control", "edge-focus"],
-                    "Focus",
-                    resolved,
-                    active,
-                )
-                .on_hover_text(format!(
-                    "Focus and highlight Edge {} · {summary}",
-                    index + 1
-                ))
-                .on_disabled_hover_text(
-                    "Wait for current input geometry or repair this edge reference",
-                )
-                .clicked()
-                    && let Err(error) = focus_edge(w, body, edge)
-                {
-                    w.status = error.to_string();
-                }
-                if controls::button(
-                    ui,
-                    &format!("selection.edge-remove/{key}"),
-                    "edge-selection-action",
-                    &["property-control", "edge-remove"],
-                    "Remove",
-                    true,
-                    false,
-                )
-                .on_hover_text("Remove edge from this draft")
-                .clicked()
-                {
-                    remove = Some(index);
-                }
-            })
-        });
+        let active = w
+            .selected
+            .as_ref()
+            .is_some_and(|pick| same_edge(&pick.reference, edge));
+        let label = format!("Edge {}", index + 1);
+        if let Some(command) = edge_row_contents(ui, &key, &label, &summary, resolved, active) {
+            if command.starts_with("selection.edge-remove/") {
+                remove = Some(index);
+            } else if let Err(error) = focus_edge(w, body, edge) {
+                w.status = error.to_string();
+            }
+        }
     }
     if let Some(index) = remove {
         edges.remove(index);
@@ -1103,7 +1096,9 @@ pub(crate) fn edge_picker(
         }
         w.rendered_key.clear();
     }
-    ui.small("Click edges to add · ⌘/Shift-click to toggle · click a listed edge to focus");
+    if edges.is_empty() {
+        ui.weak("Select edges on the model");
+    }
     changed
 }
 
@@ -1268,6 +1263,46 @@ fn descriptors(
             .then_some(w.view.active_part.as_deref())
             .flatten(),
     );
+    if let SelectionTarget::Object {
+        role,
+        definition,
+        object,
+    } = target
+        && role == "parameter-field"
+    {
+        let reason = if crate::named_parameter_ui::parameters(w.session.visible(), definition)
+            .is_none_or(|parameters| !parameters.contains_key(object))
+        {
+            Some("This parameter no longer exists")
+        } else if w.dialog.as_deref() == Some("parameter-value")
+            && w.fields
+                .get("editing-parameter")
+                .is_some_and(|editing| editing != &format!("{definition}::{object}"))
+        {
+            Some("Finish editing the current parameter first")
+        } else if w
+            .sketch
+            .as_ref()
+            .is_some_and(|sketch| sketch.choosing_plane)
+            || w.dialog.as_deref() != Some("parameter-value")
+                && ((w.tool_checkpoint.is_some() || w.session.draft.is_some())
+                    && w.sketch.is_none()
+                    || w.sketch.is_some()
+                        && w.dialog.as_deref().is_some_and(|dialog| dialog != "sketch"))
+        {
+            Some("Finish the current operation before editing a parameter")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            for action in &mut actions {
+                action.state = "disabled".into();
+                action.value = Some(reason.into());
+                action.data["disabled_reason"] = reason.into();
+                action.data["enabled"] = false.into();
+            }
+        }
+    }
     if actions.iter().any(|action| {
         action
             .commands
@@ -1353,6 +1388,25 @@ fn descriptors(
     for action in &mut actions {
         cad_core::selection_actions::menu_metadata(action);
     }
+    if !w.has_assembly_context() {
+        let geometry = matches!(target, SelectionTarget::Geometry { .. });
+        actions.retain_mut(|action| {
+            let occurrence_action = action.commands.iter().any(|command| {
+                matches!(
+                    command.as_str(),
+                    "selection.edit-in-place" | "selection.isolate"
+                )
+            });
+            if occurrence_action {
+                let reason = "Open an assembly and select a component";
+                action.state = "disabled".into();
+                action.value = Some(reason.into());
+                action.data["disabled_reason"] = reason.into();
+                action.data["menu"]["primary"] = false.into();
+            }
+            occurrence_action || !geometry || action.data["group"].as_str() != Some("Component")
+        });
+    }
     actions
 }
 
@@ -1393,9 +1447,6 @@ pub(crate) fn feature_selected_at(
     path: Option<Vec<cad_core::Id>>,
 ) {
     w.geometry_selection.clear();
-    if response.double_clicked() {
-        crate::history::latest(w);
-    }
     w.selection_popup = None;
     w.selected_feature_path = path;
     if w.sketch.as_ref().is_some_and(|s| s.choosing_plane)
@@ -1489,17 +1540,8 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
     if props.get("display").is_some_and(|v| v == "none") {
         return;
     }
-    let number = |key: &str, default: f32| {
-        props
-            .get(key)
-            .and_then(|v| v.trim_end_matches("px").parse::<f32>().ok())
-            .filter(|v| v.is_finite())
-            .unwrap_or(default)
-    };
-    let width = number("width", 232.)
-        .max(number("min-width", 0.))
-        .min(number("max-width", ctx.content_rect().width()))
-        .max(0.);
+    let number = |key, default| controls::number(&props, key, default);
+    let width = menu_width(&props, ctx.content_rect().width());
     let mut frame =
         egui::Frame::popup(&ctx.global_style()).inner_margin(number("padding", 8.).max(0.));
     if let Some(color) = props.get("background").and_then(|v| ui::color(v)) {
@@ -1582,17 +1624,20 @@ fn title(w: &Workspace, target: &SelectionTarget) -> String {
                 "plane" => "Plane",
                 "axis" => "Axis",
                 "point" => "Point",
-                _ => "Face",
+                "face" => "Face",
+                "coordinate_system" => "Coordinate system",
+                _ => "Geometry",
             }
         ),
         SelectionTarget::Feature { .. } => name.into(),
-        SelectionTarget::Sketch { entities, .. } => {
-            if entities.is_empty() {
-                "Sketch".into()
-            } else {
-                format!("Sketch · {} selected", entities.len())
-            }
-        }
+        SelectionTarget::Sketch {
+            sketch, entities, ..
+        } => w
+            .sketch
+            .as_ref()
+            .filter(|s| &s.sketch_id == sketch && &s.selection == entities)
+            .and_then(crate::sketch_ui::selection_label)
+            .unwrap_or_else(|| name.into()),
         SelectionTarget::Reference { reference, .. } => reference.clone(),
         SelectionTarget::Object {
             role,
@@ -1617,63 +1662,79 @@ fn title(w: &Workspace, target: &SelectionTarget) -> String {
     }
 }
 
+fn menu_width(props: &BTreeMap<String, String>, screen: f32) -> f32 {
+    let available = (screen - 2. * controls::number(props, "padding", 8.).max(0.)).max(0.);
+    controls::length(props, "width", available, 232.)
+        .max(controls::length(props, "min-width", available, 0.))
+        .min(controls::length(props, "max-width", available, available))
+        .clamp(0., available)
+}
+
 pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) -> bool {
+    let parent = controls::current_target();
+    if parent
+        .as_ref()
+        .is_some_and(|p| p.node.id == "selection-popup")
+    {
+        // The anchored viewport popup already supplies its authored size and parent.
+        return selection_contents(ui, w, target);
+    }
+    let mut render = |ui: &mut egui::Ui| {
+        if egui::containers::menu::is_in_menu(ui) {
+            let props = controls::properties("selection-popup", "selection-actions", &[], "ready");
+            ui.set_width(menu_width(&props, ui.ctx().content_rect().width()));
+        }
+        selection_contents(ui, w, target)
+    };
+    if let Some(parent) = parent {
+        controls::with_target(
+            parent.child("selection-popup", "selection-actions", &[], "ready"),
+            ui,
+            render,
+        )
+    } else {
+        render(ui)
+    }
+}
+
+fn selection_contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) -> bool {
     let actions = descriptors(w, target);
     if actions.is_empty() {
         ui.weak("Selection is no longer available");
         return false;
     }
     let title = title(w, target);
-    let dismissed = ui
-        .horizontal(|ui| {
-            let dismiss = controls::properties(
-                "selection-popup.dismiss",
-                "dismiss-action",
-                &["menu-item"],
-                "ready",
-            );
-            let dismiss_width = controls::length(&dismiss, "width", ui.available_width(), 24.)
-                .max(controls::number(&dismiss, "min-width", 0.))
-                .min(ui.available_width());
-            let available =
-                (ui.available_width() - dismiss_width - ui.spacing().item_spacing.x).max(0.);
-            let title_props =
-                controls::properties("selection-popup.title", "selection-title", &[], "ready");
-            let title_width =
-                controls::length(&title_props, "width", available, available).min(available);
-            controls::bounded_label(
-                ui,
-                "selection-popup.title",
-                "selection-title",
-                &[],
-                &title,
-                "ready",
-                title_width,
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if controls::button(
-                    ui,
-                    "selection-popup.dismiss",
-                    "dismiss-action",
-                    &["menu-item"],
-                    "×",
-                    true,
-                    false,
-                )
-                .on_hover_text("Dismiss actions · Esc")
-                .clicked()
-                {
-                    ui.close();
-                    true
-                } else {
-                    false
-                }
+    let in_menu = egui::containers::menu::is_in_menu(ui);
+    if in_menu {
+        let dismissed = ui
+            .horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let close = controls::icon_button(
+                        ui,
+                        "selection-popup.dismiss",
+                        "dismiss-action",
+                        &["menu-item", "icon-action"],
+                        "Dismiss actions",
+                        true,
+                        false,
+                        Some(&|p, c, s, color| {
+                            crate::command_icons::paint(p, c, s, color, "close")
+                        }),
+                    );
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        selection_title(ui, &title, ui.available_width());
+                    });
+                    close.clicked()
+                })
+                .inner
             })
-            .inner
-        })
-        .inner;
-    if dismissed {
-        return true;
+            .inner;
+        if dismissed {
+            ui.close();
+            return true;
+        }
+    } else {
+        selection_title(ui, &title, ui.available_width());
     }
     let mut direct = vec![];
     let mut groups: BTreeMap<String, Vec<&cad_core::presentation::SemanticElement>> =
@@ -1745,6 +1806,7 @@ pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) 
         }
     }
     direct.sort_by(|a, b| action_order(a).total_cmp(&action_order(b)));
+    let has_direct = !direct.is_empty();
     for element in direct {
         if menu_action(ui, w, target, element) {
             return true;
@@ -1768,7 +1830,7 @@ pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) 
         )
     };
     groups.sort_by(|a, b| group_order(&a.0, &a.1).total_cmp(&group_order(&b.0, &b.1)));
-    if !groups.is_empty() {
+    if has_direct && !groups.is_empty() {
         ui.separator();
     }
     for (group, mut members) in groups {
@@ -1802,19 +1864,20 @@ pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) 
             }
             continue;
         }
-        let response = controls::button(
+        let response = controls::icon_button(
             ui,
             &id,
             "selection-action-group",
-            &["selection-menu-group"],
-            &format!("{group}  ›"),
+            &["selection-menu-group", "submenu-heading"],
+            &group,
             true,
             false,
+            Some(&|p, c, s, color| controls::paint_chevron(p, c, s, color, true)),
         );
         let parent = controls::current_target();
         let parent_width = ui.available_width();
         let mut executed = false;
-        egui::containers::menu::SubMenu::new().show(ui, &response, |ui| {
+        let flyout = |ui: &mut egui::Ui| {
             let render = |ui: &mut egui::Ui| {
                 controls::apply_properties(ui, &props);
                 let available = (ui.ctx().content_rect().width() - 16.).max(0.);
@@ -1851,12 +1914,33 @@ pub fn contents(ui: &mut egui::Ui, w: &mut Workspace, target: &SelectionTarget) 
             } else {
                 render(ui);
             }
-        });
+        };
+        if in_menu {
+            egui::containers::menu::SubMenu::new().show(ui, &response, flyout);
+        } else {
+            egui::Popup::menu(&response)
+                .align(egui::RectAlign::RIGHT_START)
+                .show(flyout);
+        }
         if executed {
             return true;
         }
     }
     false
+}
+
+fn selection_title(ui: &mut egui::Ui, title: &str, available: f32) {
+    let props = controls::properties("selection-popup.title", "selection-title", &[], "ready");
+    let width = controls::length(&props, "width", available, available).min(available);
+    controls::bounded_label(
+        ui,
+        "selection-popup.title",
+        "selection-title",
+        &[],
+        title,
+        "ready",
+        width,
+    );
 }
 
 fn menu_action(
@@ -1866,7 +1950,13 @@ fn menu_action(
     element: &cad_core::presentation::SemanticElement,
 ) -> bool {
     let primary = element.data["menu"]["primary"].as_bool() == Some(true);
-    if controls::button(
+    let Some(command) = element.commands.first() else {
+        return false;
+    };
+    let draw = |painter: &egui::Painter, center, size, color| {
+        crate::command_icons::paint(painter, center, size, color, command);
+    };
+    if controls::icon_button(
         ui,
         &element.id,
         &element.role,
@@ -1878,6 +1968,7 @@ fn menu_action(
         &element.label,
         element.state != "disabled",
         element.state == "selected",
+        primary.then_some(&draw as controls::IconPainter<'_>),
     )
     .on_hover_text(
         element
@@ -1888,13 +1979,51 @@ fn menu_action(
     )
     .on_disabled_hover_text(element.value.as_deref().unwrap_or(&element.label))
     .clicked()
-        && let Some(command) = element.commands.first()
     {
         execute(w, target, command);
-        ui.close();
+        if egui::containers::menu::is_in_menu(ui) {
+            ui.close();
+        }
         true
     } else {
         false
+    }
+}
+
+pub(crate) fn component_path(
+    w: &Workspace,
+    target: &SelectionTarget,
+) -> cad_core::Result<Vec<cad_core::Id>> {
+    if let SelectionTarget::Geometry { path, .. } = target {
+        return Ok(path.clone());
+    }
+    let doc = w.session.visible();
+    let object = target.feature();
+    if let Some(path) = &w.selected_component
+        && path.last().is_some_and(|id| id == object)
+        && cad_core::occurrence_names::path(doc, path).is_some()
+    {
+        return Ok(path.clone());
+    }
+    let owner = doc
+        .assemblies
+        .values()
+        .find(|assembly| {
+            assembly
+                .instances
+                .get(object)
+                .is_some_and(|instance| instance.definition == target.definition())
+        })
+        .ok_or_else(|| cad_core::CadError::Invalid("This component no longer exists".into()))?;
+    let paths = cad_core::component_fork::occurrence_paths(doc, &owner.id, object)?;
+    match paths.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => Err(cad_core::CadError::Invalid(
+            "This component is outside the active assembly".into(),
+        )),
+        _ => Err(cad_core::CadError::Invalid(
+            "Select an occurrence in the assembly tree".into(),
+        )),
     }
 }
 
@@ -1914,6 +2043,18 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
     // topology command to the geometry that is selected now.
     if matches!(target, SelectionTarget::Geometry { .. }) && current(w).as_ref() != Some(target) {
         w.status = "Selection changed. Select the geometry again to show its actions".into();
+        return;
+    }
+    if matches!(command, "selection.edit-in-place" | "selection.isolate") {
+        match component_path(w, target) {
+            Ok(path) => {
+                crate::assembly_tree_ui::edit_selected_part(w, path);
+                if command == "selection.isolate" {
+                    crate::workspace_controls::action(w, "workspace.hide-others");
+                }
+            }
+            Err(error) => w.status = error.to_string(),
+        }
         return;
     }
     if command.starts_with("assembly.weld-") {
@@ -1947,7 +2088,11 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
                 "sketch.new" => {
                     w.view.active_part = Some(definition.clone());
                     w.context_selection = None;
-                    w.active_plane = (reference != "Origin").then(|| reference.clone());
+                    if reference == "Origin" {
+                        w.active_plane = None;
+                    } else {
+                        crate::sketch::choose_origin(w, reference);
+                    }
                     ui::action(w, command);
                 }
                 "feature.split" | "feature.cut-with-plane" => {
@@ -1980,7 +2125,10 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
             role,
         } => {
             w.selection_popup = None;
-            if w.tool_checkpoint.is_none() && w.session.visible().parts.contains_key(definition) {
+            if role != "parameter-field"
+                && w.tool_checkpoint.is_none()
+                && w.session.visible().parts.contains_key(definition)
+            {
                 w.view.active_part = Some(definition.clone());
             }
             if role == "assembly" && w.session.visible().assemblies.contains_key(definition) {
@@ -1997,23 +2145,6 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
                         w.view.pinned.retain(|id| id != object);
                     } else {
                         w.view.pinned.push(object.clone());
-                    }
-                    w.rendered_key.clear();
-                }
-                "selection.isolate" | "selection.edit-in-place" => {
-                    if command == "selection.edit-in-place" {
-                        let path = w
-                            .session
-                            .visible()
-                            .placed_parts()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .find(|placed| placed.path.last() == Some(object))
-                            .map(|placed| placed.path);
-                        w.activate_context(Some(definition.clone()), path);
-                    } else {
-                        w.view.active_instance = Some(object.clone());
-                        w.isolate();
                     }
                     w.rendered_key.clear();
                 }
@@ -2049,18 +2180,28 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
                             crate::mate_ui::begin(w, definition, mate);
                         }
                     } else {
-                        w.fields.insert("graph-parameters".into(), "open".into());
-                        w.fields
-                            .insert("focus-parameter".into(), format!("{definition}::{object}"));
-                        w.fields.insert(
-                            "editing-parameter".into(),
-                            format!("{definition}::{object}"),
-                        );
+                        let Some(parameter) =
+                            crate::named_parameter_ui::parameters(w.session.visible(), definition)
+                                .and_then(|parameters| parameters.get(object))
+                        else {
+                            return;
+                        };
+                        let value = parameter.expression.0.clone();
+                        let key = format!("{definition}::{object}");
                         if w.sketch.is_some() {
+                            w.fields.insert("graph-parameters".into(), "open".into());
                             w.manager_tree = false;
-                        } else {
-                            w.open_editor("properties");
+                        } else if w.dialog.as_deref() != Some("parameter-value") {
+                            w.start_tool();
+                            if w.tool_checkpoint.is_none() {
+                                return;
+                            }
+                            w.dialog_title = "Named parameter".into();
+                            w.open_editor("parameter-value");
                         }
+                        w.fields.insert(key.clone(), value);
+                        w.fields.insert("focus-parameter".into(), key.clone());
+                        w.fields.insert("editing-parameter".into(), key);
                     }
                 }
                 "object.delete" if role == "assembly-mate" => {
@@ -2081,7 +2222,17 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
                     {
                         w.fields.insert("assembly-id".into(), assembly);
                     }
-                    w.open_editor("assembly");
+                    if command == "selection.mate" {
+                        match component_path(w, target) {
+                            Ok(path) => {
+                                crate::assembly_tree_ui::select(w, path);
+                                ui::action(w, "assembly.mate-new");
+                            }
+                            Err(error) => w.status = error.to_string(),
+                        }
+                    } else {
+                        ui::action(w, "assembly.edit");
+                    }
                 }
                 _ => {
                     w.context_selection = None;
@@ -2108,7 +2259,7 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
         w.active_plane = None;
         w.candidates.clear();
     }
-    if (!w.view.isolation && w.tool_checkpoint.is_none()) || command == "selection.edit-in-place" {
+    if !w.view.isolation && w.tool_checkpoint.is_none() {
         w.view.active_part = Some(target.definition().into());
         w.view.active_node = Some(target.feature().into());
     }
@@ -2148,25 +2299,7 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
             w.view.active_part = active;
         }
         "selection.pin" => ui::pin_selected(w),
-        "selection.edit-in-place" => {
-            if let SelectionTarget::Geometry { instance, .. } = target {
-                w.view.active_instance = Some(instance.clone());
-            }
-            if !w.view.isolation {
-                w.isolate();
-            }
-            w.rendered_key.clear();
-        }
-        "selection.isolate" => w.isolate(),
-        "selection.mate" => {
-            let assembly = w
-                .fields
-                .get("assembly-id")
-                .filter(|id| w.session.visible().assemblies.contains_key(*id))
-                .cloned()
-                .unwrap_or_else(|| w.session.visible().root.clone());
-            crate::mate_ui::new(w, &assembly);
-        }
+        "selection.mate" => ui::action(w, "assembly.mate-new"),
         _ => ui::action(w, command),
     }
 }

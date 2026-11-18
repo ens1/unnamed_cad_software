@@ -218,34 +218,49 @@ pub fn picking_controls(ui: &mut egui::Ui, w: &mut Workspace) {
         "reference" => "References only",
         _ => "Selection filter",
     };
-    crate::presentation_controls::menu_button(ui, "viewport.pick-filter-menu", label, |ui| {
-        for control in picking_semantics(w)
-            .into_iter()
-            .filter(|control| control.role == "selection-filter")
-        {
-            let actions = control.action_descriptors();
-            if crate::presentation_controls::button(
-                ui,
-                &control.id,
-                &control.role,
-                &["compact"],
-                &control.label,
-                actions.iter().any(|action| action.enabled),
-                control.state == "selected",
-            )
-            .on_disabled_hover_text(
-                actions
-                    .iter()
-                    .find_map(|action| action.disabled_reason.as_deref())
-                    .unwrap_or_default(),
-            )
-            .clicked()
+    let classes: &[&str] = if current == "all" {
+        &["viewport-control", "icon-action"]
+    } else {
+        &["viewport-control", "active-filter"]
+    };
+    crate::presentation_controls::icon_menu(
+        ui,
+        "viewport.pick-filter-menu",
+        "selection-filter-menu",
+        classes,
+        label,
+        &|p, center, size, color| {
+            crate::command_icons::paint(p, center, size, color, "viewport.pick-filter")
+        },
+        |ui| {
+            for control in picking_semantics(w)
+                .into_iter()
+                .filter(|control| control.role == "selection-filter")
             {
-                picking_action(w, "viewport.pick-filter", Some(&control.data));
-                ui.close();
+                let actions = control.action_descriptors();
+                if crate::presentation_controls::button(
+                    ui,
+                    &control.id,
+                    &control.role,
+                    &["compact", "menu-choice"],
+                    &control.label,
+                    actions.iter().any(|action| action.enabled),
+                    control.state == "selected",
+                )
+                .on_disabled_hover_text(
+                    actions
+                        .iter()
+                        .find_map(|action| action.disabled_reason.as_deref())
+                        .unwrap_or_default(),
+                )
+                .clicked()
+                {
+                    picking_action(w, "viewport.pick-filter", Some(&control.data));
+                    ui.close();
+                }
             }
-        }
-    });
+        },
+    );
 }
 pub fn candidate_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     if w.candidates.len() < 2 {

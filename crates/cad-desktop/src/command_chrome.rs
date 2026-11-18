@@ -494,91 +494,20 @@ pub fn ribbon(ui: &mut egui::Ui, w: &mut Workspace, context: &RenderContext<'_>)
 }
 
 pub fn timeline(ui: &mut egui::Ui, w: &mut Workspace, context: &RenderContext<'_>) {
-    egui::ScrollArea::horizontal()
-        .id_salt((&context.region.id, "history"))
-        .auto_shrink([false, true])
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let painter = |p: &egui::Painter, c, s, col| {
-                    command_icons::paint(p, c, s, col, "history.latest")
-                };
-                if controls::icon_button(
-                    ui,
-                    "timeline:latest",
-                    "timeline-action",
-                    &[],
-                    "Latest model",
-                    true,
-                    w.view.history_cursor.is_none(),
-                    Some(&painter),
-                )
-                .on_hover_text("Return to the latest model")
-                .clicked()
-                {
-                    crate::history::latest(w);
-                }
-                let mut any = false;
-                for element in context
-                    .semantics
-                    .iter()
-                    .filter(|element| element.role == "history-station")
-                {
-                    any = true;
-                    let Some(action) = element.action_descriptors().into_iter().next() else {
-                        continue;
-                    };
-                    let icon = element
-                        .data
-                        .get("icon_command")
-                        .and_then(Value::as_str)
-                        .unwrap_or("feature.extrude");
-                    let painter =
-                        |p: &egui::Painter, c, s, col| command_icons::paint(p, c, s, col, icon);
-                    let label = format!(
-                        "{} · {}",
-                        element.data["index"].as_u64().unwrap_or(0) + 1,
-                        element.label
-                    );
-                    if controls::icon_button(
+    ui.horizontal(|ui| {
+        crate::history::return_control(ui, w, "timeline:latest", "timeline-action");
+        egui::ScrollArea::horizontal()
+            .id_salt((&context.region.id, "history"))
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    crate::history::stations(
                         ui,
-                        &element.id,
-                        "history-station",
-                        &["timeline-station"],
-                        &label,
-                        action.enabled,
-                        element.state == "selected",
-                        Some(&painter),
-                    )
-                    .on_hover_text(format!(
-                        "{label}\n{}",
-                        element
-                            .value
-                            .as_deref()
-                            .unwrap_or("Inspect this point in history")
-                    ))
-                    .on_disabled_hover_text(
-                        action
-                            .disabled_reason
-                            .as_deref()
-                            .unwrap_or("History unavailable"),
-                    )
-                    .clicked()
-                    {
-                        let mut element = element.clone();
-                        element.data = action.arguments;
-                        ui::semantic_action(w, &element, &action.command);
-                    }
-                }
-                if !any {
-                    controls::label(
-                        ui,
-                        "timeline:empty",
-                        "timeline-empty",
-                        &[],
-                        "Your feature history appears here",
-                        "ready",
+                        w,
+                        context.semantics,
+                        crate::history::StationLayout::Timeline,
                     );
-                }
+                });
             });
-        });
+    });
 }

@@ -414,10 +414,47 @@ pub fn button(
     enabled: bool,
     selected: bool,
 ) -> Response {
-    icon_button(ui, id, role, classes, label, enabled, selected, None)
+    let mark = |p: &egui::Painter, center, size, color| {
+        if selected {
+            crate::command_icons::paint(p, center, size, color, "draft.apply");
+        }
+    };
+    icon_button(
+        ui,
+        id,
+        role,
+        classes,
+        label,
+        enabled,
+        selected,
+        classes
+            .contains(&"menu-choice")
+            .then_some(&mark as IconPainter<'_>),
+    )
 }
 
 pub type IconPainter<'a> = &'a dyn Fn(&egui::Painter, egui::Pos2, f32, Color32);
+
+pub fn menu_item(
+    ui: &mut egui::Ui,
+    id: &str,
+    label: &str,
+    shortcut: Option<&str>,
+    enabled: bool,
+    selected: bool,
+) -> Response {
+    button_content(
+        ui,
+        id,
+        "menu-action",
+        &["menu-item"],
+        label,
+        enabled,
+        selected,
+        None,
+        shortcut,
+    )
+}
 
 #[expect(
     clippy::too_many_arguments,
@@ -432,6 +469,24 @@ pub fn icon_button(
     enabled: bool,
     selected: bool,
     icon: Option<IconPainter<'_>>,
+) -> Response {
+    button_content(ui, id, role, classes, label, enabled, selected, icon, None)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the native button has independently styled icon, caption and shortcut"
+)]
+fn button_content(
+    ui: &mut egui::Ui,
+    id: &str,
+    role: &str,
+    classes: &[&str],
+    label: &str,
+    enabled: bool,
+    selected: bool,
+    icon: Option<IconPainter<'_>>,
+    shortcut: Option<&str>,
 ) -> Response {
     let enabled = enabled && ui.is_enabled();
     let state = if !enabled {
@@ -456,6 +511,22 @@ pub fn icon_button(
     if props.get("display").is_some_and(|value| value == "none") {
         return ui.interact(egui::Rect::NOTHING, widget_id, egui::Sense::hover());
     }
+    let shortcut_galley = shortcut.and_then(|keys| {
+        let style = properties(&format!("{id}/shortcut"), "menu-shortcut", &[], state);
+        if style.get("display").is_some_and(|value| value == "none") {
+            return None;
+        }
+        let color = style
+            .get("color")
+            .and_then(|v| crate::ui::color(v))
+            .unwrap_or_else(|| ui.visuals().weak_text_color());
+        let gap = number(&style, "gap", 16.).max(0.);
+        Some((
+            ui.painter()
+                .layout_no_wrap(keys.into(), font(ui, &style), color),
+            gap,
+        ))
+    });
     let font = font(ui, &props);
     let color = props
         .get("color")
@@ -512,7 +583,18 @@ pub fn icon_button(
         "top" => egui::vec2(text.x.max(icon_size), icon_size + icon_gap + text.y),
         _ => egui::vec2(text.x + icon_size + icon_gap, text.y.max(icon_size)),
     };
-    let natural = content_size(text_size(&lines)) + egui::vec2(pad[1] + pad[3], pad[0] + pad[2]);
+    let caption_size = content_size(text_size(&lines));
+    let shortcut_width = shortcut_galley
+        .as_ref()
+        .map_or(0., |(galley, gap)| galley.size().x + gap);
+    let natural = egui::vec2(
+        caption_size.x + shortcut_width,
+        caption_size.y.max(
+            shortcut_galley
+                .as_ref()
+                .map_or(0., |(galley, _)| galley.size().y),
+        ),
+    ) + egui::vec2(pad[1] + pad[3], pad[0] + pad[2]);
     // A popup's first, invisible pass measures its content. Resolving a
     // percentage here would turn egui's provisional area width into the final
     // menu width (600 px by default). Relative widths have no established
@@ -551,6 +633,13 @@ pub fn icon_button(
             f32::MAX,
         ))
         .max(0.);
+    // In a user-narrowed row, give its entire width to the command name.
+    let shortcut_galley = shortcut_galley.filter(|_| natural.x <= visual.x + 0.5);
+    let caption_right_inset = if shortcut_galley.is_some() {
+        shortcut_width
+    } else {
+        0.
+    };
     // Text overflow is an opt-in presentation choice. Keep the full source label
     // in semantic/accessibility data even when a narrow control elides its text.
     let lines = if props
@@ -573,7 +662,8 @@ pub fn icon_button(
                         ..Default::default()
                     },
                 );
-                job.wrap.max_width = (visual.x - pad[1] - pad[3] - inline_icon).max(0.);
+                job.wrap.max_width =
+                    (visual.x - pad[1] - pad[3] - inline_icon - caption_right_inset).max(0.);
                 job.wrap.max_rows = 1;
                 job.wrap.break_anywhere = true;
                 job.break_on_newline = false;
@@ -602,7 +692,22 @@ pub fn icon_button(
     let response = ui.add_enabled(enabled, |ui: &mut egui::Ui| {
         ui.interact(reserved, widget_id, egui::Sense::click())
     });
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    response.widget_info(|| {
+        if selected
+            || classes.contains(&"selectable")
+            || classes.contains(&"menu-choice")
+            || matches!(role, "selection-filter" | "graph-scope" | "history-station")
+        {
+            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, selected, label)
+        } else {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label)
+        }
+    });
+    if let Some(keys) = shortcut {
+        response
+            .ctx
+            .accesskit_node_builder(response.id, |node| node.set_keyboard_shortcut(keys));
+    }
     let pressed = enabled
         && (response.is_pointer_button_down_on()
             || (response.has_focus()
@@ -651,11 +756,18 @@ pub fn icon_button(
             egui::StrokeKind::Inside,
         );
         let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(rect));
+        if let Some((keys, _)) = shortcut_galley {
+            let position = egui::pos2(
+                rect.right() - pad[1] - keys.size().x,
+                rect.center().y - keys.size().y * 0.5,
+            );
+            painter.galley(position, keys, color);
+        }
         let content = content_size(text_size);
         let left = match actual.get("text-align").map(String::as_str) {
             Some("left" | "start") => rect.left() + pad[3],
-            Some("right" | "end") => rect.right() - pad[1] - content.x,
-            _ => rect.center().x - content.x * 0.5,
+            Some("right" | "end") => rect.right() - pad[1] - content.x - caption_right_inset,
+            _ => rect.center().x - (content.x + caption_right_inset) * 0.5,
         };
         let top = rect.center().y - content.y * 0.5;
         if let Some(icon) = icon {
@@ -699,7 +811,9 @@ pub fn icon_button(
         }
     }
     if icon_position == "only" || elided || natural.x > visual.x || natural.y > visual.y {
-        response.on_hover_text(label)
+        response.on_hover_text(
+            shortcut.map_or_else(|| label.into(), |keys| format!("{label} ({keys})")),
+        )
     } else {
         response
     }
@@ -1185,35 +1299,69 @@ pub fn menu_button_as<R>(
     } else {
         &["menu-heading"][..]
     };
-    let chevron = |painter: &egui::Painter, center: egui::Pos2, size: f32, color| {
-        let offset = size * 0.23;
-        let (start, tip, end) = if nested {
-            (
-                egui::vec2(-offset, -offset),
-                egui::vec2(offset, 0.),
-                egui::vec2(-offset, offset),
-            )
-        } else {
-            (
-                egui::vec2(-offset, -0.5 * offset),
-                egui::vec2(0., 0.5 * offset),
-                egui::vec2(offset, -0.5 * offset),
-            )
-        };
-        let stroke = Stroke::new((size * 0.12).max(1.), color);
-        painter.line_segment([center + start, center + tip], stroke);
-        painter.line_segment([center + tip, center + end], stroke);
+    let chevron = |painter: &egui::Painter, center, size, color| {
+        paint_chevron(painter, center, size, color, nested);
     };
-    let response = icon_button(
+    menu_trigger(
         ui,
         id,
         role,
         classes,
         label,
-        true,
-        false,
         (nested || role == "ribbon-group-menu").then_some(&chevron as IconPainter<'_>),
+        content,
     );
+}
+
+pub(crate) fn paint_chevron(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    size: f32,
+    color: Color32,
+    right: bool,
+) {
+    let offset = size * 0.23;
+    let (start, tip, end) = if right {
+        (
+            egui::vec2(-offset, -offset),
+            egui::vec2(offset, 0.),
+            egui::vec2(-offset, offset),
+        )
+    } else {
+        (
+            egui::vec2(-offset, -0.5 * offset),
+            egui::vec2(0., 0.5 * offset),
+            egui::vec2(offset, -0.5 * offset),
+        )
+    };
+    let stroke = Stroke::new((size * 0.12).max(1.), color);
+    painter.line_segment([center + start, center + tip], stroke);
+    painter.line_segment([center + tip, center + end], stroke);
+}
+
+pub fn icon_menu(
+    ui: &mut egui::Ui,
+    id: &str,
+    role: &str,
+    classes: &[&str],
+    label: &str,
+    icon: IconPainter<'_>,
+    content: impl FnOnce(&mut egui::Ui),
+) {
+    menu_trigger(ui, id, role, classes, label, Some(icon), content);
+}
+
+fn menu_trigger<R>(
+    ui: &mut egui::Ui,
+    id: &str,
+    role: &str,
+    classes: &[&str],
+    label: &str,
+    icon: Option<IconPainter<'_>>,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) {
+    let response = icon_button(ui, id, role, classes, label, true, false, icon);
+    let nested = egui::containers::menu::is_in_menu(ui);
     let target = STYLES.with(|snapshot| {
         let snapshot = snapshot.borrow();
         snapshot.target.clone().map(|parent| {

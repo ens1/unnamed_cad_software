@@ -221,7 +221,7 @@ pub struct Workspace {
     pub viewport_size: [u32; 2],
     pub viewport_pixels_per_point: f32,
     pub git_text: String,
-    pub before_isolation: Option<PresentationState>,
+    pub assembly_camera: Option<cad_core::camera_views::Pose>,
     pub sketch: Option<sketch::EditingSketch>,
     pub sketch3d: Option<sketch3d_ui::State>,
     pub active_plane: Option<String>,
@@ -246,7 +246,7 @@ pub struct Workspace {
 impl Workspace {
     fn new() -> Self {
         let mut project = None;
-        let mut status = "Select a plane, then Sketch to begin".to_string();
+        let mut status = "Ready".to_string();
         let mut doc = Document::blank_part("Part1");
         let reset = std::env::args().any(|a| a == "--reset-ui");
         let loaded_preferences = settings_preferences::load(reset);
@@ -392,7 +392,7 @@ impl Workspace {
             viewport_size: [1000, 800],
             viewport_pixels_per_point: 1.,
             git_text: String::new(),
-            before_isolation: None,
+            assembly_camera: None,
             sketch: None,
             sketch3d: None,
             active_plane: None,
@@ -443,13 +443,35 @@ impl Workspace {
     pub fn modeling_tolerances(&self) -> cad_core::tolerance::Modeling {
         self.session.visible().settings.modeling
     }
+    pub(crate) fn has_assembly_context(&self) -> bool {
+        let doc = self.session.visible();
+        doc.assemblies.get(&doc.root).is_some_and(|assembly| {
+            initial_part_context(doc).is_none()
+                || doc.parts.len() > 1
+                || doc.assemblies.len() > 1
+                || assembly.instances.len() > 1
+        })
+    }
+
+    pub(crate) fn leave_part_context(&mut self) {
+        let camera = self.assembly_camera.take();
+        self.activate_context(None, None);
+        if let Some(camera) = camera {
+            camera_views_ui::set_current(self, camera);
+            self.pending_context_focus = false;
+        }
+        self.fields.remove("assembly-id");
+        self.dialog = None;
+        self.manager_tree = true;
+    }
+
     pub fn activate_context(
         &mut self,
         definition: Option<cad_core::Id>,
         path: Option<Vec<cad_core::Id>>,
     ) {
         if definition.is_some() && !self.view.isolation {
-            self.before_isolation = Some(self.view.clone());
+            self.assembly_camera = Some(camera_views_ui::current(self));
         }
         let occurrences = self.session.visible().placed_parts().unwrap_or_default();
         let occurrence = definition.as_ref().and_then(|definition| {
@@ -490,7 +512,7 @@ impl Workspace {
         self.hover_cache = viewport_guides::Cache::default();
         if self.view.active_part.is_none() {
             self.view.isolation = false;
-            self.before_isolation = None;
+            self.assembly_camera = None;
         } else {
             self.view.isolation = true;
         }
@@ -903,24 +925,6 @@ impl Workspace {
             }
         });
         true
-    }
-    pub fn isolate(&mut self) {
-        navigation::stop(self);
-        if self.view.isolation {
-            if let Some(v) = self.before_isolation.take() {
-                let navigation = self.view.navigation.clone();
-                let ui_scale = self.view.ui_scale;
-                let optical = visibility_storage::OpticalState::capture(&self.view);
-                self.view = v;
-                self.view.navigation = navigation;
-                self.view.ui_scale = ui_scale;
-                optical.apply(&mut self.view);
-            }
-        } else {
-            self.before_isolation = Some(self.view.clone());
-            self.view.isolation = true;
-        }
-        self.rendered_key.clear();
     }
     pub fn recover(&mut self) {
         if let Some(document) = self.recovery_draft.take() {

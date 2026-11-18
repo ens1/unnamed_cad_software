@@ -363,7 +363,11 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace, id: &str) {
                         ui,
                         &element.id,
                         "menu-action",
-                        &["menu-item", "theme-choice"],
+                        if element.data["management"] == true {
+                            &["menu-item"][..]
+                        } else {
+                            &["menu-item", "theme-choice", "menu-choice"]
+                        },
                         &element.label,
                         action.enabled,
                         element.data["selected"] == true,

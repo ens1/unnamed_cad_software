@@ -386,6 +386,19 @@
   border: 1px solid var(--active-text);
 }
 
+[role=feature-timeline] .timeline-station { width: auto; icon-size: 16px; }
+[role=history-station].future { color: var(--muted-text); }
+.history-return {
+  background: var(--control-surface);
+  color: var(--ink);
+  border: 1px solid var(--control-border);
+  border-radius: 3px;
+  padding: 3px 7px;
+  min-target-size: 24px;
+  icon-size: 14px;
+}
+.history-return:hover { background: var(--hover-surface); }
+
 [role=history-path] {
   color: #666666;
   stroke-width: 1px;
@@ -541,7 +554,7 @@
   padding: 2px 4px;
   border-radius: 2px;
 }
-[role=sketch-constraint][state=selected], [role=edge-selection-item][state=selected],
+[role=sketch-constraint][state=selected], .edge-focus[state=selected],
 [role=reference-repair-input][state=selected] {
   color: var(--active-text);
   background: #FFE3D2;
@@ -945,3 +958,33 @@
 :focus, :focus[state=selected], :focus[state=active], :focus[state=pressed] {
   border: 2px solid var(--focus);
 }
+
+[role=menu-shortcut], [role=content-library-state], [role=settings-status][state=ready] {
+  color: var(--muted-text);
+}
+[role=menu-shortcut] { font-size: 10px; gap: 16px; }
+[role=selection-filter-menu], .viewport-control.icon-action {
+  height: var(--control-height);
+  min-target-size: var(--target-size);
+  icon-size: 16px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--control-border);
+  background: var(--control-surface);
+}
+[role=selection-filter-menu]:hover, .viewport-control.icon-action:hover { background: var(--hover-surface); }
+[role=selection-filter-menu].active-filter { color: var(--active-text); background: var(--selected-surface); }
+[role=workspace-action].plane-choice {
+  width: auto;
+  min-width: 58px;
+  height: 48px;
+  icon-position: top;
+  icon-size: 22px;
+  gap: 2px;
+  border: 1px solid var(--control-border);
+  background: var(--control-surface);
+}
+[role=workspace-action].plane-choice:hover { background: var(--hover-surface); }
+[role=sketch-plane-action].plane-choice { icon-size: 16px; }
+
+.menu-choice { icon-size: 13px; gap: 6px; icon-position: left; text-align: left; }

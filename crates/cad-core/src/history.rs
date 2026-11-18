@@ -187,6 +187,16 @@ pub fn display_meshes<'a>(
     }
     evaluation.meshes.get(key).into_iter().collect()
 }
+pub fn latest_disabled_reason(view: &PresentationState, editing: bool) -> Option<&'static str> {
+    if editing {
+        Some("Finish the current operation first")
+    } else if view.history_cursor.is_none() {
+        Some("Already viewing the latest model")
+    } else {
+        None
+    }
+}
+
 pub fn project(session: &Session, view: &PresentationState, editing: bool) -> Vec<SemanticElement> {
     let current = session
         .draft
@@ -200,6 +210,15 @@ pub fn project(session: &Session, view: &PresentationState, editing: bool) -> Ve
         .as_ref()
         .and_then(|id| session.visible().parts.get(id))
     {
+        let cursor_index = view
+            .history_cursor
+            .as_ref()
+            .filter(|cursor| cursor.definition == part.id)
+            .and_then(|cursor| {
+                part.features
+                    .iter()
+                    .position(|feature| feature.id == cursor.node)
+            });
         for (index, feature) in part.features.iter().enumerate() {
             let target = part.reference(&feature.id);
             let reason = if editing {
@@ -209,12 +228,40 @@ pub fn project(session: &Session, view: &PresentationState, editing: bool) -> Ve
             } else {
                 Some("History becomes available when the current model finishes evaluating".into())
             };
-            let selected = view.history_cursor.as_ref() == Some(&target);
-            out.push(SemanticElement { id: format!("history:{}::{}", part.id,feature.id), role: "history-station".into(), label: feature.name.clone(),
-                value: reason.clone().or_else(|| Some(format!("Station {} · {}",index+1,feature.operation.name()))),
+            let selected = cursor_index == Some(index);
+            let stage = if selected {
+                "current"
+            } else if cursor_index.is_some_and(|cursor| index > cursor) {
+                "future"
+            } else {
+                "included"
+            };
+            let icon = match &feature.operation {
+                Operation::Extrude { mode, .. } if mode == "cut" => "feature.cut".into(),
+                Operation::Sketch3d { .. } => "sketch3d.new".into(),
+                op => format!("feature.{}", op.name().to_lowercase().replace(' ', "-")),
+            };
+            let step = format!("Step {} of {}", index + 1, part.features.len());
+            let stage_label = match stage {
+                "current" => " · Viewed step",
+                "future" => " · After the viewed step",
+                _ => "",
+            };
+            let accessibility_label = format!("{} · {step}{stage_label}", feature.name);
+            out.push(SemanticElement {
+                id: format!("history:{}::{}", part.id, feature.id),
+                role: "history-station".into(),
+                label: feature.name.clone(),
+                value: Some(reason.clone().unwrap_or_else(|| format!("{step} · {}{stage_label}", feature.operation.name()))),
                 state: if reason.is_some() { "disabled" } else if selected { "selected" } else { "available" }.into(),
-                commands: vec!["history.inspect".into()], relationships: vec![part.id.clone(),feature.id.clone()],
-                data: serde_json::json!({"version":CONTRACT_VERSION,"target":target,"index":index,"enabled":reason.is_none(),"disabled_reason":reason,"suppressed":feature.suppressed,"operation_kind":feature.operation.name(),"icon_command":format!("feature.{}",feature.operation.name().to_lowercase().replace(' ', "-"))}),
+                commands: vec!["history.inspect".into()],
+                relationships: vec![part.id.clone(), feature.id.clone()],
+                data: serde_json::json!({
+                    "version": CONTRACT_VERSION, "target": target, "index": index, "total": part.features.len(),
+                    "enabled": reason.is_none(), "disabled_reason": reason, "suppressed": feature.suppressed,
+                    "operation_kind": feature.operation.name(), "icon_command": icon, "stage": stage,
+                    "classes": [stage], "accessibility_label": accessibility_label,
+                }),
             });
         }
     }
@@ -232,10 +279,17 @@ pub fn project(session: &Session, view: &PresentationState, editing: bool) -> Ve
         })
         .map(|f| format!("History · {}", f.name))
         .unwrap_or_else(|| "Latest model".into());
-    out.push(SemanticElement { id: "history-view".into(), role: "history-view".into(), label, value: None,
-        state: if view.history_cursor.is_some() { "inspecting" } else { "latest" }.into(), commands: vec!["history.latest".into()],
+    let reason = latest_disabled_reason(view, editing);
+    out.push(SemanticElement {
+        id: "history-view".into(),
+        role: "history-view".into(), label, value: None,
+        state: if view.history_cursor.is_some() { "inspecting" } else { "latest" }.into(),
+        commands: vec!["history.latest".into()],
         relationships: view.history_cursor.as_ref().map(|c| vec![c.definition.clone(), c.node.clone()]).unwrap_or_default(),
-        data: serde_json::json!({"version":CONTRACT_VERSION,"cursor":view.history_cursor,"view_only":true}),
+        data: serde_json::json!({
+            "version": CONTRACT_VERSION, "cursor": view.history_cursor, "view_only": true,
+            "actions": [{"command":"history.latest", "label":"Return to latest", "enabled":reason.is_none(), "disabled_reason":reason}],
+        }),
     });
     out
 }

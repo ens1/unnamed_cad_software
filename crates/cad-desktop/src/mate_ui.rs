@@ -328,6 +328,26 @@ fn source_name(doc: &Document, source: &Source) -> String {
         Source::Point { .. } => "Reference origin".into(),
     }
 }
+fn participant_path(doc: &Document, assembly: &Assembly, path: &[Id]) -> Result<(Id, Vec<Id>)> {
+    let mut owner = &doc.root;
+    for (index, key) in path.iter().enumerate() {
+        let parent = doc.assemblies.get(owner).ok_or_else(|| {
+            CadError::Invalid("Selected component path is not part of this assembly".into())
+        })?;
+        let instance = parent
+            .instances
+            .get(key)
+            .ok_or_else(|| CadError::Invalid("Selected component is missing".into()))?;
+        if parent.id == assembly.id {
+            return Ok((key.clone(), path[index + 1..].to_vec()));
+        }
+        owner = &instance.definition;
+    }
+    Err(CadError::Invalid(
+        "Select a component in the assembly being edited".into(),
+    ))
+}
+
 pub(crate) fn selected_reference(w: &Workspace, assembly: &Assembly) -> Result<(Id, Reference)> {
     let selected = w.selected.as_ref().ok_or_else(|| {
         CadError::Invalid(
@@ -336,25 +356,7 @@ pub(crate) fn selected_reference(w: &Workspace, assembly: &Assembly) -> Result<(
         )
     })?;
     let doc = w.session.visible();
-    let mut definition = doc.root.clone();
-    let mut direct = None;
-    for (index, key) in selected.path.iter().enumerate() {
-        let a = doc.assemblies.get(&definition).ok_or_else(|| {
-            CadError::Invalid("Selected component path is not part of this assembly".into())
-        })?;
-        let instance = a
-            .instances
-            .get(key)
-            .ok_or_else(|| CadError::Invalid("Selected component is missing".into()))?;
-        if a.id == assembly.id {
-            direct = Some((key.clone(), selected.path[index + 1..].to_vec()));
-            break;
-        }
-        definition = instance.definition.clone();
-    }
-    let (participant, path) = direct.ok_or_else(|| {
-        CadError::Invalid("Select geometry on a component of the assembly being edited".into())
-    })?;
+    let (participant, path) = participant_path(doc, assembly, &selected.path)?;
     let source = match selected.reference.topology.as_str() {
         "face" if crate::reference_ui::selected_face_planar(w, selected) => Source::Plane {
             plane: PlaneSource::Face {
@@ -669,14 +671,22 @@ pub fn new(w: &mut Workspace, assembly: &str) {
         second_axis: [0., 0., 1.],
         offset: "0 mm".into(),
         first_reference: Some(origin.clone()),
-        second_reference: Some(origin),
+        second_reference: Some(origin.clone()),
         alignment: Alignment::Either,
         lock_rotation: false,
         rotation_offset: "0 deg".into(),
         lock_placement: None,
         relationship: None,
     };
-    if let Ok((participant, reference)) = selected_reference(w, &a) {
+    let selection = if w.selected.is_some() {
+        selected_reference(w, &a).ok()
+    } else {
+        w.selected_component
+            .as_deref()
+            .and_then(|path| participant_path(doc, &a, path).ok())
+            .map(|(participant, path)| (participant, Reference { path, ..origin }))
+    };
+    if let Some((participant, reference)) = selection {
         mate.first = participant;
         mate.second = a
             .instances

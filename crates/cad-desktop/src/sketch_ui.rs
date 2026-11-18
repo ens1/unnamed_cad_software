@@ -130,6 +130,38 @@ pub fn selected_inspector_open(ui: &egui::Ui, id: &str, selected: Option<&str>) 
     (changed && selected.is_some()).then_some(true)
 }
 /// Custom layouts target the same sketch entities as the native viewport.
+pub(crate) fn plane_icon(name: &str) -> &'static str {
+    match name {
+        "Front Plane" => "workspace.sketch-front",
+        "Top Plane" => "workspace.sketch-top",
+        "Right Plane" => "workspace.sketch-right",
+        _ => "feature.plane",
+    }
+}
+
+pub(crate) fn plane_button(
+    ui: &mut egui::Ui,
+    id: &str,
+    role: &str,
+    classes: &[&str],
+    name: &str,
+) -> egui::Response {
+    let paint = |p: &egui::Painter, center, size, color| {
+        crate::command_icons::paint(p, center, size, color, plane_icon(name));
+    };
+    crate::presentation_controls::icon_button(
+        ui,
+        id,
+        role,
+        classes,
+        name.trim_end_matches(" Plane"),
+        true,
+        false,
+        Some(&paint),
+    )
+    .on_hover_text(format!("Sketch on the {name}"))
+}
+
 pub fn semantic_action(w: &mut Workspace, element: &presentation::SemanticElement, command: &str) {
     if element.role == "sketch-plane-action" && command == "sketch.select-entity" {
         if w.sketch
@@ -974,7 +1006,7 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
             role: "sketch-plane-action".into(), label: name.into(), value: None,
             state: "ready".into(), commands: vec!["sketch.select-entity".into()],
             relationships: vec![s.sketch_id.clone()],
-            data: serde_json::json!({"sketch": s.sketch_id, "plane": name, "classes": ["modeling-action", "compact"]}),
+            data: serde_json::json!({"sketch": s.sketch_id, "plane": name, "icon_command":plane_icon(name), "classes": ["modeling-action", "plane-choice", "compact"]}),
         }));
     }
     if let Some(prompt) = next_pick(w) {

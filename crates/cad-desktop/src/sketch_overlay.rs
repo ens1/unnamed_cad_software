@@ -198,8 +198,8 @@ pub fn visibility_controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     ui,
                     &command,
                     "viewport-visibility-toggle",
-                    &["menu-action"],
-                    &format!("{} {label}", if visible { "✓" } else { "  " }),
+                    &["menu-action", "menu-choice"],
+                    label,
                     true,
                     visible,
                 )

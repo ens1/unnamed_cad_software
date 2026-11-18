@@ -440,12 +440,7 @@ pub(crate) fn task_action(w: &mut Workspace, command: &str, data: &serde_json::V
 }
 
 pub(crate) fn in_place(w: &Workspace) -> bool {
-    w.view.isolation
-        && w.session
-            .visible()
-            .properties
-            .get("document_kind")
-            .is_none_or(|kind| kind != "part")
+    w.view.isolation && w.view.active_part.is_some() && w.has_assembly_context()
 }
 
 fn context(w: &Workspace) -> String {
@@ -590,7 +585,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             (
                 "workspace.task-history",
                 "task-section-toggle",
-                "Model history",
+                crate::history::browser_label(w),
                 String::new(),
                 Some("workspace.task-history"),
                 history_open(w),
@@ -598,7 +593,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             (
                 "workspace.task-history-panel",
                 "task-history-panel",
-                "Model history",
+                crate::history::browser_label(w),
                 String::new(),
                 None,
                 history_open(w),
@@ -617,6 +612,20 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "Model context and view controls",
             "viewport-toolbar",
             true,
+        ),
+        (
+            "viewport.pick-filter-menu",
+            "selection-filter-menu",
+            "Selection filter",
+            "selection-filter-menu",
+            w.sketch.is_none() && !crate::sketch3d_ui::active(w),
+        ),
+        (
+            "workspace.component-visibility",
+            "component-visibility-menu",
+            "Other components",
+            "component-visibility-menu",
+            in_place(w) && w.sketch.is_none(),
         ),
         (
             "viewport.start-hint",
@@ -661,11 +670,24 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data: serde_json::json!({"contract":"tcad.presentation.workspace-controls","version":1,"renderer":renderer,"available":available}),
         });
     }
-    for (key, label, gesture) in crate::navigation::shortcuts(w) {
+    out.push(SemanticElement {
+        id: "graph.gesture-help".into(), role: "graph-gesture-help".into(), label: "Graph gestures".into(),
+        state: "ready".into(), value: None, commands: vec![], relationships: vec!["command-manager".into()],
+        data: serde_json::json!({"renderer":"graph-gesture-help","icon_command":"graph.gesture-help"}),
+    });
+    for (prefix, parent, (key, label, gesture)) in crate::navigation::shortcuts(w)
+        .into_iter()
+        .map(|row| ("navigation-help", "viewport.navigation-hint", row))
+        .chain(
+            GRAPH_GESTURES
+                .into_iter()
+                .map(|row| ("graph-help", "graph.gesture-help", row)),
+        )
+    {
         out.push(SemanticElement {
-            id: format!("navigation-help/{key}"), role: "navigation-shortcut".into(),
+            id: format!("{prefix}/{key}"), role: "navigation-shortcut".into(),
             label: label.into(), value: Some(gesture.into()), state: "ready".into(),
-            commands: vec![], relationships: vec!["viewport.navigation-hint".into()],
+            commands: vec![], relationships: vec![parent.into()],
             data: serde_json::json!({"contract":"tcad.presentation.workspace-controls","version":1}),
         });
     }
@@ -710,7 +732,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         (
             "workspace.sketch-start-title",
             "workspace-heading",
-            "Start your first sketch",
+            "Choose a sketch plane",
         ),
         (
             "workspace.sketch-start-description",
@@ -774,7 +796,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         (
             "workspace.hide-others",
             "Hide others",
-            w.view.isolation && w.sketch.is_none(),
+            in_place(w) && w.sketch.is_none(),
             !w.view.ghost_others,
             "viewport.isolation",
         ),
@@ -788,7 +810,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         (
             "workspace.finish-editing",
             "Finish editing",
-            in_place(w) && idle,
+            in_place(w) && idle && w.session.draft.is_none(),
             false,
             "viewport.isolation",
         ),
@@ -826,7 +848,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             label: label.into(), value: (!enabled).then(|| "Unavailable in the current editing context".into()),
             state: if !enabled { "disabled" } else if selected { "selected" } else { "ready" }.into(),
             commands: vec![command.into()], relationships: vec![parent.into()],
-            data: serde_json::json!({"presentation_control":true,"classes":["semantic-control","viewport-control"],"enabled":enabled}),
+            data: serde_json::json!({"presentation_control":true,"classes":if parent == "viewport.start-hint" { vec!["semantic-control","viewport-control","plane-choice"] } else { vec!["semantic-control","viewport-control"] },"enabled":enabled}),
         });
     }
     out
@@ -897,15 +919,39 @@ pub(crate) fn toolbar(ui: &mut egui::Ui, w: &mut Workspace) {
             controls::menu_button(ui, "viewport.orientation-menu", "View", |ui| {
                 crate::cad_ui::view_controls(ui, w)
             });
-            button(ui, w, "viewport.fit", "Fit · F", true, false);
-            if w.sketch.is_none() {
+            let reason = crate::cad_ui::command_disabled_reason(w, "viewport.fit");
+            let fit = |p: &egui::Painter, center, size, color| {
+                crate::command_icons::paint(p, center, size, color, "viewport.fit");
+            };
+            if controls::icon_button(
+                ui,
+                "workspace-control/viewport.fit",
+                "workspace-action",
+                &["viewport-control", "icon-action"],
+                "Zoom to Fit",
+                reason.is_none(),
+                false,
+                Some(&fit),
+            )
+            .on_hover_text("Zoom to Fit (F)")
+            .on_disabled_hover_text(reason.unwrap_or_default())
+            .clicked()
+            {
+                ui::action(w, "viewport.fit");
+            }
+            if w.sketch.is_none() && !crate::sketch3d_ui::active(w) {
                 crate::viewport::picking_controls(ui, w);
             }
         });
     });
     if w.view.history_cursor.is_some() {
         ui.horizontal(|ui| {
-            button(ui, w, "history.latest", "Return to latest", true, false);
+            crate::history::return_control(
+                ui,
+                w,
+                "workspace-control/history.latest",
+                "workspace-action",
+            );
         });
     }
     if w.tool_checkpoint.is_some() && !crate::presentation_composition::task_controls_hosted(w) {
@@ -951,49 +997,29 @@ pub(crate) fn start_hint(ui: &mut egui::Ui, w: &mut Workspace) {
     if !can_offer_sketch_planes(w) {
         return;
     }
-    let first = w
-        .view
-        .active_part
-        .as_ref()
-        .and_then(|part| w.session.visible().parts.get(part))
-        .is_some_and(|part| part.features.is_empty());
     ui.vertical_centered(|ui| {
         controls::label(
             ui,
             "workspace.sketch-start-title",
             "workspace-heading",
             &[],
-            if first {
-                "Start your first sketch"
-            } else {
-                "Start a sketch"
-            },
+            "Choose a sketch plane",
             "ready",
         );
-        controls::label(
-            ui,
-            "workspace.sketch-start-description",
-            "workspace-description",
-            &[],
-            "Choose a plane",
-            "ready",
-        );
-        ui.horizontal(|ui| {
-            for (command, label) in [
-                ("workspace.sketch-front", "Front"),
-                ("workspace.sketch-top", "Top"),
-                ("workspace.sketch-right", "Right"),
-            ] {
-                button(
+        egui::Grid::new(ui.id().with("origin-planes")).show(ui, |ui| {
+            for name in crate::sketch::ORIGIN_PLANES {
+                let command = crate::sketch_ui::plane_icon(name);
+                if crate::sketch_ui::plane_button(
                     ui,
-                    w,
-                    command,
-                    label,
-                    w.sketch.is_none()
-                        && w.tool_checkpoint.is_none()
-                        && w.view.active_part.is_some(),
-                    false,
-                );
+                    &format!("workspace-control/{command}"),
+                    "workspace-action",
+                    &["semantic-control", "viewport-control", "plane-choice"],
+                    name,
+                )
+                .clicked()
+                {
+                    ui::action(w, command);
+                }
             }
         });
     });
@@ -1004,72 +1030,139 @@ pub(crate) fn isolation(ui: &mut egui::Ui, w: &mut Workspace) {
         return;
     }
     ui.horizontal_wrapped(|ui| {
-        button(
-            ui,
-            w,
-            "workspace.ghost-others",
-            "Ghost others",
-            true,
-            w.view.ghost_others,
-        );
-        button(
-            ui,
-            w,
-            "workspace.hide-others",
-            "Hide others",
-            true,
-            !w.view.ghost_others,
-        );
+        let can_finish =
+            crate::cad_ui::command_disabled_reason(w, "workspace.finish-editing").is_none();
         button(
             ui,
             w,
             "workspace.finish-editing",
             "Finish editing",
-            w.tool_checkpoint.is_none(),
+            can_finish,
             false,
         );
-        button(
-            ui,
-            w,
-            "workspace.reference-picking",
-            "Pick references",
-            true,
-            w.fields.contains_key("pick-context-references"),
-        );
-        if !w.view.pinned.is_empty() {
-            button(ui, w, "workspace.clear-pins", "Clear pins", true, false);
+        component_visibility(ui, w);
+    });
+}
+
+pub(crate) fn component_visibility(ui: &mut egui::Ui, w: &mut Workspace) {
+    controls::menu_button_as(
+        ui,
+        "workspace.component-visibility",
+        "ribbon-group-menu",
+        "Other components",
+        |ui| {
+            for (command, label, selected) in [
+                (
+                    "workspace.ghost-others",
+                    "Ghost others",
+                    w.view.ghost_others,
+                ),
+                ("workspace.hide-others", "Hide others", !w.view.ghost_others),
+                (
+                    "workspace.reference-picking",
+                    "Pick references",
+                    w.fields.contains_key("pick-context-references"),
+                ),
+            ] {
+                if command == "workspace.reference-picking" {
+                    ui.separator();
+                }
+                let reason = crate::cad_ui::command_disabled_reason(w, command);
+                if controls::button(
+                    ui,
+                    &format!("workspace-control/{command}"),
+                    "menu-action",
+                    &["menu-item", "menu-choice"],
+                    label,
+                    reason.is_none(),
+                    selected,
+                )
+                .on_disabled_hover_text(reason.unwrap_or_default())
+                .clicked()
+                {
+                    ui.close();
+                    ui::action(w, command);
+                }
+            }
+            if !w.view.pinned.is_empty()
+                && controls::menu_item(
+                    ui,
+                    "workspace-control/workspace.clear-pins",
+                    "Clear pins",
+                    None,
+                    true,
+                    false,
+                )
+                .clicked()
+            {
+                ui.close();
+                ui::action(w, "workspace.clear-pins");
+            }
+        },
+    );
+}
+
+const GRAPH_GESTURES: [(&str, &str, &str); 4] = [
+    ("move", "Move a card", "Drag"),
+    ("edit", "Edit", "Double-click"),
+    ("pan", "Pan", "Scroll"),
+    ("zoom", "Zoom", "Pinch"),
+];
+
+fn gesture_table<'a>(
+    ui: &mut egui::Ui,
+    prefix: &str,
+    rows: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+) {
+    egui::Grid::new(ui.id().with(prefix)).show(ui, |ui| {
+        for (key, label, gesture) in rows {
+            controls::label(
+                ui,
+                &format!("{prefix}/{key}"),
+                "navigation-gesture-label",
+                &[],
+                label,
+                "ready",
+            );
+            controls::label(
+                ui,
+                &format!("{prefix}/{key}/gesture"),
+                "navigation-gesture",
+                &[],
+                gesture,
+                "ready",
+            );
+            ui.end_row();
         }
     });
 }
 
+pub(crate) fn graph_gestures(ui: &mut egui::Ui) {
+    controls::icon_menu(
+        ui,
+        "graph.gesture-help",
+        "navigation-help",
+        &["icon-action"],
+        "Graph gestures",
+        &|p, center, size, color| {
+            crate::command_icons::paint(p, center, size, color, "graph.gesture-help")
+        },
+        |ui| gesture_table(ui, "graph-help", GRAPH_GESTURES),
+    );
+}
+
 pub(crate) fn navigation_hint(ui: &mut egui::Ui, w: &mut Workspace) {
-    controls::menu_button_as(
+    controls::icon_menu(
         ui,
         "viewport.navigation-hint",
         "navigation-help",
+        &["icon-action"],
         "Navigation help",
+        &|p, center, size, color| {
+            crate::command_icons::paint(p, center, size, color, "viewport.navigation-help")
+        },
         |ui| {
-            egui::Grid::new(ui.id().with("navigation-shortcuts")).show(ui, |ui| {
-                for (key, label, gesture) in crate::navigation::shortcuts(w) {
-                    controls::label(
-                        ui,
-                        &format!("navigation-help/{key}"),
-                        "navigation-gesture-label",
-                        &[],
-                        label,
-                        "ready",
-                    );
-                    controls::label(
-                        ui,
-                        &format!("navigation-help/{key}/gesture"),
-                        "navigation-gesture",
-                        &[],
-                        gesture,
-                        "ready",
-                    );
-                    ui.end_row();
-                }
-            });
+            gesture_table(ui, "navigation-help", crate::navigation::shortcuts(w));
             ui.separator();
             let unavailable = crate::cad_ui::command_disabled_reason(w, "controls");
             if controls::button(
@@ -1122,12 +1215,8 @@ pub(crate) fn action(w: &mut Workspace, command: &str) -> bool {
     }
     match command {
         "workspace.selection-actions" => w.open_editor("selection"),
-        "workspace.ghost-others" => {
-            w.view.ghost_others = !w.view.ghost_others;
-            w.rendered_key.clear();
-        }
-        "workspace.hide-others" => {
-            w.view.ghost_others = false;
+        "workspace.ghost-others" | "workspace.hide-others" => {
+            w.view.ghost_others = command == "workspace.ghost-others";
             w.rendered_key.clear();
         }
         "workspace.reference-picking" => {
@@ -1141,7 +1230,7 @@ pub(crate) fn action(w: &mut Workspace, command: &str) -> bool {
             w.candidates.clear();
             w.candidate_index = 0;
         }
-        "workspace.finish-editing" => w.isolate(),
+        "workspace.finish-editing" => w.leave_part_context(),
         "workspace.clear-pins" => {
             w.view.pinned.clear();
             w.rendered_key.clear();

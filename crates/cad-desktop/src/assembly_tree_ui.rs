@@ -284,8 +284,8 @@ pub fn select(w: &mut Workspace, path: Vec<Id>) {
     w.status = format!("Selected {name} · Move, Pattern, or Edit definition");
     w.rendered_key.clear();
 }
-fn edit(w: &mut Workspace, path: Vec<Id>) {
-    if w.tool_checkpoint.is_some() || w.sketch.is_some() {
+pub(crate) fn edit_selected_part(w: &mut Workspace, path: Vec<Id>) {
+    if w.tool_checkpoint.is_some() || w.sketch.is_some() || w.session.draft.is_some() {
         w.status = "Finish the current operation before editing a component".into();
         return;
     }
@@ -293,9 +293,16 @@ fn edit(w: &mut Workspace, path: Vec<Id>) {
         return;
     };
     let definition = instance.definition.clone();
+    let already_editing = w.view.isolation
+        && w.view.active_part.as_ref() == Some(&definition)
+        && w.edge_selection_path.as_ref() == Some(&path);
     select(w, path.clone());
     if w.session.visible().parts.contains_key(&definition) {
-        w.activate_context(Some(definition), Some(path));
+        if !already_editing {
+            w.activate_context(Some(definition), Some(path));
+        }
+        w.dialog = None;
+        w.manager_tree = true;
     } else {
         w.fields.insert("assembly-id".into(), definition);
         w.open_editor("assembly");
@@ -434,7 +441,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                     })
                     .on_disabled_hover_text("Clear the filter to expand or collapse this group");
                     if response.double_clicked() && node.definition.is_some() {
-                        edit(w, node.path.clone());
+                        edit_selected_part(w, node.path.clone());
                     } else if response.clicked() {
                         if node.definition.is_some() {
                             select(w, node.path.clone());
@@ -445,7 +452,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                     if node.definition.is_some() {
                         response.context_menu(|ui| {
                             if ui.button("Edit definition").clicked() {
-                                edit(w, node.path.clone());
+                                edit_selected_part(w, node.path.clone());
                                 ui.close();
                             }
                             if ui.button("Move").clicked() {
@@ -677,7 +684,7 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
     match command {
         "assembly.tree-clear-search" => w.assembly_tree.query.clear(),
         "assembly.tree-select" => select(w, path),
-        "assembly.tree-edit" => edit(w, path),
+        "assembly.tree-edit" => edit_selected_part(w, path),
         "assembly.tree-ground" => ground(w, &path),
         "assembly.tree-rename" => rename(w, &path),
         "assembly.tree-rename-apply"

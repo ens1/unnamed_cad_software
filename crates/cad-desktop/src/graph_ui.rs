@@ -1,31 +1,80 @@
 //! Dependency cards over application-owned semantic elements. Graph layout is presentation data.
-use crate::{Workspace, cad_ui, ui};
+use crate::{
+    Workspace, cad_ui, command_icons, presentation_controls as controls, selection_ui, ui,
+};
 use bevy_egui::egui::{self, FontId, Stroke};
-use cad_core::{Feature, Part, presentation::SemanticElement};
+use cad_core::{Document, Part, presentation::SemanticElement, selection_actions::SelectionTarget};
 use std::collections::{BTreeMap, BTreeSet};
+
+pub(crate) fn scope_reason(w: &Workspace, choice: &str) -> Option<&'static str> {
+    if choice.eq_ignore_ascii_case("features") && w.view.active_part.is_none() {
+        Some("Open a part to see its features")
+    } else if choice.eq_ignore_ascii_case("assembly") && !w.has_assembly_context() {
+        Some("Open an assembly to see its relationships")
+    } else {
+        None
+    }
+}
+
+pub(crate) fn scope(w: &Workspace) -> &'static str {
+    if w.view.active_part.is_none()
+        || w.view.graph_scope == "Assembly" && scope_reason(w, "Assembly").is_none()
+    {
+        "Assembly"
+    } else {
+        "Features"
+    }
+}
+
+fn toolbar(ui: &mut egui::Ui, w: &mut Workspace) {
+    ui.horizontal_wrapped(|ui| {
+        let actual = scope(w);
+        controls::menu_button(ui, "graph.scope", actual, |ui| {
+            for choice in ["Features", "Assembly"] {
+                let command = format!("presentation.graph-scope.{}", choice.to_lowercase());
+                let reason = cad_ui::command_disabled_reason(w, &command);
+                if controls::menu_item(
+                    ui,
+                    &command,
+                    choice,
+                    None,
+                    reason.is_none(),
+                    actual == choice,
+                )
+                .on_disabled_hover_text(reason.unwrap_or_default())
+                .clicked()
+                {
+                    ui.close();
+                    ui::action(w, &command);
+                }
+            }
+        });
+        let arrange = "graph.arrange";
+        let reason = cad_ui::command_disabled_reason(w, arrange);
+        if controls::icon_button(
+            ui,
+            arrange,
+            "graph-action",
+            &["icon-action"],
+            "Arrange graph",
+            reason.is_none(),
+            false,
+            Some(&|p, c, s, color| command_icons::paint(p, c, s, color, arrange)),
+        )
+        .on_hover_text("Arrange cards and reset the graph view")
+        .on_disabled_hover_text(reason.unwrap_or_default())
+        .clicked()
+        {
+            ui::action(w, arrange);
+        }
+    });
+}
 
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace, part: Option<&Part>) {
     let doc = w.session.visible().clone();
-    ui.horizontal(|ui| {
-        ui.strong("Relationships");
-        egui::ComboBox::from_id_salt("graph-scope")
-            .selected_text(if w.view.graph_scope == "Assembly" {
-                "Assembly"
-            } else {
-                "Features"
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut w.view.graph_scope, "Features".into(), "Features");
-                ui.selectable_value(&mut w.view.graph_scope, "Assembly".into(), "Assembly");
-            });
-        if ui.small_button("Arrange").clicked() {
-            w.view.graph_positions.clear();
-            w.view.graph_pan = [0.; 2];
-            w.view.graph_zoom = 1.;
-        }
-    });
+    toolbar(ui, w);
     let all = cad_core::presentation::project(&w.session, None);
-    let assembly_scope = w.view.graph_scope == "Assembly" || part.is_none();
+    let assembly_scope = scope(w) == "Assembly" || part.is_none();
     let mut nodes: Vec<SemanticElement>;
     if assembly_scope {
         let assembly = w
@@ -34,7 +83,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, part: Option<&Part>) {
             .and_then(|id| doc.assemblies.get(id))
             .or_else(|| doc.assemblies.get(&doc.root));
         let Some(assembly) = assembly else {
-            ui.small("This is a part document. Add components in an assembly to show mate relationships.");
+            ui.weak("Open an assembly to see its relationships.");
             return;
         };
         let ids = assembly
@@ -51,6 +100,11 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, part: Option<&Part>) {
             })
             .cloned()
             .collect();
+        // Containment points from the completed assembly to its members in the
+        // document. This view draws the modeling direction into the result.
+        for node in &mut nodes {
+            node.relationships.retain(|id| id != &assembly.id);
+        }
         if let Some(mut result) = all
             .iter()
             .find(|e| e.id == assembly.id && e.role == "assembly")
@@ -98,7 +152,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, part: Option<&Part>) {
         );
     }
     if nodes.is_empty() {
-        ui.small("Create sketches and features to build the dependency graph.");
+        ui.weak("No features yet");
         return;
     }
     let (rect, response) = ui.allocate_exact_size(
@@ -108,11 +162,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, part: Option<&Part>) {
     let painter = ui.painter().with_clip_rect(rect);
     let accent = ui.visuals().selection.stroke.color;
     let wide = rect.width() > 450.;
-    let card = if wide {
-        egui::vec2(146., 92.)
-    } else {
-        egui::vec2((rect.width() - 30.).max(100.), 72.)
-    };
     if response.hovered() {
         let delta = ui.input(|i| i.smooth_scroll_delta);
         w.view.graph_pan[0] += delta.x;
@@ -126,15 +175,31 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, part: Option<&Part>) {
         w.view.graph_pan[1] += delta.y;
     }
     let zoom = w.view.graph_zoom;
+    let mut next = if wide { [14., 18.] } else { [12., 14.] };
     let positions = nodes
         .iter()
-        .enumerate()
-        .map(|(index, node)| {
-            let default = if wide {
-                [18. + index as f32 * (card.x + 38.), 24.]
+        .map(|node| {
+            let props = controls::properties(&node.id, "graph-card", &[&node.role], "ready");
+            let card = egui::vec2(
+                controls::length(
+                    &props,
+                    "width",
+                    rect.width(),
+                    if wide {
+                        146.
+                    } else {
+                        (rect.width() - 24.).clamp(72., 280.)
+                    },
+                )
+                .max(32.),
+                controls::length(&props, "height", rect.height(), 50.).max(22.),
+            );
+            let default = next;
+            if wide {
+                next[0] += card.x + 30.;
             } else {
-                [14., 18. + index as f32 * (card.y + 26.)]
-            };
+                next[1] += card.y + 20.;
+            }
             let p = w
                 .view
                 .graph_positions
@@ -157,10 +222,14 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, part: Option<&Part>) {
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let mut inputs = BTreeSet::new();
+    let mut outputs = BTreeSet::new();
     for node in &nodes {
         let end = positions[&node.id].1;
         for input in &node.relationships {
             if let Some((_, start)) = positions.get(input) {
+                outputs.insert(input.as_str());
+                inputs.insert(node.id.as_str());
                 let (a, b) = if wide {
                     (start.right_center(), end.left_center())
                 } else {
@@ -199,144 +268,98 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, part: Option<&Part>) {
             }
         }
     }
-    for (index, node) in nodes.iter().enumerate() {
+    for node in &nodes {
         let (old, card_rect) = positions[&node.id];
-        let active = w.view.active_node.as_ref() == Some(&node.id)
-            || w.view.active_instance.as_ref() == Some(&node.id);
+        let Some(target) = object_target(&doc, node) else {
+            continue;
+        };
+        let active = w.context_selection.as_ref().map_or_else(
+            || {
+                w.view.active_node.as_ref() == Some(&node.id)
+                    || w.view.active_instance.as_ref() == Some(&node.id)
+            },
+            |selected| selected == &target,
+        );
         let hit = ui.interact(
-            card_rect,
+            card_rect.intersect(rect),
             ui.id().with((&node.id, "graph-card")),
             egui::Sense::click_and_drag(),
         );
-        painter.rect_filled(card_rect, 4., ui.visuals().panel_fill);
-        painter.rect_stroke(
-            card_rect,
-            4.,
-            Stroke::new(
-                if active { 2. } else { 1. },
-                if active {
-                    accent
-                } else {
-                    ui.visuals().widgets.noninteractive.bg_stroke.color
-                },
-            ),
-            egui::StrokeKind::Inside,
-        );
-        let header =
-            egui::Rect::from_min_size(card_rect.min, egui::vec2(card_rect.width(), 26. * zoom));
-        painter.rect_filled(
-            header,
-            4.,
-            if active {
-                accent.gamma_multiply(0.18)
-            } else {
-                ui.visuals().faint_bg_color
-            },
-        );
-        painter.text(
-            card_rect.min + egui::vec2(8., 12.) * zoom,
-            egui::Align2::LEFT_CENTER,
-            format!("{:02}  {}", index + 1, node.label),
-            FontId::proportional(12. * zoom),
-            ui.visuals().text_color(),
-        );
-        let subtitle = if node.role == "feature-station" {
-            serde_json::from_value::<Feature>(node.data.clone())
-                .map(|f| cad_ui::operation_summary(&f.operation))
-                .unwrap_or_default()
+        let (icon, detail) = caption(&doc, node, &target);
+        let state = if active {
+            "selected"
+        } else if hit.has_focus() {
+            "focus"
+        } else if hit.hovered() {
+            "hover"
         } else {
-            node.value
-                .clone()
-                .unwrap_or_else(|| node.role.replace('-', " "))
+            "ready"
         };
-        painter.text(
-            card_rect.min + egui::vec2(8., 38.) * zoom,
-            egui::Align2::LEFT_TOP,
-            subtitle,
-            FontId::proportional(10. * zoom),
-            ui.visuals().weak_text_color(),
+        let props = controls::properties(&node.id, "graph-card", &[&node.role], state);
+        draw_card(
+            ui,
+            &painter,
+            card_rect,
+            node,
+            &props,
+            &icon,
+            &detail,
+            zoom,
+            active,
+            hit.has_focus() || hit.hovered(),
         );
-        for port in if wide {
+        let ports = if wide {
             [card_rect.left_center(), card_rect.right_center()]
         } else {
             [card_rect.center_top(), card_rect.center_bottom()]
-        } {
-            painter.circle(
-                port,
-                3.5 * zoom,
-                ui.visuals().panel_fill,
-                Stroke::new(1.4, accent),
+        };
+        for (port, connected) in ports.into_iter().zip([
+            inputs.contains(node.id.as_str()),
+            outputs.contains(node.id.as_str()),
+        ]) {
+            if connected {
+                painter.circle(
+                    port,
+                    3. * zoom,
+                    ui.visuals().panel_fill,
+                    Stroke::new(1.2, accent),
+                );
+            }
+        }
+        let hit = hit.on_hover_ui(|ui| {
+            ui.strong(&node.label);
+            if !detail.is_empty() {
+                ui.label(&detail);
+            }
+            ui.small("Double-click or press Enter to edit");
+        });
+        hit.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, &node.label)
+        });
+        let keyboard_edit = hit.has_focus()
+            && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        if hit.clicked() || keyboard_edit {
+            activate(
+                w,
+                &doc,
+                &target,
+                &hit,
+                hit.double_clicked() || keyboard_edit,
             );
         }
-        if hit.clicked() {
-            if node.role == "feature-station" {
-                if let Some(part) = doc
-                    .parts
-                    .values()
-                    .find(|p| p.features.iter().any(|f| f.id == node.id))
-                    && let Some(feature) = part.features.iter().find(|f| f.id == node.id)
-                {
-                    crate::selection_ui::feature_selected(w, &part.id, feature, &hit);
-                }
-            } else if node.role == "component-instance"
-                && let Some(instance) = doc
-                    .assemblies
-                    .values()
-                    .find_map(|a| a.instances.get(&node.id))
-            {
-                if w.tool_checkpoint.is_none() {
-                    let path = doc
-                        .placed_parts()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .find(|placed| placed.path.last() == Some(&instance.id))
-                        .map(|placed| placed.path);
-                    w.activate_context(Some(instance.definition.clone()), path);
-                }
-                crate::selection_ui::object_selected(
-                    w,
-                    cad_core::selection_actions::SelectionTarget::Object {
-                        definition: instance.definition.clone(),
-                        object: instance.id.clone(),
-                        role: node.role.clone(),
-                    },
-                );
-            } else if let Some(target) = object_target(&doc, node) {
-                crate::selection_ui::object_selected(w, target);
+        let anchor = hit.id.with("context-occurrence");
+        if hit.secondary_clicked() {
+            if w.tool_checkpoint.is_none() && w.sketch.is_none() && w.session.draft.is_none() {
+                activate(w, &doc, &target, &hit, false);
             }
-        }
-        if hit.double_clicked() && node.role != "feature-station" {
-            edit(w, node);
+            ui.data_mut(|data| data.insert_temp(anchor, w.selected_component.clone()));
         }
         hit.context_menu(|ui| {
-            if node.role == "feature-station"
-                && let Some(part) = doc
-                    .parts
-                    .values()
-                    .find(|p| p.features.iter().any(|f| f.id == node.id))
-            {
-                crate::selection_ui::contents(
-                    ui,
-                    w,
-                    &cad_core::selection_actions::SelectionTarget::Feature {
-                        definition: part.id.clone(),
-                        feature: node.id.clone(),
-                    },
-                );
-                return;
-            }
-            if let Some(target) = object_target(&doc, node) {
-                crate::selection_ui::contents(ui, w, &target);
-                return;
-            }
-            if ui.button("Edit").clicked() {
-                edit(w, node);
-                ui.close();
-            }
-            if node.role == "component-instance" && ui.button("Pin reference").clicked() {
-                if !w.view.pinned.contains(&node.id) {
-                    w.view.pinned.push(node.id.clone());
-                }
+            let same_occurrence = !matches!(&target, SelectionTarget::Object { role, .. } if role == "component-instance")
+                || ui.data(|data| data.get_temp::<Option<Vec<String>>>(anchor)).flatten().is_some_and(|opened| Some(&opened) == w.selected_component.as_ref());
+            if selection_ui::current(w).as_ref() == Some(&target) && same_occurrence {
+                selection_ui::contents(ui, w, &target);
+            } else {
                 ui.close();
             }
         });
@@ -348,23 +371,198 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, part: Option<&Part>) {
         }
     }
 }
-fn edit(w: &mut Workspace, node: &SemanticElement) {
-    match node.role.as_str() {
-        "feature-station" => {
-            if let Ok(feature) = serde_json::from_value::<Feature>(node.data.clone()) {
-                ui::feature_dialog(w, Some(feature));
+
+fn activate(
+    w: &mut Workspace,
+    doc: &Document,
+    target: &SelectionTarget,
+    hit: &egui::Response,
+    edit: bool,
+) {
+    let editor_context =
+        (!edit && w.tool_checkpoint.is_some() && matches!(target, SelectionTarget::Object { .. }))
+            .then(|| (w.view.active_node.clone(), w.view.active_instance.clone()));
+    match target {
+        SelectionTarget::Feature { .. } if edit => selection_ui::execute(w, target, "feature.edit"),
+        SelectionTarget::Feature {
+            definition,
+            feature,
+        } => {
+            if let Some(feature) = doc
+                .parts
+                .get(definition)
+                .and_then(|part| part.features.iter().find(|f| f.id == *feature))
+            {
+                selection_ui::feature_selected(w, definition, feature, hit);
             }
         }
-        "assembly-mate" => {
-            w.json = serde_json::to_string_pretty(&node.data).unwrap_or_default();
-            w.fields.insert("mate-editor".into(), "open".into());
-            w.open_editor("assembly");
+        SelectionTarget::Object { role, .. } if role == "component-instance" => {
+            match selection_ui::component_path(w, target) {
+                Ok(path) if edit => crate::assembly_tree_ui::edit_selected_part(w, path),
+                Ok(path) => crate::assembly_tree_ui::select(w, path),
+                Err(error) => w.status = error.to_string(),
+            }
         }
-        "component-instance" | "assembly" => w.open_editor("assembly"),
-        _ => {
-            w.fields.insert("graph-parameters".into(), "open".into());
-            w.open_editor("properties");
+        _ if edit => {
+            let command = if matches!(target, SelectionTarget::Object {role, ..} if role == "assembly")
+            {
+                "assembly.edit"
+            } else {
+                "object.edit"
+            };
+            selection_ui::execute(w, target, command);
         }
+        _ => selection_ui::object_selected(w, target.clone()),
+    }
+    if let Some((node, instance)) = editor_context {
+        w.view.active_node = node;
+        w.view.active_instance = instance;
+    }
+}
+
+fn caption(doc: &Document, node: &SemanticElement, target: &SelectionTarget) -> (String, String) {
+    match node.role.as_str() {
+        "feature-station" => {
+            if let Some(feature) = doc
+                .parts
+                .get(target.definition())
+                .and_then(|p| p.features.iter().find(|f| f.id == node.id))
+            {
+                let kind = feature.operation.name();
+                let summary = cad_ui::operation_summary(&feature.operation);
+                let detail = if summary == kind
+                    && node.label.to_lowercase().contains(&kind.to_lowercase())
+                {
+                    String::new()
+                } else {
+                    summary
+                };
+                let icon = match &feature.operation {
+                    cad_core::Operation::Extrude { mode, .. } if mode == "cut" => {
+                        "feature.cut".into()
+                    }
+                    cad_core::Operation::Sketch3d { .. } => "sketch3d.new".into(),
+                    _ => format!("feature.{}", kind.to_lowercase().replace(' ', "-")),
+                };
+                return (icon, detail);
+            }
+            ("feature.edit".into(), String::new())
+        }
+        "parameter-field" => (
+            "sketch.smart-dimension".into(),
+            node.value.clone().unwrap_or_default(),
+        ),
+        "assembly-mate" => (
+            "assembly.mate".into(),
+            node.value.clone().unwrap_or_default(),
+        ),
+        "component-instance" => {
+            let detail = node
+                .value
+                .as_ref()
+                .filter(|value| !node.label.starts_with(value.as_str()))
+                .cloned()
+                .unwrap_or_default();
+            ("assembly.component".into(), detail)
+        }
+        _ => ("assembly".into(), String::new()),
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The native graph painter uses the positioned semantic card and its current interaction state"
+)]
+fn draw_card(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    node: &SemanticElement,
+    props: &BTreeMap<String, String>,
+    icon: &str,
+    detail: &str,
+    zoom: f32,
+    active: bool,
+    emphasized: bool,
+) {
+    let frame = controls::frame_from_properties(ui, props);
+    let visuals = ui.visuals();
+    let fill = if props.contains_key("background") {
+        frame.fill
+    } else if active {
+        visuals.selection.bg_fill
+    } else {
+        visuals.panel_fill
+    };
+    let accent = visuals.selection.stroke.color;
+    let stroke = if props
+        .keys()
+        .any(|k| k == "border" || k.starts_with("border-") && k != "border-radius")
+    {
+        frame.stroke
+    } else {
+        Stroke::new(
+            if active || emphasized { 2. } else { 1. },
+            if active || emphasized {
+                accent
+            } else {
+                visuals.widgets.noninteractive.bg_stroke.color
+            },
+        )
+    };
+    let radius = controls::number(props, "border-radius", 4.) * zoom;
+    painter.rect(rect, radius, fill, stroke, egui::StrokeKind::Inside);
+    let ink = props
+        .get("color")
+        .and_then(|s| ui::color(s))
+        .unwrap_or_else(|| visuals.text_color());
+    let inside = painter.with_clip_rect(rect.intersect(painter.clip_rect()).shrink(zoom));
+    let padding = controls::number(props, "padding", 8.).max(0.) * zoom;
+    let icon_size = controls::number(props, "icon-size", 16.).max(0.) * zoom;
+    command_icons::paint(
+        &inside,
+        egui::pos2(rect.left() + padding + icon_size / 2., rect.center().y),
+        icon_size,
+        ink,
+        icon,
+    );
+    let x = rect.left() + padding + icon_size + controls::number(props, "gap", 5.).max(0.) * zoom;
+    let width = (rect.right() - padding - x).max(0.);
+    let font = controls::number(props, "font-size", 12.).max(1.) * zoom;
+    let family = if props.get("font-family").is_some_and(|f| f.contains("mono")) {
+        egui::FontFamily::Monospace
+    } else {
+        egui::TextStyle::Body.resolve(ui.style()).family
+    };
+    let line = |text: &str, size: f32, color| {
+        let mut job = egui::text::LayoutJob::single_section(
+            text.into(),
+            egui::TextFormat {
+                font_id: FontId::new(size, family.clone()),
+                color,
+                ..Default::default()
+            },
+        );
+        job.wrap.max_width = width;
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        job.break_on_newline = false;
+        inside.layout_job(job)
+    };
+    let title = line(&node.label, font, ink);
+    let detail_color = if active {
+        ink
+    } else {
+        visuals.weak_text_color()
+    };
+    let secondary = (!detail.is_empty())
+        .then(|| line(detail, font * 0.9, detail_color))
+        .filter(|g| title.size().y + g.size().y < rect.height());
+    let y = rect.center().y - (title.size().y + secondary.as_ref().map_or(0., |g| g.size().y)) / 2.;
+    let next_y = y + title.size().y;
+    inside.galley(egui::pos2(x, y), title, ink);
+    if let Some(secondary) = secondary {
+        inside.galley(egui::pos2(x, next_y), secondary, detail_color);
     }
 }
 
@@ -372,6 +570,9 @@ fn object_target(
     doc: &cad_core::Document,
     node: &SemanticElement,
 ) -> Option<cad_core::selection_actions::SelectionTarget> {
+    if node.role == "feature-station" {
+        return serde_json::from_value(node.data.get("target")?.clone()).ok();
+    }
     let (definition, object) = match node.role.as_str() {
         "parameter-field" => {
             let (definition, parameter) = node.id.rsplit_once("::")?;

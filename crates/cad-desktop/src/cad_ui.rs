@@ -1,6 +1,6 @@
 //! Familiar CAD workspace widgets over the same document commands and user layout.
-use crate::{Workspace, presentation_controls as controls, sketch, ui, viewport};
-use bevy_egui::egui::{self, RichText, Stroke};
+use crate::{Workspace, presentation_controls as controls, sketch, ui};
+use bevy_egui::egui::{self, RichText};
 use cad_core::{Feature, Operation, Part, presentation::SemanticElement};
 mod profile_features;
 
@@ -59,12 +59,12 @@ fn menu_action(
     enabled: bool,
 ) -> egui::Response {
     let reason = command_disabled_reason(w, command);
-    controls::button(
+    let shortcut = shortcut_text(ui.ctx(), command);
+    controls::menu_item(
         ui,
         &format!("command-menu/{command}"),
-        "menu-action",
-        &["menu-item"],
         label,
+        shortcut.as_deref(),
         enabled && reason.is_none(),
         false,
     )
@@ -193,7 +193,7 @@ const ORIENTATION_MENU: (&str, &str, &[&str]) = (
     ],
 );
 
-fn shortcut_label(ctx: &egui::Context, command: &str, label: &str) -> String {
+fn shortcut_text(ctx: &egui::Context, command: &str) -> Option<String> {
     use egui::{Key, Modifiers};
     let (modifiers, key) = match command {
         "file.new-part" => (Modifiers::COMMAND, Key::N),
@@ -203,10 +203,12 @@ fn shortcut_label(ctx: &egui::Context, command: &str, label: &str) -> String {
         "document.redo" => (Modifiers::COMMAND | Modifiers::SHIFT, Key::Z),
         "settings" => (Modifiers::COMMAND, Key::Comma),
         "commands" => (Modifiers::COMMAND, Key::K),
-        _ => return label.into(),
+        "viewport.fit" => (Modifiers::NONE, Key::F),
+        "draft.apply" => (Modifiers::COMMAND, Key::Enter),
+        "document.rebuild" => (Modifiers::NONE, Key::F5),
+        _ => return None,
     };
-    let shortcut = ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key));
-    format!("{label}  {shortcut}")
+    Some(ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key)))
 }
 
 // Insert and the full feature menu always address modeling commands, including
@@ -474,19 +476,31 @@ fn menu_contents(
                 .or_else(|| command_disabled_reason(w, &action.command))
         });
         let enabled = action.as_ref().is_some_and(|action| action.enabled) && reason.is_none();
-        let label = action
+        let shortcut = action
             .as_ref()
-            .map(|a| shortcut_label(ui.ctx(), &a.command, &descriptor.label))
-            .unwrap_or_else(|| descriptor.label.clone());
-        let response = controls::button(
-            ui,
-            &descriptor.id,
-            "menu-action",
-            &["menu-item"],
-            &label,
-            enabled,
-            descriptor.state == "selected",
-        )
+            .and_then(|a| shortcut_text(ui.ctx(), &a.command));
+        let response = if descriptor.role == "viewport-visibility-toggle"
+            || descriptor.role == "theme-action" && descriptor.data["management"] != true
+        {
+            controls::button(
+                ui,
+                &descriptor.id,
+                "menu-action",
+                &["menu-item", "menu-choice"],
+                &descriptor.label,
+                enabled,
+                descriptor.state == "selected" || descriptor.data["selected"] == true,
+            )
+        } else {
+            controls::menu_item(
+                ui,
+                &descriptor.id,
+                &descriptor.label,
+                shortcut.as_deref(),
+                enabled,
+                descriptor.state == "selected",
+            )
+        }
         .on_disabled_hover_text(
             reason
                 .or(descriptor.value.as_deref())
@@ -659,7 +673,11 @@ pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
             .iter()
             .find(|scope| scope.eq_ignore_ascii_case(name))
     {
-        w.view.graph_scope = (*scope).into();
+        if let Some(reason) = crate::graph_ui::scope_reason(w, scope) {
+            w.status = reason.into();
+        } else {
+            w.view.graph_scope = (*scope).into();
+        }
         return true;
     }
     match command {
@@ -688,10 +706,16 @@ pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
             w.view.graph_pan = [0.; 2];
             w.view.graph_zoom = 1.;
         }
-        "assembly.isolate" => w.isolate(),
+        "assembly.isolate" => {
+            if let Some(reason) = command_disabled_reason(w, command) {
+                w.status = reason.into();
+            } else if let Some(path) = w.selected_component.clone() {
+                crate::assembly_tree_ui::edit_selected_part(w, path);
+            }
+        }
         "presentation.ghost-others" => {
-            w.view.ghost_others = !w.view.ghost_others;
-            w.rendered_key.clear();
+            // Existing layouts use this spelling for the Ghost others choice.
+            crate::workspace_controls::action(w, "workspace.ghost-others");
         }
         "viewport.normal-sketch" => sketch::normal_to(w),
         "selection.measure" => measure(w),
@@ -822,6 +846,18 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             "view-navigation",
         );
     }
+    for scope in ["Features", "Assembly"] {
+        let name = scope.to_lowercase();
+        publish(
+            format!("graph-scope/{name}"),
+            "graph-scope",
+            scope,
+            format!("presentation.graph-scope.{name}"),
+            true,
+            crate::graph_ui::scope(w) == scope,
+            "command-manager",
+        );
+    }
     for menu in [
         "File",
         "Edit",
@@ -895,16 +931,7 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             w.view.ui_scale == 1.15,
         ),
         ("graph.arrange", "Arrange Graph", true, false),
-        (
-            "assembly.isolate",
-            "Edit in Place",
-            w.session
-                .visible()
-                .properties
-                .get("document_kind")
-                .is_none_or(|kind| kind != "part"),
-            crate::workspace_controls::in_place(w),
-        ),
+        ("assembly.isolate", "Edit in Place", true, false),
         (
             "presentation.ghost-others",
             "Ghost Others",
@@ -1040,6 +1067,7 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             .any(|command| command == "draft.apply")
         {
             element.label = confirmation_label(w);
+            element.data["accessibility_label"] = serde_json::json!(element.label);
             element.data["completion_scope"] =
                 serde_json::json!(if sketching || spatial_sketching {
                     "sketch"
@@ -1324,6 +1352,11 @@ pub fn command_disabled_reason(w: &Workspace, command: &str) -> Option<&'static 
     if command == "presentation.navigation.history" && w.view.active_part.is_none() {
         return Some("Open a part to see its feature history");
     }
+    if let Some(scope) = command.strip_prefix("presentation.graph-scope.")
+        && let Some(reason) = crate::graph_ui::scope_reason(w, scope)
+    {
+        return Some(reason);
+    }
     if crate::publish_ui::busy(w)
         && !matches!(command, "file.publish" | "publish.settings")
         && !command.starts_with("publish.")
@@ -1351,6 +1384,12 @@ pub fn command_disabled_reason(w: &Workspace, command: &str) -> Option<&'static 
         return Some("Apply or cancel Settings first");
     }
     match command {
+        "history.latest" => {
+            return cad_core::history::latest_disabled_reason(
+                &w.view,
+                w.tool_checkpoint.is_some() || w.sketch.is_some(),
+            );
+        }
         "settings.apply" | "settings.ok" | "settings.cancel" if w.settings.is_none() => {
             return Some("Open Settings first");
         }
@@ -1412,8 +1451,27 @@ pub fn command_disabled_reason(w: &Workspace, command: &str) -> Option<&'static 
         "selection.measure" if w.selected.is_none() => {
             return Some("Select model geometry to measure");
         }
-        "presentation.ghost-others" if !crate::workspace_controls::in_place(w) => {
-            return Some("Edit a component in place to ghost the other components");
+        "presentation.ghost-others" | "workspace.ghost-others" | "workspace.hide-others"
+            if !crate::workspace_controls::in_place(w) || w.sketch.is_some() =>
+        {
+            return Some("Edit a component in place to change the surrounding components");
+        }
+        "workspace.finish-editing"
+            if !crate::workspace_controls::in_place(w)
+                || w.tool_checkpoint.is_some()
+                || w.session.draft.is_some()
+                || w.sketch.is_some() =>
+        {
+            return Some("Finish the current component edit first");
+        }
+        "assembly.isolate" if w.session.draft.is_some() => {
+            return Some("Apply or cancel the current edit first");
+        }
+        "assembly.isolate" | "selection.isolate"
+            if !w.has_assembly_context()
+                || w.selected_component.as_ref().is_none_or(Vec::is_empty) =>
+        {
+            return Some("Select a component in the assembly to edit");
         }
         _ => {}
     }
@@ -1541,7 +1599,7 @@ pub fn menu(
                 ("Content Libraries…", "content-repositories"),
                 ("Update README Preview", "readme.preview"),
                 ("Review Comments…", "comments"),
-                ("Rebuild  F5", "document.rebuild"),
+                ("Rebuild", "document.rebuild"),
                 ("Source Definitions…", "source"),
                 ("Create Release…", "file.release"),
             ] {
@@ -1568,9 +1626,9 @@ pub fn menu(
         let actions_width = ui.data(|data| data.get_temp::<f32>(actions_id)).unwrap_or(260.);
         ui.add_space((viewport_width - (ui.cursor().min.x - row_start) - actions_width).max(0.));
         let actions = ui.horizontal(|ui| {
-            let search_label = shortcut_label(ui.ctx(), "commands", "Find a command");
-            if command_button(ui, w, "commands", &search_label, true).clicked() {
-                w.open_editor("commands");
+            let search_hint = shortcut_text(ui.ctx(), "commands").map(|keys| format!("Find a command ({keys})")).unwrap_or_else(|| "Find a command".into());
+            if tool_button(ui, "commands", "Find a command", command_disabled_reason(w,"commands"), false, &search_hint) {
+                ui::action(w, "commands");
             }
             if command_button(
                 ui,
@@ -1710,14 +1768,12 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace, snapshot: &[SemanticElemen
                             .iter()
                             .filter(|entry| entry.role == "sketch-plane-action")
                         {
-                            if controls::button(
+                            if crate::sketch_ui::plane_button(
                                 ui,
                                 &plane.id,
                                 &plane.role,
-                                &["toolbar-control"],
+                                &["toolbar-control", "plane-choice"],
                                 &plane.label,
-                                true,
-                                false,
                             )
                             .clicked()
                             {
@@ -1779,7 +1835,7 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace, snapshot: &[SemanticElemen
                         false,
                         "Save this sketch and return to the model",
                     ) {
-                        w.confirm_tool();
+                        ui::action(w, "draft.apply");
                     }
                     ui.separator();
                     for id in [
@@ -1792,24 +1848,29 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace, snapshot: &[SemanticElemen
                 }
                 "Graph" => {
                     for scope in ["Features", "Assembly"] {
-                        if controls::selectable(
+                        let reason = crate::graph_ui::scope_reason(w, scope);
+                        if controls::button(
                             ui,
                             &format!("graph-scope/{}", scope.to_lowercase()),
                             "graph-scope",
+                            &["selectable"],
                             scope,
-                            w.view.graph_scope == scope,
+                            reason.is_none(),
+                            crate::graph_ui::scope(w) == scope,
                         )
+                        .on_disabled_hover_text(reason.unwrap_or_default())
                         .clicked()
                         {
-                            w.view.graph_scope = scope.into();
+                            ui::action(
+                                w,
+                                &format!("presentation.graph-scope.{}", scope.to_lowercase()),
+                            );
                         }
                     }
                     if command_button(ui, w, "graph.arrange", "Arrange Graph", true).clicked() {
-                        w.view.graph_positions.clear();
-                        w.view.graph_pan = [0.; 2];
-                        w.view.graph_zoom = 1.;
+                        ui::action(w, "graph.arrange");
                     }
-                    ui.small("Drag cards · scroll to pan · pinch to zoom · double-click to edit");
+                    crate::workspace_controls::graph_gestures(ui);
                 }
                 "Assembly" => {
                     for (label, cmd) in [
@@ -1825,45 +1886,34 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace, snapshot: &[SemanticElemen
                             ui::action(w, cmd);
                         }
                     }
-                    if command_button(
-                        ui,
-                        w,
-                        "assembly.isolate",
-                        if w.view.isolation {
-                            "Finish Editing"
-                        } else {
-                            "Edit in Place"
-                        },
-                        true,
-                    )
-                    .clicked()
+                    if crate::workspace_controls::in_place(w) {
+                        if command_button(
+                            ui,
+                            w,
+                            "workspace.finish-editing",
+                            "Finish editing",
+                            w.tool_checkpoint.is_none(),
+                        )
+                        .clicked()
+                        {
+                            ui::action(w, "workspace.finish-editing");
+                        }
+                        crate::workspace_controls::component_visibility(ui, w);
+                    } else if command_button(ui, w, "assembly.isolate", "Edit in place", true)
+                        .clicked()
                     {
-                        w.isolate();
-                    }
-                    if controls::button(
-                        ui,
-                        "command-toolbar/presentation.ghost-others",
-                        "command-action",
-                        &["toolbar-control"],
-                        "Ghost others",
-                        true,
-                        w.view.ghost_others,
-                    )
-                    .clicked()
-                    {
-                        w.view.ghost_others = !w.view.ghost_others;
-                        w.rendered_key.clear();
+                        ui::action(w, "assembly.isolate");
                     }
                 }
                 "Evaluate" => {
                     if command_button(ui, w, "selection.measure", "Measure", w.selected.is_some())
                         .clicked()
                     {
-                        measure(w);
+                        ui::action(w, "selection.measure");
                     }
                     for (label, cmd) in [
                         ("Mass Properties", "inspection.properties"),
-                        ("Fit", "viewport.fit"),
+                        ("Zoom to Fit", "viewport.fit"),
                         ("Rebuild", "document.rebuild"),
                         ("BOM", "bom"),
                         ("Drawings", "drawings"),
@@ -1962,34 +2012,42 @@ pub fn navigation(ui: &mut egui::Ui, w: &mut Workspace) {
                 presentation_action(w, &command);
             }
         }
-        if controls::button(
+        if controls::icon_button(
             ui,
             "navigation/presentation",
             "command-action",
-            &["navigation-control"],
-            "⋯",
+            &["navigation-control", "icon-action"],
+            "Edit layout and style",
             true,
             false,
+            Some(&|p, center, size, color| {
+                crate::command_icons::paint(p, center, size, color, "settings")
+            }),
         )
         .on_hover_text("Layout, theme and sizing")
         .clicked()
         {
-            w.open_editor("presentation");
+            ui::action(w, "presentation");
         }
     });
 }
-pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
-    tree_contents(ui, w, false);
+pub fn tree(ui: &mut egui::Ui, w: &mut Workspace, elements: &[SemanticElement]) {
+    tree_contents(ui, w, elements, false);
 }
 /// Independently placed browsers keep the tree visible beside a task editor.
-pub fn model_browser(ui: &mut egui::Ui, w: &mut Workspace) {
+pub fn model_browser(ui: &mut egui::Ui, w: &mut Workspace, elements: &[SemanticElement]) {
     if crate::drawing_ui::is_workspace(w) {
         crate::drawing_ui::tree(ui, w);
     } else {
-        tree_contents(ui, w, true);
+        tree_contents(ui, w, elements, true);
     }
 }
-fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
+fn tree_contents(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    elements: &[SemanticElement],
+    persistent: bool,
+) {
     let task_active =
         w.tool_checkpoint.is_some() || w.sketch.is_some() || w.session.draft.is_some();
     if w.editing_manager() && !persistent {
@@ -1999,11 +2057,11 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
             "workspace.task-history",
             "task-section-toggle",
             &["secondary-control"],
-            if open {
-                "▾ Model history"
-            } else {
-                "▸ Model history"
-            },
+            &format!(
+                "{} {}",
+                if open { "▾" } else { "▸" },
+                crate::history::browser_label(w)
+            ),
             true,
             open,
         )
@@ -2105,25 +2163,19 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
     };
     // A standalone part also has an internal assembly that places it once.
     // Only offer assembly navigation when there is an actual assembly to edit.
-    let assembly_context = doc.assemblies.get(&doc.root).is_some_and(|assembly| {
-        crate::initial_part_context(&doc).is_none()
-            || doc.parts.len() > 1
-            || doc.assemblies.len() > 1
-            || assembly.instances.len() > 1
-    });
-    if assembly_context
+    if w.has_assembly_context()
         && controls::button(
             ui,
             "feature-tree/assembly-root",
             "assembly-breadcrumb",
             &["feature-tree-row"],
             &format!("← {}", doc.name),
-            w.tool_checkpoint.is_none(),
+            w.tool_checkpoint.is_none() && w.session.draft.is_none(),
             false,
         )
         .clicked()
     {
-        w.activate_context(None, None);
+        w.leave_part_context();
         return;
     }
     if w.view.mode == "Flow" {
@@ -2131,7 +2183,7 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
         return;
     }
     if w.view.mode == "History" {
-        history(ui, w, part);
+        history(ui, w, part, elements);
         return;
     }
     egui::ScrollArea::vertical()
@@ -2171,29 +2223,26 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
                         open: None,
                     },
                     |ui| {
-                        for name in ["Front Plane", "Top Plane", "Right Plane"] {
+                        for name in sketch::ORIGIN_PLANES {
                             let choosing_plane = w
                                 .sketch
                                 .as_ref()
                                 .is_some_and(|sketch| sketch.choosing_plane);
                             let can_choose_plane = !task_active || choosing_plane;
-                            let response = controls::button(
+                            let response = controls::icon_button(
                                 ui,
                                 &format!("reference:{}::{name}", part.id),
                                 "reference-plane",
                                 &["feature-tree-row"],
-                                &format!("▱  {name}"),
+                                name,
                                 can_choose_plane,
                                 w.active_plane.as_deref() == Some(name),
+                                Some(&|p, center, size, color| crate::command_icons::paint(p, center, size, color, crate::sketch_ui::plane_icon(name))),
                             );
                             if response.clicked() {
-                                w.selected = None;
-                                if !choosing_plane {
-                                    w.view.active_node = None;
-                                }
                                 sketch::choose_origin(w, name);
                                 if !choosing_plane && !response.double_clicked() {
-                                    w.status = format!("{name} selected. Double-click to start a sketch.");
+                                    w.status = format!("{name} selected");
                                     crate::selection_ui::object_selected(
                                         w,
                                         cad_core::selection_actions::SelectionTarget::Reference {
@@ -2433,148 +2482,54 @@ pub fn operation_summary(operation: &Operation) -> String {
         _ => operation.name().into(),
     }
 }
-fn history(ui: &mut egui::Ui, w: &mut Workspace, part: &Part) {
+fn history(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, elements: &[SemanticElement]) {
+    let picking = w.tool_checkpoint.is_some() || w.sketch.is_some();
     controls::inspector_section(
         ui,
         controls::InspectorSection {
             id: &format!("feature-tree:{}:history", part.id),
             role: "feature-tree-group",
             classes: &["feature-history"],
-            label: "Feature history",
+            label: if picking {
+                "Model features"
+            } else {
+                "Feature history"
+            },
             state: "ready",
             collapse: None,
             open: None,
         },
         |ui| {
-            if controls::selectable(
-                ui,
-                "history-view",
-                "history-view",
-                "Latest model",
-                w.view.history_cursor.is_none(),
-            )
-            .on_hover_text("Show the current model without rebuilding geometry")
-            .clicked()
-            {
-                crate::history::latest(w);
-            }
-            if w.view.history_cursor.is_some() {
-                ui.small("History inspection · Esc returns to Latest");
-            }
-            egui::ScrollArea::vertical()
-                .id_salt("feature-history")
-                .show(ui, |ui| {
-                    if part.features.is_empty() {
-                        ui.small("Sketches and features appear here.");
-                    }
-                    let mut last = None;
-                    for (index, feature) in part.features.iter().enumerate() {
-                        let active = w
-                            .view
-                            .history_cursor
-                            .as_ref()
-                            .map(|cursor| cursor.definition == part.id && cursor.node == feature.id)
-                            .unwrap_or_else(|| w.view.active_node.as_ref() == Some(&feature.id));
-                        let future = w
-                            .view
-                            .history_cursor
-                            .as_ref()
-                            .filter(|cursor| cursor.definition == part.id)
-                            .and_then(|cursor| {
-                                part.features
-                                    .iter()
-                                    .position(|feature| feature.id == cursor.node)
-                            })
-                            .is_some_and(|cursor| index > cursor);
-                        let id = format!("history:{}::{}", part.id, feature.id);
-                        let classes = if future {
-                            vec!["history-row", "future"]
-                        } else {
-                            vec!["history-row"]
-                        };
-                        let props = controls::properties(
-                            &id,
-                            "history-station",
-                            &classes,
-                            if active { "selected" } else { "ready" },
-                        );
-                        let marker = std::cell::Cell::new(None);
-                        let draw =
-                            |painter: &egui::Painter, center: egui::Pos2, size: f32, color| {
-                                marker.set(Some(center));
-                                painter.circle_filled(center, size * 0.23, color);
-                                if active {
-                                    painter.circle_stroke(
-                                        center,
-                                        size * 0.42,
-                                        Stroke::new(
-                                            controls::number(&props, "stroke-width", 1.2),
-                                            color,
-                                        ),
-                                    );
-                                }
-                            };
-                        let label = format!("{:02}  {}", index + 1, feature.name);
-                        let response = controls::icon_button(
+            if picking {
+                model_features(ui, w, part);
+            } else {
+                crate::history::return_control(ui, w, "history-view", "history-view");
+                egui::ScrollArea::vertical()
+                    .id_salt(("feature-history", &part.id))
+                    .show(ui, |ui| {
+                        crate::history::stations(
                             ui,
-                            &id,
-                            "history-station",
-                            &classes,
-                            &label,
-                            true,
-                            active,
-                            Some(&draw),
-                        )
-                        .on_hover_text(format!(
-                            "{}\n{}",
-                            feature.name,
-                            operation_summary(&feature.operation)
-                        ));
-                        if let Some(marker) = marker.get() {
-                            let path = controls::properties(
-                                &format!("history-path:{}", part.id),
-                                "history-path",
-                                &[],
-                                "ready",
-                            );
-                            if let Some(last) = last {
-                                let color = path
-                                    .get("color")
-                                    .and_then(|color| crate::ui::color(color))
-                                    .unwrap_or_else(|| ui.visuals().weak_text_color());
-                                ui.painter().line_segment(
-                                    [last, marker],
-                                    Stroke::new(controls::number(&path, "stroke-width", 1.), color),
-                                );
-                            }
-                            last = Some(marker);
-                        }
-                        if active
-                            && w.fields
-                                .get("history-focus")
-                                .is_none_or(|id| id != &feature.id)
-                        {
-                            ui.scroll_to_rect(response.rect, Some(egui::Align::Center));
-                            w.fields.insert("history-focus".into(), feature.id.clone());
-                        }
-                        if response.clicked()
-                            && (w.tool_checkpoint.is_some()
-                                || response.double_clicked()
-                                || crate::history::inspect(w, part.reference(&feature.id)))
-                        {
-                            crate::selection_ui::feature_selected(w, &part.id, feature, &response);
-                        }
-                        response.context_menu(|ui| {
-                            let target = cad_core::selection_actions::SelectionTarget::Feature {
-                                definition: part.id.clone(),
-                                feature: feature.id.clone(),
-                            };
-                            crate::selection_ui::contents(ui, w, &target);
-                        });
-                    }
-                });
+                            w,
+                            elements,
+                            crate::history::StationLayout::List,
+                        );
+                    });
+            }
         },
     );
+}
+
+fn model_features(ui: &mut egui::Ui, w: &mut Workspace, part: &Part) {
+    egui::ScrollArea::vertical()
+        .id_salt(("source-features", &part.id))
+        .show(ui, |ui| {
+            if part.features.is_empty() {
+                crate::history::empty(ui);
+            }
+            for feature in &part.features {
+                feature_row(ui, w, part, feature);
+            }
+        });
 }
 pub(crate) fn feature_row(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, feature: &Feature) {
     let suppressed =
@@ -2583,6 +2538,10 @@ pub(crate) fn feature_row(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, fea
         .sketch
         .as_ref()
         .is_some_and(|sketch| sketch.feature == feature.id);
+    let selected = match &w.context_selection {
+        Some(target) => target.definition() == part.id && target.feature() == feature.id,
+        None => editing || w.view.active_node.as_ref() == Some(&feature.id),
+    };
     let response = controls::button(
         ui,
         &feature.id,
@@ -2604,7 +2563,7 @@ pub(crate) fn feature_row(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, fea
             if editing { " (Editing)" } else { "" }
         ),
         true,
-        editing || w.view.active_node.as_ref() == Some(&feature.id),
+        selected,
     );
     let response = crate::feature_order_ui::row(ui, w, part, &feature.id, response);
     let response = response.on_hover_text(format!(
@@ -2702,7 +2661,7 @@ pub fn confirmation_label(w: &Workspace) -> String {
         return crate::document_identity_ui::confirmation_label(w).into();
     }
     if w.sketch.is_some() || crate::sketch3d_ui::active(w) {
-        return "Finish".into();
+        return "Finish sketch".into();
     }
     if w.dialog.as_deref() == Some("component-insert")
         || w.fields.contains_key("standard-parts-tool")
@@ -2722,40 +2681,68 @@ pub fn confirmation_label(w: &Workspace) -> String {
 
 pub fn confirmation(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::operation_preview::status_control(ui, w);
+    ui.horizontal_wrapped(|ui| completion_buttons(ui, w));
+}
+
+fn completion_buttons(ui: &mut egui::Ui, w: &mut Workspace) {
     let label = confirmation_label(w);
-    ui.horizontal_wrapped(|ui| {
-        let enabled = confirmation_available(w);
-        if controls::button(
-            ui,
-            "draft.apply",
-            "apply-action",
-            &["confirmation-control"],
-            &label,
-            enabled,
-            false,
-        )
-        .on_hover_text("Finish this operation")
-        .on_disabled_hover_text(
-            confirmation_disabled_reason(w).unwrap_or("Finish the required inputs first"),
-        )
-        .clicked()
-        {
-            w.confirm_tool();
+    let reason = command_disabled_reason(w, "draft.apply");
+    if controls::button(
+        ui,
+        "draft.apply",
+        "apply-action",
+        &["confirmation-control"],
+        &label,
+        reason.is_none(),
+        false,
+    )
+    .on_hover_text("Finish this operation")
+    .on_disabled_hover_text(reason.unwrap_or("Finish the required inputs first"))
+    .clicked()
+    {
+        ui::action(w, "draft.apply");
+    }
+    let cancel_reason = command_disabled_reason(w, "draft.cancel");
+    if controls::button(
+        ui,
+        "draft.cancel",
+        "cancel-action",
+        &["confirmation-control"],
+        "Cancel",
+        cancel_reason.is_none(),
+        false,
+    )
+    .on_disabled_hover_text(cancel_reason.unwrap_or_default())
+    .clicked()
+    {
+        ui::action(w, "draft.cancel");
+    }
+}
+
+/// The viewport menu and the property manager commit the same validated draft.
+pub(crate) fn viewport_menu(ui: &mut egui::Ui, w: &mut Workspace) {
+    if w.tool_checkpoint.is_some() {
+        for (command, label) in [
+            ("draft.apply", confirmation_label(w)),
+            ("draft.cancel", "Cancel".into()),
+        ] {
+            if menu_action(ui, w, command, &label, true).clicked() {
+                ui.close();
+                ui::action(w, command);
+                return;
+            }
         }
-        if controls::button(
-            ui,
-            "draft.cancel",
-            "cancel-action",
-            &["confirmation-control"],
-            "Cancel",
-            true,
-            false,
-        )
-        .clicked()
-        {
-            ui::action(w, "draft.cancel");
+        ui.separator();
+    } else if let Some(target) = crate::selection_ui::current(w) {
+        if crate::selection_ui::contents(ui, w, &target) {
+            return;
         }
-    });
+        ui.separator();
+    }
+    if menu_action(ui, w, "viewport.fit", "Zoom to Fit", true).clicked() {
+        ui.close();
+        ui::action(w, "viewport.fit");
+    }
 }
 
 pub(crate) fn task_history(ui: &mut egui::Ui, w: &mut Workspace) {
@@ -2768,7 +2755,7 @@ pub(crate) fn task_history(ui: &mut egui::Ui, w: &mut Workspace) {
             id: "workspace.task-history-panel",
             role: "task-history-panel",
             classes: &["secondary-section"],
-            label: "Model history",
+            label: crate::history::browser_label(w),
             state: "open",
             collapse: None,
             open: None,
@@ -2781,7 +2768,7 @@ pub(crate) fn task_history(ui: &mut egui::Ui, w: &mut Workspace) {
                 .and_then(|owner| w.session.visible().parts.get(owner))
                 .cloned();
             if let Some(part) = part {
-                history(ui, w, &part);
+                model_features(ui, w, &part);
             } else {
                 crate::assembly_tree_ui::show(ui, w);
             }
@@ -3724,18 +3711,18 @@ pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
             let mut label = name.to_string();
             label[..1].make_ascii_uppercase();
             if menu_action(ui, w, command, &label, true).clicked() {
-                presentation_action(w, command);
+                ui::action(w, command);
                 ui.close();
             }
         }
     });
     ui.separator();
-    if menu_action(ui, w, "viewport.fit", "Zoom to Fit  F", true).clicked() {
-        viewport::fit(w, false);
+    if menu_action(ui, w, "viewport.fit", "Zoom to Fit", true).clicked() {
+        ui::action(w, "viewport.fit");
         ui.close();
     }
     if menu_action(ui, w, "viewport.normal-sketch", "Normal To Sketch", true).clicked() {
-        sketch::normal_to(w);
+        ui::action(w, "viewport.normal-sketch");
         ui.close();
     }
 }
@@ -3788,32 +3775,7 @@ pub fn status(ui: &mut egui::Ui, w: &mut Workspace) {
                 .on_hover_text(crate::operation_preview::tooltip(w));
             }
             if w.session.draft.is_some() && w.tool_checkpoint.is_none() {
-                if controls::button(
-                    ui,
-                    "draft.apply",
-                    "apply-action",
-                    &["status-control"],
-                    "Confirm Changes",
-                    confirmation_available(w),
-                    false,
-                )
-                .clicked()
-                {
-                    w.confirm_tool();
-                }
-                if controls::button(
-                    ui,
-                    "draft.cancel",
-                    "cancel-action",
-                    &["status-control"],
-                    "Cancel",
-                    true,
-                    false,
-                )
-                .clicked()
-                {
-                    ui::action(w, "draft.cancel");
-                }
+                completion_buttons(ui, w);
             }
             controls::bounded_label(
                 ui,

@@ -22,16 +22,17 @@ pub fn menu_metadata(element: &mut SemanticElement) {
         "feature.chamfer" => ("Modify", 1, true),
         "feature.extrude" | "feature.drilled-holes" => ("Create", 1, true),
         "feature.cut" | "feature.shell" => ("Modify", 2, true),
-        "feature.move-face" => ("Modify", 3, true),
-        "feature.offset-face" => ("Modify", 4, true),
-        "feature.edit" | "selection.edit-in-place" => ("Edit", 5, true),
+        "feature.move-face" => ("Direct Editing", 3, false),
+        "feature.offset-face" => ("Direct Editing", 4, false),
+        "feature.edit" => ("Edit", 5, true),
+        "selection.edit-in-place" => ("Component", 5, true),
         "sketch.relations" => ("Relations", 6, true),
         "sketch.toggle-construction" => ("Edit", 7, true),
         "sketch.delete-selection" => ("Edit", 8, true),
         "assembly.insert-existing" | "part.new" => ("Component", 0, true),
         "assembly.mate-new" | "selection.mate" => ("Component", 1, true),
         "selection.measure" => ("View", 90, true),
-        "selection.fit" | "viewport.fit" => ("View", 91, true),
+        "selection.fit" | "viewport.fit" => ("View", 91, false),
         "feature.tapped-hole" => ("Hole types", 0, false),
         "feature.counterbore" => ("Hole types", 1, false),
         "feature.countersink" => ("Hole types", 2, false),
@@ -236,7 +237,15 @@ pub fn project(
                         "Component",
                         reason,
                     ),
-                    ("selection.isolate", "Isolate", "Component", reason),
+                    (
+                        "selection.isolate",
+                        "Isolate",
+                        "Component",
+                        reason.or_else(|| {
+                            (!document.parts.contains_key(target.definition()))
+                                .then_some("Select a part occurrence to isolate")
+                        }),
+                    ),
                     (
                         "selection.pin",
                         if pinned.contains(object) {
@@ -511,7 +520,9 @@ pub fn project(
                         solid_reason
                             .or((!planar).then_some("Requires a planar face or datum plane")),
                     );
-                    add("surface.mid", "Mid-Surface", "Surfaces", busy);
+                    if !selected_operation.is_surface() {
+                        add("surface.mid", "Mid-Surface", "Surfaces", busy);
+                    }
                     add("feature.keep-bodies", "Keep Body", "Bodies", solid_reason);
                     add(
                         "feature.delete-bodies",
@@ -660,11 +671,8 @@ pub fn project(
                             command,
                             tool.label,
                             "Model",
-                            if tool.requires_body {
-                                solid_reason
-                            } else {
-                                profile_reason
-                            },
+                            profile_reason.or((tool.requires_body && !body)
+                                .then_some("Create a solid body from a sketch first")),
                         );
                     }
                 }
@@ -973,13 +981,15 @@ pub fn sketch_project(
             None
         }
     });
-    if members.iter().any(|member|crate::sketch_text::operation_for(sketch,member).is_some()) || entities.iter().any(|entity|matches!(entity,a::SketchEntity::Point{point} if sketch.texts.values().any(|definition|&definition.anchor==point))) {
+    let text_member = members
+        .iter()
+        .any(|id| crate::sketch_text::operation_for(sketch, id).is_some());
+    let equation_member = members.iter().any(|id| sketch.equations.contains_key(id));
+    if text_member || entities.iter().any(|entity|matches!(entity,a::SketchEntity::Point{point} if sketch.texts.values().any(|definition|&definition.anchor==point))) {
         out.push(descriptor(target,"sketch.edit-text","Edit Sketch Text…","Edit",None));
-        if !members.is_empty(){out.push(descriptor(target,"sketch.detach-conversion","Detach Text Outlines","Edit",None));}
     }
-    if members.iter().any(|member|sketch.equations.contains_key(member)) || entities.iter().any(|entity|matches!(entity,a::SketchEntity::Point{point} if sketch.equations.values().any(|definition|&definition.anchor==point))) {
+    if equation_member || entities.iter().any(|entity|matches!(entity,a::SketchEntity::Point{point} if sketch.equations.values().any(|definition|&definition.anchor==point))) {
         out.push(descriptor(target,"sketch.edit-equation","Edit Equation Curve…","Edit",None));
-        if !members.is_empty(){out.push(descriptor(target,"sketch.detach-conversion","Detach Equation Curve","Edit",None));}
     }
     let offset_edit = sketch
         .offsets
@@ -1104,30 +1114,11 @@ pub fn sketch_project(
         "Edit",
         spline_reason.as_deref(),
     ));
-    if members
-        .iter()
-        .any(|member| sketch.splines.contains_key(member))
-    {
-        out.push(descriptor(
-            target,
-            "sketch.detach-conversion",
-            "Detach Spline Intent",
-            "Edit",
-            None,
-        ));
-    }
     if members.len() == 1 && crate::sketch_conic::operation_for(sketch, &members[0]).is_some() {
         out.push(descriptor(
             target,
             "sketch.edit-conic",
             "Edit Conic / Arc Slot…",
-            "Edit",
-            None,
-        ));
-        out.push(descriptor(
-            target,
-            "sketch.detach-conversion",
-            "Detach Conic / Arc Slot Intent",
             "Edit",
             None,
         ));
@@ -1198,38 +1189,66 @@ pub fn sketch_project(
             None,
         ));
     }
-    if sketch.transforms.values().any(|p| {
-        crate::sketch_transform::outputs(p)
+    if !members.is_empty() {
+        let all_construction = members
             .iter()
-            .any(|m| members.contains(m))
-    }) {
-        out.push(descriptor(
-            target,
-            "sketch.detach-conversion",
-            "Detach Pattern/Copy Relation",
-            "Edit",
-            None,
-        ));
-    }
-    if entities
-        .iter()
-        .any(|e| matches!(e, a::SketchEntity::Member { .. }))
-    {
+            .all(|key| sketch.members.get(key).is_some_and(|m| m.construction));
         out.push(descriptor(
             target,
             "sketch.toggle-construction",
-            "Toggle Construction",
+            if all_construction {
+                "Make Profile Geometry"
+            } else {
+                "Make Construction Geometry"
+            },
             "Edit",
             None,
         ));
     }
-    if members.iter().any(|id| sketch.conversions.contains_key(id)) {
+    let source_kinds = [
+        (text_member, "Detach Text Outlines"),
+        (equation_member, "Detach Equation Curve"),
+        (
+            members.iter().any(|id| sketch.splines.contains_key(id)),
+            "Detach Spline",
+        ),
+        (
+            members
+                .iter()
+                .any(|id| crate::sketch_conic::operation_for(sketch, id).is_some()),
+            "Detach Conic / Arc Slot",
+        ),
+        (
+            members.iter().any(|id| sketch.conversions.contains_key(id)),
+            "Detach Source Relation",
+        ),
+        (
+            sketch.transforms.values().any(|pattern| {
+                crate::sketch_transform::outputs(pattern)
+                    .iter()
+                    .any(|id| members.contains(id))
+            }),
+            "Detach Pattern / Copy Relation",
+        ),
+    ];
+    let mut sources = source_kinds
+        .into_iter()
+        .filter_map(|(present, label)| present.then_some(label));
+    if let Some(first) = sources.next() {
+        let label = if sources.next().is_some() {
+            "Detach Source Relations"
+        } else {
+            first
+        };
         out.push(descriptor(
             target,
             "sketch.detach-conversion",
-            "Detach Source Relation",
+            label,
             "Edit",
-            None,
+            members
+                .iter()
+                .any(|member| crate::sketch_blocks::instance_for_member(sketch, member).is_some())
+                .then_some("Explode the block before detaching its source"),
         ));
     }
     if entities.iter().any(|e| {
@@ -1250,7 +1269,12 @@ pub fn sketch_project(
     }
     if entities.is_empty() {
         for (command, label, group) in crate::modeling_tools::SKETCH_TOOLS {
-            if matches!(*group, "Constraints" | "Edit") || *command == "sketch.select" {
+            if matches!(*group, "Constraints" | "Edit")
+                || *command == "sketch.select"
+                || out
+                    .iter()
+                    .any(|item| item.commands.iter().any(|id| id == command))
+            {
                 continue;
             }
             out.push(descriptor(target, command, label, "Draw", None));
@@ -1280,7 +1304,7 @@ pub fn sketch_project(
     out.push(descriptor(
         target,
         "sketch.finish",
-        "Apply Sketch",
+        "Finish Sketch",
         "Operation",
         None,
     ));
