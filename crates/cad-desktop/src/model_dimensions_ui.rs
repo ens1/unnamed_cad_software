@@ -284,12 +284,11 @@ fn begin(w: &mut Workspace, id: Option<&str>) -> Result<()> {
 /// when several copies have exactly the sheet's part and configuration.
 pub(crate) fn open_from_drawing(
     w: &mut Workspace,
-    part: &str,
-    configuration: Option<&str>,
-    path: &[cad_core::Id],
-    source: &str,
-    is_datum: bool,
+    sheet: &cad_core::Drawing,
+    item: &cad_core::drawing::model_items::PaperItem,
 ) -> Result<()> {
+    let part = item.definition.as_str();
+    let source = item.source.as_str();
     if w.settings.is_some()
         || w.tool_checkpoint.is_some()
         || w.session.draft.is_some()
@@ -301,13 +300,18 @@ pub(crate) fn open_from_drawing(
     }
     let eval = current_geometry(w).ok_or_else(|| invalid("Wait for the current model geometry"))?;
     let doc = w.session.visible();
-    let config = configuration.or_else(|| doc.active_configurations.get(part).map(String::as_str));
+    let config = item
+        .configuration
+        .as_deref()
+        .or_else(|| doc.active_configurations.get(part).map(String::as_str));
     let occurrence = eval
         .instances
         .iter()
         .filter(|i| {
             i.definition == part
-                && (path.is_empty() || path == i.path)
+                && crate::drawing_interaction_ui::model_return::matches_occurrence(
+                    doc, sheet, item, &i.path,
+                )
                 && i.configuration
                     .as_deref()
                     .or_else(|| doc.active_configurations.get(part).map(String::as_str))
@@ -321,7 +325,7 @@ pub(crate) fn open_from_drawing(
         .model_dimensions
         .get(cad_core::history::mesh_key(occurrence))
         .ok_or_else(|| invalid("This part has no evaluated model dimensions"))?;
-    let selected = if is_datum {
+    let selected = if item.datum {
         let datum = report
             .datums
             .iter()
@@ -342,7 +346,7 @@ pub(crate) fn open_from_drawing(
     };
     let path = occurrence.path.clone();
     w.activate_context(Some(part.into()), Some(path.clone()));
-    begin(w, (!is_datum).then_some(source))?;
+    begin(w, (!item.datum).then_some(source))?;
     w.fields.insert(PATH.into(), serde_json::to_string(&path)?);
     if let Some(pick) = selected {
         viewport::select(w, pick);

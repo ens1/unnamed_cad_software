@@ -175,6 +175,7 @@ pub struct Workspace {
     pub content_repositories: content_repositories_ui::State,
     pub sketch_analysis: sketch_analysis_ui::State,
     pub drawing_interaction: drawing_interaction_ui::State,
+    pub(crate) drawing_model_return: Option<drawing_interaction_ui::model_return::ModelReturn>,
     pub drawing_worker: drawing_interaction_ui::PaperWorker,
     pub operation_values: std::sync::Mutex<operation_editor_ui::ValueCache>,
     pub production_cache: std::sync::Mutex<production_ui::Cache>,
@@ -351,6 +352,7 @@ impl Workspace {
             content_repositories: Default::default(),
             sketch_analysis: sketch_analysis_ui::State::default(),
             drawing_interaction: drawing_interaction_ui::State::default(),
+            drawing_model_return: None,
             drawing_worker: drawing_interaction_ui::PaperWorker::new(),
             operation_values: Default::default(),
             production_cache: Default::default(),
@@ -805,6 +807,7 @@ impl Workspace {
                 drawing_interaction_ui::reset(self);
                 production_ui::reset(self);
                 drawing_ui::retain_workspace(self);
+                drawing_interaction_ui::model_return::restore(self, true);
                 if save_as {
                     ui::save_after_confirm(self, destination);
                 }
@@ -868,6 +871,7 @@ impl Workspace {
         self.manager_tree = true;
         self.status = "Draft discarded".into();
         drawing_ui::retain_workspace(self);
+        drawing_interaction_ui::model_return::restore(self, false);
     }
     pub fn replace(&mut self, d: Document, path: Option<PathBuf>) {
         self.replace_session(Session::new(d, BACKEND), path, None);
@@ -890,6 +894,7 @@ impl Workspace {
         }
         settings::cancel(self);
         self.file_switch = None;
+        self.drawing_model_return = None;
         self.cancel();
         self.session = session;
         self.source_cache = Default::default();
@@ -1078,6 +1083,7 @@ impl Workspace {
         self.rendered_key.clear();
         self.status = "Operation cancelled".into();
         drawing_ui::retain_workspace(self);
+        drawing_interaction_ui::model_return::restore(self, false);
     }
     pub fn confirm_tool(&mut self) {
         if weld_beads_ui::seam_pick::owner(self).is_some() {
@@ -1296,6 +1302,7 @@ impl Workspace {
             || self.fields.contains_key("assembly-inspection-editor")
             || self.fields.contains_key("appearance-tool")
             || self.fields.contains_key("production-editor")
+            || drawing_interaction_ui::model_return::unchanged_feature(self)
             || model_dimensions_ui::active(self))
             && self.session.draft.is_none()
         {
@@ -1309,6 +1316,7 @@ impl Workspace {
             self.rendered_key.clear();
             production_ui::reset(self);
             self.status = "Editor closed; source unchanged".into();
+            drawing_interaction_ui::model_return::restore(self, false);
             return;
         }
         if self.sketch.is_none() && self.session.draft.is_none() {

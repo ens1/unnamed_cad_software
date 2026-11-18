@@ -14,6 +14,7 @@ use cad_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
+pub(crate) mod model_return;
 mod paper_cache;
 mod section_tool;
 mod weld_source;
@@ -105,6 +106,7 @@ struct Capture {
 }
 #[derive(Default)]
 pub struct State {
+    returned_callout: Option<model_return::ReturnedCallout>,
     cache: Option<Cache>,
     paper_request: Option<(u64, BuildKey)>,
     paper_error: Option<(BuildKey, String)>,
@@ -412,6 +414,7 @@ fn target_label(source: &Drawing, target: &Target) -> String {
     }
 }
 fn select(w: &mut Workspace, state: &mut State, source: &Drawing, page: u32, target: Target) {
+    state.returned_callout = None;
     state.selection = Some((source.id.clone(), page, target.clone()));
     state.cohort = vec![target.clone()];
     w.fields.insert("drawing-active".into(), source.id.clone());
@@ -1354,6 +1357,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data["handles"] = json!(target.handles);
             data["in_cohort"] = json!(state.cohort.contains(&target.target));
             data["primary"] = json!(selection == Some(&target.target));
+            if state.returned_callout.is_some() && selection == Some(&target.target) {
+                data["classes"] = json!(["paper-item", "primary", "cohort", "model-edit-return"]);
+            }
             out.push(SemanticElement {
                 id: format!(
                     "{}:paper:{}:{}",
@@ -1680,6 +1686,7 @@ pub fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) -> Result
                 w.fields.insert("drawing-page".into(), page.to_string());
                 w.view.drawing_page = page;
                 w.view.drawing_selection = None;
+                w.drawing_interaction.returned_callout = None;
                 w.drawing_interaction.selection = None;
                 w.drawing_interaction.cohort.clear();
                 w.drawing_interaction.tool = Tool::Select;
@@ -1835,27 +1842,31 @@ fn execute(w: &mut Workspace, state: &mut State, cmd: &str, data: Option<&Value>
                 .as_ref()
                 .and_then(|cache| cache.paper.model_items.get(id))
                 .ok_or_else(|| invalid("The selected callout is no longer on this sheet"))?;
+            let origin = model_return::ModelReturn::capture(
+                w,
+                state,
+                &source,
+                Target::ModelItem { id: id.clone() },
+            );
             if !crate::drawing_ui::leave_workspace(w) {
                 return Err(invalid("Finish the current drawing edit first"));
             }
             let result = if item.weld {
                 weld_source::open(w, &source, item)
             } else {
-                crate::model_dimensions_ui::open_from_drawing(
-                    w,
-                    &item.definition,
-                    item.configuration.as_deref(),
-                    &item.path,
-                    &item.source,
-                    item.datum,
-                )
+                crate::model_dimensions_ui::open_from_drawing(w, &source, item)
             };
             if let Err(error) = result {
+                if w.tool_checkpoint.is_some() {
+                    w.cancel_tool();
+                }
                 crate::drawing_ui::open_workspace(w);
                 return Err(error);
             }
+            w.drawing_model_return = Some(origin);
         }
         "drawing.interact-clear-selection" => {
+            state.returned_callout = None;
             state.selection = None;
             state.cohort.clear();
             state.context_target = None;
@@ -2328,6 +2339,9 @@ pub fn frame(
         w.drawing_interaction = state;
         return true;
     }
+    if let Some(remaining) = model_return::reveal(w, &mut state, &source) {
+        ui.ctx().request_repaint_after(remaining);
+    }
     let Some(cache) = state.cache.as_ref() else {
         draw_status(
             ui,
@@ -2503,6 +2517,7 @@ pub fn frame(
                                     w.fields.insert("drawing-page".into(), p.to_string());
                                     w.view.drawing_page = p;
                                     w.view.drawing_selection = None;
+                                    state.returned_callout = None;
                                     state.cohort.clear();
                                     state.selection = None;
                                     state.tool = Tool::Select;
@@ -2543,6 +2558,11 @@ pub fn frame(
         let is_hovered = state.hover.as_ref() == Some(&target.target);
         if is_selected || is_hovered || target.diagnostic.is_some() {
             let mut classes = vec!["paper-item"];
+            let just_updated =
+                state.returned_callout.is_some() && selected(&state) == Some(&target.target);
+            if just_updated {
+                classes.push("model-edit-return");
+            }
             if selected(&state) == Some(&target.target) {
                 classes.push("primary");
             }
@@ -2581,7 +2601,9 @@ pub fn frame(
             let width = controls::number(
                 &properties,
                 "stroke-width",
-                if is_selected {
+                if just_updated {
+                    stroke.width + 2.
+                } else if is_selected {
                     stroke.width + 0.5
                 } else {
                     stroke.width

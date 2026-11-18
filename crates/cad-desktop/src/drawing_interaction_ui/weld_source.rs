@@ -1,23 +1,5 @@
-use super::{Workspace, current_native, invalid};
-use cad_core::{Document, Drawing, Id, Operation, Result, drawing::model_items::PaperItem};
-
-/// A sheet stores the occurrence path from its own drawing root. Model editing
-/// uses a path from the document root, including when a subassembly is reused.
-fn matches_sheet(doc: &Document, sheet: &Drawing, item: &PaperItem, path: &[Id]) -> bool {
-    let Some(prefix) = path.strip_suffix(item.path.as_slice()) else {
-        return false;
-    };
-    let owner = prefix.iter().try_fold(&doc.root, |definition, id| {
-        Some(
-            &doc.assemblies
-                .get(definition)?
-                .instances
-                .get(id)?
-                .definition,
-        )
-    });
-    owner == Some(&sheet.definition)
-}
+use super::{Workspace, current_native, invalid, model_return::matches_occurrence};
+use cad_core::{Drawing, Id, Operation, Result, drawing::model_items::PaperItem};
 
 pub(super) fn open(w: &mut Workspace, sheet: &Drawing, item: &PaperItem) -> Result<()> {
     let doc = w.session.visible();
@@ -48,7 +30,7 @@ pub(super) fn open(w: &mut Workspace, sheet: &Drawing, item: &PaperItem) -> Resu
             .filter(|i| {
                 i.definition == part.id
                     && configuration(i.configuration.as_ref()) == expected
-                    && matches_sheet(doc, sheet, item, &i.path)
+                    && matches_occurrence(doc, sheet, item, &i.path)
             })
             .min_by_key(|i| (Some(&i.path) != w.selected_component.as_ref(), &i.path))
             .map(|i| i.path.clone())
@@ -70,7 +52,7 @@ pub(super) fn open(w: &mut Workspace, sheet: &Drawing, item: &PaperItem) -> Resu
                     && configuration(weld.placement.configuration.as_ref()) == expected
             })
             .filter_map(|weld| weld.placement.path.split_last().map(|(_, owner)| owner))
-            .filter(|owner| matches_sheet(doc, sheet, item, owner))
+            .filter(|owner| matches_occurrence(doc, sheet, item, owner))
             .min_by_key(|p| (Some(*p) != w.selected_component.as_deref(), *p))
             .ok_or_else(occurrence_error)?
             .to_vec();

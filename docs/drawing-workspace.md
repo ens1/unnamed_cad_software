@@ -48,6 +48,8 @@ Part and assembly sheets show symbols for the model’s deposited welds by defau
 
 Use **Edit weld in model…** to change the joint or mark it as a field weld. To hide generated symbols on one sheet, clear **Sheet → Model scope → Show model weld symbols**. Manual welding annotations have their own placement. The sheet preview, drawing PDF and drawing DXF share the resulting symbols. [Weld symbol conventions](drawing-symbols.md)
 
+When you open a weld symbol, model dimension, or datum from the sheet, **Finish & return** brings you back to the same page, zoom, and pan. The updated callout briefly highlights. **Cancel** returns to the same spot and restores the original callout. If the edit removes the callout or moves it off the page, TCAD keeps your place and tells you.
+
 ## Model dimensions on paper
 
 A new part sheet shows finished model dimensions and established datums automatically. **Sheet → Model scope → Show model dimensions and datums** also enables them on an existing sheet. Each callout follows its part and configuration. Select a label and choose **Edit in model…** to change its tolerance. Drag its handle to change where it prints. A label move is a sheet edit and uses Apply, Cancel and Undo.

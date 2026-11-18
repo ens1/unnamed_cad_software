@@ -1334,6 +1334,7 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
             return Some("A current validated preview is required");
         }
     } else if !(crate::model_dimensions_ui::active(w)
+        || crate::drawing_interaction_ui::model_return::unchanged_feature(w)
         || w.fields.contains_key("exploded-view-editor")
         || crate::document_identity_ui::active(w)
         || w.fields.contains_key("assembly-inspection-editor")
@@ -2667,6 +2668,14 @@ pub fn properties(ui: &mut egui::Ui, w: &mut Workspace) {
     );
 }
 pub fn confirmation_label(w: &Workspace) -> String {
+    if w.drawing_model_return.is_some() {
+        return if w.session.draft.is_some() {
+            "Finish & return"
+        } else {
+            "Return to drawing"
+        }
+        .into();
+    }
     if crate::model_dimensions_ui::active(w) && w.session.draft.is_none() {
         return "Done".into();
     }
