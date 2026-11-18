@@ -220,7 +220,7 @@ pub(crate) fn line_axis(curve: &Curve) -> Result<Axis> {
     axis(start, d)
 }
 
-fn ruled_axis(surface: BsplineSurface<Vector4>) -> Result<(Axis, [f64; 2])> {
+fn ruled_axis(surface: BsplineSurface<Vector4>, for_size: bool) -> Result<(Axis, [f64; 2], f64)> {
     let mut surface = surface;
     if surface.vdegree() != 1 || surface.control_points()[0].len() != 2 {
         if surface.udegree() == 1 && surface.control_points().len() == 2 {
@@ -256,6 +256,18 @@ fn ruled_axis(surface: BsplineSurface<Vector4>) -> Result<(Axis, [f64; 2])> {
             "circular rulings do not have a common normal axis",
         ));
     }
+    // A reference axis can tolerate a near-perpendicular section. A size
+    // implies a right circular section over the whole face: reject a skew
+    // extrusion when radial scale would turn that angle into a size error.
+    if for_size
+        && [a, b].iter().any(|ring| {
+            ring.normal.cross(direction).magnitude() > (DISTANCE / ring.radius).min(1e-9)
+        })
+    {
+        return Err(unsupported(
+            "Circular stations are skew to their center axis",
+        ));
+    }
     let ratio = surface.control_points()[0][1].w / surface.control_points()[0][0].w;
     let scale = b.radius / a.radius;
     if !ratio.is_finite() || ratio <= 0. || !scale.is_finite() || scale <= 0. {
@@ -276,7 +288,11 @@ fn ruled_axis(surface: BsplineSurface<Vector4>) -> Result<(Axis, [f64; 2])> {
             ));
         }
     }
-    Ok((axis(a.center, direction)?, [a.radius, b.radius]))
+    Ok((
+        axis(a.center, direction)?,
+        [a.radius, b.radius],
+        (b.center - a.center).magnitude(),
+    ))
 }
 pub(crate) fn face_axis(face: &Face) -> Result<Axis> {
     let surface = face.surface();
@@ -342,32 +358,51 @@ pub(crate) fn face_axis(face: &Face) -> Result<Axis> {
     let rational = surface
         .try_into_homogeneous_bspline_surface()
         .ok_or_else(|| unsupported("face carrier has no exact rational form"))?;
-    ruled_axis(rational).map(|(axis, _)| axis)
+    ruled_axis(rational, false).map(|(axis, _, _)| axis)
 }
 
-/// Diameter and datum axes must belong to a circular cylinder. A cone or a
-/// revolved spline can define an axis without defining a constant diameter.
-pub(crate) fn right_cylinder(face: &Face) -> Result<(Axis, f64)> {
+/// Axis and radii at two native stations. A skew generator produces a
+/// hyperboloid, so a line revolution must also trace one meridian plane.
+pub(crate) fn circular_ruling(face: &Face) -> Result<(Axis, [f64; 2], f64)> {
     let surface = face.surface();
     if let Surface::RevolutionSurface(processor) = &surface {
         let source = processor.entity();
         let Curve::Line(Line(a, b)) = source.entity_curve() else {
-            return Err(unsupported("Generator is not a straight cylinder ruling"));
+            return Err(unsupported("Generator is not a straight circular ruling"));
         };
-        let direction = unit(source.axis())?;
-        if unit(*b - *a)?.cross(direction).magnitude() > 64. * f64::EPSILON {
-            return Err(unsupported(
-                "Generator is not parallel to the rotation axis",
-            ));
+        let carrier = face_axis(face)?;
+        let axis_direction = Vector3::from(carrier.direction);
+        let origin = Point3::from(carrier.origin);
+        let a = processor.transform().transform_point(*a) - origin;
+        let b = processor.transform().transform_point(*b) - origin;
+        let axial_a = a.dot(axis_direction);
+        let axial_b = b.dot(axis_direction);
+        let radial_a = a - axis_direction * axial_a;
+        let radial_b = b - axis_direction * axial_b;
+        let ra = radial_a.magnitude();
+        let rb = radial_b.magnitude();
+        if !(ra.is_finite() && rb.is_finite() && (ra > DISTANCE || rb > DISTANCE)) {
+            return Err(unsupported("Circular ruling has no finite radius"));
         }
-        let axis = face_axis(face)?;
-        let world_axis = Vector3::from(axis.direction);
-        let position = processor.transform().transform_point(*a) - Point3::from(axis.origin);
-        let radius = position.cross(world_axis).magnitude();
-        if radius.is_finite() && radius > DISTANCE {
-            return Ok((axis, radius));
+        if ra > DISTANCE && rb > DISTANCE {
+            let u = radial_a / ra;
+            let v = radial_b / rb;
+            if u.dot(v) <= 0. || u.cross(v).magnitude() > 1e-10 {
+                return Err(unsupported("The generator is not on one cone meridian"));
+            }
         }
-        return Err(unsupported("Degenerate circular cylinder"));
+        let height = axial_b - axial_a;
+        if !height.is_finite() || height.abs() <= DISTANCE {
+            return Err(unsupported("Circular ruling has no axial extent"));
+        }
+        return Ok((
+            axis(
+                origin + axis_direction * axial_a,
+                axis_direction * height.signum(),
+            )?,
+            [ra, rb],
+            height.abs(),
+        ));
     }
     let net = match &surface {
         Surface::BsplineSurface(patch) => patch
@@ -388,9 +423,5 @@ pub(crate) fn right_cylinder(face: &Face) -> Result<(Axis, f64)> {
     let rational = surface
         .try_into_homogeneous_bspline_surface()
         .ok_or_else(|| unsupported("Missing rational carrier"))?;
-    let (axis, [a, b]) = ruled_axis(rational)?;
-    if (a - b).abs() > 128. * f64::EPSILON * a.max(b).max(1.) {
-        return Err(unsupported("The ruled carrier has a varying radius"));
-    }
-    Ok((axis, (a + b) * 0.5))
+    ruled_axis(rational, true)
 }

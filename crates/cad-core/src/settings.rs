@@ -79,6 +79,8 @@ pub struct ModelSettings {
     /// Bilateral manufacturing allowance on finished lengths. Independent of kernel accuracy.
     #[serde(skip_serializing_if = "crate::model_dimensions::is_default_tolerance")]
     pub manufacturing_tolerance_mm: f64,
+    #[serde(skip_serializing_if = "crate::model_dimensions::is_default_angular_tolerance")]
+    pub manufacturing_tolerance_deg: f64,
     /// Applied to subsequently created part definitions; existing assignments are preserved.
     pub default_new_part_finish: Id,
     /// Engineering assignment for subsequently created parts, independent of finish.
@@ -99,6 +101,7 @@ impl Default for ModelSettings {
             display_tolerance_mm: 0.15,
             modeling: Default::default(),
             manufacturing_tolerance_mm: crate::model_dimensions::DEFAULT_TOLERANCE_MM,
+            manufacturing_tolerance_deg: crate::model_dimensions::DEFAULT_ANGULAR_TOLERANCE_DEG,
             default_new_part_finish: crate::appearance::default_finish(),
             default_new_part_material: default_new_part_material(),
             production: Default::default(),
@@ -122,8 +125,7 @@ impl ModelSettings {
         }
         crate::tolerance::validate_display(self.display_tolerance_mm)?;
         self.modeling.validate()?;
-        crate::model_dimensions::Allowance::symmetric(self.manufacturing_tolerance_mm)
-            .validate()?;
+        crate::model_dimensions::SourceDefaults::from_settings(self).validate()?;
         let finish = &self.default_new_part_finish;
         if finish.is_empty()
             || finish.len() > 256
@@ -202,6 +204,7 @@ struct SavedModelSettings {
     display_tolerance_mm: f64,
     modeling: crate::tolerance::Modeling,
     manufacturing_tolerance_mm: f64,
+    manufacturing_tolerance_deg: f64,
     default_new_part_finish: Id,
     default_new_part_material: Id,
     production: crate::production::Preferences,
@@ -217,6 +220,7 @@ impl Default for SavedModelSettings {
             display_tolerance_mm: settings.display_tolerance_mm,
             modeling: settings.modeling,
             manufacturing_tolerance_mm: settings.manufacturing_tolerance_mm,
+            manufacturing_tolerance_deg: settings.manufacturing_tolerance_deg,
             default_new_part_finish: settings.default_new_part_finish,
             default_new_part_material: settings.default_new_part_material,
             production: settings.production,
@@ -237,6 +241,7 @@ impl From<SavedModelSettings> for ModelSettings {
             display_tolerance_mm: saved.display_tolerance_mm,
             modeling: saved.modeling,
             manufacturing_tolerance_mm: saved.manufacturing_tolerance_mm,
+            manufacturing_tolerance_deg: saved.manufacturing_tolerance_deg,
             default_new_part_finish: saved.default_new_part_finish,
             default_new_part_material: saved.default_new_part_material,
             production: saved.production,

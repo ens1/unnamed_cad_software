@@ -42,6 +42,16 @@ Each action and tree item is also an independent semantic binding. Existing
 `drawing-editor` confirmation action identities remain available to custom
 layouts; their default visual position has moved to the pinned footer.
 
+## Model dimensions on paper
+
+A new part sheet shows finished model dimensions and established datums automatically. **Sheet → Model scope → Show model dimensions and datums** also enables them on an existing sheet. Each callout follows its part and configuration. Select a label and choose **Edit in model…** to change its tolerance. Drag its handle to change where it prints. A label move is a sheet edit and uses Apply, Cancel and Undo.
+
+TCAD projects a measurement once per sheet. A suitable orthographic view gets the measurement lines or angular arc. A foreshortened view uses a leader and the true model value. A projected diameter or radius carries its model size. Explicit part datums can be referenced from drawing tolerance frames. The Model callouts group and Drawing information show the generated annotations and any missing coverage.
+
+PDF and drawing DXF use the same evaluated paper vectors. Exporting a part without a saved sheet generates a dimensioned projection. For an assembly without saved sheets, export also generates one local part detail for each represented solid part and configuration. If you have saved sheets, they determine the exported drawing set. Assembly sheets can show component dimensions once per represented part configuration. Datum letters stay scoped to their part detail sheets.
+
+If a saved tolerance or datum loses its model reference, the part stays editable. Drawing export identifies the requirement to repair. A sheet whose automatic recognition reports omitted sizes carries a coverage note. When automatic callouts fill the sheet, the page selector adds model-dimension pages after any table pages. Each page repeats the views its callouts refer to. PDF and drawing DXF keep that order and sheet numbering across the drawing set. Dragging a callout pins it to its view and page. **Place automatically** returns a moved callout to automatic layout. Moving a pinned label outside the paper flags it for repair before export.
+
 ## Paper content and fidelity
 
 Production paper, PDF and drawing DXF retain ordinary view labels, standard scale

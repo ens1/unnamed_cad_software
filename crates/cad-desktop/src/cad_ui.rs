@@ -2184,6 +2184,7 @@ fn tree_contents(
         w.leave_part_context();
         return;
     }
+    crate::model_dimensions_ui::review_action(ui, w, elements);
     if w.view.mode == "Flow" {
         crate::ui::graph(ui, w, part);
         return;

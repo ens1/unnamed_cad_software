@@ -69,6 +69,16 @@ pub struct NativeFaceMeasurement {
     /// Actual native boundary points, indexed by low/high and measurement axis.
     pub witnesses: [[[f64; 3]; 3]; 2],
     pub cylinder: Option<NativeCylinder>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cone: Option<NativeCone>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NativeCone {
+    /// Origin is the apex; direction points towards the measured nappe.
+    pub axis: crate::reference_geometry::Axis,
+    /// Positive change in radius per axial millimeter.
+    pub slope: f64,
+    pub internal: bool,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NativeCylinder {
@@ -239,6 +249,9 @@ pub struct Evaluation {
     pub model_dimensions: BTreeMap<Id, crate::model_dimensions::Report>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub drawing_review: crate::drawing_review::Sheets,
+    /// Number of paper pages actually required for each saved sheet, including continuation pages.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub drawing_page_counts: BTreeMap<Id, u32>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub drawing_sections: BTreeMap<Id, crate::drawing_sections::Evaluated>,
     pub accuracy: crate::tolerance::Accuracy,

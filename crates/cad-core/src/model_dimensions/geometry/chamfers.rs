@@ -1,11 +1,14 @@
 //! Measure a bevel from its surviving rails back to the virtual sharp. An
 //! authored chamfer distance alone cannot establish either finished setback.
-use super::{Characteristic, Characteristics, Kind, MAX_VISITS, Vector, aligned, key, normal, vec};
+use super::{
+    Characteristic, Characteristics, FaceIndex, Kind, MAX_VISITS, Vector, aligned,
+    neighboring_faces, normal, vec,
+};
 use crate::{
     Operation, Part,
     protocol::{EdgeCenter, FaceRange, MeshData},
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Clone)]
 struct Rail {
@@ -67,54 +70,48 @@ fn offsets(
         .then_some(spans)
 }
 
-pub(super) fn add(result: &mut Characteristics<'_>, part: &Part, mesh: &MeshData) {
-    let chamfers: HashSet<_> = part
+pub(super) fn add(
+    result: &mut Characteristics<'_>,
+    part: &Part,
+    mesh: &MeshData,
+    index: &FaceIndex,
+) {
+    let chamfers: HashMap<_, _> = part
         .features
         .iter()
-        .filter(|f| matches!(f.operation, Operation::Chamfer { .. }))
-        .map(|f| f.id.as_str())
+        .filter_map(|feature| {
+            if let Operation::Chamfer { options, .. } = &feature.operation {
+                Some((feature.id.as_str(), options.as_ref()))
+            } else {
+                None
+            }
+        })
         .collect();
     if chamfers.is_empty() {
         return;
     }
     let mut rails = HashMap::<usize, Vec<Rail>>::new();
     for (index, face) in result.faces.iter().enumerate() {
-        if !chamfers.contains(face.reference.producer.node.as_str()) {
+        if !chamfers.contains_key(face.reference.producer.node.as_str()) {
             continue;
         }
-        match bevel_constructor(face).as_deref() {
-            Some("edge_setback" | "local_exact_planar_wedge") if face.plane.is_some() => {
-                rails.insert(index, Vec::new());
-            }
-            Some("exact_conical_rim") => {
-                result
-                    .coverage
-                    .insert("Circular chamfer setbacks require a radial section.".into());
-            }
-            _ => {}
+        if face.plane.is_some()
+            && matches!(
+                bevel_constructor(face).as_deref(),
+                Some("edge_setback" | "local_exact_planar_wedge")
+            )
+        {
+            rails.insert(index, Vec::new());
         }
     }
     if rails.is_empty() {
         return;
     }
-    let mut faces = BTreeMap::new();
-    for (i, face) in result.faces.iter().enumerate() {
-        faces
-            .entry(key(face.body.as_ref(), &face.reference))
-            .and_modify(|idx| *idx = None)
-            .or_insert(Some(i));
-    }
     for edge in &mesh.edges {
-        let (Some(native), Some(EdgeCenter::Line { start, end, .. })) =
-            (&edge.native, &edge.center)
-        else {
+        let Some(EdgeCenter::Line { start, end, .. }) = &edge.center else {
             continue;
         };
-        let [one, two] = native.boundaries.as_slice() else {
-            continue;
-        };
-        let lookup = |r| faces.get(&key(edge.body.as_ref(), r)).copied().flatten();
-        let (Some(a), Some(b)) = (lookup(&one.face), lookup(&two.face)) else {
+        let Some([(a, _), (b, _)]) = neighboring_faces(index, edge) else {
             continue;
         };
         for (bevel, support) in [(a, b), (b, a)] {
@@ -160,7 +157,37 @@ pub(super) fn add(result: &mut Characteristics<'_>, part: &Part, mesh: &MeshData
                 .insert("A chamfer has no unique pair of surviving straight support rails.".into());
             continue;
         };
-        for (support, [sharp, rail]) in spans {
+        let options = chamfers[result.faces[i].reference.producer.node.as_str()];
+        let first = if options.method == crate::edge_features::ChamferMethod::DistanceAngle {
+            first_support(&spans, result.faces, options)
+        } else {
+            None
+        };
+        for (index, (support, [sharp, rail])) in spans.iter().copied().enumerate() {
+            if first.is_some_and(|selected| selected != index) {
+                continue;
+            }
+            if first == Some(index) {
+                let other_rail = spans[1 - index].1[1];
+                let incoming = sharp - rail;
+                let outgoing = other_rail - rail;
+                let section_normal = incoming.cross(&outgoing);
+                let angle = section_normal.norm().atan2(incoming.dot(&outgoing));
+                if let Some(direction) = section_normal.try_normalize(1e-14)
+                    && let Some(id) = result.id("chamfer-angle", &[i, support])
+                {
+                    result.dimensions.push(Characteristic {
+                        id,
+                        label: "Chamfer angle".into(),
+                        kind: Kind::Angle,
+                        nominal: angle,
+                        angle_vertex: Some(rail.into()),
+                        witnesses: [sharp.into(), other_rail.into()],
+                        plane_normal: Some(direction.into()),
+                        supports: result.refs([i, support]),
+                    });
+                }
+            }
             let Some(id) = result.id("chamfer-setback", &[i, support]) else {
                 continue;
             };
@@ -174,11 +201,41 @@ pub(super) fn add(result: &mut Characteristics<'_>, part: &Part, mesh: &MeshData
                 id,
                 label,
                 kind: Kind::Linear,
-                nominal_mm: span.norm(),
+                angle_vertex: None,
+                nominal: span.norm(),
                 witnesses: [sharp.into(), rail.into()],
                 plane_normal: None,
                 supports: result.refs([i, support]),
             });
         }
     }
+}
+
+/// The selected setback side is explicit, or follows the feature's ordered
+/// outward normals. Retain both measured lengths if a saved side cannot be resolved.
+fn first_support(
+    spans: &[(usize, [Vector; 2]); 2],
+    faces: &[&FaceRange],
+    options: &crate::edge_features::ChamferOptions,
+) -> Option<usize> {
+    let [a, b] = spans.map(|(index, _)| faces[index]);
+    let index = if let Some(reference) = &options.first_face {
+        let matches =
+            [a, b].map(|f| crate::provenance::equivalent(&f.reference, reference).unwrap_or(false));
+        match matches {
+            [true, false] => 0,
+            [false, true] => 1,
+            _ => return None,
+        }
+    } else {
+        let a = normal(a)?;
+        let b = normal(b)?;
+        usize::from(
+            a.x.total_cmp(&b.x)
+                .then_with(|| a.y.total_cmp(&b.y))
+                .then_with(|| a.z.total_cmp(&b.z))
+                .is_gt(),
+        )
+    };
+    Some(if options.flip { 1 - index } else { index })
 }

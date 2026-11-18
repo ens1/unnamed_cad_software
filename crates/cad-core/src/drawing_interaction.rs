@@ -125,6 +125,9 @@ pub struct Snap {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
+    ResetModelPlacement {
+        id: Id,
+    },
     TranslateAnnotations {
         annotations: Vec<Id>,
         delta_mm: [f64; 2],
@@ -273,7 +276,7 @@ fn expanded(mut bounds: [[f64; 2]; 2], pad: f64) -> [[f64; 2]; 2] {
     }
     bounds
 }
-fn bounds(primitives: &[Primitive]) -> Option<[[f64; 2]; 2]> {
+pub(crate) fn bounds(primitives: &[Primitive]) -> Option<[[f64; 2]; 2]> {
     let mut result = [[f64::INFINITY; 2], [f64::NEG_INFINITY; 2]];
     let mut add = |point: [f64; 2]| {
         for axis in 0..2 {
@@ -1585,6 +1588,11 @@ pub fn apply(
     }
     let mut sheet = source.clone();
     match action {
+        Action::ResetModelPlacement { id } => {
+            if sheet.model_item_placements.remove(id).is_none() {
+                return Err(invalid("The callout already uses automatic placement"));
+            }
+        }
         Action::TranslateAnnotations {
             annotations,
             delta_mm,
@@ -1653,6 +1661,7 @@ pub fn apply(
                     sheet.model_item_placements.insert(
                         id.clone(),
                         drawing::model_items::Placement {
+                            model_page: item.model_page,
                             view: item.view.clone(),
                             offset_mm: std::array::from_fn(|i| {
                                 item.label_mm[i] - item.anchor_mm[i] + delta_mm[i]
@@ -2110,6 +2119,12 @@ pub fn apply(
     // Every gesture may repair one item while another still has a drawing
     // diagnostic. Native reference proofs above stay strict; the worker must
     // validate the complete drawing before final Apply or production export.
-    drawing::build_sheet_layout(doc, evaluation, &sheet, page)?;
+    // Resetting the last pinned callout can remove its continuation page.
+    let updated_page = if matches!(action, Action::ResetModelPlacement { .. }) {
+        0
+    } else {
+        page
+    };
+    drawing::build_sheet_layout(doc, evaluation, &sheet, updated_page)?;
     Ok(sheet)
 }

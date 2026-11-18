@@ -441,6 +441,10 @@ fn restore_workspace_fields(w: &mut Workspace) {
                 .first()
                 .map(|sheet| sheet.id.clone())
         });
+    if w.view.drawing_sheet != key {
+        w.view.drawing_page = 0;
+        w.view.drawing_selection = None;
+    }
     w.view.drawing_sheet = key.clone();
     w.command_tab = "Drawing".into();
     w.dialog = Some("drawings".into());
@@ -449,15 +453,8 @@ fn restore_workspace_fields(w: &mut Workspace) {
         .entry("drawing-editor-generation".into())
         .or_insert_with(cad_core::id);
     if let Some(key) = key {
-        let max = w
-            .session
-            .visible()
-            .drawings
-            .iter()
-            .find(|sheet| sheet.id == key)
-            .map(cad_core::drawing_tables::page_count)
-            .unwrap_or(1);
-        w.view.drawing_page = w.view.drawing_page.min(max.saturating_sub(1));
+        // The paper worker resolves the saved page after the document has evaluated.
+        // Before then the number of dimension continuations is unknown.
         w.fields.insert("drawing-active".into(), key.clone());
         w.fields.insert("drawing-preview".into(), key);
         w.fields
@@ -1028,7 +1025,7 @@ pub fn workspace_semantics(w: &Workspace) -> Vec<cad_core::presentation::Semanti
             let paper_target = cad_core::drawing_interaction::Target::ModelItem { id: id.clone() };
             out.push(tree_element(
                 &format!("{}:model-item:{id}", paper.id),
-                &paper.id,
+                w.fields.get("drawing-preview").unwrap_or(&paper.id),
                 &format!("{} · {}", item.label, item.text),
                 Some(&paper_target),
                 target == Some(&paper_target),
@@ -1141,7 +1138,9 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
         {
             let kind = element.data["item_kind"].as_str().unwrap_or("sheet");
             let sheet = element.data["sheet_id"].as_str();
-            if kind != "sheet" && sheet != w.fields.get("drawing-active").map(String::as_str) {
+            if kind == "model-item"
+                || (kind != "sheet" && sheet != w.fields.get("drawing-active").map(String::as_str))
+            {
                 continue;
             }
             let clicked = if kind == "sheet" {
@@ -1169,6 +1168,41 @@ pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
             if clicked {
                 semantic_action(w, element, "drawing.tree-select");
             }
+        }
+        let model_items = elements
+            .iter()
+            .filter(|e| e.data["item_kind"] == "model-item")
+            .collect::<Vec<_>>();
+        if !model_items.is_empty() {
+            egui::CollapsingHeader::new(format!("Model callouts ({})", model_items.len()))
+                .id_salt("drawing.model-callouts")
+                .show(ui, |ui| {
+                    for item in model_items {
+                        if controls::selectable(
+                            ui,
+                            &item.id,
+                            &item.role,
+                            &item.label,
+                            item.state == "selected",
+                        )
+                        .clicked()
+                        {
+                            semantic_action(w, item, "drawing.tree-select");
+                        }
+                    }
+                });
+        }
+        if let Some(issue) =
+            crate::drawing_interaction_ui::rendered_sheet(w).and_then(|p| p.model_review.first())
+        {
+            controls::label(
+                ui,
+                "drawing.model-review",
+                "drawing-source-detail",
+                &["compact"],
+                issue,
+                "invalid",
+            );
         }
         egui::CollapsingHeader::new("Drawing information")
             .id_salt("drawing.workspace-info")
@@ -1205,7 +1239,10 @@ pub fn footer_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticEl
     }
     let source_valid = crate::drawing_editor_ui::current_source_is_valid(w)
         && crate::drawing_interaction_ui::current_source_is_valid(w);
+    let model_review =
+        crate::drawing_interaction_ui::rendered_sheet(w).and_then(|p| p.model_review.first());
     let export_ready = source_valid
+        && model_review.is_none()
         && w.session.draft.is_none()
         && evaluation(w).is_some_and(|e| e.valid)
         && !w.session.visible().drawings.is_empty();
@@ -1219,7 +1256,7 @@ pub fn footer_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticEl
         let enabled = enabled && w.settings.is_none();
         cad_core::presentation::SemanticElement {
         id: format!("drawing-footer:{command}"), role: "drawing-workspace-action".into(), label: label.into(),
-        value: (!enabled).then(|| if command.starts_with("file.export") { "Apply a current validated drawing before export" } else { "Finish or validate the current drawing edit" }.into()),
+        value: (!enabled).then(|| if command.starts_with("file.export") { model_review.map_or("Apply a current validated drawing before export",String::as_str) } else { "Finish or validate the current drawing edit" }.into()),
         state: if enabled { "ready" } else { "disabled" }.into(), commands: vec![command.into()], relationships: vec![],
         data: json!({"contract":"tcad.presentation.drawing-workspace","version":1,"group":"drawing.workspace-footer","enabled":enabled,"actions":[{"command":command,"label":label,"enabled":enabled}]}),
     }}).collect()

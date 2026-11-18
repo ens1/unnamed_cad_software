@@ -924,7 +924,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     if w.session.committed.drawings.is_empty()
         && (preferences.outputs.drawing_pdf || preferences.outputs.drawing_dxf)
     {
-        out.push(note("drawing-source","No drawing sheets are saved. Publish will generate the standard projection sheet; dimensions and tolerances must be authored in Drawings."));
+        out.push(note("drawing-source","Publish will generate drawings from the model, including finished part dimensions and tolerances."));
     } else {
         out.push(note(
             "drawing-source",

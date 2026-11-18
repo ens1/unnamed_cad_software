@@ -8,6 +8,7 @@ use crate::{
 };
 use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -107,20 +108,36 @@ fn eligible_suggestion(face: &FaceRange, established: &[&FaceRange]) -> bool {
 }
 
 pub(super) fn resolve(part: &Part, mesh: &MeshData, report: &mut Report) {
-    let eligible: Vec<_> = mesh
+    // A designation is part-local. Two bodies can carry the same construction role.
+    let mut by_role = BTreeMap::new();
+    for face in mesh
         .faces
         .iter()
-        .filter(|face| face.reference.producer.definition == part.id && datum_eligible(face))
+        .filter(|f| f.reference.producer.definition == part.id)
+    {
+        by_role
+            .entry((&face.reference.producer, &face.reference.role))
+            .and_modify(|item| *item = None)
+            .or_insert(Some(face));
+    }
+    let eligible: Vec<_> = by_role
+        .values()
+        .flatten()
+        .copied()
+        .filter(|f| datum_eligible(f))
         .collect();
+    let unique_face = |target: &TopologyRef| {
+        let canonical = crate::provenance::normalized_reference(target).ok()?;
+        let mut matches = mesh.faces.iter().filter(|face| {
+            crate::provenance::matches_normalized(&face.reference, target, &canonical)
+                .unwrap_or(false)
+        });
+        let face = matches.next()?;
+        (matches.next().is_none() && datum_eligible(face)).then_some(face)
+    };
     let mut established = Vec::new();
     for (label, target) in &part.model_dimensions.datums {
-        let matching = |face: &&&FaceRange| {
-            crate::provenance::equivalent(&face.reference, target).unwrap_or(false)
-        };
-        let mut candidates = eligible.iter().filter(matching).copied();
-        let first = candidates.next();
-        if candidates.next().is_none()
-            && let Some(face) = first
+        if let Some(face) = unique_face(target)
             && let Some(datum) = from_face(label, face, true)
         {
             established.push(face);
@@ -156,7 +173,7 @@ pub(super) fn resolve(part: &Part, mesh: &MeshData, report: &mut Report) {
                     .then_with(|| b.reference.producer.cmp(&a.reference.producer))
                     .then_with(|| b.reference.role.cmp(&a.reference.role))
             });
-        if let Some(face) = candidate
+        if let Some(face) = candidate.and_then(|f| unique_face(&f.reference))
             && let Some(datum) = from_face(label, face, false)
         {
             established.push(face);

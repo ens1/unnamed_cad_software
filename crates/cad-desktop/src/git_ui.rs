@@ -263,6 +263,7 @@ pub fn poll(w: &mut Workspace) {
                     library::replace_command(w.session.visible(), plan.document, &w.root())?;
                 w.start_tool();
                 w.dispatch(command);
+                w.git_ui.checked_sources.remove(&plan.link);
                 w.git_ui.impact = Some(plan.impact);
                 w.status = "Review affected items and the model preview. Apply waits for validation; Cancel keeps the old component version".into();
             }
@@ -641,6 +642,14 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                         let name =
                             cad_core::occurrence_names::definition(&document, &source.definition);
                         let message = match available_revision {
+                            Some(revision)
+                                if !source.pin_model_defaults
+                                    && revision == source.source_revision =>
+                            {
+                                format!(
+                                    "{name}: preview the component update to pin its source manufacturing tolerances"
+                                )
+                            }
                             Some(revision) => format!(
                                 "{name}: revision {} → {revision} available. Preview it before applying",
                                 source.source_revision
@@ -909,6 +918,12 @@ fn library_elements(w: &Workspace) -> Vec<SemanticElement> {
             Some(SourceCheck {
                 available_revision: Some(revision),
                 ..
+            }) if !link.pin_model_defaults && *revision == link.source_revision => {
+                format!("Revision {revision} · source tolerance update available")
+            }
+            Some(SourceCheck {
+                available_revision: Some(revision),
+                ..
             }) => format!(
                 "Current revision {} → available revision {revision}",
                 link.source_revision
@@ -977,7 +992,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         elements.push(SemanticElement{id:"git/repository-status".into(),role:"git-repository-status".into(),label:format!("Branch: {}",report.branch),value:Some(report.status.clone()),state:"ready".into(),commands:vec!["git.refresh".into()],relationships:vec![w.session.visible().id.clone()],data:json!({"contract":"tcad.git-status","version":1,"branch":report.branch,"status":report.status,"history":report.history,"branches":report.branches,"remotes":report.remotes,"recovery":report.recovery})});
     }
     for link in w.session.visible().libraries.values() {
-        elements.push(SemanticElement{id:format!("component-source/pin/{}",link.id),role:"component-source-pin".into(),label:cad_core::occurrence_names::definition(w.session.visible(),&link.definition),value:Some(format!("Revision {}",link.source_revision)),state:"pinned".into(),commands:vec!["component-source.check".into(),"component-source.update".into()],relationships:vec![link.id.clone(),link.definition.clone()],data:json!({"contract":"tcad.component-source","version":2,"link":link.id,"source_document":link.source_document,"source_definition":link.source_definition,"source_revision":link.source_revision,"source_sha256":link.source_sha256,"git_source":link.git_source,"definition_closure":link.definition_closure,"offline_snapshot":link.snapshot_resource,"advanced_source":true})});
+        elements.push(SemanticElement{id:format!("component-source/pin/{}",link.id),role:"component-source-pin".into(),label:cad_core::occurrence_names::definition(w.session.visible(),&link.definition),value:Some(format!("Revision {}",link.source_revision)),state:"pinned".into(),commands:vec!["component-source.check".into(),"component-source.update".into()],relationships:vec![link.id.clone(),link.definition.clone()],data:json!({"contract":"tcad.component-source","version":2,"link":link.id,"source_document":link.source_document,"source_definition":link.source_definition,"source_revision":link.source_revision,"source_sha256":link.source_sha256,"git_source":link.git_source,"definition_closure":link.definition_closure,"source_manufacturing_defaults_pinned":link.pin_model_defaults,"offline_snapshot":link.snapshot_resource,"advanced_source":true})});
     }
     if let Some(impact) = &w.git_ui.impact {
         elements.push(SemanticElement{id:"component-source/update-impact".into(),role:"component-update-impact".into(),label:"Component update review".into(),value:Some(format!("{} components · {} mates · {} drawings · {} BOM rows",impact.occurrences.len(),impact.mates.len(),impact.drawings.len(),impact.bom_rows.len())),state:"review".into(),commands:vec![],relationships:impact.changed_definitions.clone(),data:json!({"contract":"tcad.component-update-impact","version":1,"impact":impact,"requires_current_evaluation":true})});

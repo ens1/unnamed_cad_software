@@ -168,6 +168,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         Ok(Some(Evaluation {
             model_dimensions: BTreeMap::new(),
             drawing_review: BTreeMap::new(),
+            drawing_page_counts: BTreeMap::new(),
             drawing_sections: BTreeMap::new(),
             accuracy: cad_core::tolerance::Accuracy::new(
                 source.settings.modeling,
@@ -1357,13 +1358,13 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         for p in solved
             .parts
             .values()
-            .filter(|p| !p.outputs.is_empty() || !p.model_dimensions.is_empty())
+            .filter(|p| !p.outputs.is_empty() || p.model_dimensions.has_requirements())
         {
             let (mesh, bodies, surfaces) =
                 self.output_with_measurements(p, display_tolerance_mm, true)?;
             model_dimensions.insert(
                 p.id.clone(),
-                cad_core::model_dimensions::evaluate(p, &mesh, &solved.settings),
+                cad_core::model_dimensions::evaluate(p, &mesh, &solved),
             );
             if !p.outputs.is_empty() {
                 meshes.insert(p.id.clone(), mesh);
@@ -1463,16 +1464,12 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 );
                 let part = &configured_solved.parts[&i.definition];
                 self.focused_preview(part, &key, display_tolerance_mm);
-                if !part.outputs.is_empty() || !part.model_dimensions.is_empty() {
+                if !part.outputs.is_empty() || part.model_dimensions.has_requirements() {
                     let (mesh, bodies, surfaces) =
                         self.output_with_measurements(part, display_tolerance_mm, true)?;
                     model_dimensions.insert(
                         key.clone(),
-                        cad_core::model_dimensions::evaluate(
-                            part,
-                            &mesh,
-                            &configured_solved.settings,
-                        ),
+                        cad_core::model_dimensions::evaluate(part, &mesh, &configured_solved),
                     );
                     if !part.outputs.is_empty() {
                         meshes.insert(key.clone(), mesh);
@@ -1619,6 +1616,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         let mut evaluated = Evaluation {
             model_dimensions,
             drawing_review: BTreeMap::new(),
+            drawing_page_counts: BTreeMap::new(),
             drawing_sections: BTreeMap::new(),
             accuracy: cad_core::tolerance::Accuracy::new(
                 document.settings.modeling,
@@ -1661,31 +1659,32 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         // Leave geometry available for repairing individual broken references.
         let mut issues = Vec::new();
         for sheet in &document.drawings {
-            let mut items = BTreeMap::new();
-            let mut complete = true;
-            for page in 0..cad_core::drawing_tables::page_count(sheet) {
-                match cad_core::drawing::build_sheet_page(document, &evaluated, sheet, page) {
-                    Ok(output) => {
-                        cad_core::drawing_review::collect(sheet, &output, page, &mut items)
+            match cad_core::drawing::build_sheet_family(document, &evaluated, sheet) {
+                Ok(pages) => {
+                    let page_count = u32::try_from(pages.len()).map_err(|_| {
+                        CadError::Invalid(format!("{} exceeds the drawing page limit", sheet.name))
+                    })?;
+                    evaluated
+                        .drawing_page_counts
+                        .insert(sheet.id.clone(), page_count);
+                    let mut items = BTreeMap::new();
+                    for (output, page) in pages.iter().zip(0..page_count) {
+                        cad_core::drawing_review::collect(sheet, output, page, &mut items);
                     }
-                    Err(error) => {
-                        let (target, message) = match error {
-                            CadError::EvaluationTarget { target, message } => (target, message),
-                            error => (sheet.id.clone(), format!("{} · {error}", sheet.name)),
-                        };
-                        issues.push(Diagnostic {
-                            edge_recovery: None,
-                            severity: "error".into(),
-                            target: Some(target),
-                            message,
-                        });
-                        complete = false;
-                        break;
-                    }
+                    evaluated.drawing_review.insert(sheet.id.clone(), items);
                 }
-            }
-            if complete {
-                evaluated.drawing_review.insert(sheet.id.clone(), items);
+                Err(error) => {
+                    let (target, message) = match error {
+                        CadError::EvaluationTarget { target, message } => (target, message),
+                        error => (sheet.id.clone(), format!("{} · {error}", sheet.name)),
+                    };
+                    issues.push(Diagnostic {
+                        edge_recovery: None,
+                        severity: "error".into(),
+                        target: Some(target),
+                        message,
+                    });
+                }
             }
         }
         if !issues.is_empty() {

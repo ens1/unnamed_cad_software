@@ -371,7 +371,12 @@ pub fn drawing_pdf(doc: &Document, e: &Evaluation, path: &Path) -> Result<()> {
     let factor = 72. / 25.4;
     let mut pages = vec![];
     for sheet in crate::drawing::sheets(doc, e)? {
-        let mut content = String::from("0.45 w\n");
+        // Acrobat limits a MediaBox side to 14,400 user units. Scale both axes
+        // together so custom sheets retain their physical print scale.
+        let [width, height] = sheet.paper_mm.map(|mm| mm * factor);
+        let user_unit = (width.max(height) / 14_400.).ceil().max(1.);
+        let inverse = 1. / user_unit;
+        let mut content = format!("{inverse} 0 0 {inverse} 0 0 cm\n0.45 w\n");
         for primitive in sheet.primitives {
             match primitive {
                 crate::drawing::Primitive::Polyline { points, dashed } => {
@@ -428,11 +433,7 @@ pub fn drawing_pdf(doc: &Document, e: &Evaluation, path: &Path) -> Result<()> {
                 }
             }
         }
-        pages.push((
-            sheet.paper_mm[0] * factor,
-            sheet.paper_mm[1] * factor,
-            content,
-        ));
+        pages.push((width / user_unit, height / user_unit, user_unit, content));
     }
     let count = pages.len();
     let kids = (0..count)
@@ -445,14 +446,14 @@ pub fn drawing_pdf(doc: &Document, e: &Evaluation, path: &Path) -> Result<()> {
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"
             .to_string(),
     ];
-    for (index, (w, h, content)) in pages.into_iter().enumerate() {
-        objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>",5+index*2));
+    for (index, (w, h, user_unit, content)) in pages.into_iter().enumerate() {
+        objects.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /UserUnit {user_unit} /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>",5+index*2));
         objects.push(format!(
             "<< /Length {} >>\nstream\n{content}endstream",
             content.len()
         ));
     }
-    let mut data = b"%PDF-1.4\n".to_vec();
+    let mut data = b"%PDF-1.6\n".to_vec();
     let mut offsets = vec![0];
     for (i, object) in objects.iter().enumerate() {
         offsets.push(data.len());
@@ -484,9 +485,14 @@ fn pdf_escape(s: &str) -> Result<String> {
             c if c.is_ascii_graphic() || c == ' ' => out.push(c),
             c if (160..=255).contains(&(c as u32)) => out.push_str(&format!("\\{:03o}", c as u32)),
             _ => {
-                return Err(CadError::Unsupported(format!(
-                    "PDF annotation font cannot encode {c:?}; use a supported Latin annotation character"
-                )));
+                // Non-Latin-1 characters also present in Helvetica's WinAnsi
+                // encoding, including punctuation used in drawing titles/notes.
+                let extended = "€\0‚ƒ„…†‡ˆ‰Š‹Œ\0Ž\0\0‘’“”•–—˜™š›œ\0žŸ";
+                let code = extended.chars().position(|ch| ch != '\0' && ch == c)
+                    .ok_or_else(|| CadError::Unsupported(format!(
+                        "PDF annotation font cannot encode {c:?}; use a supported Latin annotation character"
+                    )))?;
+                out.push_str(&format!("\\{:03o}", 128 + code));
             }
         }
     }

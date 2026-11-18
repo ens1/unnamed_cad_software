@@ -159,8 +159,7 @@ pub struct ArtifactFile {
 pub enum DrawingSource {
     NotSelected,
     SavedSheets,
-    /// Existing drawing export behavior: A4 front, top, right and isometric
-    /// projections of the root model, without invented dimensions or tolerances.
+    /// Automatically projected model and configured part detail sheets with finished requirements.
     AutomaticProjection,
 }
 

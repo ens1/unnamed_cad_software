@@ -61,7 +61,7 @@ fn expected(document: &Document, link: &ComponentLink, json: &str) -> Result<Exp
             "Source snapshot identity, revision or canonical fingerprint does not match the saved component link; no migration was guessed",
         ));
     }
-    let (mut namespaced, mapping) = namespace_snapshot(&source, &link.id)?;
+    let (mut namespaced, mapping) = namespace_snapshot(&source, &link.id, link.pin_model_defaults)?;
     if mapping.get(&link.source_definition) != Some(&link.definition) {
         return Err(invalid(
             "The linked source definition does not match its namespaced snapshot identity",
@@ -196,7 +196,7 @@ pub fn verified_source(
     let expected = expected(document, link, &json)?;
     matches_expected(document, link, &expected, true)?;
     let source: Document = serde_json::from_str(&json)?;
-    let (_, mapping) = namespace_snapshot(&source, &link.id)?;
+    let (_, mapping) = namespace_snapshot(&source, &link.id, link.pin_model_defaults)?;
     Ok((source, mapping))
 }
 /// Populate legacy optional evidence only when the exact original snapshot and
@@ -504,6 +504,16 @@ pub fn validate_verified_replacement(
                 "A component update must retain its original source document identity",
             ));
         }
+        if before
+            .libraries
+            .get(&proof.link)
+            .is_some_and(|previous| previous.pin_model_defaults)
+            && !link.pin_model_defaults
+        {
+            return Err(invalid(
+                "A component update cannot discard pinned manufacturing defaults",
+            ));
+        }
         let value = expected(after, link, &proof.source_json)?;
         matches_expected(after, link, &value, true)?;
     }
@@ -542,6 +552,6 @@ pub fn replace_command(before: &Document, after: Document, root: &Path) -> Resul
 pub fn semantic(document: &Document) -> Vec<SemanticElement> {
     document.libraries.values().map(|link| {
         let verified = link.pinned_materials.is_some() && link.pinned_finishes.is_some() && link.pin_diagnostic.is_none();
-        SemanticElement { id: format!("library-integrity:{}", link.id), role: "library-snapshot-integrity".into(), label: link.name.clone(), value: Some(link.pin_diagnostic.clone().unwrap_or_else(|| if verified { "Source definitions, engineering materials and finishes are pinned".into() } else { "Legacy source assignments are read-only until the original snapshot is verified".into() })), state: if verified { "verified" } else { "warning" }.into(), commands: vec!["library".into()], relationships: vec![link.id.clone(), link.definition.clone(), link.snapshot_resource.clone()], data: serde_json::json!({"contract":"tcad.component-snapshot-integrity","version":1,"link":link.id,"source_document":link.source_document,"source_revision":link.source_revision,"source_sha256":link.source_sha256,"pinned_material_count":link.pinned_materials.as_ref().map(BTreeMap::len),"pinned_finish_count":link.pinned_finishes.as_ref().map(BTreeMap::len),"legacy_unverified":!verified,"diagnostic":link.pin_diagnostic}) }
+        SemanticElement { id: format!("library-integrity:{}", link.id), role: "library-snapshot-integrity".into(), label: link.name.clone(), value: Some(link.pin_diagnostic.clone().unwrap_or_else(|| if verified { "Source definitions, engineering materials and finishes are pinned".into() } else { "Legacy source assignments are read-only until the original snapshot is verified".into() })), state: if verified { "verified" } else { "warning" }.into(), commands: vec!["library".into()], relationships: vec![link.id.clone(), link.definition.clone(), link.snapshot_resource.clone()], data: serde_json::json!({"contract":"tcad.component-snapshot-integrity","version":1,"link":link.id,"source_document":link.source_document,"source_revision":link.source_revision,"source_sha256":link.source_sha256,"source_manufacturing_defaults_pinned":link.pin_model_defaults,"pinned_material_count":link.pinned_materials.as_ref().map(BTreeMap::len),"pinned_finish_count":link.pinned_finishes.as_ref().map(BTreeMap::len),"legacy_unverified":!verified,"diagnostic":link.pin_diagnostic}) }
     }).collect()
 }

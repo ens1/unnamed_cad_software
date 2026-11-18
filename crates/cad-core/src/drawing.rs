@@ -8,6 +8,8 @@ use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod dxf;
+pub use dxf::dxf;
 pub mod model_items;
 pub mod symbols;
 pub use symbols::*;
@@ -568,6 +570,9 @@ impl DrawingSourceInfo {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sheet {
+    /// Number of master, table and model-callout pages in this sheet family.
+    #[serde(default = "one_page")]
+    pub page_count: u32,
     pub id: Id,
     pub name: String,
     pub paper_mm: [f64; 2],
@@ -597,6 +602,9 @@ pub struct Sheet {
     /// Preview-only diagnostics; production export still rejects these source errors.
     #[serde(default)]
     pub diagnostics: BTreeMap<Id, String>,
+}
+fn one_page() -> u32 {
+    1
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NativeTraceBinding {
@@ -768,6 +776,20 @@ pub fn validate_format(format: &SheetFormat, paper: [f64; 2]) -> Result<()> {
     Ok(())
 }
 pub fn linked_text(doc: &Document, sheet: &Drawing, value: &LinkedText) -> Result<String> {
+    linked_text_evaluated(doc, sheet, value, None)
+}
+pub fn linked_text_evaluated(
+    doc: &Document,
+    sheet: &Drawing,
+    value: &LinkedText,
+    evaluation: Option<&Evaluation>,
+) -> Result<String> {
+    let count = |d: &Drawing| {
+        evaluation.map_or_else(
+            || crate::drawing_tables::page_count(d),
+            |e| page_count(e, d),
+        )
+    };
     let config = doc.active_configurations.get(&sheet.definition);
     let result = match value {
         LinkedText::Literal { text } => text.clone(),
@@ -827,10 +849,9 @@ pub fn linked_text(doc: &Document, sheet: &Drawing, value: &LinkedText) -> Resul
                             .parse::<u32>()
                             .ok()
                             .filter(|page| {
-                                doc.drawings.iter().any(|saved| {
-                                    saved.id == id
-                                        && *page < crate::drawing_tables::page_count(saved)
-                                })
+                                doc.drawings
+                                    .iter()
+                                    .any(|saved| saved.id == id && *page < count(saved))
                             })
                             .map(|page| (id, page))
                     })
@@ -840,7 +861,7 @@ pub fn linked_text(doc: &Document, sheet: &Drawing, value: &LinkedText) -> Resul
                 doc.drawings
                     .iter()
                     .take_while(|saved| saved.id != master)
-                    .map(|saved| u64::from(crate::drawing_tables::page_count(saved)))
+                    .map(|saved| u64::from(count(saved)))
                     .sum()
             } else {
                 0
@@ -848,7 +869,7 @@ pub fn linked_text(doc: &Document, sheet: &Drawing, value: &LinkedText) -> Resul
             let total: u64 = doc
                 .drawings
                 .iter()
-                .map(|saved| u64::from(crate::drawing_tables::page_count(saved)))
+                .map(|saved| u64::from(count(saved)))
                 .sum();
             format!("{} / {}", preceding + u64::from(page) + 1, total.max(1))
         }
@@ -984,7 +1005,7 @@ pub fn new_sheet(doc: &Document, definition: &str, name: String) -> Result<Drawi
         name,
         definition: definition.into(),
         views: vec!["front".into(), "top".into(), "right".into()],
-        annotations: vec![],
+        annotations: vec!["Unmarked linear dimensions in millimeters".into()],
         paper_mm: [297., 210.],
         dimensions: vec![],
         show_model_dimensions: model_items::part_scope(doc, definition),
@@ -2712,6 +2733,14 @@ fn wrapped_title(value: &str, width: f64, size: f64) -> Vec<String> {
     rows
 }
 pub fn format_geometry(doc: &Document, sheet: &Drawing) -> Result<Vec<Primitive>> {
+    numbered_format(doc, sheet, None, &sheet.name)
+}
+fn numbered_format(
+    doc: &Document,
+    sheet: &Drawing,
+    number: Option<&str>,
+    name: &str,
+) -> Result<Vec<Primitive>> {
     let Some(format) = &sheet.format else {
         return Ok(vec![]);
     };
@@ -2791,11 +2820,12 @@ pub fn format_geometry(doc: &Document, sheet: &Drawing) -> Result<Vec<Primitive>
             rectangle(&mut out, position, [width, height]);
             let label_size = block.text_size_mm * TITLE_LABEL_SCALE;
             let label = wrapped_title(&cell.label, width, label_size);
-            let value = wrapped_title(
-                &linked_text(doc, sheet, &cell.value)?,
-                width,
-                block.text_size_mm,
-            );
+            let value = match (&cell.value, number) {
+                (LinkedText::SheetNumber, Some(number)) => number.to_owned(),
+                (LinkedText::SheetName, _) => name.to_owned(),
+                _ => linked_text(doc, sheet, &cell.value)?,
+            };
+            let value = wrapped_title(&value, width, block.text_size_mm);
             let used = label.len() as f64 * label_size * TITLE_LINE_HEIGHT
                 + value.len() as f64 * block.text_size_mm * TITLE_LINE_HEIGHT
                 + 2. * TITLE_CELL_PADDING_MM;
@@ -3885,7 +3915,7 @@ fn automatic_projection(doc: &Document) -> Drawing {
             "right".into(),
             "isometric".into(),
         ],
-        annotations: vec![],
+        annotations: vec!["Unmarked linear dimensions in millimeters".into()],
         paper_mm: [297., 210.],
         dimensions: vec![],
         show_model_dimensions: model_items::part_scope(doc, &doc.root),
@@ -3920,64 +3950,148 @@ fn production_page(sheet: Sheet) -> Result<Sheet> {
     }
     Ok(sheet)
 }
-pub fn sheets(doc: &Document, e: &Evaluation) -> Result<Vec<Sheet>> {
-    let mut pages = vec![];
-    if !doc.drawings.is_empty() {
-        for sheet in &doc.drawings {
-            for page in 0..crate::drawing_tables::page_count(sheet) {
-                pages.push(production_page(build_sheet_page(doc, e, sheet, page)?)?);
-            }
+/// Render linked page numbers after layout has determined how many pages each drawing needs.
+fn number_pages(
+    doc: &Document,
+    source: &Drawing,
+    family: &mut [Sheet],
+    preceding: u64,
+    total: u64,
+) -> Result<()> {
+    let count = family.len() as u32;
+    let family_issue = family.iter().enumerate().find_map(|(index, page)| {
+        page.model_review
+            .first()
+            .map(|issue| format!("Page {} · {issue}", index + 1))
+    });
+    for (offset, page) in family.iter_mut().enumerate() {
+        page.page_count = count;
+        if page.model_review.is_empty()
+            && let Some(issue) = &family_issue
+        {
+            page.model_review.push(issue.clone());
         }
-        return Ok(pages);
-    }
-    let root = automatic_projection(doc);
-    pages.push(production_page(build_sheet(doc, e, &root)?)?);
-    if !model_items::part_scope(doc, &doc.root) {
-        // One manufacturing detail per actual configured part. The assembly placement
-        // supplies the evaluated variant, while its detail is drawn in local axes.
-        let mut seen = BTreeSet::new();
-        for occurrence in &e.instances {
-            let key = crate::history::mesh_key(occurrence);
-            let Some(part) = doc.parts.get(&occurrence.definition) else {
-                continue;
-            };
-            if !seen.insert(key) || e.meshes.get(key).is_none_or(|mesh| mesh.faces.is_empty()) {
-                continue;
-            }
-            let mut sheet = root.clone();
-            sheet.definition.clone_from(&part.id);
-            sheet.id = format!("automatic-part:{key}");
-            sheet.name = occurrence
-                .configuration
-                .as_ref()
-                .and_then(|id| crate::configuration::names(doc, &part.id).get(id).cloned())
-                .map_or_else(
-                    || part.name.clone(),
-                    |config| format!("{} ({config})", part.name),
-                );
-            sheet.show_model_dimensions = true;
-            let mut local = occurrence.clone();
-            local.path.clear();
-            local.matrix =
-                std::array::from_fn(|i| std::array::from_fn(|j| if i == j { 1. } else { 0. }));
-            pages.push(production_page(build_sheet_mode(
-                doc,
-                e,
-                &sheet,
-                false,
-                Some(local),
-            )?)?);
-        }
-    }
-    Ok(pages)
-}
-pub fn validate_evaluation(doc: &Document, e: &Evaluation) -> Result<()> {
-    for sheet in &doc.drawings {
-        for page in 0..crate::drawing_tables::page_count(sheet) {
-            build_sheet_page(doc, e, sheet, page)?;
+        let number = format!("{} / {}", preceding + offset as u64 + 1, total);
+        if source.format.is_some() {
+            page.primitives
+                .extend(numbered_format(doc, source, Some(&number), &page.name)?);
+        } else {
+            let bounds = paper_bounds(source);
+            let label = format!("Sheet {number}");
+            text(
+                &mut page.primitives,
+                [
+                    bounds[1][0] - 4. - label.len() as f64 * 1.65,
+                    bounds[0][1] + 2.,
+                ],
+                2.5,
+                label,
+            );
         }
     }
     Ok(())
+}
+/// Current evaluated count, falling back to the authored table pages before evaluation.
+pub fn page_count(e: &Evaluation, sheet: &Drawing) -> u32 {
+    e.drawing_page_counts
+        .get(&sheet.id)
+        .copied()
+        .unwrap_or(1)
+        .max(crate::drawing_tables::page_count(sheet))
+}
+pub fn sheets(doc: &Document, e: &Evaluation) -> Result<Vec<Sheet>> {
+    let mut families = Vec::new();
+    if doc.drawings.is_empty() {
+        let root = automatic_projection(doc);
+        let rendered = build_sheet_mode(doc, e, &root, false, None)?;
+        families.push((root.clone(), rendered));
+        if !model_items::part_scope(doc, &doc.root) {
+            // One manufacturing detail per actual configured part. The assembly placement
+            // supplies the evaluated variant, while its detail is drawn in local axes.
+            let mut seen = BTreeSet::new();
+            for occurrence in &e.instances {
+                let key = crate::history::mesh_key(occurrence);
+                let Some(part) = doc.parts.get(&occurrence.definition) else {
+                    continue;
+                };
+                if !seen.insert(key) || e.meshes.get(key).is_none_or(|mesh| mesh.faces.is_empty()) {
+                    continue;
+                }
+                let mut sheet = root.clone();
+                sheet.definition.clone_from(&part.id);
+                sheet.id = format!("automatic-part:{key}");
+                sheet.name = occurrence
+                    .configuration
+                    .as_ref()
+                    .and_then(|id| crate::configuration::names(doc, &part.id).get(id).cloned())
+                    .map_or_else(
+                        || part.name.clone(),
+                        |config| format!("{} ({config})", part.name),
+                    );
+                sheet.show_model_dimensions = true;
+                let mut local = occurrence.clone();
+                local.path.clear();
+                local.matrix =
+                    std::array::from_fn(|i| std::array::from_fn(|j| if i == j { 1. } else { 0. }));
+                let pages = build_sheet_mode(doc, e, &sheet, false, Some(local))?;
+                families.push((sheet, pages));
+            }
+        }
+    } else {
+        for source in &doc.drawings {
+            let rendered = build_sheet_mode(doc, e, source, false, None)?;
+            families.push((source.clone(), rendered));
+        }
+    }
+    let total = families.iter().map(|(_, pages)| pages.len() as u64).sum();
+    let mut out = vec![];
+    let mut ids = BTreeSet::new();
+    for (source, mut pages) in families {
+        number_pages(doc, &source, &mut pages, out.len() as u64, total)?;
+        for page in pages {
+            if !ids.insert(page.id.clone()) {
+                return Err(invalid("A sheet ID conflicts with a continuation page"));
+            }
+            out.push(production_page(page)?);
+        }
+    }
+    Ok(out)
+}
+pub fn validate_evaluation(doc: &Document, e: &Evaluation) -> Result<()> {
+    for sheet in &doc.drawings {
+        build_sheet_family(doc, e, sheet)?;
+    }
+    Ok(())
+}
+pub fn build_sheet_family(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Vec<Sheet>> {
+    family_for_preview(doc, e, sheet, false)
+}
+fn family_for_preview(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+    repair: bool,
+) -> Result<Vec<Sheet>> {
+    let mut pages = build_sheet_mode(doc, e, sheet, repair, None)?;
+    let mut preceding = 0;
+    let mut total = pages.len() as u64;
+    let mut before = true;
+    let is_saved = doc.drawings.iter().any(|s| s.id == sheet.id);
+    if is_saved {
+        for other in &doc.drawings {
+            if other.id == sheet.id {
+                before = false;
+                continue;
+            }
+            let count = u64::from(page_count(e, other));
+            if before {
+                preceding += count;
+            }
+            total += count;
+        }
+    }
+    number_pages(doc, sheet, &mut pages, preceding, total)?;
+    Ok(pages)
 }
 pub fn build_sheet_page(
     doc: &Document,
@@ -3985,13 +4099,10 @@ pub fn build_sheet_page(
     sheet: &Drawing,
     page: u32,
 ) -> Result<Sheet> {
-    if page == 0 {
-        return build_sheet(doc, e, sheet);
-    }
-    if page >= crate::drawing_tables::page_count(sheet) {
-        return Err(invalid("Requested continuation page is absent"));
-    }
-    build_continuation_sheet(doc, e, sheet, page, false)
+    build_sheet_family(doc, e, sheet)?
+        .into_iter()
+        .nth(page as usize)
+        .ok_or_else(|| invalid("Requested continuation page is absent"))
 }
 fn table_page_geometries(
     doc: &Document,
@@ -4116,16 +4227,14 @@ fn build_continuation_sheet(
     sheet: &Drawing,
     page: u32,
     repair: bool,
+    info: &DrawingSourceInfo,
 ) -> Result<Sheet> {
-    validate_definition(sheet)?;
-    let mut page_definition = sheet.clone();
-    page_definition.id = format!("{}::continuation:{page}", sheet.id);
-    page_definition.name = format!("{} · continuation {}", sheet.name, page + 1);
     let mut result = Sheet {
-        id: page_definition.id.clone(),
-        name: page_definition.name.clone(),
+        page_count: 1,
+        id: format!("{}::continuation:{page}", sheet.id),
+        name: format!("{} · continuation {}", sheet.name, page + 1),
         paper_mm: sheet.paper_mm,
-        primitives: format_geometry(doc, &page_definition)?,
+        primitives: vec![],
         native_traces: vec![],
         model_items: BTreeMap::new(),
         model_review: vec![],
@@ -4133,7 +4242,7 @@ fn build_continuation_sheet(
         views: BTreeMap::new(),
         projections: BTreeMap::new(),
         view_fidelity: BTreeMap::new(),
-        source_info: DrawingSourceInfo::current(doc, e),
+        source_info: info.clone(),
         display_state: None,
         groups: vec![],
         diagnostics: BTreeMap::new(),
@@ -4148,7 +4257,7 @@ fn build_continuation_sheet(
             &mut result.primitives,
             [12., sheet.paper_mm[1] - 13.],
             3.5,
-            &page_definition.name,
+            &result.name,
         );
         text(
             &mut result.primitives,
@@ -4156,6 +4265,9 @@ fn build_continuation_sheet(
             2.5,
             format!("Source {} | page {}", sheet.name, page + 1),
         );
+    }
+    if page >= crate::drawing_tables::page_count(sheet) {
+        return Ok(result);
     }
     for (table, geometry) in
         table_page_geometries(doc, e, sheet, page, repair, &mut result.diagnostics)?
@@ -4179,7 +4291,7 @@ fn build_continuation_sheet(
     Ok(result)
 }
 pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sheet> {
-    build_sheet_mode(doc, e, sheet, false, None)
+    build_sheet_page(doc, e, sheet, 0)
 }
 /// Broken associative annotations stay selectable on paper while they are being
 /// repaired. Placeholder vectors are explicitly diagnostic and never exported.
@@ -4189,14 +4301,18 @@ pub fn build_sheet_preview(
     sheet: &Drawing,
     page: u32,
 ) -> Result<Sheet> {
-    if page == 0 {
-        build_sheet_mode(doc, e, sheet, true, None)
-    } else {
-        if page >= crate::drawing_tables::page_count(sheet) {
-            return Err(invalid("Requested continuation page is absent"));
-        }
-        build_continuation_sheet(doc, e, sheet, page, true)
-    }
+    build_sheet_preview_family(doc, e, sheet)?
+        .into_iter()
+        .nth(page as usize)
+        .ok_or_else(|| invalid("Requested continuation page is absent"))
+}
+/// Prepare all desktop pages together so switching pages can reuse the evaluated projection.
+pub fn build_sheet_preview_family(
+    doc: &Document,
+    e: &Evaluation,
+    sheet: &Drawing,
+) -> Result<Vec<Sheet>> {
+    family_for_preview(doc, e, sheet, true)
 }
 /// Disposable layout/annotation geometry for synchronous interaction. It keeps
 /// all source-reference and paper diagnostics, but omits surface visibility.
@@ -4217,12 +4333,13 @@ fn build_sheet_mode(
     sheet: &Drawing,
     repair: bool,
     automatic_part: Option<crate::PlacedPart>,
-) -> Result<Sheet> {
+) -> Result<Vec<Sheet>> {
     validate_definition(sheet)?;
     if sheet.paper_mm.iter().any(|v| !v.is_finite() || *v < 50.) {
         return Err(invalid("Drawing paper dimensions must be at least 50 mm"));
     }
     let mut result = Sheet {
+        page_count: 1,
         id: sheet.id.clone(),
         name: sheet.name.clone(),
         paper_mm: sheet.paper_mm,
@@ -4240,9 +4357,7 @@ fn build_sheet_mode(
         diagnostics: BTreeMap::new(),
     };
     let out = &mut result.primitives;
-    if sheet.format.is_some() {
-        out.extend(format_geometry(doc, sheet)?);
-    } else {
+    if sheet.format.is_none() {
         rectangle(
             out,
             [8., 8.],
@@ -4804,6 +4919,8 @@ fn build_sheet_mode(
     for name in &names {
         resolve_view_alignment(&effective, name, &mut prepared, &mut resolved)?;
     }
+    let mut model_bounds = BTreeMap::new();
+    let mut view_ranges = BTreeMap::new();
     for name in &names {
         let (view, lines, view_curves, mut note, min, max, view_dashes) = prepared
             .remove(name)
@@ -4854,6 +4971,16 @@ fn build_sheet_mode(
                 scale: view.scale,
             },
         );
+        if sheet.show_model_dimensions && !world.is_empty() {
+            let projection = &result.projections[name];
+            model_bounds.insert(
+                name.clone(),
+                [
+                    projection.paper_projected(min),
+                    projection.paper_projected(max),
+                ],
+            );
+        }
         let layout_invalid = result.diagnostics.contains_key(&view_id(sheet, name));
         let mode = crate::drawing_visibility::mode_for(sheet, name);
         let geometry = crate::drawing_visibility::geometry_for(sheet, name);
@@ -5165,6 +5292,9 @@ fn build_sheet_mode(
                 }
             }
         }
+        if matches!(name.as_str(), "front" | "right" | "top" | "isometric") {
+            view_ranges.insert(name.clone(), view_start..out.len());
+        }
         for d in sheet.dimensions.iter().filter(|d| d.view == *name) {
             let start = out.len();
             if let Err(error) = dimension(doc, e, sheet, &view, d, out) {
@@ -5272,8 +5402,104 @@ fn build_sheet_mode(
                 primitive_count: out.len() - start,
             });
     }
-    model_items::project_items(doc, e, sheet, &instances, &mut result, footer_height)?;
-    if result.primitives.iter().any(|p| match p {
+    let extra = model_items::project_items(
+        doc,
+        e,
+        sheet,
+        &instances,
+        &mut result,
+        model_items::PaperSpace {
+            footer: footer_height,
+            model_bounds: &model_bounds,
+            view_ranges: &view_ranges,
+        },
+    )?;
+    let source_info = result.source_info.clone();
+    let mut pages = vec![result];
+    let table_pages = crate::drawing_tables::page_count(sheet);
+    for page in 1..table_pages {
+        pages.push(build_continuation_sheet(
+            doc,
+            e,
+            sheet,
+            page,
+            repair,
+            &source_info,
+        )?);
+    }
+    // Keep pathological repeated high-detail views within a bounded drawing working set.
+    // A blocked print still leaves the model editable and every callout available for repair.
+    let mut repeated_units = 0usize;
+    let mut costs = BTreeMap::new();
+    for (slot, layer) in extra.into_iter().enumerate() {
+        let mut page = build_continuation_sheet(
+            doc,
+            e,
+            sheet,
+            table_pages + slot as u32,
+            repair,
+            &source_info,
+        )?;
+        let model = &pages[0];
+        page.display_state.clone_from(&model.display_state);
+        let views: BTreeSet<_> = layer.items.values().map(|item| &item.view).collect();
+        for name in views {
+            let range = &view_ranges[name];
+            let cost = *costs.entry(name.clone()).or_insert_with(|| {
+                let geometry = model.primitives[range.clone()]
+                    .iter()
+                    .map(|p| {
+                        16 + match p {
+                            Primitive::Polyline { points, .. }
+                            | Primitive::HiddenPolyline { points } => points.len() * 2,
+                            Primitive::Spline { curve, .. } | Primitive::HiddenSpline { curve } => {
+                                curve.control_points.len() * 2
+                                    + curve.knots.len()
+                                    + curve.weights.len()
+                            }
+                            Primitive::Circle { .. } => 3,
+                            Primitive::Text { text, .. } => text.len(),
+                        }
+                    })
+                    .sum::<usize>();
+                geometry
+                    + model
+                        .native_traces
+                        .iter()
+                        .filter(|trace| &trace.view == name)
+                        .map(|trace| trace.geometry.storage_units())
+                        .sum::<usize>()
+            });
+            if repeated_units.saturating_add(cost) > 16_000_000 {
+                page.model_review.push(format!("The {name} view exceeds the storage available for repeated views. Enlarge the paper or reduce the represented model scope."));
+                continue;
+            }
+            repeated_units += cost;
+            let start = page.primitives.len();
+            page.primitives
+                .extend_from_slice(&model.primitives[range.clone()]);
+            page.views.insert(name.clone(), model.views[name].clone());
+            page.projections
+                .insert(name.clone(), model.projections[name].clone());
+            page.view_fidelity
+                .insert(name.clone(), model.view_fidelity[name].clone());
+            page.native_traces.extend(
+                model
+                    .native_traces
+                    .iter()
+                    .filter(|t| &t.view == name)
+                    .cloned()
+                    .map(|mut t| {
+                        t.primitive_range =
+                            t.primitive_range.map(|index| start + (index - range.start));
+                        t
+                    }),
+            );
+        }
+        layer.append(&mut page);
+        pages.push(page);
+    }
+    if pages.iter().flat_map(|p| &p.primitives).any(|p| match p {
         Primitive::Polyline { points, .. } | Primitive::HiddenPolyline { points } => {
             points.iter().flatten().any(|v| !v.is_finite())
         }
@@ -5295,108 +5521,17 @@ fn build_sheet_mode(
             "An annotation produced non-finite paper coordinates",
         ));
     }
-    Ok(result)
-}
-
-pub fn dxf(doc: &Document, e: &Evaluation) -> Result<String> {
-    let sheets = sheets(doc, e)?;
-    let mut out="0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLTYPE\n70\n2\n0\nLTYPE\n2\nTCAD_REFERENCE\n70\n0\n3\nTCAD reference geometry\n72\n65\n73\n4\n40\n7\n49\n4\n74\n0\n49\n-1\n74\n0\n49\n1\n74\n0\n49\n-1\n74\n0\n0\nLTYPE\n2\nTCAD_HIDDEN\n70\n0\n3\nTCAD hidden model edges\n72\n65\n73\n2\n40\n3\n49\n2\n74\n0\n49\n-1\n74\n0\n0\nENDTAB\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n".to_string();
-    let mut offset = 0.;
-    for sheet in sheets {
-        let layer = sheet.name.replace(['\n', '\r'], " ");
-        for primitive in sheet.primitives {
-            match primitive {
-                Primitive::HiddenPolyline { points } => {
-                    for pair in points.windows(2) {
-                        let [a, b] = [pair[0], pair[1]];
-                        out.push_str(&format!(
-                            "0\nLINE\n8\n{layer}\n6\nTCAD_HIDDEN\n10\n{}\n20\n{}\n30\n0\n11\n{}\n21\n{}\n31\n0\n",
-                            a[0]+offset,a[1],b[0]+offset,b[1]
-                        ));
-                    }
-                }
-                Primitive::Polyline { points, dashed } => {
-                    let segments = if dashed {
-                        crate::drawing_strokes::reference_segments(&points)?
-                    } else {
-                        points.windows(2).map(|pair| [pair[0], pair[1]]).collect()
-                    };
-                    for [a, b] in segments {
-                        out.push_str(&format!(
-                            "0\nLINE\n8\n{layer}\n10\n{}\n20\n{}\n30\n0\n11\n{}\n21\n{}\n31\n0\n",
-                            a[0] + offset,
-                            a[1],
-                            b[0] + offset,
-                            b[1]
-                        ));
-                    }
-                }
-                Primitive::Text { at, size, text } => out.push_str(&format!(
-                    "0\nTEXT\n8\n{layer}\n10\n{}\n20\n{}\n30\n0\n40\n{size}\n1\n{}\n",
-                    at[0] + offset,
-                    at[1],
-                    text.replace(['\n', '\r'], " ")
-                )),
-                Primitive::Spline { curve, dashed } => {
-                    dxf_curve(
-                        &mut out,
-                        &curve,
-                        &layer,
-                        offset,
-                        if dashed {
-                            "TCAD_REFERENCE"
-                        } else {
-                            "CONTINUOUS"
-                        },
-                    );
-                }
-                Primitive::HiddenSpline { curve } => {
-                    dxf_curve(&mut out, &curve, &layer, offset, "TCAD_HIDDEN");
-                }
-                Primitive::Circle { center, radius } => out.push_str(&format!(
-                    "0\nCIRCLE\n8\n{layer}\n10\n{}\n20\n{}\n30\n0\n40\n{radius}\n",
-                    center[0] + offset,
-                    center[1]
-                )),
-            }
-        }
-        offset += sheet.paper_mm[0] + 20.;
-    }
-    out.push_str("0\nENDSEC\n0\nEOF\n");
-    Ok(out)
-}
-
-fn dxf_curve(
-    out: &mut String,
-    curve: &crate::sketch_edit::Curve2,
-    layer: &str,
-    offset: f64,
-    linetype: &str,
-) {
-    if curve.degree == 1 && curve.control_points.len() == 2 {
-        let [a, b] = [curve.control_points[0], curve.control_points[1]];
-        out.push_str(&format!(
-            "0\nLINE\n8\n{layer}\n6\n{linetype}\n10\n{}\n20\n{}\n30\n0\n11\n{}\n21\n{}\n31\n0\n",
-            a[0] + offset,
-            a[1],
-            b[0] + offset,
-            b[1]
-        ));
-        return;
-    }
-    out.push_str(&format!("0\nSPLINE\n8\n{layer}\n6\n{linetype}\n70\n12\n71\n{}\n72\n{}\n73\n{}\n74\n0\n210\n0\n220\n0\n230\n1\n",curve.degree,curve.knots.len(),curve.control_points.len()));
-    for knot in &curve.knots {
-        out.push_str(&format!("40\n{knot}\n"));
-    }
-    for weight in &curve.weights {
-        out.push_str(&format!("41\n{weight}\n"));
-    }
-    for p in &curve.control_points {
-        out.push_str(&format!("10\n{}\n20\n{}\n30\n0\n", p[0] + offset, p[1]));
-    }
+    Ok(pages)
 }
 
 pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation::SemanticElement> {
+    semantic_elements_evaluated(doc, None, state)
+}
+pub fn semantic_elements_evaluated(
+    doc: &Document,
+    evaluation: Option<&Evaluation>,
+    state: &str,
+) -> Vec<crate::presentation::SemanticElement> {
     let mut out = Vec::new();
     for (index, sheet) in doc.drawings.iter().enumerate() {
         out.extend(crate::drawing_tables::semantic_elements(sheet, state));
@@ -5416,8 +5551,9 @@ pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation
         if index + 1 < doc.drawings.len() {
             commands.push("drawing.sheet-down".into());
         }
-        out.push(crate::presentation::SemanticElement {id:sheet.id.clone(),role:"drawing-sheet".into(),label:sheet.name.clone(),value:Some(format!("Sheet {} / {}",index+1,doc.drawings.len())),state:state.into(),commands,relationships:vec![sheet.definition.clone()].into_iter().chain(sheet.exploded_view.iter().cloned()).collect(),data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"sheet":sheet,"paper_units":"mm","template_contract":"tcad.drawing-sheet-template","template_version":FORMAT_VERSION})});
-        out.push(crate::presentation::SemanticElement {id:format!("{}::format",sheet.id),role:"drawing-sheet-format".into(),label:"Sheet format and linked title block".into(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-format-load".into(),"drawing.sheet-template-save".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing-sheet-format","version":FORMAT_VERSION,"sheet_id":sheet.id,"format":sheet.format,"paper_units":"mm","vectors":format_geometry(doc,sheet).ok()})});
+        let number = linked_text_evaluated(doc, sheet, &LinkedText::SheetNumber, evaluation).ok();
+        out.push(crate::presentation::SemanticElement {id:sheet.id.clone(),role:"drawing-sheet".into(),label:sheet.name.clone(),value:number.as_ref().map(|number|format!("Sheet {number}")),state:state.into(),commands,relationships:vec![sheet.definition.clone()].into_iter().chain(sheet.exploded_view.iter().cloned()).collect(),data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"sheet":sheet,"paper_units":"mm","template_contract":"tcad.drawing-sheet-template","template_version":FORMAT_VERSION})});
+        out.push(crate::presentation::SemanticElement {id:format!("{}::format",sheet.id),role:"drawing-sheet-format".into(),label:"Sheet format and linked title block".into(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-format-load".into(),"drawing.sheet-template-save".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing-sheet-format","version":FORMAT_VERSION,"sheet_id":sheet.id,"format":sheet.format,"paper_units":"mm","vectors":numbered_format(doc,sheet,number.as_deref(),&sheet.name).ok()})});
         for key in view_keys(sheet) {
             let section = sheet
                 .section
@@ -5431,7 +5567,7 @@ pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation
             .flat_map(|f| &f.title_block)
             .flat_map(|b| &b.cells)
         {
-            out.push(crate::presentation::SemanticElement {id:cell.id.clone(),role:"drawing-title-field".into(),label:cell.label.clone(),value:linked_text(doc,sheet,&cell.value).ok(),state:state.into(),commands:vec!["drawing.sheet-edit".into()],relationships:vec![sheet.id.clone(),sheet.definition.clone()],data:serde_json::json!({"contract":"tcad.drawing-sheet-format","version":FORMAT_VERSION,"sheet_id":sheet.id,"source":cell,"paper_units":"mm","linked_value":cell.value})});
+            out.push(crate::presentation::SemanticElement {id:cell.id.clone(),role:"drawing-title-field".into(),label:cell.label.clone(),value:linked_text_evaluated(doc,sheet,&cell.value,evaluation).ok(),state:state.into(),commands:vec!["drawing.sheet-edit".into()],relationships:vec![sheet.id.clone(),sheet.definition.clone()],data:serde_json::json!({"contract":"tcad.drawing-sheet-format","version":FORMAT_VERSION,"sheet_id":sheet.id,"source":cell,"paper_units":"mm","linked_value":cell.value})});
         }
         for dimension in &sheet.dimensions {
             out.push(crate::presentation::SemanticElement {id:dimension.id.clone(),role:"drawing-dimension".into(),label:format!("{:?} dimension",dimension.options.kind),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"dimension":dimension,"measurement_intent":if dimension.options.second_curve.is_some() || dimension.options.kind == DimensionKind::Perpendicular{"parallel_edge_separation"}else if matches!(dimension.options.kind,DimensionKind::Diameter|DimensionKind::Radius|DimensionKind::HoleCallout){"circular_carrier"}else{"point_references"},"curve_references":{"first":dimension.options.curve,"second":dimension.options.second_curve},"choices":{"kind":["aligned","horizontal","vertical","perpendicular","angular","diameter","radius","hole_callout"],"tolerance":["none","symmetric","deviation","limits","basic"],"units":["millimeters","inches"]}})});

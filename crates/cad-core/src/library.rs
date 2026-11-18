@@ -39,6 +39,9 @@ pub struct ComponentLink {
     /// New links import only the selected definition's dependency closure.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub definition_closure: bool,
+    /// Include source manufacturing defaults in imported part digests. Absent on legacy pins.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pin_model_defaults: bool,
     /// Runtime source availability, never part of authoritative hashes.
     #[serde(skip)]
     pub pin_diagnostic: Option<String>,
@@ -97,12 +100,16 @@ pub fn available_update(link: &ComponentLink, root: &Path) -> Result<Option<(u64
         let repository = git_repository(root, &git.remote, false)?;
         let source =
             crate::version_control::snapshot_at(&repository, &git.update_ref, &git.project_path)?;
-        return Ok((source.fingerprint() != link.source_sha256)
-            .then(|| (source.revision, source.fingerprint())));
+        return Ok(
+            (!link.pin_model_defaults || source.fingerprint() != link.source_sha256)
+                .then(|| (source.revision, source.fingerprint())),
+        );
     }
     let source = FileStore.load(&source_path(root, &link.source_path))?;
-    Ok((source.fingerprint() != link.source_sha256)
-        .then(|| (source.revision, source.fingerprint())))
+    Ok(
+        (!link.pin_model_defaults || source.fingerprint() != link.source_sha256)
+            .then(|| (source.revision, source.fingerprint())),
+    )
 }
 pub fn is_definition_pinned(doc: &Document, definition: &str) -> bool {
     doc.libraries
@@ -146,6 +153,7 @@ pub fn validate_pins(doc: &Document) -> Result<()> {
 pub(crate) fn namespace_snapshot(
     src: &Document,
     link_id: &str,
+    pin_model_defaults: bool,
 ) -> Result<(Document, BTreeMap<Id, Id>)> {
     let mut mapping = BTreeMap::new();
     for key in src
@@ -330,7 +338,16 @@ pub(crate) fn namespace_snapshot(
         }
         json["feature_transfers"] = serde_json::Value::Object(remapped);
     }
-    let imported: Document = serde_json::from_value(json)?;
+    let mut imported: Document = serde_json::from_value(json)?;
+    if pin_model_defaults {
+        let source_defaults = crate::model_dimensions::SourceDefaults::from_settings(&src.settings);
+        for part in imported.parts.values_mut() {
+            // An assembly can contain components that already carry their own source defaults.
+            part.model_dimensions
+                .source_defaults
+                .get_or_insert(source_defaults);
+        }
+    }
     Ok((imported, mapping))
 }
 
@@ -475,7 +492,7 @@ fn link_snapshot(
         ));
     }
     let link_id = old.as_ref().map(|l| l.id.clone()).unwrap_or_else(id);
-    let (mut imported, mapping) = namespace_snapshot(src, &link_id)?;
+    let (mut imported, mapping) = namespace_snapshot(src, &link_id, true)?;
     let definition_closure = old.as_ref().is_none_or(|old| old.definition_closure);
     if definition_closure {
         retain_definition_closure(&mut imported, &mapping[&source_definition])?;
@@ -592,6 +609,7 @@ fn link_snapshot(
             pinned_finishes: Some(pinned_finishes),
             git_source,
             definition_closure,
+            pin_model_defaults: true,
             pin_diagnostic: None,
         },
     );

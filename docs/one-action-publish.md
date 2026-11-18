@@ -40,11 +40,12 @@ published project folder. Flat patterns and cut lists require applicable model
 definitions; a selected output that cannot be generated stops publication with
 an explanation instead of silently omitting the file.
 
-If the model has no saved drawing sheets, the existing drawing exporter creates
-an A4 sheet with front, top, right, and isometric views of the root model. This is
-an automatic projection, without invented dimensions or manufacturing
-tolerances. The Publish panel and `publication.json` identify this fallback.
-Create drawing sheets in TCAD when dimensioned production drawings are needed.
+With no saved sheets, Publish generates a dimensioned part drawing from the finished model.
+For an assembly it adds a detail sheet for each represented solid part and configuration.
+With saved sheets it exports the authored drawing set. PDF and drawing DXF use the same
+callouts, including tolerance overrides and established part datums. Repair unresolved
+requirements in **Model Dimensions** before publishing. The publication manifest records
+which drawing source was used.
 
 If the project already has a TCAD README model preview, Publish regenerates that
 preview from the same evaluated model. It replaces only TCAD's marked preview

@@ -2,6 +2,9 @@
 //! The display mesh carries these records, but its triangles and visual bounds
 //! never supply a nominal size or select a manufacturing reference.
 mod chamfers;
+mod cones;
+mod contour_corners;
+mod drills;
 
 use super::{Characteristic, Kind};
 use crate::{
@@ -82,9 +85,14 @@ fn overall(faces: &[&FaceRange], axis: usize, tolerance: f64) -> Option<(Extent,
         reached[0] = reached[0].min(native.witnesses[0][axis][axis]);
         reached[1] = reached[1].max(native.witnesses[1][axis][axis]);
     }
+    // The modeling residual permits surface incidence error, but cannot make a
+    // recessed face the nominal extremum. Admit only roundoff when matching a
+    // conservative box to a native witness. The allowance never exceeds the
+    // modeling residual, including at large part-coordinate offsets.
+    let slack = reached.map(|value| (64. * f64::EPSILON * value.abs().max(1.)).min(tolerance));
     if faces.is_empty()
-        || (reached[0] - enclosure[0]).abs() > tolerance
-        || (enclosure[1] - reached[1]).abs() > tolerance
+        || (reached[0] - enclosure[0]).abs() > slack[0]
+        || (enclosure[1] - reached[1]).abs() > slack[1]
     {
         return None;
     }
@@ -99,7 +107,7 @@ fn overall(faces: &[&FaceRange], axis: usize, tolerance: f64) -> Option<(Extent,
             .enumerate()
             .filter(|(_, f)| {
                 (f.measurement.as_ref().unwrap().witnesses[side][axis][axis] - reached[side]).abs()
-                    <= tolerance
+                    <= slack[side]
             })
             .map(|(i, _)| i)
             .collect::<Vec<_>>();
@@ -140,7 +148,8 @@ fn overall(faces: &[&FaceRange], axis: usize, tolerance: f64) -> Option<(Extent,
             id: format!("overall/{}", AXES[axis]),
             label: ["Overall width", "Overall depth", "Overall height"][axis].into(),
             kind: Kind::Linear,
-            nominal_mm: size,
+            angle_vertex: None,
+            nominal: size,
             witnesses: [start, finish],
             plane_normal: None,
             supports,
@@ -158,7 +167,9 @@ type ReferenceKey<'a> = (Option<&'a NodeRef>, &'a NodeRef, &'a str);
 fn key<'a>(body: Option<&'a NodeRef>, r: &'a TopologyRef) -> ReferenceKey<'a> {
     (body, &r.producer, &r.role)
 }
-fn incidence(faces: &[&FaceRange], mesh: &MeshData) -> Incidence {
+type FaceIndex<'a> = BTreeMap<ReferenceKey<'a>, Option<usize>>;
+
+fn face_index<'a>(faces: &[&'a FaceRange]) -> FaceIndex<'a> {
     let mut index = BTreeMap::new();
     for (i, face) in faces.iter().enumerate() {
         index
@@ -166,34 +177,36 @@ fn incidence(faces: &[&FaceRange], mesh: &MeshData) -> Incidence {
             .and_modify(|value| *value = None)
             .or_insert(Some(i));
     }
+    index
+}
+
+fn neighboring_faces(
+    index: &FaceIndex<'_>,
+    edge: &crate::protocol::EdgeData,
+) -> Option<[(usize, u32); 2]> {
+    let native = edge.native.as_ref()?;
+    if native.version != crate::protocol::NATIVE_SELECTION_VERSION {
+        return None;
+    }
+    let [left, right] = native.boundaries.as_slice() else {
+        return None;
+    };
+    let lookup = |r: &TopologyRef| index.get(&key(edge.body.as_ref(), r)).copied().flatten();
+    let (a, b) = (lookup(&left.face)?, lookup(&right.face)?);
+    (a != b).then_some([(a, left.boundary), (b, right.boundary)])
+}
+
+fn incidence(faces: &[&FaceRange], mesh: &MeshData, index: &FaceIndex<'_>) -> Incidence {
     let mut result = Incidence {
         wires: BTreeMap::new(),
         adjacent: vec![BTreeSet::new(); faces.len()],
     };
     for edge in &mesh.edges {
-        let Some(native) = &edge.native else { continue };
-        // At a manifold solid edge the two incidences are the only physical
-        // neighbors. A seam on a single underlying face supplies no pair.
-        let [left, right] = native.boundaries.as_slice() else {
+        let Some([(a, left), (b, right)]) = neighboring_faces(index, edge) else {
             continue;
         };
-        let lookup = |r: &TopologyRef| index.get(&key(edge.body.as_ref(), r)).copied().flatten();
-        let (Some(a), Some(b)) = (lookup(&left.face), lookup(&right.face)) else {
-            continue;
-        };
-        if a == b {
-            continue;
-        }
-        result
-            .wires
-            .entry((a, left.boundary))
-            .or_default()
-            .insert(b);
-        result
-            .wires
-            .entry((b, right.boundary))
-            .or_default()
-            .insert(a);
+        result.wires.entry((a, left)).or_default().insert(b);
+        result.wires.entry((b, right)).or_default().insert(a);
         result.adjacent[a].insert(b);
         result.adjacent[b].insert(a);
     }
@@ -306,14 +319,16 @@ impl Characteristics<'_> {
                 {
                     "Pocket depth"
                 }
-                Some(Operation::Hole { .. } | Operation::DrilledHoles { .. }) => "Bore depth",
+                Some(Operation::Hole { .. } | Operation::DrilledHoles { .. }) => {
+                    "Bore segment depth"
+                }
                 _ if wall_face
                     .measurement
                     .as_ref()
                     .and_then(|m| m.cylinder.as_ref())
                     .is_some_and(|c| c.internal) =>
                 {
-                    "Bore depth"
+                    "Bore segment depth"
                 }
                 _ => "Step height",
             }
@@ -322,7 +337,25 @@ impl Characteristics<'_> {
         } else {
             "Face spacing"
         };
-        let Some(id) = self.id("span", &[a, b]) else {
+        let key = if same_direction {
+            let outside = if delta > 0. { b } else { a };
+            let inside = if delta > 0. { a } else { b };
+            // Depth is the distance from the surrounding rim to this floor. A
+            // second pocket can repartition the shared stock face while this
+            // floor and its user tolerance remain completely identifiable.
+            match label {
+                "Pocket depth" | "Bore segment depth" => self.id("depth", &[inside]),
+                "Step height"
+                    if wall_face.reference.producer == self.faces[outside].reference.producer =>
+                {
+                    self.id("boss-height", &[outside])
+                }
+                _ => self.id("span", &[a, b]),
+            }
+        } else {
+            self.id("span", &[a, b])
+        };
+        let Some(id) = key else {
             return;
         };
         // Start near the actual connecting wall even when the floor is a large face.
@@ -332,7 +365,8 @@ impl Characteristics<'_> {
             id,
             label: label.into(),
             kind: Kind::Linear,
-            nominal_mm: delta.abs(),
+            angle_vertex: None,
+            nominal: delta.abs(),
             witnesses: [start.into(), (start + n * delta).into()],
             plane_normal: None,
             supports: self.refs([a, b, wall]),
@@ -366,7 +400,8 @@ impl Characteristics<'_> {
                         id,
                         label: format!("Face location {}", AXES[axis].to_uppercase()),
                         kind: Kind::Linear,
-                        nominal_mm: end[axis] - origin[axis],
+                        angle_vertex: None,
+                        nominal: end[axis] - origin[axis],
                         witnesses: [origin.into(), end.into()],
                         plane_normal: None,
                         supports: self.refs([left, datum]),
@@ -447,7 +482,8 @@ impl Characteristics<'_> {
             id,
             label: label.into(),
             kind,
-            nominal_mm: if is_fillet {
+            angle_vertex: None,
+            nominal: if is_fillet {
                 c.radius_mm
             } else {
                 2. * c.radius_mm
@@ -493,7 +529,8 @@ impl Characteristics<'_> {
                     id,
                     label: format!("Axis location {}", AXES[i].to_uppercase()),
                     kind: Kind::Linear,
-                    nominal_mm: value,
+                    angle_vertex: None,
+                    nominal: value,
                     witnesses: [start.into(), center.into()],
                     plane_normal: Some(n.into()),
                     supports: self.refs(supports),
@@ -511,7 +548,12 @@ fn same_cylinder(a: &NativeCylinder, b: &NativeCylinder, tol: f64) -> bool {
         && a.internal == b.internal
 }
 
-pub fn infer(part: &Part, mesh: &MeshData, linear_mm: f64) -> (Vec<Characteristic>, Vec<String>) {
+pub fn infer(
+    part: &Part,
+    mesh: &MeshData,
+    document: &crate::Document,
+) -> (Vec<Characteristic>, Vec<String>) {
+    let linear_mm = document.settings.modeling.linear_mm;
     let faces = mesh
         .faces
         .iter()
@@ -529,8 +571,13 @@ pub fn infer(part: &Part, mesh: &MeshData, linear_mm: f64) -> (Vec<Characteristi
         locations: BTreeSet::new(),
         tolerance: linear_mm,
     };
+    if faces.len() != mesh.faces.len() {
+        output
+            .coverage
+            .insert("Surface bodies have no automatic finished-solid size.".into());
+    }
     if faces.is_empty() {
-        return (vec![], vec![]);
+        return (vec![], output.coverage.into_iter().collect());
     }
     for (axis, name) in AXES.iter().enumerate() {
         if let Some((extent, dimension)) = overall(&faces, axis, linear_mm) {
@@ -543,7 +590,8 @@ pub fn infer(part: &Part, mesh: &MeshData, linear_mm: f64) -> (Vec<Characteristi
             ));
         }
     }
-    let graph = incidence(&faces, mesh);
+    let index = face_index(&faces);
+    let graph = incidence(&faces, mesh, &index);
     let mut visited = BTreeSet::new();
     let mut pairs = BTreeSet::new();
     let for_face = |i: usize| faces[i].measurement.as_ref()?.cylinder.as_ref();
@@ -619,14 +667,15 @@ pub fn infer(part: &Part, mesh: &MeshData, linear_mm: f64) -> (Vec<Characteristi
             }
         }
     }
+    cones::add(&mut output, part, mesh, &graph, &index);
+    drills::consolidate(&mut output, part, document, &graph);
     let other = faces
         .iter()
         .filter(|f| {
             f.plane.is_none()
                 && f.measurement
                     .as_ref()
-                    .and_then(|m| m.cylinder.as_ref())
-                    .is_none()
+                    .is_none_or(|m| m.cylinder.is_none() && m.cone.is_none())
         })
         .count();
     if other > 0 {
@@ -634,7 +683,8 @@ pub fn infer(part: &Part, mesh: &MeshData, linear_mm: f64) -> (Vec<Characteristi
             "{other} curved faces have no automatic local size."
         ));
     }
-    chamfers::add(&mut output, part, mesh);
+    chamfers::add(&mut output, part, mesh, &index);
+    contour_corners::add(&mut output, part, mesh, &index);
     if graph.wires.is_empty() {
         output
             .coverage

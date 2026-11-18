@@ -526,7 +526,11 @@ pub fn project_with_identity(
         relationships: vec![],
         data: serde_json::Value::Null,
     });
-    out.extend(crate::drawing::semantic_elements(doc, state));
+    out.extend(crate::drawing::semantic_elements_evaluated(
+        doc,
+        property_evaluation,
+        state,
+    ));
     out.extend(crate::drawing_tables::evaluated_semantic_rows(
         doc,
         property_evaluation,
@@ -1576,6 +1580,7 @@ pub struct ViewportVisibility {
     pub sketch_grid: bool,
     pub centerlines: bool,
     pub edge_midpoints: bool,
+    pub model_dimensions: bool,
 }
 impl Default for ViewportVisibility {
     fn default() -> Self {
@@ -1591,6 +1596,7 @@ impl Default for ViewportVisibility {
             sketch_grid: true,
             centerlines: true,
             edge_midpoints: true,
+            model_dimensions: true,
         }
     }
 }

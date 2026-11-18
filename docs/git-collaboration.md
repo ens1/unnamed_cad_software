@@ -96,8 +96,7 @@ first; Publish does not silently apply a draft.
 
 Available outputs are drawing PDF, drawing DXF, BOM CSV, STEP, STL, sketch-profile
 DXF, sheet-metal flat-pattern DXF, and weldment cut-list CSV. Drawing outputs use
-saved drawing sheets. If no sheets exist, TCAD makes a standard projection sheet;
-it does not invent dimensions or tolerances. Outputs use the current model
+saved drawing sheets. Without saved sheets, TCAD generates a model-dimensioned part drawing or an assembly projection with detail sheets for its configured parts. Outputs use the current model
 configuration. Selecting a flat pattern or cut list requires matching fabrication
 data. A generation error stops publication before a commit or upload.
 
@@ -118,6 +117,12 @@ generating the files again. Cancellation cannot undo a push that already finishe
 The status reports the retained folder and whether the commit reached the remote.
 See [One-action Publish](one-action-publish.md) for the file contract and recovery
 details.
+
+## Manufacturing tolerances on linked components
+
+Inserting a component from a local file or a Git repository pins its source linear and angular tolerance defaults. The assembly's display units control how those values appear. An explicit component update imports changed source defaults and retains any nested component's own defaults. Making the component unique keeps its existing tolerances. Choose **Use document tolerances for this part** in **Model Dimensions** to adopt the receiving project's defaults. Individual dimension overrides stay in effect.
+
+Links saved before tolerance pinning keep their earlier behavior and hashes. Use **Check for updates** and preview a component update to adopt its source defaults, including when the source revision is the same.
 
 ## Copy a model into a new working copy
 

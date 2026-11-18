@@ -20,6 +20,7 @@ const LAYERS: &[(&str, &str)] = &[
     ("sketch-grid", "Sketch grid"),
     ("centerlines", "Circular center guides on hover"),
     ("edge-midpoints", "Edge midpoint guides on hover"),
+    ("model-dimensions", "Model dimensions and datums"),
 ];
 fn layer_mut<'a>(w: &'a mut Workspace, layer: &str) -> Option<&'a mut bool> {
     let visibility = &mut w.view.visibility;
@@ -37,6 +38,7 @@ fn layer_mut<'a>(w: &'a mut Workspace, layer: &str) -> Option<&'a mut bool> {
         "sketch-grid" => &mut visibility.sketch_grid,
         "centerlines" => &mut visibility.centerlines,
         "edge-midpoints" => &mut visibility.edge_midpoints,
+        "model-dimensions" => &mut visibility.model_dimensions,
         _ => return None,
     })
 }
@@ -56,6 +58,7 @@ fn layer(w: &Workspace, layer: &str) -> bool {
         "sketch-grid" => visibility.sketch_grid,
         "centerlines" => visibility.centerlines,
         "edge-midpoints" => visibility.edge_midpoints,
+        "model-dimensions" => visibility.model_dimensions,
         _ => false,
     }
 }
@@ -164,6 +167,7 @@ pub fn visibility_controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     "sketch-grid",
                 ][..],
             ),
+            ("model", "Part", &["model-dimensions"][..]),
             (
                 "references",
                 "Reference geometry",

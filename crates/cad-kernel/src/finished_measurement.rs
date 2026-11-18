@@ -1,7 +1,7 @@
 //! Native evidence for finished-size measurements. Boundary witnesses belong to
 //! the trimmed solid. Conservative hulls can disqualify a size, never supply one.
 use crate::{adapter::Shape, native_bounds};
-use cad_core::protocol::{FaceRange, NativeCylinder, NativeFaceMeasurement};
+use cad_core::protocol::{FaceRange, NativeCone, NativeCylinder, NativeFaceMeasurement};
 use monstertruck::modeling::*;
 use std::collections::HashMap;
 
@@ -44,6 +44,18 @@ fn boundary(edge: &Edge) -> Boundary {
         edge.absolute_front().point().into(),
         edge.absolute_back().point().into(),
     ];
+    // Native trimming vertices and underlying curve endpoints may differ by
+    // the modeling incidence residual. Include both in the boundary envelope.
+    if matches!(
+        &c,
+        Curve::Line(_) | Curve::BsplineCurve(_) | Curve::NurbsCurve(_)
+    ) {
+        let (low, high) = c.range_tuple();
+        if low.is_finite() && high.is_finite() {
+            points.push(c.subs(low).into());
+            points.push(c.subs(high).into());
+        }
+    }
     // Native lines and verified monotone arcs attain each coordinate extreme
     // at an endpoint or an angular station inside the actual trim.
     let simple = if matches!(&c, Curve::Line(_)) {
@@ -87,19 +99,20 @@ fn boundary(edge: &Edge) -> Boundary {
     }
 }
 
-fn cylinder(
-    face: &Face,
-    axis: cad_core::reference_geometry::Axis,
-    radius_mm: f64,
-) -> Option<NativeCylinder> {
+fn inward(face: &Face, axis: &cad_core::reference_geometry::Axis) -> Option<bool> {
     let s = face.surface();
     let (u, v) = match &s {
         Surface::NurbsSurface(p) => p.range_tuple(),
         Surface::BsplineSurface(p) => p.range_tuple(),
-        Surface::RevolutionSurface(p) => (
-            p.entity().entity_curve().range_tuple(),
-            (0., std::f64::consts::TAU),
-        ),
+        Surface::RevolutionSurface(p) => {
+            let line = p.entity().entity_curve().range_tuple();
+            let angle = (0., std::f64::consts::TAU);
+            if p.orientation() {
+                (line, angle)
+            } else {
+                (angle, line)
+            }
+        }
         _ => return None,
     };
     // Inverted processor charts interchange their parameters. Either chart is
@@ -109,33 +122,39 @@ fn cylinder(
     let from_axis = s.subs(u, v) - Point3::from(axis.origin);
     let radial = from_axis - d * from_axis.dot(d);
     let sign = radial.dot(s.normal(u, v)) * if face.orientation() { 1. } else { -1. };
-    (sign.is_finite() && sign.abs() > 1e-10 * radius_mm).then_some(NativeCylinder {
-        axis,
-        radius_mm,
-        internal: sign < 0.,
-    })
+    (sign.is_finite() && sign.abs() > 1e-12).then_some(sign < 0.)
 }
 
-fn trimmed_cylinder_box(cylinder: &NativeCylinder, boundary: Bounds) -> Bounds {
-    let d = Vector3::from(cylinder.axis.direction);
-    let o = Point3::from(cylinder.axis.origin);
-    let mut axial = [f64::INFINITY, f64::NEG_INFINITY];
-    // The projection along the cylinder axis has no interior critical points.
-    // The boundary box can be loose for oblique axes and stays conservative.
-    for corner in 0..8 {
-        let p = Point3::from(std::array::from_fn(|i| boundary[(corner >> i) & 1][i]));
-        let t = (p - o).dot(d);
-        axial = [axial[0].min(t), axial[1].max(t)];
+fn measured_ruling(face: &Face) -> Option<(Option<NativeCylinder>, Option<NativeCone>)> {
+    let (mut axis, [ra, rb], height) = crate::axis_geometry::circular_ruling(face).ok()?;
+    let internal = inward(face, &axis)?;
+    if (ra - rb).abs() <= 128. * f64::EPSILON * ra.max(rb).max(1.) {
+        return Some((
+            Some(NativeCylinder {
+                axis,
+                radius_mm: (ra + rb) * 0.5,
+                internal,
+            }),
+            None,
+        ));
     }
-    std::array::from_fn(|side| {
-        std::array::from_fn(|i| {
-            let radial = cylinder.radius_mm * AXES[i].cross(d).magnitude();
-            let end = usize::from((side == 1) == (d[i] >= 0.));
-            o[i] + axial[end] * d[i] + if side == 0 { -radial } else { radial }
-        })
-    })
+    let slope = (rb - ra) / height;
+    let dir = Vector3::from(axis.direction);
+    let apex = Point3::from(axis.origin) - dir * (ra / slope);
+    if !apex.to_vec().is_finite() || !slope.is_finite() {
+        return None;
+    }
+    axis.origin = apex.into();
+    axis.direction = (dir * slope.signum()).into();
+    Some((
+        None,
+        Some(NativeCone {
+            axis,
+            slope: slope.abs(),
+            internal,
+        }),
+    ))
 }
-
 fn face_measurement(
     face: &Face,
     planar: bool,
@@ -171,16 +190,16 @@ fn face_measurement(
     if !initialized {
         return None;
     }
-    let cylinder = (!planar)
-        .then(|| crate::axis_geometry::right_cylinder(face).ok())
-        .flatten()
-        .and_then(|(axis, radius)| cylinder(face, axis, radius));
-    let enclosure_mm = if planar {
+    let (cylinder, cone) = if planar {
+        (None, None)
+    } else {
+        measured_ruling(face).unwrap_or_default()
+    };
+    // Every point on a bounded trimmed plane, cylinder or cone lies on a
+    // straight ruling that terminates on its trim. A linear coordinate reaches
+    // its extremum at one of those endpoints, even on an oblique or partial arc.
+    let enclosure_mm = if planar || cylinder.is_some() || cone.is_some() {
         boundary_box
-    } else if let Some(c) = &cylinder
-        && let Some(b) = boundary_box
-    {
-        Some(trimmed_cylinder_box(c, b))
     } else {
         native_bounds::face(face)
             .ok()
@@ -190,6 +209,7 @@ fn face_measurement(
         enclosure_mm,
         witnesses,
         cylinder,
+        cone,
     })
 }
 
@@ -197,7 +217,7 @@ pub(crate) fn measure(shape: &Shape, output: &mut [FaceRange]) {
     let Shape::Bodies(solids) = shape else {
         return;
     };
-    if output.len() > 65_536 {
+    if output.len() > 65_536 || solids.iter().flat_map(|s| s.face_iter()).count() != output.len() {
         return;
     }
     let mut cache = HashMap::new();

@@ -71,6 +71,7 @@ fn source(w: &Workspace, scope: &str) -> Result<Value> {
         "model" => {
             let settings = &w.session.visible().settings;
             let mut source = serde_json::to_value(settings)?;
+            source["manufacturing_tolerance_deg"] = json!(settings.manufacturing_tolerance_deg);
             source["size_tolerance"] = json!(
                 settings.manufacturing_tolerance_mm
                     / settings.display_length_unit.millimeters_per_unit()
@@ -86,6 +87,8 @@ fn source(w: &Workspace, scope: &str) -> Result<Value> {
                 .map(|state| &state.application)
                 .unwrap_or(&w.application_preferences);
             let mut source = serde_json::to_value(preferences)?;
+            source["default_model"]["manufacturing_tolerance_deg"] =
+                json!(preferences.default_model.manufacturing_tolerance_deg);
             source["default_model"]["size_tolerance"] = json!(
                 preferences.default_model.manufacturing_tolerance_mm
                     / preferences
@@ -197,7 +200,7 @@ fn field(w: &Workspace, spec: FieldSpec<'_>) -> SemanticElement {
 
 fn field_description(scope: &str, pointer: &str) -> Option<&'static str> {
     match pointer.strip_prefix("/default_model").unwrap_or(pointer) {
-        "/size_tolerance" => {
+        "/size_tolerance" | "/manufacturing_tolerance_deg" => {
             return Some(
                 "Applied above and below each finished model dimension unless that dimension has an override.",
             );
@@ -359,6 +362,14 @@ fn model_fields(w: &Workspace, application_defaults: bool) -> Vec<SemanticElemen
             ]),
             json!([]),
             Some(unit.symbol()),
+        ),
+        (
+            units,
+            "/manufacturing_tolerance_deg",
+            "Default angle tolerance (±)",
+            Some([0., 180.]),
+            json!([]),
+            Some("°"),
         ),
         (
             geometry,

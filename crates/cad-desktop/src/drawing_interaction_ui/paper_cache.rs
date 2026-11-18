@@ -29,6 +29,7 @@ impl PaperWorker {
         let mailbox = Arc::new(Mailbox::default());
         let thread = mailbox.clone();
         std::thread::spawn(move || {
+            let mut family = None;
             loop {
                 let Ok(mut pending) = thread.pending.lock() else {
                     break;
@@ -47,7 +48,7 @@ impl PaperWorker {
                 };
                 drop(pending);
                 let ticket = request.ticket;
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(request, &thread)))
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(request, &thread, &mut family)))
                 .map_err(|_| "Drawing preparation failed unexpectedly; change the sheet or reopen it to retry".to_owned())
                 .and_then(|result| result.map_err(|error| error.to_string()));
                 if thread.latest.load(Ordering::Acquire) == ticket
@@ -104,14 +105,41 @@ fn current(mailbox: &Mailbox, ticket: u64) -> Result<()> {
     }
     Ok(())
 }
-fn build(request: Request, mailbox: &Mailbox) -> Result<Cache> {
+struct Family {
+    key: BuildKey,
+    pages: Vec<Arc<cad_core::drawing::Sheet>>,
+}
+fn build(mut request: Request, mailbox: &Mailbox, cached: &mut Option<Family>) -> Result<Cache> {
     current(mailbox, request.ticket)?;
-    let paper = cad_core::drawing::build_sheet_preview(
-        &request.geometry,
-        &request.evaluation,
-        &request.key.source,
-        request.key.page,
-    )?;
+    let mut family_key = request.key.clone();
+    family_key.page = 0;
+    if cached
+        .as_ref()
+        .is_none_or(|family| family.key != family_key)
+    {
+        *cached = None;
+        let pages = cad_core::drawing::build_sheet_preview_family(
+            &request.geometry,
+            &request.evaluation,
+            &request.key.source,
+        )?;
+        *cached = Some(Family {
+            key: family_key,
+            pages: pages.into_iter().map(Arc::new).collect(),
+        });
+    }
+    let family = cached
+        .as_ref()
+        .ok_or_else(|| invalid("No prepared drawing pages"))?;
+    request.key.page = request
+        .key
+        .page
+        .min(family.pages.len().saturating_sub(1) as u32);
+    let paper = family
+        .pages
+        .get(request.key.page as usize)
+        .cloned()
+        .ok_or_else(|| invalid("The drawing has no pages"))?;
     current(mailbox, request.ticket)?;
     let scene = interaction::build(
         &request.geometry,
@@ -131,7 +159,7 @@ fn build(request: Request, mailbox: &Mailbox) -> Result<Cache> {
         key: request.key,
         geometry: request.geometry,
         evaluation: request.evaluation,
-        paper: Arc::new(paper),
+        paper,
         scene: Arc::new(scene),
         paint: Arc::new(paint),
     })

@@ -20,13 +20,22 @@ type Bounds = [Point; 2];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Placement {
+    /// Zero selects the main sheet. Positive slots follow all saved table pages.
+    #[serde(default, skip_serializing_if = "is_main_page")]
+    pub model_page: u32,
     pub view: String,
     /// Paper millimeters from the continuing dimension witness or datum anchor.
     pub offset_mm: Point,
 }
 
+fn is_main_page(page: &u32) -> bool {
+    *page == 0
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PaperItem {
+    #[serde(default)]
+    pub model_page: u32,
     pub definition: Id,
     pub source: Id,
     pub configuration: Option<Id>,
@@ -93,7 +102,8 @@ pub fn declared_datums(doc: &Document, sheet: &Drawing) -> BTreeSet<String> {
 
 pub(super) fn validate_placements(sheet: &Drawing) -> Result<()> {
     if sheet.model_item_placements.iter().any(|(key, p)| {
-        key.is_empty()
+        model_dimensions::remap::PaperKey::decode(key).is_err()
+            || p.model_page >= 1024
             || !super::VIEW_KEYS.contains(&p.view.as_str())
             || p.offset_mm
                 .iter()
@@ -115,6 +125,7 @@ struct Item {
     label: String,
     text: String,
     points: [[f64; 3]; 2],
+    vertex: Option<[f64; 3]>,
     normal: Option<[f64; 3]>,
     style: Style,
 }
@@ -123,6 +134,7 @@ struct Item {
 enum Style {
     Linear,
     Circular,
+    Angular,
     Datum,
 }
 
@@ -170,9 +182,10 @@ fn collect(
             continue;
         }
         let Some(report) = e.model_dimensions.get(key) else {
-            if sheet.show_model_dimensions
-                && (!part.outputs.is_empty()
-                    || e.meshes.get(key).is_some_and(|m| !m.faces.is_empty()))
+            if part.model_dimensions.has_requirements()
+                || sheet.show_model_dimensions
+                    && (!part.outputs.is_empty()
+                        || e.meshes.get(key).is_some_and(|m| !m.faces.is_empty()))
             {
                 paper.model_review.push(format!(
                     "{}: finished dimensions are unavailable; rebuild the part",
@@ -216,11 +229,21 @@ fn collect(
                 label: d.label.clone(),
                 text: model_dimensions::dimension_text(part, &doc.settings, d),
                 points: d.witnesses.map(|p| transform(p, m)),
-                normal: d.plane_normal.map(|n| world_direction(m, n)),
-                style: if d.kind == Kind::Linear {
-                    Style::Linear
+                vertex: d.angle_vertex.map(|p| transform(p, m)),
+                normal: if let Some(vertex) = d.angle_vertex {
+                    let v = nalgebra::Vector3::from(vertex);
+                    let a = nalgebra::Vector3::from(d.witnesses[0]) - v;
+                    let b = nalgebra::Vector3::from(d.witnesses[1]) - v;
+                    a.cross(&b)
+                        .try_normalize(1e-15)
+                        .map(|n| world_direction(m, n.into()))
                 } else {
-                    Style::Circular
+                    d.plane_normal.map(|n| world_direction(m, n))
+                },
+                style: match d.kind {
+                    Kind::Linear => Style::Linear,
+                    Kind::Diameter | Kind::Radius => Style::Circular,
+                    Kind::Angle => Style::Angular,
                 },
             });
         }
@@ -229,6 +252,21 @@ fn collect(
             continue;
         }
         for datum in report.datums.iter().filter(|d| d.explicit) {
+            if let Some(target) = sheet.entities.iter().find_map(|entity| match &entity.kind {
+                super::AnnotationKind::Datum { target, identifier }
+                    if identifier.eq_ignore_ascii_case(&datum.label) =>
+                {
+                    Some(target)
+                }
+                _ => None,
+            }) {
+                if !matches!(&target.reference, Some(super::PointReference::FaceOrigin { face, .. })
+                    if crate::provenance::equivalent(face, &datum.face).unwrap_or(false))
+                {
+                    paper.model_review.push(format!("Datum {} is also assigned on paper. Reattach the paper datum to the same model face, remove it, or change its letter.", datum.label));
+                }
+                continue;
+            }
             let point = transform(datum.anchor, m);
             items.push(Item {
                 id: placement_id("datum", &datum.label)?,
@@ -239,6 +277,7 @@ fn collect(
                 label: format!("Datum {}", datum.label),
                 text: datum.label.clone(),
                 points: [point, point],
+                vertex: None,
                 normal: match &datum.carrier {
                     model_dimensions::DatumCarrier::Plane { plane } => {
                         let n = nalgebra::Vector3::from(plane.u)
@@ -270,23 +309,34 @@ fn inside(b: Bounds, r: Bounds) -> bool {
 }
 
 // Index labels in paper rows. Large patterns need only inspect nearby labels.
-#[derive(Default)]
-struct Occupancy(BTreeMap<i32, Vec<Bounds>>);
+#[derive(Clone, Default)]
+struct Occupancy {
+    rows: BTreeMap<i32, Vec<Bounds>>,
+    large: Vec<Bounds>,
+    // Occupied space only grows. A previously rejected grid position cannot open up.
+    scan_positions: BTreeMap<(u64, bool), usize>,
+}
 impl Occupancy {
     fn rows(b: Bounds) -> std::ops::RangeInclusive<i32> {
         (b[0][1] / 6.).floor() as i32..=(b[1][1] / 6.).floor() as i32
     }
     fn insert(&mut self, b: Bounds) {
-        for row in Self::rows(b) {
-            self.0.entry(row).or_default().push(b);
+        let rows = Self::rows(b);
+        if i64::from(*rows.end()) - i64::from(*rows.start()) > 16 {
+            self.large.push(b);
+        } else {
+            for row in rows {
+                self.rows.entry(row).or_default().push(b);
+            }
         }
     }
     fn intersects(&self, b: Bounds) -> bool {
-        Self::rows(b).any(|row| {
-            self.0
-                .get(&row)
-                .is_some_and(|values| values.iter().any(|v| super::rectangles_overlap(*v, b)))
-        })
+        self.large.iter().any(|v| super::rectangles_overlap(*v, b))
+            || Self::rows(b).any(|row| {
+                self.rows
+                    .get(&row)
+                    .is_some_and(|values| values.iter().any(|v| super::rectangles_overlap(*v, b)))
+            })
     }
 }
 
@@ -294,8 +344,9 @@ struct Projection {
     view: String,
     anchor: Point,
     points: [Point; 2],
-    /// False if a linear measurement would be foreshortened in this view.
-    true_length: bool,
+    vertex: Option<Point>,
+    /// Only draw measurement lines/arcs in a view showing their true size.
+    true_size: bool,
     quality: f64,
 }
 
@@ -330,6 +381,17 @@ fn choose_view(
         } else {
             ratio.min(1.)
         };
+        let vertex = item
+            .vertex
+            .map(|p| projection.paper_point(name, p))
+            .transpose()?;
+        let true_size = if item.style == Style::Angular {
+            item.normal.is_some()
+                && quality > 1. - 1e-7
+                && vertex.is_some_and(|v| length(diff(a, v)) > 1e-9 && length(diff(b, v)) > 1e-9)
+        } else {
+            (ratio - 1.).abs() < 1e-7
+        };
         let anchor = if item.style == Style::Circular {
             b
         } else {
@@ -345,7 +407,8 @@ fn choose_view(
             view: name.into(),
             points: [a, b],
             anchor,
-            true_length: (ratio - 1.).abs() < 1e-7,
+            vertex,
+            true_size,
             quality,
         };
         if saved.is_some_and(|p| p.view == name) {
@@ -366,7 +429,8 @@ fn auto_label(
     width: f64,
     area: Bounds,
     projection: &ViewProjection,
-    occupied: &Occupancy,
+    occupied: &mut Occupancy,
+    view_bounds: &BTreeMap<String, Bounds>,
 ) -> Option<Point> {
     let [x, y, w, h] = projection.rect_mm;
     let anchor = p.anchor;
@@ -390,41 +454,93 @@ fn auto_label(
             p[1].clamp(area[0][1] + 1.4, area[1][1] - TEXT_MM - 1.),
         ]
     };
-    for lane in 0..10 {
-        for (i, base) in primary.iter().enumerate() {
-            let at = constrain([
-                base[0],
-                base[1] + lane as f64 * 5.5 * if i == 0 { -1. } else { 1. },
-            ]);
-            if !occupied.intersects(label_bounds(at, width)) {
-                return Some(at);
+    // Prefer exterior labels. On crowded paper use free space within projection rectangles.
+    for avoid_model in [true, false] {
+        let clear = |at| {
+            let label = label_bounds(at, width);
+            !occupied.intersects(label)
+                && (!avoid_model
+                    || view_bounds
+                        .values()
+                        .all(|bounds| !super::rectangles_overlap(label, *bounds)))
+        };
+        for lane in 0..10 {
+            for (i, base) in primary.iter().enumerate() {
+                let at = constrain([
+                    base[0],
+                    base[1] + lane as f64 * 5.5 * if i == 0 { -1. } else { 1. },
+                ]);
+                if clear(at) {
+                    return Some(at);
+                }
             }
         }
-    }
-    // Sparse area elsewhere on the sheet is preferable to overlapping text.
-    let mut y = area[1][1] - TEXT_MM - 1.;
-    while y >= area[0][1] + 1.4 {
-        let mut x = area[0][0] + 1.;
-        while x + width + 1. <= area[1][0] {
-            let at = [x, y];
-            if !occupied.intersects(label_bounds(at, width)) {
-                return Some(at);
-            }
-            x += 5.;
+        let dx = ((area[1][0] - area[0][0]) / 80.).max(5.);
+        let dy = ((area[1][1] - area[0][1]) / 80.).max(5.5);
+        let cols = ((area[1][0] - area[0][0] - width - 2.) / dx).floor() as usize + 1;
+        let rows = ((area[1][1] - area[0][1] - TEXT_MM - 2.4) / dy).floor() as usize + 1;
+        let key = (width.to_bits(), avoid_model);
+        let start = occupied.scan_positions.get(&key).copied().unwrap_or(0);
+        let limit = cols * rows;
+        let candidate = (start..limit).find_map(|index| {
+            let at = [
+                area[0][0] + 1. + (index % cols) as f64 * dx,
+                area[1][1] - TEXT_MM - 1. - (index / cols) as f64 * dy,
+            ];
+            clear(at).then_some((index, at))
+        });
+        occupied
+            .scan_positions
+            .insert(key, candidate.map_or(limit, |(index, _)| index + 1));
+        if let Some((_, at)) = candidate {
+            return Some(at);
         }
-        y -= 5.5;
     }
     None
+}
+
+fn angular_arc(out: &mut Vec<Primitive>, center: Point, rays: [Point; 2], label: Point) {
+    let [a, b] = rays.map(|p| diff(p, center));
+    let start = a[1].atan2(a[0]);
+    let sweep = (a[0] * b[1] - a[1] * b[0]).atan2(dot(a, b));
+    let radius = length(diff(label, center))
+        .min(length(a).min(length(b)) + 4.)
+        .clamp(2., 16.);
+    let station = |t: f64| {
+        let angle = start + sweep * t;
+        sum(center, [radius * angle.cos(), radius * angle.sin()])
+    };
+    let divisions = (sweep.abs() * (radius / 0.1).sqrt()).ceil().clamp(2., 128.) as usize;
+    let arc = (0..=divisions)
+        .map(|i| station(i as f64 / divisions as f64))
+        .collect::<Vec<_>>();
+    line(out, center, arc[0]);
+    line(out, center, arc[divisions]);
+    arrow(out, arc[0], arc[1]);
+    arrow(out, arc[divisions], arc[divisions - 1]);
+    out.push(Primitive::Polyline {
+        points: arc,
+        dashed: false,
+    });
+    line(out, station(0.5), label);
 }
 
 fn draw(out: &mut Vec<Primitive>, item: &Item, p: &Projection, at: Point, label: &str) {
     let [a, b] = p.points;
     let width = label_width(label);
     let base = [at[0] + width / 2., at[1] - 0.8];
-    if item.style == Style::Linear && p.true_length && length(diff(b, a)) > 1e-9 {
+    if item.style == Style::Angular
+        && p.true_size
+        && let Some(vertex) = p.vertex
+    {
+        angular_arc(out, vertex, p.points, base);
+    } else if item.style == Style::Linear && p.true_size && length(diff(b, a)) > 1e-9 {
         let direction = mul(diff(b, a), 1. / length(diff(b, a)));
         let normal = [-direction[1], direction[0]];
-        let shift = mul(normal, dot(diff(base, p.anchor), normal));
+        let label_center = [at[0] + width * 0.5, at[1] + TEXT_MM * 0.4];
+        let distance = dot(diff(label_center, p.anchor), normal);
+        let label_clearance = normal[0].abs() * width * 0.5 + normal[1].abs() * TEXT_MM * 0.6 + 0.8;
+        let shift = mul(normal, distance - distance.signum() * label_clearance);
         let (start, end) = (sum(a, shift), sum(b, shift));
         line(out, a, start);
         line(out, b, end);
@@ -433,10 +549,10 @@ fn draw(out: &mut Vec<Primitive>, item: &Item, p: &Projection, at: Point, label:
         arrow(out, end, start);
         let along = dot(diff(base, start), direction);
         if along < 0. {
-            line(out, start, base);
+            line(out, start, sum(start, mul(direction, along)));
         }
         if along > length(diff(end, start)) {
-            line(out, end, base);
+            line(out, end, sum(start, mul(direction, along)));
         }
     } else {
         let right = p.anchor[0] > base[0];
@@ -467,31 +583,108 @@ fn draw(out: &mut Vec<Primitive>, item: &Item, p: &Projection, at: Point, label:
     text(out, at, TEXT_MM, label);
 }
 
+/// A layer is laid out before any large view vectors are copied to continuation sheets.
+#[derive(Default)]
+pub(super) struct CalloutLayer {
+    pub primitives: Vec<Primitive>,
+    pub items: BTreeMap<Id, PaperItem>,
+    pub groups: Vec<PrimitiveGroup>,
+    pub review: Vec<String>,
+    occupied: Occupancy,
+}
+
+impl CalloutLayer {
+    pub fn append(self, paper: &mut Sheet) {
+        let start = paper.primitives.len();
+        paper.primitives.extend(self.primitives);
+        paper.model_items.extend(self.items);
+        paper.model_review.extend(self.review);
+        paper
+            .groups
+            .extend(self.groups.into_iter().map(|mut group| {
+                group.primitive_start += start;
+                group
+            }));
+    }
+}
+
+fn reserve_text(occupied: &mut Occupancy, primitive: &Primitive) {
+    if let Primitive::Text { at, size, text } = primitive {
+        occupied.insert([
+            [at[0] - 1., at[1] - 1.4],
+            [
+                at[0] + text.chars().count() as f64 * size * 0.66 + 1.,
+                at[1] + size + 1.,
+            ],
+        ]);
+    }
+}
+
+pub(super) struct PaperSpace<'a> {
+    pub footer: f64,
+    pub model_bounds: &'a BTreeMap<String, Bounds>,
+    pub view_ranges: &'a BTreeMap<String, std::ops::Range<usize>>,
+}
+
 pub(super) fn project_items(
     doc: &Document,
     e: &Evaluation,
     sheet: &Drawing,
     instances: &[DisplayInstance],
     paper: &mut Sheet,
-    footer: f64,
-) -> Result<()> {
+    space: PaperSpace<'_>,
+) -> Result<Vec<CalloutLayer>> {
     let mut items = collect(doc, e, sheet, instances, paper)?;
-    // Keep manual labels in their reserved positions while placing automatic labels.
+    if !paper.model_coverage.is_empty() {
+        let notes = sheet.annotations.len() + sheet.title_block.len();
+        text(
+            &mut paper.primitives,
+            [
+                paper_bounds(sheet)[0][0] + 4.,
+                space.footer - 6. - notes as f64 * 3.5,
+            ],
+            2.6,
+            "Automatic dimension coverage is partial",
+        );
+    }
+    if items.is_empty() {
+        return Ok(vec![]);
+    }
+    // A moved item reserves its original page and location before automatic placement.
     items.sort_by_key(|item| !sheet.model_item_placements.contains_key(&item.id));
-    let mut area = paper_bounds(sheet);
-    area[0][1] = area[0][1].max(footer + 3.);
+    let bounds = paper_bounds(sheet);
+    let mut main_area = bounds;
+    main_area[0][1] = main_area[0][1].max(space.footer + 3.);
+    let mut extra_area = bounds;
+    extra_area[0][1] = super::title_bounds(sheet).map_or(bounds[0][1] + 5., |b| b[1][1] + 2.);
+    extra_area[1][1] -= 9.;
     let mut occupied = Occupancy::default();
     for primitive in &paper.primitives {
-        if let Primitive::Text { at, size, text } = primitive {
-            occupied.insert([
-                [at[0] - 1., at[1] - 1.4],
-                [
-                    at[0] + text.chars().count() as f64 * size * 0.66 + 1.,
-                    at[1] + size + 1.,
-                ],
-            ]);
+        reserve_text(&mut occupied, primitive);
+    }
+    // Reserve table rectangles as well as cell text, including floating tables.
+    for group in &paper.groups {
+        if matches!(
+            group.target,
+            Target::Table { .. } | Target::TableSegment { .. }
+        ) && let Some(b) = crate::drawing_interaction::bounds(
+            &paper.primitives[group.primitive_start..group.primitive_start + group.primitive_count],
+        ) {
+            occupied.insert(b);
         }
     }
+    let mut extra_occupied = Occupancy::default();
+    for range in space.view_ranges.values() {
+        for primitive in &paper.primitives[range.clone()] {
+            reserve_text(&mut extra_occupied, primitive);
+        }
+    }
+    let max_slot = (1024 - crate::drawing_tables::page_count(sheet)) as usize;
+    let mut layers = vec![CalloutLayer {
+        occupied,
+        ..Default::default()
+    }];
+    let mut current_slot = 0;
     for item in items {
         let saved = sheet.model_item_placements.get(&item.id);
         let Some(p) = choose_view(&item, paper, saved)? else {
@@ -500,45 +693,84 @@ pub(super) fn project_items(
                 .push("Add an ordinary model view to place model dimensions and datums".into());
             break;
         };
-        let value = if item.style == Style::Linear && !p.true_length {
+        if saved.is_some_and(|placement| placement.view != p.view) {
+            paper.model_review.push(format!(
+                "{}'s saved view is missing. Restore the view or reset the callout placement.",
+                item.label
+            ));
+        }
+        let value = if matches!(item.style, Style::Linear | Style::Angular) && !p.true_size {
             format!("{} {}", item.label, item.text)
         } else {
             item.text.clone()
         };
         let width = label_width(&value);
-        let manual = saved.filter(|s| s.view == p.view);
-        let at = if let Some(manual) = manual {
-            sum(p.anchor, manual.offset_mm)
-        } else if let Some(at) = auto_label(&p, width, area, &paper.projections[&p.view], &occupied)
-        {
-            at
-        } else {
-            paper.model_review.push(format!(
-                "{} needs more label space; enlarge the sheet or move its callouts",
-                item.label
-            ));
-            sum(p.anchor, [2., 4.])
+        let mut slot = saved.map_or(current_slot, |v| v.model_page as usize);
+        if slot > max_slot {
+            paper.model_review.push(format!("{}'s saved page exceeds the 1024-page sheet limit. Reset its placement or split the drawing.", item.label));
+            slot = 0;
+        }
+        let fallback = sum(p.anchor, [2., 4.]);
+        let at = loop {
+            if slot >= layers.len() {
+                layers.resize_with(slot + 1, || CalloutLayer {
+                    occupied: extra_occupied.clone(),
+                    ..Default::default()
+                });
+            }
+            if let Some(saved) = saved {
+                break sum(p.anchor, saved.offset_mm);
+            }
+            if width + 2. > bounds[1][0] - bounds[0][0] {
+                layers[slot].review.push(format!(
+                    "{} is wider than the printable area. Enlarge the paper.",
+                    item.label
+                ));
+                break fallback;
+            }
+            let layer = &mut layers[slot];
+            if let Some(at) = auto_label(
+                &p,
+                width,
+                if slot == 0 { main_area } else { extra_area },
+                &paper.projections[&p.view],
+                &mut layer.occupied,
+                space.model_bounds,
+            ) {
+                current_slot = slot;
+                break at;
+            }
+            if slot == max_slot || (slot > 0 && layer.items.is_empty()) {
+                layers[slot].review.push(format!(
+                    "{} cannot fit on a continuation page. Enlarge the paper or split the drawing.",
+                    item.label
+                ));
+                break fallback;
+            }
+            slot += 1;
         };
-        if !inside(label_bounds(at, width), paper_bounds(sheet)) {
-            paper.model_review.push(format!(
+        let layer = &mut layers[slot];
+        if !inside(label_bounds(at, width), bounds) {
+            layer.review.push(format!(
                 "{} falls outside the paper; move its label or enlarge the sheet",
                 item.label
             ));
         }
-        occupied.insert(label_bounds(at, width));
-        let start = paper.primitives.len();
-        draw(&mut paper.primitives, &item, &p, at, &value);
-        paper.groups.push(PrimitiveGroup {
+        layer.occupied.insert(label_bounds(at, width));
+        let start = layer.primitives.len();
+        draw(&mut layer.primitives, &item, &p, at, &value);
+        layer.groups.push(PrimitiveGroup {
             target: Target::ModelItem {
                 id: item.id.clone(),
             },
             view: Some(p.view.clone()),
             primitive_start: start,
-            primitive_count: paper.primitives.len() - start,
+            primitive_count: layer.primitives.len() - start,
         });
-        paper.model_items.insert(
+        layer.items.insert(
             item.id,
             PaperItem {
+                model_page: slot as u32,
                 definition: item.definition,
                 source: item.source,
                 configuration: item.configuration,
@@ -552,5 +784,7 @@ pub(super) fn project_items(
             },
         );
     }
-    Ok(())
+    let extra = layers.split_off(1);
+    layers.pop().unwrap().append(paper);
+    Ok(extra)
 }

@@ -1268,7 +1268,12 @@ fn format_fields(f: &mut Fields<'_>) {
             }
             _ => {}
         }
-        match linked_text(f.w.session.visible(), f.sheet, &cell.value) {
+        match linked_text_evaluated(
+            f.w.session.visible(),
+            f.sheet,
+            &cell.value,
+            crate::drawing_ui::evaluation(f.w),
+        ) {
             Ok(value) => f.note(
                 "title-current",
                 &format!("Current value · {value}"),

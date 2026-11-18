@@ -132,6 +132,28 @@ fn page(w: &Workspace) -> u32 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0)
 }
+fn paper_page_name(sheet: &Drawing, page: u32) -> String {
+    let tables = cad_core::drawing_tables::page_count(sheet);
+    if page == 0 {
+        "1 · Model sheet".into()
+    } else if page < tables {
+        format!("{} · Tables", page + 1)
+    } else {
+        format!("{} · Model dimensions", page + 1)
+    }
+}
+pub(crate) fn current_page_count(w: &Workspace, source: &Drawing) -> u32 {
+    if let Some(cache) = &w.drawing_interaction.cache
+        && cache.source == *source
+        && cache.key.stamp == document_stamp(w)
+    {
+        return cache.paper.page_count;
+    }
+    current_native(w).map_or_else(
+        || cad_core::drawing_tables::page_count(source),
+        |e| cad_core::drawing::page_count(e, source),
+    )
+}
 fn sheet(w: &Workspace) -> Option<Drawing> {
     crate::drawing_ui::sheet_source(w, w.fields.get("drawing-preview")?.as_str())
 }
@@ -164,8 +186,8 @@ fn session_native(session: &Session) -> Option<&Evaluation> {
         .or(session.evaluation.as_ref())
         .filter(|e| (e.valid || e.geometry_valid) && e.identity == session.identity())
 }
-fn refresh(w: &Workspace, state: &mut State, source: &Drawing, page: u32) -> Result<()> {
-    let key = BuildKey {
+fn refresh(w: &mut Workspace, state: &mut State, source: &Drawing, mut page: u32) -> Result<()> {
+    let mut key = BuildKey {
         stamp: document_stamp(w),
         backend: w.session.backend.clone(),
         source: source.clone(),
@@ -180,6 +202,13 @@ fn refresh(w: &Workspace, state: &mut State, source: &Drawing, page: u32) -> Res
         state.paper_request = None;
         match result {
             Ok(cache) => {
+                if page != cache.page {
+                    page = cache.page;
+                    key.page = page;
+                    w.fields.insert("drawing-page".into(), page.to_string());
+                    w.view.drawing_page = page;
+                    w.view.drawing_selection = None;
+                }
                 state.cache = Some(cache);
                 state.paper_error = None;
             }
@@ -1121,10 +1150,20 @@ fn selected_commands(context: &SemanticContext<'_>, state: &State) -> Vec<Semant
             context,
             "drawing.interact-edit-in-model",
             "Edit in model…",
-            enabled && w.tool_checkpoint.is_none() && w.session.draft.is_none(),
+            state.capture.is_none() && w.tool_checkpoint.is_none() && w.session.draft.is_none(),
         );
         edit.data["model_item"] = json!(id);
         out.push(edit);
+        if source.model_item_placements.contains_key(id) {
+            let mut reset = command(
+                context,
+                "drawing.interact-reset-model-placement",
+                "Place automatically",
+                state.capture.is_none(),
+            );
+            reset.data["model_item"] = json!(id);
+            out.push(reset);
+        }
     }
     if supports_curve(&source, target) {
         let mut element = command(
@@ -1156,7 +1195,7 @@ fn selected_commands(context: &SemanticContext<'_>, state: &State) -> Vec<Semant
         context,
         "drawing.interact-clear-selection",
         "Clear paper selection",
-        enabled,
+        state.capture.is_none(),
     ));
     out
 }
@@ -1175,7 +1214,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             &context,
             "drawing.interact-dimension",
             "Smart Dimension",
-            !active(w),
+            !active(w) && page(w) == 0,
         ),
         command(
             &context,
@@ -1258,7 +1297,17 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         });
     }
     if let Some(cache) = &state.cache {
-        out.push(field(&context,"page","Page",json!(page(w)),"integer",None,(0..cad_core::drawing_tables::page_count(&cache.source)).map(|p|json!({"label":if p==0{"Model sheet".into()}else{format!("Continuation {p}")},"value":p})).collect()));
+        out.push(field(
+            &context,
+            "page",
+            "Page",
+            json!(page(w)),
+            "integer",
+            None,
+            (0..cache.paper.page_count)
+                .map(|p| json!({"label":paper_page_name(&cache.source, p),"value":p}))
+                .collect(),
+        ));
         for target in &cache.scene.targets {
             let mut data = context.identity.clone();
             data["target"] = json!(target.target);
@@ -1573,7 +1622,7 @@ pub fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) -> Result
                 let source = sheet(w).ok_or_else(|| invalid("Select a drawing sheet"))?;
                 let page = value
                     .as_u64()
-                    .filter(|p| *p < (cad_core::drawing_tables::page_count(&source) as u64))
+                    .filter(|p| *p < u64::from(current_page_count(w, &source)))
                     .ok_or_else(|| invalid("Choose an existing continuation page"))?
                     as u32;
                 w.fields.insert("drawing-page".into(), page.to_string());
@@ -1681,6 +1730,18 @@ fn execute(w: &mut Workspace, state: &mut State, cmd: &str, data: Option<&Value>
         return Ok(());
     }
     match cmd {
+        "drawing.interact-reset-model-placement" => {
+            let Some(Target::ModelItem { id }) = selected(state) else {
+                return Err(invalid("Select a moved model callout"));
+            };
+            if data
+                .and_then(|d| d["model_item"].as_str())
+                .is_some_and(|key| key != id)
+            {
+                return Err(invalid("The selected callout changed"));
+            }
+            apply(w, state, &Action::ResetModelPlacement { id: id.clone() })?;
+        }
         "drawing.interact-edit-in-model" => {
             if w.tool_checkpoint.is_some() || w.session.draft.is_some() {
                 return Err(invalid(
@@ -1711,7 +1772,8 @@ fn execute(w: &mut Workspace, state: &mut State, cmd: &str, data: Option<&Value>
                 &item.definition,
                 item.configuration.as_deref(),
                 &item.path,
-                (!item.datum).then_some(item.source.as_str()),
+                &item.source,
+                item.datum,
             ) {
                 crate::drawing_ui::open_workspace(w);
                 return Err(error);
@@ -2350,7 +2412,7 @@ pub fn frame(
                     }
                 }
             }
-            let max = cad_core::drawing_tables::page_count(&source);
+            let max = rendered.page_count;
             if max > 1 {
                 let mut current = page(w);
                 ui.add_enabled_ui(state.capture.is_none(), |ui| {
@@ -2359,10 +2421,13 @@ pub fn frame(
                         .show_ui(ui, |ui| {
                             for p in 0..max {
                                 if ui
-                                    .selectable_value(&mut current, p, format!("Page {}", p + 1))
+                                    .selectable_value(&mut current, p, paper_page_name(&source, p))
                                     .changed()
                                 {
                                     w.fields.insert("drawing-page".into(), p.to_string());
+                                    w.view.drawing_page = p;
+                                    w.view.drawing_selection = None;
+                                    state.cohort.clear();
                                     state.selection = None;
                                     state.tool = Tool::Select;
                                 }

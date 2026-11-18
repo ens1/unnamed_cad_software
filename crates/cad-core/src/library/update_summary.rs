@@ -175,7 +175,17 @@ pub(super) fn engineering_changes(
                 {
                     output.push(format!("{name}: configurations changed"));
                 }
-                if a.model_dimensions != b.model_dimensions {
+                if a.model_dimensions.source_defaults != b.model_dimensions.source_defaults
+                    && let Some(defaults) = b.model_dimensions.source_defaults
+                {
+                    output.push(format!(
+                        "{name}: source default tolerances ±{} mm and ±{}°",
+                        defaults.linear_mm, defaults.angular_deg
+                    ));
+                }
+                if a.model_dimensions.overrides != b.model_dimensions.overrides
+                    || a.model_dimensions.datums != b.model_dimensions.datums
+                {
                     output.push(format!(
                         "{name}: model dimension tolerances or datums changed"
                     ));

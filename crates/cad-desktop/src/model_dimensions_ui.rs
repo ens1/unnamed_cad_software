@@ -2,7 +2,7 @@
 use crate::{Workspace, presentation_controls as controls, viewport};
 use bevy_egui::egui;
 use cad_core::{
-    CadError, Part, PlacedPart, Result, TopologyRef,
+    CadError, Dimension, Part, PlacedPart, Result, TopologyRef,
     commands::Command,
     model_dimensions::{self as mbd, Characteristic, Edit, Report},
     presentation::SemanticElement,
@@ -10,6 +10,7 @@ use cad_core::{
     selection_actions::SelectionTarget,
 };
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 const PANEL: &str = "model-dimensions";
 const DIMENSION: &str = "mbd-dimension";
@@ -34,6 +35,12 @@ fn owner(w: &Workspace) -> Option<&str> {
         .or(w.view.active_part.as_deref())
 }
 pub(crate) fn unavailable(w: &Workspace) -> Option<&'static str> {
+    if crate::publish_ui::busy(w) || crate::git_ui::busy(w) || w.file_switch.is_some() {
+        return Some("Finish the current file or repository operation first");
+    }
+    if crate::drawing_interaction_ui::active(w) {
+        return Some("Finish the current drawing gesture first");
+    }
     if w.view.history_cursor.is_some() || w.view.original && w.session.draft.is_some() {
         return Some("Return to the current part to inspect finished dimensions");
     }
@@ -71,7 +78,24 @@ struct Context<'a> {
 }
 fn context(w: &Workspace) -> Option<Context<'_>> {
     let id = owner(w)?;
-    let eval = current_geometry(w)?;
+    // Typing one allowance can produce several pending worker revisions. Keep
+    // the stable editor and its text focus on the opening geometry while every
+    // intervening edit was a requirement edit made by this tool. New geometry
+    // picks and datum changes still require the current worker result.
+    let eval = current_geometry(w).or_else(|| {
+        if !active(w)
+            || w.fields.get("mbd-geometry-epoch").map(String::as_str)
+                != Some(w.session.source_epoch())
+            || !w.session.draft.as_ref().is_some_and(|draft| draft.pending)
+        {
+            return None;
+        }
+        w.tool_checkpoint
+            .as_ref()?
+            .evaluation
+            .as_ref()
+            .filter(|e| e.valid || e.geometry_valid)
+    })?;
     let path: Option<Vec<String>> = active(w)
         .then(|| w.fields.get(PATH))
         .flatten()
@@ -84,7 +108,11 @@ fn context(w: &Workspace) -> Option<Context<'_>> {
                 .filter(|s| s.definition == id)
                 .map(|s| s.path.as_slice())
         })
-        .or(w.selected_feature_path.as_deref());
+        .or(w.selected_feature_path.as_deref())
+        .or(w
+            .edge_selection_path
+            .as_deref()
+            .filter(|_| w.view.active_part.as_deref() == Some(id)));
     let mut candidates = viewport::display_instances(w, eval)
         .into_iter()
         .filter(|i| {
@@ -233,7 +261,12 @@ fn begin(w: &mut Workspace, id: Option<&str>) -> Result<()> {
             .map(|ctx| ctx.instance.path.clone())
             .or_else(|| w.selected.as_ref().map(|p| p.path.clone()));
         w.fields.retain(|k, _| !k.starts_with("mbd-"));
+        let geometry_current = current_geometry(w).is_some();
         w.start_tool();
+        if geometry_current {
+            w.fields
+                .insert("mbd-geometry-epoch".into(), w.session.source_epoch().into());
+        }
         w.fields.insert(EDITOR.into(), cad_core::id());
         w.fields.insert(OWNER.into(), owner);
         if let Some(path) = path {
@@ -254,7 +287,8 @@ pub(crate) fn open_from_drawing(
     part: &str,
     configuration: Option<&str>,
     path: &[cad_core::Id],
-    dimension: Option<&str>,
+    source: &str,
+    is_datum: bool,
 ) -> Result<()> {
     if w.settings.is_some()
         || w.tool_checkpoint.is_some()
@@ -287,15 +321,33 @@ pub(crate) fn open_from_drawing(
         .model_dimensions
         .get(cad_core::history::mesh_key(occurrence))
         .ok_or_else(|| invalid("This part has no evaluated model dimensions"))?;
-    if dimension.is_some_and(|id| !report.dimensions.iter().any(|d| d.id == id)) {
-        return Err(invalid(
-            "This drawing dimension no longer resolves to a finished size",
-        ));
-    }
+    let selected = if is_datum {
+        let datum = report
+            .datums
+            .iter()
+            .find(|d| d.explicit && d.label == source)
+            .ok_or_else(|| invalid("The drawing datum no longer has a unique face"))?;
+        let mesh = eval
+            .meshes
+            .get(cad_core::history::mesh_key(occurrence))
+            .ok_or_else(|| invalid("The datum face is unavailable"))?;
+        Some(datum_pick(occurrence, mesh, datum)?)
+    } else {
+        if !report.dimensions.iter().any(|d| d.id == source) {
+            return Err(invalid(
+                "This drawing dimension no longer resolves to a finished size",
+            ));
+        }
+        None
+    };
     let path = occurrence.path.clone();
     w.activate_context(Some(part.into()), Some(path.clone()));
-    begin(w, dimension)?;
+    begin(w, (!is_datum).then_some(source))?;
     w.fields.insert(PATH.into(), serde_json::to_string(&path)?);
+    if let Some(pick) = selected {
+        viewport::select(w, pick);
+        w.fields.insert("mbd-reveal-datums".into(), "true".into());
+    }
     Ok(())
 }
 
@@ -327,6 +379,20 @@ pub(crate) fn selection_actions(
     Some(element)
 }
 
+// Keep CSS and widget identities compact even when a characteristic's
+// construction references contain long nested JSON. Actions retain the exact ID.
+fn widget_key(id: &str) -> String {
+    if id.len() <= 96
+        && id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"-/_".contains(&c))
+    {
+        return id.to_owned();
+    }
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(id.as_bytes()))
+}
+
 fn field(
     key: &str,
     label: &str,
@@ -352,10 +418,10 @@ fn field(
     let id = if key == "dimension" {
         "all"
     } else {
-        data["dimension"].as_str().unwrap_or("all")
+        data["characteristic"].as_str().unwrap_or("all")
     };
     SemanticElement {
-        id: format!("model-dimensions:{key}:{id}"),
+        id: format!("model-dimensions:{key}:{}", widget_key(id)),
         role: "model-dimension-field".into(),
         label: label.into(),
         value: value.as_str().map(String::from),
@@ -377,7 +443,7 @@ fn button(
     let mut data = ctx.bind(w, data);
     data["enabled"] = enabled.into();
     SemanticElement {
-        id: format!("{key}:{suffix}"),
+        id: format!("{key}:{}", widget_key(suffix)),
         role: "model-dimension-action".into(),
         label,
         state: if enabled { "ready" } else { "disabled" }.into(),
@@ -387,11 +453,35 @@ fn button(
         data,
     }
 }
-fn mode(w: &Workspace, ctx: &Context<'_>, id: &str) -> &'static str {
-    match ctx.part.model_dimensions.overrides.get(id) {
+fn allowance_text(d: &Characteristic, value: f64) -> String {
+    if d.kind == mbd::Kind::Angle {
+        format!("{} deg", value.to_degrees())
+    } else {
+        format!("{value} mm")
+    }
+}
+fn suggested_datums(ctx: &Context<'_>) -> BTreeMap<String, TopologyRef> {
+    ctx.report
+        .datums
+        .iter()
+        .filter(|datum| {
+            !datum.explicit && !ctx.part.model_dimensions.datums.contains_key(&datum.label)
+        })
+        .map(|datum| (datum.label.clone(), datum.face.clone()))
+        .collect()
+}
+fn mode(w: &Workspace, ctx: &Context<'_>, dim: &Characteristic) -> &'static str {
+    let id = &dim.id;
+    match ctx
+        .part
+        .model_dimensions
+        .overrides
+        .get(id)
+        .filter(|saved| saved.dimension == dim.kind.dimension())
+    {
         None => "default",
         Some(a)
-            if a.tolerance.minus_mm != a.tolerance.plus_mm
+            if a.tolerance.minus != a.tolerance.plus
                 || w.fields.get(UNEQUAL).is_some_and(|s| s == id) =>
         {
             "unequal"
@@ -412,14 +502,54 @@ fn next_label(ctx: &Context<'_>) -> Option<String> {
 fn show_callouts(w: &Workspace) -> bool {
     unavailable(w).is_none() && (active(w) || w.selected.is_some() && w.dialog.is_none())
 }
+fn review_prompt(w: &Workspace) -> Option<SemanticElement> {
+    if active(w) || unavailable(w).is_some() {
+        return None;
+    }
+    let ctx = context(w)?;
+    let count = ctx.report.issues.len();
+    if count == 0 {
+        return None;
+    }
+    let label = if count == 1 {
+        "Review 1 model requirement".to_owned()
+    } else {
+        format!("Review {count} model requirements")
+    };
+    Some(SemanticElement {
+        id: "model-dimensions:review-required".into(),
+        role: "model-dimensions-review-action".into(),
+        label,
+        value: Some(ctx.report.issues.join("\n")),
+        state: "warning".into(),
+        commands: vec!["inspection.model-dimensions".into()],
+        relationships: vec![ctx.part.id.clone()],
+        data: ctx.bind(w, json!({"issue_count":count})),
+    })
+}
+pub(crate) fn review_action(ui: &mut egui::Ui, w: &mut Workspace, elements: &[SemanticElement]) {
+    let Some(e) = elements
+        .iter()
+        .find(|e| e.role == "model-dimensions-review-action")
+    else {
+        return;
+    };
+    if controls::button(ui, &e.id, &e.role, &["warning"], &e.label, true, false)
+        .on_hover_text(e.value.as_deref().unwrap_or(""))
+        .clicked()
+    {
+        action(w, "inspection.model-dimensions", None);
+    }
+}
 pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
+    let mut elements: Vec<_> = review_prompt(w).into_iter().collect();
     if !show_callouts(w) {
-        return vec![];
+        return elements;
     }
     let Some(ctx) = context(w) else {
-        return vec![];
+        return elements;
     };
-    let mut elements = callouts(w, &ctx);
+    elements.extend(callouts(w, &ctx));
     if !active(w) {
         return elements;
     }
@@ -443,7 +573,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let writable = ctx.writable(w);
     let dimension_choices = ctx.report.dimensions.iter().map(|d| json!({"value":d.id, "label":format!("{}   {}",d.label,mbd::dimension_text(ctx.part,&w.session.visible().settings,d))})).collect();
     if let Some(d) = ctx.focused(w) {
-        let bind = ctx.bind(w,json!({"dimension":d.id,"nominal_mm":d.nominal_mm,"witnesses":d.witnesses,"supports":d.supports}));
+        let bind = ctx.bind(w,json!({"characteristic":d.id,"dimension":d.kind.dimension(),"nominal":d.nominal,"measurement_kind":d.kind,"angle_vertex":d.angle_vertex,"witnesses":d.witnesses,"supports":d.supports}));
         elements.push(field(
             "dimension",
             "Finished dimension",
@@ -452,29 +582,33 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             dimension_choices,
             true,
         ));
-        let mode = mode(w, &ctx, &d.id);
+        let mode = mode(w, &ctx, d);
         elements.push(field(
             "mode",
             "Tolerance",
             bind.clone(),
             json!(mode),
             vec![
-                json!({"value":"default","label":"Model default"}),
+                json!({"value":"default","label":if ctx.part.model_dimensions.source_defaults.is_some() {"Part default"} else {"Document default"}}),
                 json!({"value":"symmetric","label":"Symmetric ±"}),
                 json!({"value":"unequal","label":"Unequal limits"}),
             ],
             writable,
         ));
         if mode != "default" {
-            let a = mbd::effective_tolerance(ctx.part, &w.session.visible().settings, &d.id);
+            let a = mbd::effective_tolerance(ctx.part, &w.session.visible().settings, d);
             let mut quantity = bind;
-            quantity["unit"] = json!(w.session.visible().settings.display_length_unit.symbol());
+            quantity["unit"] = json!(if d.kind == mbd::Kind::Angle {
+                "deg"
+            } else {
+                w.session.visible().settings.display_length_unit.symbol()
+            });
             if mode == "symmetric" {
                 elements.push(field(
                     "both",
                     "± allowance",
                     quantity,
-                    json!(format!("{} mm", a.plus_mm)),
+                    json!(allowance_text(d, a.plus)),
                     vec![],
                     writable,
                 ));
@@ -483,7 +617,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                     "lower",
                     "Lower allowance (−)",
                     quantity.clone(),
-                    json!(format!("{} mm", a.minus_mm)),
+                    json!(allowance_text(d, a.minus)),
                     vec![],
                     writable,
                 ));
@@ -491,12 +625,25 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                     "upper",
                     "Upper allowance (+)",
                     quantity,
-                    json!(format!("{} mm", a.plus_mm)),
+                    json!(allowance_text(d, a.plus)),
                     vec![],
                     writable,
                 ));
             }
         }
+    }
+    if let Some(defaults) = &ctx.part.model_dimensions.source_defaults {
+        let mut action = button(
+            &ctx,
+            w,
+            "mbd.use-document-defaults",
+            "Use document tolerances for this part".into(),
+            "part",
+            json!({"previous":defaults}),
+            writable,
+        );
+        action.value=Some("All dimensions using the part default will inherit this document’s general tolerances.".into());
+        elements.push(action);
     }
     let face = ctx.eligible_face(w);
     let selected_used = face.is_some_and(|pick| {
@@ -576,6 +723,23 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             writable,
         ));
     }
+    let suggestions = suggested_datums(&ctx);
+    if suggestions.len() > 1 {
+        let letters = suggestions
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        elements.push(button(
+            &ctx,
+            w,
+            "mbd.accept-datum-set",
+            format!("Accept suggested datums {letters}"),
+            "set",
+            json!({"datums":suggestions}),
+            writable,
+        ));
+    }
     for datum in &ctx.report.datums {
         if !datum.explicit && !ctx.part.model_dimensions.datums.contains_key(&datum.label) {
             let selected =
@@ -604,14 +768,38 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         }
     }
     for (key, saved) in &ctx.part.model_dimensions.overrides {
-        if !ctx.report.dimensions.iter().any(|d| &d.id == key) {
+        if !ctx
+            .report
+            .dimensions
+            .iter()
+            .any(|d| &d.id == key && d.kind.dimension() == saved.dimension)
+        {
+            if let Some(target) = ctx.focused(w)
+                && target.kind.dimension() == saved.dimension
+                && !ctx.part.model_dimensions.overrides.contains_key(&target.id)
+            {
+                elements.push(button(
+                    &ctx,
+                    w,
+                    "mbd.reassign-override",
+                    format!(
+                        "Move {} tolerance to {} ({})",
+                        saved.label,
+                        target.label,
+                        mbd::dimension_text(ctx.part, &w.session.visible().settings, target)
+                    ),
+                    key,
+                    json!({"characteristic": key, "replacement": target.id}),
+                    writable,
+                ));
+            }
             elements.push(button(
                 &ctx,
                 w,
                 "mbd.clear-override",
                 format!("Remove override for {}", saved.label),
                 key,
-                json!({"dimension":key}),
+                json!({"characteristic":key}),
                 writable,
             ));
         }
@@ -632,15 +820,15 @@ pub(crate) fn current_value(w: &Workspace, e: &SemanticElement) -> Option<Value>
         ));
     }
     let d = ctx.focused(w)?;
-    if e.data["field"] != "dimension" && e.data["dimension"] != d.id {
+    if e.data["field"] != "dimension" && e.data["characteristic"] != d.id {
         return None;
     }
-    let a = mbd::effective_tolerance(ctx.part, &w.session.visible().settings, &d.id);
+    let a = mbd::effective_tolerance(ctx.part, &w.session.visible().settings, d);
     Some(match e.data["field"].as_str()? {
         "dimension" => json!(d.id),
-        "mode" => json!(mode(w, &ctx, &d.id)),
-        "both" | "upper" => json!(format!("{} mm", a.plus_mm)),
-        "lower" => json!(format!("{} mm", a.minus_mm)),
+        "mode" => json!(mode(w, &ctx, d)),
+        "both" | "upper" => json!(allowance_text(d, a.plus)),
+        "lower" => json!(allowance_text(d, a.minus)),
         _ => return None,
     })
 }
@@ -649,6 +837,10 @@ fn submit(w: &mut Workspace, part: String, edit: Edit) -> Result<()> {
     w.dispatch(Command::EditModelDimensions { part, edit });
     if prior == w.session.source_epoch() {
         return Err(CadError::Invalid(w.status.clone()));
+    }
+    if w.fields.get("mbd-geometry-epoch") == Some(&prior) {
+        w.fields
+            .insert("mbd-geometry-epoch".into(), w.session.source_epoch().into());
     }
     Ok(())
 }
@@ -706,30 +898,46 @@ pub(crate) fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) ->
         .model_dimensions
         .overrides
         .get(&id)
+        .filter(|entry| entry.dimension == dimension.kind.dimension())
         .map(|d| d.tolerance);
-    let mut a = mbd::effective_tolerance(ctx.part, &w.session.visible().settings, &id);
+    let mut a = mbd::effective_tolerance(ctx.part, &w.session.visible().settings, dimension);
     let tolerance = if field == "mode" {
         match text {
             "default" => None,
             "symmetric" => {
-                a.minus_mm = a.plus_mm;
+                a.minus = a.plus;
                 Some(a)
             }
             "unequal" => Some(a),
             _ => return Err(invalid("Choose a tolerance mode")),
         }
     } else {
-        let (_, mm) = crate::quantity_display::input_length(w.session.visible(), &part, text)?;
-        if !mm.is_finite() || mm < 0. {
+        let value = if dimension.kind == mbd::Kind::Angle {
+            let text = text.trim();
+            let angular: cad_core::Expr = text
+                .strip_suffix('°')
+                .map_or_else(|| text.into(), |v| cad_core::Expr(format!("({v}) * 1 deg")));
+            let q = cad_core::expression::quantity(w.session.visible(), &part, &angular)?;
+            if q.matches(Dimension::Angle) {
+                q.value
+            } else if q.matches(Dimension::Scalar) {
+                q.value.to_radians()
+            } else {
+                return Err(invalid("Enter an angular tolerance in degrees or radians"));
+            }
+        } else {
+            crate::quantity_display::input_length(w.session.visible(), &part, text)?.1
+        };
+        if !value.is_finite() || value < 0. {
             return Err(invalid("Enter a nonnegative tolerance allowance"));
         }
         match field {
             "both" => {
-                a.minus_mm = mm;
-                a.plus_mm = mm;
+                a.minus = value;
+                a.plus = value;
             }
-            "upper" => a.plus_mm = mm,
-            "lower" => a.minus_mm = mm,
+            "upper" => a.plus = value,
+            "lower" => a.minus = value,
             _ => return Err(invalid("This tolerance field has changed")),
         }
         Some(a)
@@ -740,6 +948,7 @@ pub(crate) fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) ->
             part,
             Edit::SetTolerance {
                 id: id.clone(),
+                dimension: dimension.kind.dimension(),
                 label,
                 tolerance,
             },
@@ -755,6 +964,30 @@ pub(crate) fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) ->
     Ok(())
 }
 
+fn datum_pick(
+    instance: &PlacedPart,
+    mesh: &MeshData,
+    d: &mbd::Datum,
+) -> Result<viewport::Selection> {
+    let mut matches = mesh
+        .faces
+        .iter()
+        .filter(|face| cad_core::selection_sets::same_reference(&face.reference, &d.face));
+    let face = matches
+        .next()
+        .filter(|_| matches.next().is_none())
+        .ok_or_else(|| invalid("The datum face is ambiguous"))?;
+    Ok(viewport::Selection {
+        instance: instance.path.last().unwrap_or(&instance.definition).clone(),
+        path: instance.path.clone(),
+        name: instance.name.clone(),
+        definition: instance.definition.clone(),
+        reference: face.reference.clone(),
+        body: face.body.clone(),
+        distance: 0.,
+        point: viewport::placed(d.anchor, instance),
+    })
+}
 fn run(w: &mut Workspace, key: &str, data: &Value) -> Result<()> {
     if key == "inspection.model-dimensions" {
         return begin(w, None);
@@ -774,7 +1007,7 @@ fn run(w: &mut Workspace, key: &str, data: &Value) -> Result<()> {
                 .report
                 .dimensions
                 .iter()
-                .find(|d| data["dimension"] == d.id)
+                .find(|d| data["characteristic"] == d.id)
                 .ok_or_else(|| invalid("The dimension is no longer available"))?;
             let id = dim.id.clone();
             return begin(w, Some(&id));
@@ -785,26 +1018,12 @@ fn run(w: &mut Workspace, key: &str, data: &Value) -> Result<()> {
             .iter()
             .find(|d| data["label"] == d.label && json!(d.face) == data["face"])
             .ok_or_else(|| invalid("The datum changed. Select it again."))?;
-        let mut matches = ctx
-            .mesh
-            .ok_or_else(|| invalid("The datum face is unavailable"))?
-            .faces
-            .iter()
-            .filter(|face| cad_core::selection_sets::same_reference(&face.reference, &d.face));
-        let face = matches
-            .next()
-            .filter(|_| matches.next().is_none())
-            .ok_or_else(|| invalid("The datum face is ambiguous"))?;
-        let pick = viewport::Selection {
-            instance: ctx.instance.path.last().unwrap_or(&ctx.part.id).clone(),
-            path: ctx.instance.path.clone(),
-            name: ctx.instance.name.clone(),
-            definition: ctx.part.id.clone(),
-            reference: face.reference.clone(),
-            body: face.body.clone(),
-            distance: 0.,
-            point: viewport::placed(d.anchor, ctx.instance),
-        };
+        let pick = datum_pick(
+            ctx.instance,
+            ctx.mesh
+                .ok_or_else(|| invalid("The datum face is unavailable"))?,
+            d,
+        )?;
         begin(w, None)?;
         if !viewport::select(w, pick) {
             return Err(invalid("The datum face is unavailable"));
@@ -828,8 +1047,30 @@ fn run(w: &mut Workspace, key: &str, data: &Value) -> Result<()> {
             "Edit these requirements in the linked part's source project",
         ));
     }
-    let edit = if key == "mbd.clear-override" {
-        let id = data["dimension"]
+    if current_geometry(w).is_none() {
+        return Err(invalid(
+            "Wait for the current model geometry before changing this reference",
+        ));
+    }
+    let edit = if key == "mbd.accept-datum-set" {
+        let datums = suggested_datums(&ctx);
+        if datums.len() < 2 || json!(datums) != data["datums"] {
+            return Err(invalid(
+                "The suggested datums changed. Review the current faces.",
+            ));
+        }
+        Edit::AcceptDatums { datums }
+    } else if key == "mbd.use-document-defaults" {
+        if ctx.part.model_dimensions.source_defaults.is_none()
+            || json!(ctx.part.model_dimensions.source_defaults) != data["previous"]
+        {
+            return Err(invalid(
+                "The part defaults have changed. Review the current tolerances.",
+            ));
+        }
+        Edit::UseDocumentDefaults
+    } else if matches!(key, "mbd.clear-override" | "mbd.reassign-override") {
+        let id = data["characteristic"]
             .as_str()
             .ok_or_else(|| invalid("Choose an unavailable tolerance"))?;
         let source = ctx
@@ -838,15 +1079,34 @@ fn run(w: &mut Workspace, key: &str, data: &Value) -> Result<()> {
             .overrides
             .get(id)
             .ok_or_else(|| invalid("This override is already removed"))?;
-        if ctx.report.dimensions.iter().any(|d| d.id == id) {
+        if ctx
+            .report
+            .dimensions
+            .iter()
+            .any(|d| d.id == id && d.kind.dimension() == source.dimension)
+        {
             return Err(invalid(
                 "This dimension is available again. Choose Model default to clear its override.",
             ));
         }
-        Edit::SetTolerance {
-            id: id.into(),
-            label: source.label.clone(),
-            tolerance: None,
+        if key == "mbd.reassign-override" {
+            let target = ctx
+                .focused(w)
+                .filter(|d| data["replacement"] == d.id && d.kind.dimension() == source.dimension)
+                .ok_or_else(|| invalid("Select the replacement dimension again."))?;
+            Edit::ReassignTolerance {
+                source: id.into(),
+                replacement: target.id.clone(),
+                label: target.label.clone(),
+                dimension: source.dimension,
+            }
+        } else {
+            Edit::SetTolerance {
+                id: id.into(),
+                label: source.label.clone(),
+                dimension: source.dimension,
+                tolerance: None,
+            }
         }
     } else {
         let label = data["label"]
@@ -887,7 +1147,10 @@ fn run(w: &mut Workspace, key: &str, data: &Value) -> Result<()> {
     };
     let owner = ctx.part.id.clone();
     submit(w, owner, edit)?;
-    if key == "mbd.establish-datum" || key == "mbd.confirm-datum" {
+    if matches!(
+        key,
+        "mbd.establish-datum" | "mbd.confirm-datum" | "mbd.accept-datum-set"
+    ) {
         w.fields.remove("mbd-datum-letter");
     }
     Ok(())
@@ -903,7 +1166,7 @@ pub(crate) fn action(w: &mut Workspace, key: &str, data: Option<&Value>) -> bool
     true
 }
 fn draw_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement) {
-    if controls::button(
+    let response = controls::button(
         ui,
         &element.id,
         &element.role,
@@ -911,9 +1174,13 @@ fn draw_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement) 
         &element.label,
         element.state != "disabled",
         false,
-    )
-    .clicked()
-    {
+    );
+    let response = if let Some(help) = &element.value {
+        response.on_hover_text(help)
+    } else {
+        response
+    };
+    if response.clicked() {
         action(w, &element.commands[0], Some(&element.data));
     }
 }
@@ -958,6 +1225,13 @@ pub(crate) fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     {
         crate::ui::semantic_field(ui, w, element);
     }
+    for element in elements.iter().filter(|e| {
+        e.commands
+            .first()
+            .is_some_and(|cmd| cmd == "mbd.use-document-defaults")
+    }) {
+        draw_action(ui, w, element);
+    }
     if linked {
         ui.weak("Shared library part · edit requirements in its source project.");
     }
@@ -967,7 +1241,7 @@ pub(crate) fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             matches!(e.role.as_str(), "model-datum" | "model-datum-field")
                 || e.commands
                     .first()
-                    .is_some_and(|cmd| cmd.ends_with("-datum"))
+                    .is_some_and(|cmd| cmd.ends_with("-datum") || cmd == "mbd.accept-datum-set")
         })
         .collect();
     let reveal = w.fields.remove("mbd-reveal-datums").map(|_| true);
@@ -1015,9 +1289,9 @@ pub(crate) fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                     ui.label(issue);
                 }
                 for e in elements.iter().filter(|e| {
-                    e.commands
-                        .first()
-                        .is_some_and(|cmd| cmd == "mbd.clear-override")
+                    e.commands.first().is_some_and(|cmd| {
+                        matches!(cmd.as_str(), "mbd.clear-override" | "mbd.reassign-override")
+                    })
                 }) {
                     draw_action(ui, w, e);
                 }
@@ -1047,7 +1321,7 @@ pub(crate) fn show(ui: &mut egui::Ui, w: &mut Workspace) {
 
 // Expose the same semantic callouts to themes and to the default viewport.
 fn callouts(w: &Workspace, ctx: &Context<'_>) -> Vec<SemanticElement> {
-    if !viewport::visible(w, ctx.instance) {
+    if !w.view.visibility.model_dimensions || !viewport::visible(w, ctx.instance) {
         return vec![];
     }
     let dimensions: Vec<_> = if active(w) {
@@ -1063,10 +1337,13 @@ fn callouts(w: &Workspace, ctx: &Context<'_>) -> Vec<SemanticElement> {
 
     let mut elements = Vec::new();
     for d in dimensions {
-        let mut data=ctx.bind(w,json!({"dimension":d.id,"name":d.label,"nominal_mm":d.nominal_mm,"witnesses":d.witnesses, "supports":d.supports}));
+        let mut data=ctx.bind(w,json!({"characteristic":d.id,"dimension":d.kind.dimension(),"name":d.label,"nominal":d.nominal,"measurement_kind":d.kind,"angle_vertex":d.angle_vertex,"witnesses":d.witnesses, "supports":d.supports}));
         data["world_witnesses"] = json!(d.witnesses.map(|p| viewport::placed(p, ctx.instance)));
+        if let Some(vertex) = d.angle_vertex {
+            data["world_vertex"] = json!(viewport::placed(vertex, ctx.instance));
+        }
         elements.push(SemanticElement {
-            id: format!("model-dimension-callout:{}", d.id),
+            id: format!("model-dimension-callout:{}", widget_key(&d.id)),
             role: "model-dimension-callout".into(),
             label: mbd::dimension_text(ctx.part, &w.session.visible().settings, d),
             value: Some(d.label.clone()),
@@ -1113,6 +1390,37 @@ fn callouts(w: &Workspace, ctx: &Context<'_>) -> Vec<SemanticElement> {
     }
     elements
 }
+/// Draw an angle in its actual measurement plane; its screen projection may
+/// be foreshortened as the user orbits.
+fn angle_arc(
+    w: &Workspace,
+    rect: egui::Rect,
+    origin: [f64; 3],
+    first: [f64; 3],
+    second: [f64; 3],
+) -> Option<(egui::Pos2, Vec<egui::Pos2>)> {
+    use bevy::math::DVec3;
+    let center = DVec3::from_array(origin);
+    let (a, b) = (
+        DVec3::from_array(first) - center,
+        DVec3::from_array(second) - center,
+    );
+    let radius = a.length().min(b.length()) * 0.65;
+    let (u, v) = (a.try_normalize()?, b.try_normalize()?);
+    let y = (v - u * v.dot(u)).try_normalize()?;
+    let angle = u.angle_between(v);
+    let points = (0..=24)
+        .map(|index| {
+            let theta = angle * f64::from(index) / 24.;
+            viewport::project(
+                w,
+                rect,
+                (center + radius * (theta.cos() * u + theta.sin() * y)).to_array(),
+            )
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some((viewport::project(w, rect, origin)?, points))
+}
 pub(crate) fn viewport(
     w: &mut Workspace,
     ui: &mut egui::Ui,
@@ -1134,11 +1442,18 @@ pub(crate) fn viewport(
         else {
             continue;
         };
+        let arc = callout
+            .data
+            .get("world_vertex")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .and_then(|vertex| angle_arc(w, rect, vertex, a, b));
         let (Some(a), Some(b)) = (viewport::project(w, rect, a), viewport::project(w, rect, b))
         else {
             continue;
         };
-        let mid = a.lerp(b, 0.5);
+        let mid = arc
+            .as_ref()
+            .map_or_else(|| a.lerp(b, 0.5), |(_, points)| points[points.len() / 2]);
         if !rect.contains(mid) {
             continue;
         }
@@ -1185,7 +1500,13 @@ pub(crate) fn viewport(
             .and_then(|c| crate::ui::color(c))
             .unwrap_or_else(|| viewport::selection_color(w));
         let stroke = egui::Stroke::new(controls::number(&props, "border-width", 1.2), color);
-        ui.painter().line_segment([a, b], stroke);
+        if let Some((vertex, points)) = arc {
+            ui.painter().line_segment([a, vertex], stroke);
+            ui.painter().line_segment([vertex, b], stroke);
+            ui.painter().add(egui::Shape::line(points, stroke));
+        } else {
+            ui.painter().line_segment([a, b], stroke);
+        }
         ui.painter().line_segment([mid, panel.clamp(mid)], stroke);
         let mut frame = ui.new_child(egui::UiBuilder::new().id_salt(&callout.id).max_rect(panel));
         controls::apply_properties(&mut frame, &props);
