@@ -140,6 +140,7 @@ const TOOL_GROUPS: &[(&str, &str, &[&str])] = &[
         "menu/tools-inspect",
         "Inspect",
         &[
+            "inspection.model-dimensions",
             "assembly.inspection-new",
             "inspection.sensors",
             "inspection.tolerance-stacks",
@@ -1329,7 +1330,8 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
         {
             return Some("A current validated preview is required");
         }
-    } else if !(w.fields.contains_key("exploded-view-editor")
+    } else if !(crate::model_dimensions_ui::active(w)
+        || w.fields.contains_key("exploded-view-editor")
         || crate::document_identity_ui::active(w)
         || w.fields.contains_key("assembly-inspection-editor")
         || w.fields.contains_key("assembly-weld-editor"))
@@ -1387,6 +1389,7 @@ pub fn command_disabled_reason(w: &Workspace, command: &str) -> Option<&'static 
         return Some("Apply or cancel Settings first");
     }
     match command {
+        "inspection.model-dimensions" => return crate::model_dimensions_ui::unavailable(w),
         "history.latest" => {
             return cad_core::history::latest_disabled_reason(
                 &w.view,
@@ -2660,6 +2663,9 @@ pub fn properties(ui: &mut egui::Ui, w: &mut Workspace) {
     );
 }
 pub fn confirmation_label(w: &Workspace) -> String {
+    if crate::model_dimensions_ui::active(w) && w.session.draft.is_none() {
+        return "Done".into();
+    }
     if crate::document_identity_ui::active(w) {
         return crate::document_identity_ui::confirmation_label(w).into();
     }

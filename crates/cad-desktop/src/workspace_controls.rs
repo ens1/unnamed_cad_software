@@ -107,6 +107,7 @@ pub(crate) fn task_title(w: &Workspace) -> String {
         Some("assembly") => "Assembly".into(),
         Some("configurations") => "Configurations and Equations".into(),
         Some("drawings") => "Drawing".into(),
+        Some("model-dimensions") => "Model Dimensions".into(),
         _ if !w.dialog_title.is_empty() => w.dialog_title.clone(),
         _ => "Operation".into(),
     }

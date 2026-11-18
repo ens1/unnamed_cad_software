@@ -11,12 +11,13 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const CONTRACT_VERSION: u32 = 6;
+pub const CONTRACT_VERSION: u32 = 7;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
     View { key: String },
     Dimension { id: Id },
+    ModelItem { id: Id },
     Annotation { id: Id },
     Table { id: Id },
     TableSegment { table: Id, segment: Id },
@@ -26,6 +27,7 @@ impl Target {
     pub fn identity(&self) -> String {
         match self {
             Self::View { key } => format!("view:{key}"),
+            Self::ModelItem { id } => format!("model-item:{id}"),
             Self::Dimension { id } => format!("dimension:{id}"),
             Self::Annotation { id } => format!("annotation:{id}"),
             Self::Table { id } => format!("table:{id}"),
@@ -470,6 +472,11 @@ pub fn build(
                     [(extent[0][0] + extent[1][0]) * 0.5, extent[1][1] + 4.],
                 ));
                 handles.extend(resize_handles(&group.target, extent));
+            }
+            Target::ModelItem { id } => {
+                if let Some(item) = rendered.model_items.get(id) {
+                    handles.push(handle(&group.target, HandleKind::Move, item.label_mm));
+                }
             }
             Target::Dimension { id } => {
                 let dimension = source
@@ -1636,6 +1643,22 @@ pub fn apply(
                     for (axis, delta) in delta_mm.iter().enumerate() {
                         layout.rect_mm[axis] = actual.rect_mm[axis] + delta;
                     }
+                }
+                Target::ModelItem { id } => {
+                    let rendered = drawing::build_sheet_layout(doc, evaluation, source, page)?;
+                    let item = rendered
+                        .model_items
+                        .get(id)
+                        .ok_or_else(|| invalid("The model callout is no longer on this sheet"))?;
+                    sheet.model_item_placements.insert(
+                        id.clone(),
+                        drawing::model_items::Placement {
+                            view: item.view.clone(),
+                            offset_mm: std::array::from_fn(|i| {
+                                item.label_mm[i] - item.anchor_mm[i] + delta_mm[i]
+                            }),
+                        },
+                    );
                 }
                 Target::Dimension { id } => {
                     let rendered = drawing::build_sheet_layout(doc, evaluation, source, 0)?;

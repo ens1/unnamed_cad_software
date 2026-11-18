@@ -8,6 +8,10 @@ pub enum Command {
     InsertStandardPart {
         insertion: Box<crate::standard_parts::Insertion>,
     },
+    EditModelDimensions {
+        part: Id,
+        edit: crate::model_dimensions::Edit,
+    },
     EditModelProperties {
         edit: crate::model_properties::Edit,
     },
@@ -243,6 +247,9 @@ impl Command {
         match self {
             Self::InsertStandardPart { insertion } => {
                 crate::standard_parts::insert(document, &insertion)?;
+            }
+            Self::EditModelDimensions { part, edit } => {
+                crate::model_dimensions::apply(document, &part, edit)?;
             }
             Self::EditModelProperties { edit } => {
                 crate::model_properties::apply(document, edit)?;

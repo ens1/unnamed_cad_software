@@ -752,6 +752,9 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     registry.register("model-properties-editor", |ui, w, _| {
         crate::properties_ui::show(ui, w)
     });
+    registry.register("model-dimensions-editor", |ui, w, _| {
+        crate::model_dimensions_ui::show(ui, w)
+    });
     registry.register("sensors-editor", |ui, w, _| crate::sensors_ui::show(ui, w));
     registry.register("tolerance-stacks-editor", |ui, w, _| {
         crate::tolerance_stacks_ui::show(ui, w)
@@ -1215,6 +1218,7 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         || crate::weld_beads_ui::action(w, command, Some(&element.data))
         || crate::sketch_block_library_ui::action(w, command, Some(&element.data))
         || crate::command_palette::action(w, command, Some(&element.data))
+        || crate::model_dimensions_ui::action(w, command, Some(&element.data))
         || crate::inspection_ui::action(w, command, Some(&element.data))
         || crate::reference_repair_ui::action(w, command, Some(&element.data))
         || crate::properties_ui::action(w, command, Some(&element.data))
@@ -1553,6 +1557,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                         | "sensor-editor"
                         | "sketch-block-library"
                         | "command-palette"
+                        | "model-dimensions"
                         | "inspection-report"
                         | "camera-view"
                         | "standard-parts"
@@ -2140,7 +2145,8 @@ fn model_view(
     }
     let cube = viewport::view_cube(w, ui, r);
     crate::operation_preview::viewport_status(ui, w, r);
-    let motion_owned = crate::feature_handles::viewport(w, ui, r, &[toolbar, cube])
+    let motion_owned = crate::model_dimensions_ui::viewport(w, ui, r, &[toolbar, cube])
+        || crate::feature_handles::viewport(w, ui, r, &[toolbar, cube])
         || crate::assembly_motion_ui::viewport(w, ui, r, &response, &[toolbar, cube]);
     if !motion_owned
         && !crate::sketch3d_ui::captured(w)
@@ -2472,6 +2478,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || crate::materials_ui::action(w, cmd, None)
         || crate::finish_library_ui::action(w, cmd, None)
         || crate::sketch_block_library_ui::action(w, cmd, None)
+        || crate::model_dimensions_ui::action(w, cmd, None)
         || crate::inspection_ui::action(w, cmd, None)
         || crate::drawing_ui::action(w, cmd)
         || crate::components_ui::action(w, cmd)
@@ -3806,6 +3813,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "parameter" | "parameter-value" => "Named parameter",
             "bom" => "Bill of materials",
             "inspection" => "Mass Properties",
+            "model-dimensions" => "Model Dimensions",
             "sensors" => "Design Monitors",
             "sketch-block-library" => "Sketch Block Library",
             "camera-views" => "Named Views",
@@ -3851,6 +3859,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 | "parameter-value"
                 | "standard-parts"
                 | "tolerance-stacks"
+                | "model-dimensions"
                 | "properties"
                 | "reference-repair"
                 | "feature-order"
@@ -3952,6 +3961,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 }
                 "configurations" => crate::configuration_ui::show(ui, w),
                 "inspection" => crate::inspection_ui::controls(ui, w),
+                "model-dimensions" => crate::model_dimensions_ui::show(ui, w),
                 "sensors" => crate::sensors_ui::show(ui, w),
                 "sketch-block-library" => crate::sketch_block_library_ui::show(ui, w),
                 "camera-views" => crate::camera_views_ui::show(ui, w),

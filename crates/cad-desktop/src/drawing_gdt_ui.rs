@@ -154,16 +154,8 @@ fn annotation_id(fields: &Fields<'_>, path: &str) -> String {
         .map(|annotation| annotation.id.clone())
         .unwrap_or_else(|| path.into())
 }
-fn declared(sheet: &Drawing) -> Vec<String> {
-    sheet
-        .entities
-        .iter()
-        .filter_map(|annotation| match &annotation.kind {
-            AnnotationKind::Datum { identifier, .. } => Some(identifier.to_uppercase()),
-            AnnotationKind::DatumTarget { symbol, .. } => Some(symbol.identifier.to_uppercase()),
-            _ => None,
-        })
-        .collect::<std::collections::BTreeSet<_>>()
+fn declared(w: &Workspace, sheet: &Drawing) -> Vec<String> {
+    cad_core::drawing::model_items::declared_datums(w.session.visible(), sheet)
         .into_iter()
         .collect()
 }
@@ -252,7 +244,7 @@ pub(crate) fn frame_fields(fields: &mut Fields<'_>, path: &str, frame: &Toleranc
             );
         }
         fields.group("tolerance-frame-datums", "Datum reference sequence");
-        let choices = declared(fields.sheet)
+        let choices = declared(fields.w, fields.sheet)
             .iter()
             .map(|datum| choice(datum, datum))
             .collect::<Vec<_>>();
@@ -280,7 +272,7 @@ pub(crate) fn frame_fields(fields: &mut Fields<'_>, path: &str, frame: &Toleranc
             "Add datum reference",
             json!({"kind":"gdt-datum-add","frame":path,"row":row.id}),
             row.datums.len() < 3
-                && declared(fields.sheet).iter().any(|identifier| {
+                && declared(fields.w, fields.sheet).iter().any(|identifier| {
                     !row.datums
                         .iter()
                         .any(|datum| datum.identifier.eq_ignore_ascii_case(identifier))
@@ -380,7 +372,7 @@ pub(crate) fn apply_action(
     if !kind.starts_with("gdt-") {
         return Ok(false);
     }
-    let available = declared(sheet);
+    let available = declared(w, sheet);
     let frame = frame_mut(
         sheet,
         mutation["frame"]
@@ -505,7 +497,7 @@ pub(crate) fn create_target(w: &Workspace, sheet: &Drawing) -> Result<Annotation
 }
 pub(crate) fn create_frame(w: &Workspace, sheet: &Drawing) -> AnnotationKind {
     let mut frame = ToleranceFrame::default();
-    if let Some(identifier) = declared(sheet).first() {
+    if let Some(identifier) = declared(w, sheet).first() {
         frame.rows[0].datums.push(DatumReference {
             identifier: identifier.clone(),
             material: MaterialCondition::Regardless,

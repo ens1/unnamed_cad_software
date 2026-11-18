@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     io::{Read, Write},
 };
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const MAX_FRAME: usize = 256 * 1024 * 1024;
 pub const OPERATION_PREVIEW_VERSION: u32 = 3;
 pub const BODY_COUNTS_VERSION: u32 = 1;
@@ -50,12 +50,32 @@ pub struct FaceRange {
     pub body_kind: BodyKind,
     #[serde(default)]
     pub plane: Option<crate::Plane>,
+    /// Measurements of a finished solid's trimmed native face. Historical,
+    /// preview, and reduced-detail meshes may omit these data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement: Option<NativeFaceMeasurement>,
     /// Native trimmed carrier for drawing visibility. Absence requires an
     /// explicit unsupported diagnostic in native visibility mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_geometry: Option<crate::drawing_geometry::FaceGeometry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_geometry_error: Option<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NativeFaceMeasurement {
+    /// Conservative native enclosure, in part coordinates. It is never
+    /// published as a size until a point on the trimmed face attains it.
+    pub enclosure_mm: Option<[[f64; 3]; 2]>,
+    /// Actual native boundary points, indexed by low/high and measurement axis.
+    pub witnesses: [[[f64; 3]; 3]; 2],
+    pub cylinder: Option<NativeCylinder>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NativeCylinder {
+    pub axis: crate::reference_geometry::Axis,
+    pub radius_mm: f64,
+    /// The oriented face normal points toward the cylinder axis.
+    pub internal: bool,
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -214,6 +234,9 @@ pub struct OperationPreview {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Evaluation {
+    /// Current finished-part dimensions for each evaluated definition/configuration.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_dimensions: BTreeMap<Id, crate::model_dimensions::Report>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub drawing_review: crate::drawing_review::Sheets,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

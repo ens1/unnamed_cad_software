@@ -291,6 +291,7 @@ fn generate_staged(
             "Publish requires a valid current model. {details}"
         )));
     }
+    crate::model_dimensions::validate_release(document, &evaluated)?;
     let outputs = &preferences.outputs;
     fs::create_dir(staging.join("outputs"))?;
     let mut files = Vec::new();

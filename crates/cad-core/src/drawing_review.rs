@@ -110,6 +110,10 @@ pub fn collect(source: &Drawing, page: &Sheet, number: u32, items: &mut BTreeMap
     for group in &page.groups {
         let label = match &group.target {
             Target::View { key } => key.replace('-', " "),
+            Target::ModelItem { id } => page
+                .model_items
+                .get(id)
+                .map_or_else(|| "Model dimension".into(), |item| item.label.clone()),
             Target::Dimension { id } => source
                 .dimensions
                 .iter()
@@ -148,7 +152,7 @@ pub fn collect(source: &Drawing, page: &Sheet, number: u32, items: &mut BTreeMap
         }
         let printed_text = if matches!(
             group.target,
-            Target::Dimension { .. } | Target::Annotation { .. }
+            Target::Dimension { .. } | Target::Annotation { .. } | Target::ModelItem { .. }
         ) {
             page.primitives[span]
                 .iter()

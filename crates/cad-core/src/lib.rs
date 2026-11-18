@@ -102,6 +102,7 @@ pub type Result<T> = std::result::Result<T, CadError>;
 
 pub mod commands;
 pub mod library;
+pub mod model_dimensions;
 pub mod model_properties;
 pub mod release;
 pub mod selection_actions;

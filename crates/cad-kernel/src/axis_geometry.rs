@@ -220,7 +220,7 @@ pub(crate) fn line_axis(curve: &Curve) -> Result<Axis> {
     axis(start, d)
 }
 
-fn ruled_axis(surface: BsplineSurface<Vector4>) -> Result<Axis> {
+fn ruled_axis(surface: BsplineSurface<Vector4>) -> Result<(Axis, [f64; 2])> {
     let mut surface = surface;
     if surface.vdegree() != 1 || surface.control_points()[0].len() != 2 {
         if surface.udegree() == 1 && surface.control_points().len() == 2 {
@@ -276,7 +276,7 @@ fn ruled_axis(surface: BsplineSurface<Vector4>) -> Result<Axis> {
             ));
         }
     }
-    axis(a.center, direction)
+    Ok((axis(a.center, direction)?, [a.radius, b.radius]))
 }
 pub(crate) fn face_axis(face: &Face) -> Result<Axis> {
     let surface = face.surface();
@@ -342,5 +342,55 @@ pub(crate) fn face_axis(face: &Face) -> Result<Axis> {
     let rational = surface
         .try_into_homogeneous_bspline_surface()
         .ok_or_else(|| unsupported("face carrier has no exact rational form"))?;
-    ruled_axis(rational)
+    ruled_axis(rational).map(|(axis, _)| axis)
+}
+
+/// Diameter and datum axes must belong to a circular cylinder. A cone or a
+/// revolved spline can define an axis without defining a constant diameter.
+pub(crate) fn right_cylinder(face: &Face) -> Result<(Axis, f64)> {
+    let surface = face.surface();
+    if let Surface::RevolutionSurface(processor) = &surface {
+        let source = processor.entity();
+        let Curve::Line(Line(a, b)) = source.entity_curve() else {
+            return Err(unsupported("Generator is not a straight cylinder ruling"));
+        };
+        let direction = unit(source.axis())?;
+        if unit(*b - *a)?.cross(direction).magnitude() > 64. * f64::EPSILON {
+            return Err(unsupported(
+                "Generator is not parallel to the rotation axis",
+            ));
+        }
+        let axis = face_axis(face)?;
+        let world_axis = Vector3::from(axis.direction);
+        let position = processor.transform().transform_point(*a) - Point3::from(axis.origin);
+        let radius = position.cross(world_axis).magnitude();
+        if radius.is_finite() && radius > DISTANCE {
+            return Ok((axis, radius));
+        }
+        return Err(unsupported("Degenerate circular cylinder"));
+    }
+    let net = match &surface {
+        Surface::BsplineSurface(patch) => patch
+            .control_points()
+            .len()
+            .saturating_mul(patch.control_points()[0].len()),
+        Surface::NurbsSurface(patch) => patch
+            .control_points()
+            .len()
+            .saturating_mul(patch.control_points()[0].len()),
+        _ => return Err(unsupported("Carrier is not cylindrical")),
+    };
+    if net > 4096 {
+        return Err(unsupported(
+            "Rational cylinder recognition exceeds its control budget",
+        ));
+    }
+    let rational = surface
+        .try_into_homogeneous_bspline_surface()
+        .ok_or_else(|| unsupported("Missing rational carrier"))?;
+    let (axis, [a, b]) = ruled_axis(rational)?;
+    if (a - b).abs() > 128. * f64::EPSILON * a.max(b).max(1.) {
+        return Err(unsupported("The ruled carrier has a varying radius"));
+    }
+    Ok((axis, (a + b) * 0.5))
 }

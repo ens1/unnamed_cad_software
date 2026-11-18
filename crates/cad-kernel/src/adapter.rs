@@ -160,6 +160,7 @@ pub trait KernelAdapter {
         ))
     }
     fn mesh(&self, shape: &Shape, producer: &NodeRef, tolerance: f64) -> Result<MeshData>;
+    fn measure_finished_faces(&self, _shape: &Shape, _faces: &mut [FaceRange]) {}
     fn assembly_weld(
         &self,
         _doc: &Document,
@@ -2456,6 +2457,9 @@ impl KernelAdapter for MonstertruckAdapter {
         }
         Ok(result)
     }
+    fn measure_finished_faces(&self, shape: &Shape, faces: &mut [FaceRange]) {
+        crate::finished_measurement::measure(shape, faces);
+    }
     fn mesh(&self, shape: &Shape, producer: &NodeRef, tolerance: f64) -> Result<MeshData> {
         if !tolerance.is_finite() || tolerance <= 0. {
             return Err(err("Display tolerance must be finite and positive"));
@@ -2750,6 +2754,7 @@ impl KernelAdapter for MonstertruckAdapter {
                     }
                 }
                 mesh.faces.push(FaceRange {
+                    measurement: None,
                     native_geometry,
                     native_geometry_error,
                     body: Some(producer.clone()),

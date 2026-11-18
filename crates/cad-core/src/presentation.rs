@@ -1126,6 +1126,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("camera-view.orthographic", "Orthographic Projection"),
     ("standard-parts", "Standard Hardware"),
     ("inspection.tolerance-stacks", "Tolerance Stacks"),
+    ("inspection.model-dimensions", "Model Dimensions"),
     ("appearance.environment.import", "Import HDR Environment"),
     ("appearance.environment.clear", "Use Studio Environment"),
     ("properties", "Model Properties"),

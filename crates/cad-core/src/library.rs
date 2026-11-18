@@ -909,7 +909,9 @@ fn remap_source_inner(
                             ) || matches!(field, "points" | "members" | "arc_through")
                                 && value.is_string());
                     // Dictionary keys are native identities or parameter names, not schema field names.
-                    let child_field = if field == "feature_dimensions" {
+                    let child_field = if field == "model_dimensions" && key == "overrides" {
+                        "__finished_size_overrides"
+                    } else if field == "feature_dimensions" {
                         "__feature_dimension_fields"
                     } else if field == "sketch_dimensions" {
                         "__sketch_dimension_constraints"
@@ -942,7 +944,11 @@ fn remap_source_inner(
                     if !(key == "path" && value.is_string() && child_field == key.as_str()) {
                         walk(&mut value, mapping, child_field, refs, owned_features)?;
                     }
-                    let key = if field == "item_numbers" {
+                    let key = if field == "__finished_size_overrides" {
+                        crate::model_dimensions::geometry::remap_id(&key, mapping)?
+                    } else if field == "model_item_placements" {
+                        crate::model_dimensions::remap::paper_item(&key, mapping)?
+                    } else if field == "item_numbers" {
                         remap_manufacturing_row_key(&key, mapping, owned_features)?
                     } else if field == "__feature_dimension_fields" {
                         key.split('/')

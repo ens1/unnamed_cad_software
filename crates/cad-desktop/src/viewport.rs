@@ -783,6 +783,11 @@ fn render_mesh(source: &MeshData, instance: &PlacedPart) -> Mesh {
     .with_inserted_indices(Indices::U32(source.indices.clone()))
 }
 pub(crate) fn display_evaluation(w: &Workspace) -> Option<&Evaluation> {
+    if crate::model_dimensions_ui::active(w)
+        && let Some(current) = crate::model_dimensions_ui::current_geometry(w)
+    {
+        return Some(current);
+    }
     if crate::contours_ui::picking_target(w) {
         return crate::contours_ui::input_evaluation(w);
     }
@@ -1131,6 +1136,9 @@ fn part_pattern_input(w: &Workspace) -> Option<cad_core::NodeRef> {
     }
 }
 pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
+    if crate::model_dimensions_ui::active(w) {
+        return crate::model_dimensions_ui::current_geometry(w);
+    }
     if let Some(evaluation) = crate::reference_repair_ui::display_evaluation(w) {
         return Some(evaluation);
     }
@@ -1424,6 +1432,9 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
     hits
 }
 pub fn select(w: &mut Workspace, s: Selection) -> bool {
+    if crate::model_dimensions_ui::active(w) && !crate::model_dimensions_ui::accepts_pick(w, &s) {
+        return false;
+    }
     let feature_editing = w.dialog.as_deref() == Some("feature") && w.tool_checkpoint.is_some();
     let direction_pick = crate::component_pattern_ui::picking_direction(w);
     if feature_editing && !direction_pick && w.view.active_part.as_ref() != Some(&s.definition) {
@@ -1492,6 +1503,9 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
         w.rendered_key.clear();
         crate::navigation::stop(w);
         return true;
+    }
+    if crate::model_dimensions_ui::active(w) {
+        crate::model_dimensions_ui::picked(w, &s);
     }
     let reference = w.view.isolation
         && (w.view.active_part.as_ref() != Some(&s.definition)

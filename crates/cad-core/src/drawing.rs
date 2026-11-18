@@ -8,11 +8,12 @@ use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod model_items;
 pub mod symbols;
 pub use symbols::*;
 
-pub const CONTRACT_VERSION: u32 = 13;
-pub const FORMAT_VERSION: u32 = 4;
+pub const CONTRACT_VERSION: u32 = 14;
+pub const FORMAT_VERSION: u32 = 5;
 const TITLE_CELL_PADDING_MM: f64 = 1.;
 const TITLE_LABEL_SCALE: f64 = 0.65;
 const TITLE_LINE_HEIGHT: f64 = 1.35;
@@ -197,6 +198,8 @@ pub struct SheetTemplate {
     pub view_visibility_geometry: BTreeMap<String, crate::drawing_visibility::GeometryMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub title_block: BTreeMap<String, String>,
+    #[serde(default = "model_items::default_enabled")]
+    pub show_model_dimensions: bool,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -573,6 +576,13 @@ pub struct Sheet {
     /// retained separately from their finite paper rendering.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub native_traces: Vec<NativeTraceBinding>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_items: BTreeMap<Id, model_items::PaperItem>,
+    /// Model requirements that need repair before manufacturing drawing export.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_review: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_coverage: Vec<String>,
     pub views: BTreeMap<String, ViewLayout>,
     #[serde(default)]
     pub projections: BTreeMap<String, ViewProjection>,
@@ -974,9 +984,11 @@ pub fn new_sheet(doc: &Document, definition: &str, name: String) -> Result<Drawi
         name,
         definition: definition.into(),
         views: vec!["front".into(), "top".into(), "right".into()],
-        annotations: vec!["All dimensions in millimeters".into()],
+        annotations: vec![],
         paper_mm: [297., 210.],
         dimensions: vec![],
+        show_model_dimensions: model_items::part_scope(doc, definition),
+        model_item_placements: BTreeMap::new(),
         title_block: BTreeMap::new(),
         entities: vec![],
         tables: vec![],
@@ -1186,6 +1198,7 @@ impl SheetTemplate {
             view_display_modes: sheet.view_display_modes.clone(),
             view_visibility_geometry: sheet.view_visibility_geometry.clone(),
             title_block: sheet.title_block.clone(),
+            show_model_dimensions: sheet.show_model_dimensions,
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -1205,6 +1218,8 @@ impl SheetTemplate {
             annotations: self.annotations.clone(),
             paper_mm: self.paper_mm,
             dimensions: vec![],
+            show_model_dimensions: self.show_model_dimensions,
+            model_item_placements: BTreeMap::new(),
             title_block: self.title_block.clone(),
             entities: vec![],
             tables: vec![],
@@ -1225,6 +1240,7 @@ impl SheetTemplate {
         sheet.paper_mm = self.paper_mm;
         sheet.views = self.views.clone();
         sheet.annotations = self.annotations.clone();
+        sheet.show_model_dimensions = self.show_model_dimensions;
         sheet.view_layouts = self.view_layouts.clone();
         sheet.view_display_modes = self.view_display_modes.clone();
         sheet.view_visibility_geometry = self.view_visibility_geometry.clone();
@@ -2035,6 +2051,7 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
     }
     ids.insert(sheet.id.clone());
     let views = view_keys(sheet);
+    model_items::validate_placements(sheet)?;
     if sheet
         .view_display_modes
         .keys()
@@ -3746,15 +3763,7 @@ fn annotation(
             if value <= 0. {
                 return Err(invalid("Geometric tolerance zone must be positive"));
             }
-            let declared = sheet
-                .entities
-                .iter()
-                .filter_map(|entity| match &entity.kind {
-                    AnnotationKind::Datum { identifier, .. } => Some(identifier.as_str()),
-                    AnnotationKind::DatumTarget { symbol, .. } => Some(symbol.identifier.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
+            let declared = model_items::declared_datums(doc, sheet);
             if datums.iter().any(|d| {
                 !declared
                     .iter()
@@ -3863,47 +3872,101 @@ fn annotation(
     Ok(())
 }
 
+// A headless drawing export and a drawing made in the desktop both enter the same
+// paper builder. Preserve saved sheets as the exact authored drawing set.
+fn automatic_projection(doc: &Document) -> Drawing {
+    Drawing {
+        id: "automatic".into(),
+        name: doc.name.clone(),
+        definition: doc.root.clone(),
+        views: vec![
+            "front".into(),
+            "top".into(),
+            "right".into(),
+            "isometric".into(),
+        ],
+        annotations: vec![],
+        paper_mm: [297., 210.],
+        dimensions: vec![],
+        show_model_dimensions: model_items::part_scope(doc, &doc.root),
+        model_item_placements: BTreeMap::new(),
+        title_block: BTreeMap::new(),
+        entities: vec![],
+        tables: vec![],
+        format: None,
+        view_layouts: BTreeMap::new(),
+        view_display_modes: ["front", "top", "right", "isometric"]
+            .map(|key| {
+                (
+                    key.into(),
+                    crate::drawing_visibility::DisplayMode::HiddenLinesRemoved,
+                )
+            })
+            .into_iter()
+            .collect(),
+        view_visibility_geometry: BTreeMap::new(),
+        section: None,
+        exploded_view: None,
+        display_state: None,
+    }
+}
+fn production_page(sheet: Sheet) -> Result<Sheet> {
+    if !sheet.model_review.is_empty() {
+        return Err(invalid(format!(
+            "{} · {}",
+            sheet.name,
+            sheet.model_review.join("\n")
+        )));
+    }
+    Ok(sheet)
+}
 pub fn sheets(doc: &Document, e: &Evaluation) -> Result<Vec<Sheet>> {
-    let definitions = if doc.drawings.is_empty() {
-        vec![Drawing {
-            id: "automatic".into(),
-            name: doc.name.clone(),
-            definition: doc.root.clone(),
-            views: vec![
-                "front".into(),
-                "top".into(),
-                "right".into(),
-                "isometric".into(),
-            ],
-            annotations: vec!["Units: millimeters".into()],
-            paper_mm: [297., 210.],
-            dimensions: vec![],
-            title_block: std::collections::BTreeMap::new(),
-            entities: vec![],
-            tables: vec![],
-            format: None,
-            view_layouts: BTreeMap::new(),
-            view_display_modes: ["front", "top", "right", "isometric"]
-                .map(|key| {
-                    (
-                        key.into(),
-                        crate::drawing_visibility::DisplayMode::HiddenLinesRemoved,
-                    )
-                })
-                .into_iter()
-                .collect(),
-            view_visibility_geometry: BTreeMap::new(),
-            section: None,
-            exploded_view: None,
-            display_state: None,
-        }]
-    } else {
-        doc.drawings.clone()
-    };
     let mut pages = vec![];
-    for sheet in &definitions {
-        for page in 0..crate::drawing_tables::page_count(sheet) {
-            pages.push(build_sheet_page(doc, e, sheet, page)?);
+    if !doc.drawings.is_empty() {
+        for sheet in &doc.drawings {
+            for page in 0..crate::drawing_tables::page_count(sheet) {
+                pages.push(production_page(build_sheet_page(doc, e, sheet, page)?)?);
+            }
+        }
+        return Ok(pages);
+    }
+    let root = automatic_projection(doc);
+    pages.push(production_page(build_sheet(doc, e, &root)?)?);
+    if !model_items::part_scope(doc, &doc.root) {
+        // One manufacturing detail per actual configured part. The assembly placement
+        // supplies the evaluated variant, while its detail is drawn in local axes.
+        let mut seen = BTreeSet::new();
+        for occurrence in &e.instances {
+            let key = crate::history::mesh_key(occurrence);
+            let Some(part) = doc.parts.get(&occurrence.definition) else {
+                continue;
+            };
+            if !seen.insert(key) || e.meshes.get(key).is_none_or(|mesh| mesh.faces.is_empty()) {
+                continue;
+            }
+            let mut sheet = root.clone();
+            sheet.definition.clone_from(&part.id);
+            sheet.id = format!("automatic-part:{key}");
+            sheet.name = occurrence
+                .configuration
+                .as_ref()
+                .and_then(|id| crate::configuration::names(doc, &part.id).get(id).cloned())
+                .map_or_else(
+                    || part.name.clone(),
+                    |config| format!("{} ({config})", part.name),
+                );
+            sheet.show_model_dimensions = true;
+            let mut local = occurrence.clone();
+            local.path.clear();
+            local.matrix =
+                std::array::from_fn(|i| std::array::from_fn(|j| if i == j { 1. } else { 0. }));
+            pages.push(production_page(build_sheet_mode(
+                doc,
+                e,
+                &sheet,
+                false,
+                Some(local),
+            )?)?);
         }
     }
     Ok(pages)
@@ -4064,6 +4127,9 @@ fn build_continuation_sheet(
         paper_mm: sheet.paper_mm,
         primitives: format_geometry(doc, &page_definition)?,
         native_traces: vec![],
+        model_items: BTreeMap::new(),
+        model_review: vec![],
+        model_coverage: vec![],
         views: BTreeMap::new(),
         projections: BTreeMap::new(),
         view_fidelity: BTreeMap::new(),
@@ -4113,7 +4179,7 @@ fn build_continuation_sheet(
     Ok(result)
 }
 pub fn build_sheet(doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Sheet> {
-    build_sheet_mode(doc, e, sheet, false)
+    build_sheet_mode(doc, e, sheet, false, None)
 }
 /// Broken associative annotations stay selectable on paper while they are being
 /// repaired. Placeholder vectors are explicitly diagnostic and never exported.
@@ -4124,7 +4190,7 @@ pub fn build_sheet_preview(
     page: u32,
 ) -> Result<Sheet> {
     if page == 0 {
-        build_sheet_mode(doc, e, sheet, true)
+        build_sheet_mode(doc, e, sheet, true, None)
     } else {
         if page >= crate::drawing_tables::page_count(sheet) {
             return Err(invalid("Requested continuation page is absent"));
@@ -4150,6 +4216,7 @@ fn build_sheet_mode(
     e: &Evaluation,
     sheet: &Drawing,
     repair: bool,
+    automatic_part: Option<crate::PlacedPart>,
 ) -> Result<Sheet> {
     validate_definition(sheet)?;
     if sheet.paper_mm.iter().any(|v| !v.is_finite() || *v < 50.) {
@@ -4161,6 +4228,9 @@ fn build_sheet_mode(
         paper_mm: sheet.paper_mm,
         primitives: vec![],
         native_traces: vec![],
+        model_items: BTreeMap::new(),
+        model_review: vec![],
+        model_coverage: vec![],
         views: BTreeMap::new(),
         projections: BTreeMap::new(),
         view_fidelity: BTreeMap::new(),
@@ -4185,7 +4255,11 @@ fn build_sheet_mode(
     let display_scope = crate::drawing_display_states::scope(doc, sheet)?;
     let instances = crate::drawing_display_states::apply(
         display_scope.as_ref(),
-        sheet_instances(doc, e, sheet)?,
+        if let Some(part) = automatic_part {
+            vec![part]
+        } else {
+            sheet_instances(doc, e, sheet)?
+        },
     );
     result.display_state = display_scope
         .as_ref()
@@ -5198,7 +5272,8 @@ fn build_sheet_mode(
                 primitive_count: out.len() - start,
             });
     }
-    if out.iter().any(|p| match p {
+    model_items::project_items(doc, e, sheet, &instances, &mut result, footer_height)?;
+    if result.primitives.iter().any(|p| match p {
         Primitive::Polyline { points, .. } | Primitive::HiddenPolyline { points } => {
             points.iter().flatten().any(|v| !v.is_finite())
         }

@@ -350,6 +350,7 @@ fn target_label(source: &Drawing, target: &Target) -> String {
                 _ => annotation.kind.label().into(),
             })
             .unwrap_or_else(|| "Missing annotation".into()),
+        Target::ModelItem { .. } => "Model callout".into(),
         Target::Dimension { id } => source
             .dimensions
             .iter()
@@ -387,6 +388,9 @@ fn select(w: &mut Workspace, state: &mut State, source: &Drawing, page: u32, tar
         Target::View { key } => {
             w.fields.insert("drawing-section".into(), "views".into());
             w.fields.insert("drawing-view".into(), key);
+        }
+        Target::ModelItem { .. } => {
+            w.fields.insert("drawing-section".into(), "sheet".into());
         }
         Target::Dimension { id } | Target::Annotation { id } => {
             w.fields.insert("drawing-section".into(), "items".into());
@@ -850,6 +854,9 @@ pub fn select_item(w: &mut Workspace, target: Target) {
     restore_presentation(w, &mut state, &source);
     let exists = match &target {
         Target::View { key } => cad_core::drawing::view_keys(&source).contains(key),
+        Target::ModelItem { id } => state.cache.as_ref().is_some_and(|cache| {
+            cache.source.id == source.id && cache.paper.model_items.contains_key(id)
+        }),
         Target::Dimension { id } => source.dimensions.iter().any(|item| &item.id == id),
         Target::Annotation { id } => source.entities.iter().any(|item| &item.id == id),
         Target::Table { id } => source.tables.iter().any(|item| &item.id == id),
@@ -1109,6 +1116,16 @@ fn selected_commands(context: &SemanticContext<'_>, state: &State) -> Vec<Semant
             out.push(element);
         }
     }
+    if let Target::ModelItem { id } = target {
+        let mut edit = command(
+            context,
+            "drawing.interact-edit-in-model",
+            "Edit in model…",
+            enabled && w.tool_checkpoint.is_none() && w.session.draft.is_none(),
+        );
+        edit.data["model_item"] = json!(id);
+        out.push(edit);
+    }
     if supports_curve(&source, target) {
         let mut element = command(
             context,
@@ -1257,7 +1274,14 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                     target.target.identity()
                 ),
                 role: "drawing-paper-item".into(),
-                label: target_label(&cache.source, &target.target),
+                label: match &target.target {
+                    Target::ModelItem { id }
+                        if let Some(item) = cache.paper.model_items.get(id) =>
+                    {
+                        format!("{} · {}", item.label, item.text)
+                    }
+                    target => target_label(&cache.source, target),
+                },
                 value: target.diagnostic.clone(),
                 state: if state.cohort.contains(&target.target) {
                     "selected"
@@ -1657,6 +1681,42 @@ fn execute(w: &mut Workspace, state: &mut State, cmd: &str, data: Option<&Value>
         return Ok(());
     }
     match cmd {
+        "drawing.interact-edit-in-model" => {
+            if w.tool_checkpoint.is_some() || w.session.draft.is_some() {
+                return Err(invalid(
+                    "Finish the drawing edit before opening the model dimension",
+                ));
+            }
+            let source = sheet(w).ok_or_else(|| invalid("Select a drawing sheet"))?;
+            refresh(w, state, &source, page(w))?;
+            let Some(Target::ModelItem { id }) = selected(state) else {
+                return Err(invalid("Select a model callout on the drawing"));
+            };
+            if data
+                .and_then(|d| d["model_item"].as_str())
+                .is_some_and(|key| key != id)
+            {
+                return Err(invalid("The selected callout changed"));
+            }
+            let item = state
+                .cache
+                .as_ref()
+                .and_then(|cache| cache.paper.model_items.get(id))
+                .ok_or_else(|| invalid("The selected callout is no longer on this sheet"))?;
+            if !crate::drawing_ui::leave_workspace(w) {
+                return Err(invalid("Finish the current drawing edit first"));
+            }
+            if let Err(error) = crate::model_dimensions_ui::open_from_drawing(
+                w,
+                &item.definition,
+                item.configuration.as_deref(),
+                &item.path,
+                (!item.datum).then_some(item.source.as_str()),
+            ) {
+                crate::drawing_ui::open_workspace(w);
+                return Err(error);
+            }
+        }
         "drawing.interact-clear-selection" => {
             state.selection = None;
             state.cohort.clear();

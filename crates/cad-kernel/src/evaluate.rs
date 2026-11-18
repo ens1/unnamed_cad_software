@@ -166,6 +166,7 @@ impl<K: KernelAdapter> Evaluator<K> {
         self.surface_sets.clear();
         self.history_cache.clear();
         Ok(Some(Evaluation {
+            model_dimensions: BTreeMap::new(),
             drawing_review: BTreeMap::new(),
             drawing_sections: BTreeMap::new(),
             accuracy: cad_core::tolerance::Accuracy::new(
@@ -812,6 +813,18 @@ impl<K: KernelAdapter> Evaluator<K> {
         Vec<monstertruck::modeling::Solid>,
         Vec<monstertruck::modeling::Shell>,
     )> {
+        self.output_with_measurements(part, display_tolerance_mm, false)
+    }
+    fn output_with_measurements(
+        &self,
+        part: &cad_core::Part,
+        display_tolerance_mm: f64,
+        measure: bool,
+    ) -> Result<(
+        MeshData,
+        Vec<monstertruck::modeling::Solid>,
+        Vec<monstertruck::modeling::Shell>,
+    )> {
         let mut all = MeshData {
             positions: vec![],
             normals: vec![],
@@ -840,7 +853,10 @@ impl<K: KernelAdapter> Evaluator<K> {
                     )));
                 }
             }
-            let m = self.adapter.mesh(shape, &r, display_tolerance_mm)?;
+            let mut m = self.adapter.mesh(shape, &r, display_tolerance_mm)?;
+            if measure {
+                self.adapter.measure_finished_faces(shape, &mut m.faces);
+            }
             let has_geometry = !m.positions.is_empty();
             let offset = all.positions.len() as u32;
             let index_offset = all.indices.len();
@@ -1272,6 +1288,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         };
         let assemblies = self.assemblies.clone();
         let mut meshes = BTreeMap::new();
+        let mut model_dimensions = BTreeMap::new();
         let mut body_sets = BTreeMap::new();
         let mut surface_sets = BTreeMap::new();
         let mut sketches = BTreeMap::new();
@@ -1337,11 +1354,22 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 self.history_output(&solved, &part.id, &part.id, display_tolerance_mm),
             );
         }
-        for p in solved.parts.values().filter(|p| !p.outputs.is_empty()) {
-            let (mesh, bodies, surfaces) = self.part_output(p, display_tolerance_mm)?;
-            meshes.insert(p.id.clone(), mesh);
-            body_sets.insert(p.id.clone(), bodies);
-            surface_sets.insert(p.id.clone(), surfaces);
+        for p in solved
+            .parts
+            .values()
+            .filter(|p| !p.outputs.is_empty() || !p.model_dimensions.is_empty())
+        {
+            let (mesh, bodies, surfaces) =
+                self.output_with_measurements(p, display_tolerance_mm, true)?;
+            model_dimensions.insert(
+                p.id.clone(),
+                cad_core::model_dimensions::evaluate(p, &mesh, &solved.settings),
+            );
+            if !p.outputs.is_empty() {
+                meshes.insert(p.id.clone(), mesh);
+                body_sets.insert(p.id.clone(), bodies);
+                surface_sets.insert(p.id.clone(), surfaces);
+            }
         }
         let instances = cad_core::configuration::placed_parts(document, Some(&assemblies))?;
         for i in &instances {
@@ -1435,11 +1463,22 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 );
                 let part = &configured_solved.parts[&i.definition];
                 self.focused_preview(part, &key, display_tolerance_mm);
-                if !part.outputs.is_empty() {
-                    let (mesh, bodies, surfaces) = self.part_output(part, display_tolerance_mm)?;
-                    meshes.insert(key.clone(), mesh);
-                    body_sets.insert(key.clone(), bodies);
-                    surface_sets.insert(key, surfaces);
+                if !part.outputs.is_empty() || !part.model_dimensions.is_empty() {
+                    let (mesh, bodies, surfaces) =
+                        self.output_with_measurements(part, display_tolerance_mm, true)?;
+                    model_dimensions.insert(
+                        key.clone(),
+                        cad_core::model_dimensions::evaluate(
+                            part,
+                            &mesh,
+                            &configured_solved.settings,
+                        ),
+                    );
+                    if !part.outputs.is_empty() {
+                        meshes.insert(key.clone(), mesh);
+                        body_sets.insert(key.clone(), bodies);
+                        surface_sets.insert(key, surfaces);
+                    }
                 }
             }
         }
@@ -1578,6 +1617,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             &self.body_sets,
         )?;
         let mut evaluated = Evaluation {
+            model_dimensions,
             drawing_review: BTreeMap::new(),
             drawing_sections: BTreeMap::new(),
             accuracy: cad_core::tolerance::Accuracy::new(

@@ -477,6 +477,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::materials_ui::semantics(w));
     elements.extend(crate::display_states_ui::elements(w));
     elements.extend(crate::sensors_ui::semantics(w));
+    elements.extend(crate::model_dimensions_ui::semantics(w));
     elements.extend(crate::sketch_block_library_ui::elements(w));
     elements.extend(crate::command_palette::semantics(w));
     elements.extend(crate::inspection_ui::semantics(w));
@@ -551,6 +552,11 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ),
         ("workspace.viewport", "model-viewport", "Model viewport"),
         ("workspace.sensors", "sensors-editor", "Design Monitors"),
+        (
+            "workspace.model-dimensions",
+            "model-dimensions-editor",
+            "Model Dimensions",
+        ),
         (
             "workspace.tolerance-stacks",
             "tolerance-stacks-editor",
@@ -925,6 +931,11 @@ fn build_value_adapters() -> ValueAdapters {
             crate::properties_ui::value,
         );
     }
+    adapters.register(
+        "model-dimensions",
+        crate::model_dimensions_ui::set_value,
+        crate::model_dimensions_ui::current_value,
+    );
     adapters.register(
         "tolerance-stack-editor",
         crate::tolerance_stacks_ui::set_value,

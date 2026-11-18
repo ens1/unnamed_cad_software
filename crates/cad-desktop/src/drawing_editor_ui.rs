@@ -739,6 +739,16 @@ fn sheet_fields(f: &mut Fields<'_>) {
             )
             .collect();
     f.select("/definition", "Model", scopes);
+    f.emit(
+        "/show_model_dimensions",
+        "Show model dimensions and datums",
+        json!(f.sheet.show_model_dimensions),
+        vec![],
+        None,
+    );
+    if let Some(field) = f.out.last_mut() {
+        field.data["default_json"] = json!(false);
+    }
     let mut exploded = vec![choice("Assembled", Value::Null)];
     if f.sheet.definition == f.w.session.visible().root
         && let Some(a) = f.w.session.visible().assemblies.get(&f.sheet.definition)

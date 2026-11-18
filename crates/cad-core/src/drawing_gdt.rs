@@ -3,10 +3,7 @@
 //! infer contact regions from rendered geometry.
 use crate::{
     CadError, Dimension, Document, Drawing, Expr, Id, Result,
-    drawing::{
-        self, Annotation, AnnotationKind, GeometricCharacteristic, MaterialCondition, Primitive,
-        Units,
-    },
+    drawing::{self, Annotation, GeometricCharacteristic, MaterialCondition, Primitive, Units},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -547,15 +544,7 @@ pub fn render_frame(
     out: &mut Vec<Primitive>,
 ) -> Result<()> {
     frame.validate()?;
-    let declared = sheet
-        .entities
-        .iter()
-        .filter_map(|annotation| match &annotation.kind {
-            AnnotationKind::Datum { identifier, .. } => Some(identifier.as_str()),
-            AnnotationKind::DatumTarget { symbol, .. } => Some(symbol.identifier.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let declared = drawing::model_items::declared_datums(doc, sheet);
     let mut rows = Vec::new();
     for row in &frame.rows {
         if row.datums.iter().any(|datum| {

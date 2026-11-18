@@ -52,6 +52,7 @@ mod holes_ui;
 mod inspection_ui;
 mod mate_ui;
 mod materials_ui;
+mod model_dimensions_ui;
 mod mold_ui;
 mod named_parameter_ui;
 mod navigation;
@@ -1036,7 +1037,8 @@ impl Workspace {
         self.edge_selection_path = None;
         self.candidates.clear();
         self.fields.retain(|key, _| {
-            !key.starts_with("structural-member-")
+            !key.starts_with("mbd-")
+                && !key.starts_with("structural-member-")
                 && !key.starts_with("appearance-")
                 && !key.starts_with("configuration-pose-error:")
                 && !key.starts_with("lighting-")
@@ -1288,7 +1290,8 @@ impl Workspace {
             || self.fields.contains_key("exploded-view-editor")
             || self.fields.contains_key("assembly-inspection-editor")
             || self.fields.contains_key("appearance-tool")
-            || self.fields.contains_key("production-editor"))
+            || self.fields.contains_key("production-editor")
+            || model_dimensions_ui::active(self))
             && self.session.draft.is_none()
         {
             assembly_tools_ui::cancel(self);

@@ -175,6 +175,11 @@ pub(super) fn engineering_changes(
                 {
                     output.push(format!("{name}: configurations changed"));
                 }
+                if a.model_dimensions != b.model_dimensions {
+                    output.push(format!(
+                        "{name}: model dimension tolerances or datums changed"
+                    ));
+                }
                 if a.face_finishes != b.face_finishes {
                     output.push(format!("{name}: face finishes changed"));
                 }

@@ -1024,6 +1024,34 @@ pub fn workspace_semantics(w: &Workspace) -> Vec<cad_core::presentation::Semanti
         }
     }
     if let Some(paper) = crate::drawing_interaction_ui::rendered_sheet(w) {
+        for (id, item) in &paper.model_items {
+            let paper_target = cad_core::drawing_interaction::Target::ModelItem { id: id.clone() };
+            out.push(tree_element(
+                &format!("{}:model-item:{id}", paper.id),
+                &paper.id,
+                &format!("{} · {}", item.label, item.text),
+                Some(&paper_target),
+                target == Some(&paper_target),
+                "model-item",
+            ));
+        }
+        for (index, message) in paper
+            .model_review
+            .iter()
+            .chain(&paper.model_coverage)
+            .enumerate()
+        {
+            out.push(SemanticElement {
+                id: format!("{}:model-requirement-info:{index}", paper.id),
+                role: "drawing-source-detail".into(),
+                label: "Model dimensions".into(),
+                value: Some(message.clone()),
+                state: "warning".into(),
+                commands: vec![],
+                relationships: vec![paper.id.clone()],
+                data: json!({"contract":"tcad.drawing-model-items","version":1}),
+            });
+        }
         out.push(SemanticElement {
             id: format!("{}:construction-info", paper.id), role: "drawing-source-info".into(), label: "Drawing information".into(),
             value: Some(format!("Source revision {}", paper.source_info.revision)), state: "ready".into(), commands: vec![],

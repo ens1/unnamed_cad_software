@@ -41,6 +41,7 @@ mod drilled_pockets;
 mod edge_round;
 mod extrusion;
 mod extrusion_surface;
+mod finished_measurement;
 mod general_chamfer;
 mod general_round;
 mod holes;

@@ -71,6 +71,10 @@ fn source(w: &Workspace, scope: &str) -> Result<Value> {
         "model" => {
             let settings = &w.session.visible().settings;
             let mut source = serde_json::to_value(settings)?;
+            source["size_tolerance"] = json!(
+                settings.manufacturing_tolerance_mm
+                    / settings.display_length_unit.millimeters_per_unit()
+            );
             source["default_new_part_material"] = json!(settings.default_new_part_material);
             Ok(source)
         }
@@ -82,6 +86,13 @@ fn source(w: &Workspace, scope: &str) -> Result<Value> {
                 .map(|state| &state.application)
                 .unwrap_or(&w.application_preferences);
             let mut source = serde_json::to_value(preferences)?;
+            source["default_model"]["size_tolerance"] = json!(
+                preferences.default_model.manufacturing_tolerance_mm
+                    / preferences
+                        .default_model
+                        .display_length_unit
+                        .millimeters_per_unit()
+            );
             source["default_model"]["default_new_part_material"] =
                 json!(preferences.default_model.default_new_part_material);
             source["default_model"]["default_material_selection"] = json!(format!(
@@ -173,7 +184,7 @@ fn field(w: &Workspace, spec: FieldSpec<'_>) -> SemanticElement {
             "category":spec.category, "group":group, "json":value, "editable":editable,
             "range":spec.range, "choices":spec.choices, "unit":spec.unit,
             "minimum":spec.range.map(|range|range[0]), "maximum":spec.range.map(|range|range[1]),
-            "step":if spec.pointer.ends_with("/modeling/linear_mm") { Some(1e-7) } else if spec.pointer.ends_with("/modeling/boolean_search_mm") || spec.pointer.ends_with("/display_tolerance_mm") { Some(0.001) } else { None },
+            "step":if spec.pointer.ends_with("/modeling/linear_mm") { Some(1e-7) } else if spec.pointer.ends_with("/modeling/boolean_search_mm") || spec.pointer.ends_with("/display_tolerance_mm") || spec.pointer.ends_with("/size_tolerance") { Some(0.001) } else { None },
             "kind":if spec.choices.as_array().is_some_and(|choices|!choices.is_empty()) {"choice"} else if value.is_boolean() {"boolean"} else if value.is_number() {"number"} else {"text"},
             "accessibility_label":spec.label,
             "description":field_description(spec.scope, spec.pointer),
@@ -186,6 +197,11 @@ fn field(w: &Workspace, spec: FieldSpec<'_>) -> SemanticElement {
 
 fn field_description(scope: &str, pointer: &str) -> Option<&'static str> {
     match pointer.strip_prefix("/default_model").unwrap_or(pointer) {
+        "/size_tolerance" => {
+            return Some(
+                "Applied above and below each finished model dimension unless that dimension has an override.",
+            );
+        }
         "/display_tolerance_mm" => {
             return Some(
                 "Viewport and meshed export chord tolerance. Changing display quality never changes native modeling accuracy or Boolean search resolution.",
@@ -244,6 +260,16 @@ fn model_fields(w: &Workspace, application_defaults: bool) -> Vec<SemanticElemen
         "application.defaults"
     } else {
         "model.units"
+    };
+    let unit = if application_defaults {
+        w.settings
+            .as_ref()
+            .map(|state| &state.application)
+            .unwrap_or(&w.application_preferences)
+            .default_model
+            .display_length_unit
+    } else {
+        w.session.visible().settings.display_length_unit
     };
     let geometry = if application_defaults {
         "application.defaults"
@@ -322,6 +348,17 @@ fn model_fields(w: &Workspace, application_defaults: bool) -> Vec<SemanticElemen
             Some([0., 8.]),
             json!([]),
             None,
+        ),
+        (
+            units,
+            "/size_tolerance",
+            "Default size tolerance (±)",
+            Some([
+                0.,
+                cad_core::model_dimensions::MAX_ALLOWANCE_MM / unit.millimeters_per_unit(),
+            ]),
+            json!([]),
+            Some(unit.symbol()),
         ),
         (
             geometry,
@@ -712,6 +749,19 @@ pub fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
             preferences.default_material = Some(material);
         }
         return settings::set_application(w, preferences);
+    }
+    if pointer.ends_with("/size_tolerance") {
+        let settings = if scope == "application" {
+            &mut candidate["default_model"]
+        } else {
+            &mut candidate
+        };
+        let unit: cad_core::settings::LengthUnit =
+            serde_json::from_value(settings["display_length_unit"].clone())?;
+        let allowance = value.as_f64().ok_or_else(|| {
+            CadError::Invalid("Enter a size tolerance in the selected length unit.".into())
+        })?;
+        settings["manufacturing_tolerance_mm"] = json!(allowance * unit.millimeters_per_unit());
     }
     *candidate
         .pointer_mut(pointer)

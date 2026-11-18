@@ -698,6 +698,23 @@ fn retarget_drawings(
         if sheet.definition != source.root {
             continue;
         }
+        let mut placements = BTreeMap::new();
+        for (key, placement) in std::mem::take(&mut sheet.model_item_placements) {
+            let mut occurrence = crate::model_dimensions::remap::PaperKey::decode(&key)?;
+            let original_path = occurrence.path.clone();
+            if original_path.starts_with(selected) {
+                occurrence.remap(ids)?;
+            }
+            for (prefix, mapping) in enclosers {
+                if original_path.starts_with(prefix) {
+                    occurrence.remap(mapping)?;
+                }
+            }
+            if placements.insert(occurrence.encode()?, placement).is_some() {
+                return Err(invalid("Fork would merge two drawing dimension placements"));
+            }
+        }
+        sheet.model_item_placements = placements;
         let mut row_maps = BTreeMap::<Id, BTreeMap<String, String>>::new();
         for table in &mut sheet.tables {
             match &table.kind {

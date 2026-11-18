@@ -789,6 +789,11 @@ pub struct Part {
     /// material and authoritative CAD surfaces remain part-wide and unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub face_finishes: Vec<crate::appearance::FaceFinish>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::model_dimensions::Definition::is_empty"
+    )]
+    pub model_dimensions: crate::model_dimensions::Definition,
     #[serde(default)]
     pub properties: BTreeMap<String, String>,
     #[serde(default)]
@@ -824,6 +829,7 @@ impl Part {
             material: "aluminum".into(),
             finish: crate::appearance::default_finish(),
             face_finishes: vec![],
+            model_dimensions: Default::default(),
             properties: BTreeMap::new(),
             sketches: BTreeMap::new(),
             configurations: BTreeMap::new(),
@@ -1173,6 +1179,11 @@ pub struct Drawing {
     pub paper_mm: [f64; 2],
     #[serde(default)]
     pub dimensions: Vec<DrawingDimension>,
+    /// Show live finished-part characteristics. Legacy sheets keep their authored annotations.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub show_model_dimensions: bool,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_item_placements: BTreeMap<Id, crate::drawing::model_items::Placement>,
     #[serde(default)]
     pub title_block: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1276,6 +1287,9 @@ impl Document {
             crate::standard_parts::validate_origin(origin)?;
         }
         crate::model_properties::validate(self)?;
+        for part in self.parts.values() {
+            part.model_dimensions.validate(&part.id)?;
+        }
         self.settings.validate(self)?;
         crate::sensors::validate(self)?;
         crate::tolerance_stacks::validate(self)?;

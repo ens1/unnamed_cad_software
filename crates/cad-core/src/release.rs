@@ -63,6 +63,7 @@ pub fn create(
                 "A release requires a valid current evaluation".into(),
             ));
         }
+        crate::model_dimensions::validate_release(doc, &evaluated)?;
         FileStore.save(&staging.join("source"), doc)?;
         for resource in doc.resources.values() {
             let from = crate::persistence::safe_join(root, &resource.path)?;
