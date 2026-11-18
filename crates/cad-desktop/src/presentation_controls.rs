@@ -904,6 +904,9 @@ pub fn inspector_section(
                 frame_from_properties(ui, &props).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     let mut folding = section.collapse.map(|default_open| {
+                        let default_open = props
+                            .get("initially-expanded")
+                            .map_or(default_open, |value| value == "true");
                         let mut folding =
                             egui::collapsing_header::CollapsingState::load_with_default_open(
                                 ui.ctx(),

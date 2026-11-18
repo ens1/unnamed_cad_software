@@ -4,7 +4,7 @@ use crate::Workspace;
 use bevy_egui::egui;
 use cad_core::{Document, Feature, NodeRef, Operation};
 
-fn options_section(
+pub(crate) fn options_section(
     ui: &mut egui::Ui,
     feature: &str,
     key: &str,
@@ -27,7 +27,7 @@ fn options_section(
     );
 }
 
-fn scope_fields(
+pub(crate) fn scope_fields(
     ui: &mut egui::Ui,
     doc: &Document,
     feature: &str,
@@ -107,14 +107,6 @@ pub(super) fn fields(
                 options.contours.clear();
                 changed = true;
             }
-            changed |= crate::contours_ui::fields(
-                ui,
-                w,
-                doc,
-                std::slice::from_ref(profile),
-                &mut options.contours,
-                options.thin.is_some(),
-            );
             let prior_end = options.end.clone();
             let mut first = cad_core::extrusion::DirectionEnd {
                 end: options.end.clone(),
@@ -160,6 +152,15 @@ pub(super) fn fields(
                 changed = true;
             }
             changed |= result_fields(ui, doc, &feature.id, body, mode);
+            changed |= crate::contours_ui::fields(
+                ui,
+                w,
+                doc,
+                &feature.id,
+                std::slice::from_ref(profile),
+                &mut options.contours,
+                options.thin.is_some(),
+            );
             options_section(
                 ui,
                 &feature.id,
@@ -297,7 +298,11 @@ pub(super) fn fields(
                 |ui| {
                     changed |= thin_fields(ui, &mut options.thin);
                     let mut draft = options.draft.is_some();
-                    if ui.checkbox(&mut draft, "Draft While Extruding").changed() {
+                    if ui
+                        .checkbox(&mut draft, "Draft")
+                        .on_hover_text("Available for straight-sided sketch profiles.")
+                        .changed()
+                    {
                         options.draft = draft.then(|| cad_core::ExtrudeDraft {
                             angle: "3 deg".into(),
                             outward: false,
@@ -307,7 +312,6 @@ pub(super) fn fields(
                     if let Some(draft) = &mut options.draft {
                         changed |= expression(ui, "Draft Angle", &mut draft.angle);
                         changed |= ui.checkbox(&mut draft.outward, "Draft Outward").changed();
-                        ui.small("Draft needs a sketch with straight edges.");
                     }
                 },
             );
@@ -329,29 +333,54 @@ pub(super) fn fields(
                 options.contours.clear();
                 changed = true;
             }
-            changed |= crate::contours_ui::fields(
-                ui,
-                w,
-                doc,
-                std::slice::from_ref(profile),
-                &mut options.contours,
-                options.thin.is_some(),
-            );
             changed |= expression(ui, "Angle", angle);
             changed |= ui
                 .checkbox(&mut options.reverse, "Reverse direction")
                 .changed();
-            ui.label("Axis of revolution");
-            changed |= crate::reference_ui::axis_fields(
+            let axis_name = axis_reference.as_ref().map_or_else(
+                || {
+                    let name = match *axis {
+                        [1., 0., 0.] => "X axis",
+                        [0., 1., 0.] => "Y axis",
+                        [0., 0., 1.] => "Z axis",
+                        _ => "Custom direction",
+                    };
+                    if *origin == [0.; 3] {
+                        name.into()
+                    } else {
+                        format!("{name}, offset origin")
+                    }
+                },
+                |source| crate::reference_ui::axis_label(doc, source),
+            );
+            options_section(
+                ui,
+                &feature.id,
+                "axis",
+                &format!("Revolution axis · {axis_name}"),
+                false,
+                |ui| {
+                    changed |= crate::reference_ui::axis_fields(
+                        ui,
+                        w,
+                        doc,
+                        &feature.id,
+                        axis,
+                        Some(origin),
+                        axis_reference,
+                    );
+                },
+            );
+            changed |= result_fields(ui, doc, &feature.id, body, mode);
+            changed |= crate::contours_ui::fields(
                 ui,
                 w,
                 doc,
                 &feature.id,
-                axis,
-                Some(origin),
-                axis_reference,
+                std::slice::from_ref(profile),
+                &mut options.contours,
+                options.thin.is_some(),
             );
-            changed |= result_fields(ui, doc, &feature.id, body, mode);
             options_section(
                 ui,
                 &feature.id,
@@ -481,10 +510,10 @@ fn extrusion_end_fields(
     let mut changed = false;
     let before = end.end.clone();
     let name = match end.end {
-        ExtrudeEnd::Blind => "Blind (distance)",
+        ExtrudeEnd::Blind => "Blind",
         ExtrudeEnd::MidPlane => "Mid-plane",
         ExtrudeEnd::ThroughAll => "Through all",
-        ExtrudeEnd::ThroughAllBoth => "Through all in both directions",
+        ExtrudeEnd::ThroughAllBoth => "Through all (both)",
         ExtrudeEnd::UpToFace => "Up to face",
         ExtrudeEnd::UpToVertex => "Up to vertex",
         ExtrudeEnd::UpToNext => "Up to next face",
@@ -494,10 +523,10 @@ fn extrusion_end_fields(
         .selected_text(name)
         .show_ui(ui, |ui| {
             for (value, name) in [
-                (ExtrudeEnd::Blind, "Blind (distance)"),
+                (ExtrudeEnd::Blind, "Blind"),
                 (ExtrudeEnd::MidPlane, "Mid-plane"),
                 (ExtrudeEnd::ThroughAll, "Through all"),
-                (ExtrudeEnd::ThroughAllBoth, "Through all in both directions"),
+                (ExtrudeEnd::ThroughAllBoth, "Through all (both)"),
                 (ExtrudeEnd::UpToFace, "Up to face"),
                 (ExtrudeEnd::UpToVertex, "Up to vertex"),
                 (ExtrudeEnd::UpToNext, "Up to next face"),
@@ -521,7 +550,12 @@ fn extrusion_end_fields(
     }
     match end.end {
         ExtrudeEnd::Blind | ExtrudeEnd::MidPlane => {
-            changed |= expression(ui, "Depth", &mut end.distance)
+            let label = if end.end == ExtrudeEnd::MidPlane {
+                "Total depth"
+            } else {
+                "Depth"
+            };
+            changed |= controls::expression(ui, "feature-field/depth", label, &mut end.distance);
         }
         ExtrudeEnd::UpToFace => {
             if let Some(reference) = &end.target {
@@ -540,7 +574,7 @@ fn extrusion_end_fields(
                     name.unwrap_or("saved reference")
                 ));
             } else {
-                ui.label("Pick the face or plane where the extrusion should end.");
+                ui.label("Select an end face or plane.");
             }
             if let Some(selected) = w.selected.as_ref().filter(|s| {
                 matches!(s.reference.topology.as_str(), "face" | "plane")
@@ -696,7 +730,7 @@ fn extrusion_start_fields(
     }
     changed
 }
-fn thin_fields(ui: &mut egui::Ui, thin: &mut Option<cad_core::ThinExtrude>) -> bool {
+pub(crate) fn thin_fields(ui: &mut egui::Ui, thin: &mut Option<cad_core::ThinExtrude>) -> bool {
     let mut changed = false;
     let mut enabled = thin.is_some();
     if ui.checkbox(&mut enabled, "Thin Feature").changed() {
@@ -709,6 +743,7 @@ fn thin_fields(ui: &mut egui::Ui, thin: &mut Option<cad_core::ThinExtrude>) -> b
         changed = true;
     }
     if let Some(thin) = thin {
+        let prior_mode = thin.mode.clone();
         egui::ComboBox::from_label("Thickness Mode")
             .selected_text(match thin.mode {
                 cad_core::ThinExtrudeMode::OneSide => "One Side",
@@ -731,11 +766,14 @@ fn thin_fields(ui: &mut egui::Ui, thin: &mut Option<cad_core::ThinExtrude>) -> b
         };
         changed |= expression(ui, label, &mut thin.thickness);
         if thin.mode == cad_core::ThinExtrudeMode::TwoSide {
-            if thin.second_thickness.is_none() {
+            if thin.second_thickness.is_none() && thin.mode != prior_mode {
                 thin.second_thickness = Some("2 mm".into());
+            }
+            let mut second = thin.second_thickness.clone().unwrap_or_else(|| "".into());
+            if expression(ui, "Thickness 2", &mut second) {
+                thin.second_thickness = Some(second);
                 changed = true;
             }
-            changed |= expression(ui, "Thickness 2", thin.second_thickness.as_mut().unwrap());
         }
         if thin.mode != cad_core::ThinExtrudeMode::MidPlane {
             changed |= ui

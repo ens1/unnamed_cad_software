@@ -902,8 +902,17 @@
   border-color: #928B81;
 }
 
+[role=inspector-section-heading][state=collapsed] {
+  font-weight: normal;
+}
+
 [role=inspector-section-heading][state=open] {
   color: var(--section-heading-color);
+}
+
+[role=inspector-section-heading][state=error] {
+  color: var(--error);
+  border-color: var(--error);
 }
 
 [role=inspector-section-divider] {

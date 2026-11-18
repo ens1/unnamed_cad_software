@@ -57,6 +57,7 @@ pub const SUPPORTED_STYLE_PROPERTIES: &[&str] = &[
     "preview-removed-color",
     "preview-edge-width",
     "show-part-edges",
+    "initially-expanded",
     "part-edge-color",
     "part-edge-width",
     "hover-centerlines",
@@ -952,7 +953,9 @@ fn validate_property(name: &str, value: &str) -> Result<()> {
         )));
     }
     let allowed: Option<&[&str]> = match name {
-        "show-part-edges" | "hover-centerlines" | "hover-midpoints" => Some(&["true", "false"]),
+        "show-part-edges" | "hover-centerlines" | "hover-midpoints" | "initially-expanded" => {
+            Some(&["true", "false"])
+        }
         "shadows" => Some(&["true", "false", "none"]),
         "display" => Some(&["none", "block", "flex"]),
         "visibility" => Some(&["visible", "hidden"]),

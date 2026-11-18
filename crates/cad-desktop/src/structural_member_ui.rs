@@ -36,7 +36,9 @@ fn catalogs() -> Vec<Arc<Catalog>> {
 }
 fn library_notice() -> Option<(&'static str, String)> {
     match cad_core::weldment_profiles::installed_catalogs() {
-        Ok(catalogs) if catalogs.iter().all(|catalog| catalog.profiles.is_empty()) => Some(("empty", "No weldment profile pack is available. Saved members keep their profiles. Download a pack, or use a sketched section with a path.".into())),
+        Ok(catalogs) if catalogs.iter().all(|catalog| catalog.profiles.is_empty()) => {
+            Some(("empty", "No weldment profile pack is installed.".into()))
+        }
         Err(error) => Some(("error", error.to_string())),
         _ => None,
     }
@@ -394,6 +396,7 @@ fn metadata(w: &Workspace, owner: &NodeRef, group: &str) -> Value {
 fn group(w: &Workspace, owner: &NodeRef, key: &str, label: &str) -> SemanticElement {
     let mut data = metadata(w, owner, key);
     data["classes"] = json!(["modeling-field", "modeling-group", "inspector-section", key]);
+    data["default_expanded"] = json!(matches!(key, "paths" | "profile" | "placement"));
     SemanticElement {
         id: format!("structural-member:{}/group/{key}", owner.node),
         role: "structural-member-group".into(),
@@ -563,7 +566,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let libraries = catalogs();
     let entries = available_entries(profile, &libraries);
     let generated = generated_sections(w);
-    let mut out = vec![group(w, &owner, "paths", "Sketch entities")];
+    let mut out = vec![group(w, &owner, "paths", "Member paths")];
     let path_choices = w
         .session
         .visible()
@@ -604,14 +607,36 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         None,
     ));
     let selected = selected_members(operation, w);
-    out.push(action_element(
+    let picking = w.fields.get(PICK).is_some_and(|value| value == "true");
+    let mut pick = action_element(
         w,
         &owner,
         "paths",
         "pick",
-        "Pick sketch entities",
+        if picking {
+            "Stop picking"
+        } else {
+            "Pick in model"
+        },
         true,
-    ));
+    );
+    if picking {
+        pick.state = "selected".into();
+        pick.data["action"] = json!("stop-pick");
+    }
+    if selected.is_empty() {
+        let mut prompt = note(
+            w,
+            &owner,
+            "paths",
+            "empty",
+            "Select a line or arc in the layout sketch.",
+        );
+        prompt.role = "structural-member-status".into();
+        prompt.state = "required".into();
+        out.push(prompt);
+    }
+    out.push(pick);
     out.push(action_element(
         w,
         &owner,
@@ -640,33 +665,14 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             None,
         ));
     }
-    out.push(note(
-        w,
-        &owner,
-        "paths",
-        "selection",
-        &format!(
-            "{} sketch entities selected. Click their lines on the model to add or remove them.",
-            selected.len()
-        ),
-    ));
-    if selected.is_empty() {
-        out.push(note(
-            w,
-            &owner,
-            "paths",
-            "empty",
-            "Select at least one sketch entity before confirming.",
-        ));
-    }
-    out.push(group(w, &owner, "profile", "Pre-made profile"));
+    out.push(group(w, &owner, "profile", "Profile"));
     if let Some((state, notice)) = library_notice() {
         let mut element = note(
             w,
             &owner,
             "profile",
             "library-notice",
-            &format!("{notice} This member's saved profile remains editable."),
+            &format!("{notice} Using the saved profile."),
         );
         // Keep missing-content information visible, outside collapsed instructions.
         element.role = "structural-member-library-notice".into();
@@ -690,7 +696,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "profile",
             "library-notice",
             &format!(
-                "{} is not available. This member uses its saved profile. Manage libraries to add its source repository.",
+                "{} is unavailable. Using the saved profile.",
                 profile.catalog_name
             ),
         );
@@ -775,25 +781,6 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             .collect(),
         None,
     ));
-    out.push(note(
-        w,
-        &owner,
-        "profile",
-        "snapshot",
-        &format!(
-            "{} · pinned profile revision {}",
-            profile.catalog_name, profile.profile.revision
-        ),
-    ));
-    if !profile.profile.notes.is_empty() {
-        out.push(note(
-            w,
-            &owner,
-            "profile",
-            "profile-notes",
-            &profile.profile.notes,
-        ));
-    }
     let profile_update = libraries
         .iter()
         .find(|catalog| catalog.id == profile.catalog_id)
@@ -814,24 +801,6 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             true,
         ));
     }
-    out.push(action_element(
-        w,
-        &owner,
-        "profile",
-        "import",
-        "Manage libraries…",
-        true,
-    ));
-    out.push(action_element(
-        w,
-        &owner,
-        "profile",
-        "export",
-        "Export profile library…",
-        libraries
-            .iter()
-            .any(|catalog| catalog.id == profile.catalog_id),
-    ));
     out.push(group(w, &owner, "placement", "Locate profile"));
     let locating = locators(w, section, profile, anchor.as_ref());
     let mut points = vec![choice("Profile origin", Value::Null)];
@@ -860,10 +829,13 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         vec![],
         Some("deg"),
     ));
+    out.push(SemanticElement {id:format!("structural-member:{}/locator",owner.node),role:"structural-member-locator".into(),label:"Profile locating diagram".into(),value:None,state:"draft".into(),commands:vec![ACTION.into()],relationships:vec![owner.node.clone()],
+        data:json!({"contract":"tcad.presentation.structural-profile-locator","version":1,"document":w.session.visible().id,"owner":owner.definition,"feature":owner.node,"editor":w.fields.get("feature-editor-generation"),"contours_mm":profile.profile.contours,"locating_points_mm":locating,"anchor":anchor,"roll":roll,"offset":profile_offset,"path_origin_mm":[0.,0.],"source_authority":"pinned catalog profile","action":"locate","classes":["profile-locator"]})});
+    out.push(group(w, &owner, "offsets", "Profile offsets"));
     out.push(field(
         w,
         &owner,
-        "placement",
+        "offsets",
         "profile_offset/0",
         "Horizontal offset",
         json!(profile_offset[0]),
@@ -873,16 +845,14 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     out.push(field(
         w,
         &owner,
-        "placement",
+        "offsets",
         "profile_offset/1",
         "Vertical offset",
         json!(profile_offset[1]),
         vec![],
         Some("mm"),
     ));
-    out.push(SemanticElement {id:format!("structural-member:{}/locator",owner.node),role:"structural-member-locator".into(),label:"Profile locating diagram".into(),value:None,state:"draft".into(),commands:vec![ACTION.into()],relationships:vec![owner.node.clone()],
-        data:json!({"contract":"tcad.presentation.structural-profile-locator","version":1,"document":w.session.visible().id,"owner":owner.definition,"feature":owner.node,"editor":w.fields.get("feature-editor-generation"),"contours_mm":profile.profile.contours,"locating_points_mm":locating,"anchor":anchor,"roll":roll,"offset":profile_offset,"path_origin_mm":[0.,0.],"source_authority":"pinned catalog profile","action":"locate","classes":["profile-locator"]})});
-    out.push(group(w, &owner, "joints", "Group and ends"));
+    out.push(group(w, &owner, "joints", "Joints and end offsets"));
     let mut body_choices = vec![choice("New weldment", Value::Null)];
     body_choices.extend(
         w.session
@@ -947,7 +917,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         &owner,
         "joints",
         "start_offset",
-        "Start shortening (+) / extension (−)",
+        "Start trim (+) / extend (−)",
         json!(start_offset),
         vec![],
         Some("mm"),
@@ -957,7 +927,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         &owner,
         "joints",
         "end_offset",
-        "Finish shortening (+) / extension (−)",
+        "End trim (+) / extend (−)",
         json!(end_offset),
         vec![],
         Some("mm"),
@@ -979,17 +949,48 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             None,
         ));
     }
+    out.push(group(w, &owner, "library", "Profile library"));
     out.push(note(
         w,
         &owner,
-        "joints",
-        "custom",
-        "Custom section sketches remain available in Custom Section Along Path.",
+        "library",
+        "snapshot",
+        &format!(
+            "{} · saved revision {}",
+            profile.catalog_name, profile.profile.revision
+        ),
+    ));
+    if !profile.profile.notes.is_empty() {
+        out.push(note(
+            w,
+            &owner,
+            "library",
+            "profile-notes",
+            &profile.profile.notes,
+        ));
+    }
+    out.push(action_element(
+        w,
+        &owner,
+        "library",
+        "import",
+        "Manage libraries…",
+        true,
     ));
     out.push(action_element(
         w,
         &owner,
-        "joints",
+        "library",
+        "export",
+        "Export profile library…",
+        libraries
+            .iter()
+            .any(|catalog| catalog.id == profile.catalog_id),
+    ));
+    out.push(action_element(
+        w,
+        &owner,
+        "library",
         "restore-profile",
         "Restore saved profile",
         true,
@@ -997,7 +998,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     out.push(action_element(
         w,
         &owner,
-        "joints",
+        "library",
         "custom",
         "Use custom section",
         !selected.is_empty(),
@@ -1427,6 +1428,11 @@ pub fn action(w: &mut Workspace, command: &str, payload: &Value) -> bool {
                 w.status = "Click layout sketch entities to add or remove members".into();
                 Ok(())
             }
+            "stop-pick" => {
+                w.fields.remove(PICK);
+                w.status = "Member selection retained".into();
+                Ok(())
+            }
             "all" | "clear" => {
                 let Operation::Weldment { operation } = &mut feature.operation else {
                     return Err(invalid("Not a member group"));
@@ -1617,24 +1623,33 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
             .flatten()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
-        let open = group.data["group"] != "joints";
+        let invalid = children.iter().find(|element| field_is_invalid(w, element));
+        let reveal = crate::operation_editor_ui::reveal_invalid_field(
+            ui,
+            &group.id,
+            invalid.map(|element| element.id.as_str()),
+        );
+        let label = if invalid.is_some() {
+            format!("{} · Check input", group.label)
+        } else {
+            group.label.clone()
+        };
         controls::inspector_section(
             ui,
             controls::InspectorSection {
                 id: &group.id,
                 role: &group.role,
                 classes: &classes,
-                label: &group.label,
-                state: "draft",
-                collapse: Some(open),
-                open: None,
+                label: &label,
+                state: if invalid.is_some() {
+                    "draft error"
+                } else {
+                    "draft"
+                },
+                collapse: group.data["default_expanded"].as_bool(),
+                open: reveal,
             },
             |ui| {
-                let notes = children
-                    .iter()
-                    .filter(|element| element.role == "structural-member-note")
-                    .cloned()
-                    .collect::<Vec<_>>();
                 let member_items = children
                     .iter()
                     .filter(|element| {
@@ -1647,28 +1662,26 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                     .iter()
                     .filter(|element| element.data["json"] == true)
                     .count();
-                let query = if !member_items.is_empty() {
-                    crate::workspace_controls::reference_filter(
-                        ui,
-                        w,
-                        &group.id,
-                        "sketch entities",
-                        selected,
-                        member_items.len(),
-                    )
-                } else {
-                    Some(String::new())
-                };
-                let mut selected_shown = 0;
+                let member_count = member_items.len();
+                let mut query = None;
+                let mut started_list = false;
                 let mut children = children.into_iter().peekable();
                 while let Some(element) = children.next() {
-                    if element.role == "structural-member-note" {
-                        continue;
-                    }
                     if element.data["field"]
                         .as_str()
                         .is_some_and(|field| field.starts_with("member/"))
                     {
+                        if !started_list {
+                            started_list = true;
+                            query = crate::workspace_controls::reference_filter(
+                                ui,
+                                w,
+                                &group.id,
+                                "sketch entities",
+                                selected,
+                                member_count,
+                            );
+                        }
                         match &query {
                             Some(query)
                                 if !query.is_empty()
@@ -1676,10 +1689,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                             {
                                 continue;
                             }
-                            None if element.data["json"] != true || selected_shown >= 2 => continue,
-                            None => {
-                                selected_shown += 1;
-                            }
+                            None => continue,
                             _ => {}
                         }
                     }
@@ -1700,25 +1710,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                         });
                     } else {
                         render_control(ui, w, &element);
-                    }
-                }
-                if !notes.is_empty()
-                    && crate::workspace_controls::disclosure(
-                        ui,
-                        w,
-                        &format!("{}/instructions", group.id),
-                        "Instructions",
-                    )
-                {
-                    for element in notes {
-                        controls::label(
-                            ui,
-                            &element.id,
-                            &element.role,
-                            &["modeling-help"],
-                            &element.label,
-                            &element.state,
-                        );
                     }
                 }
             },
@@ -1756,8 +1747,7 @@ pub(crate) fn render_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
             &["modeling-action"],
             &element.label,
             element.state != "disabled",
-            element.data["action"] == "pick"
-                && w.fields.get(PICK).is_some_and(|value| value == "true"),
+            element.state == "selected",
         );
         if response.clicked() {
             action(w, ACTION, &element.data);

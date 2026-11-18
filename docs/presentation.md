@@ -654,6 +654,10 @@ independent style targets. Existing `.modeling-group`,
 hierarchy styles. User layouts can continue to move or duplicate the original
 groups and their bound controls.
 
+Set `initially-expanded` on a collapsible group to choose its initial state.
+For example, `.bend-defaults { initially-expanded: true; }` opens sheet-metal
+bend defaults on entry. The user can still close the group.
+
 Classic and the optional Nocturne theme expose reusable `--section-*` variables for body and header
 backgrounds, border color, padding, gap, header height, corner radius, and divider
 width/spacing. These are ordinary theme variables, not reserved engine options.

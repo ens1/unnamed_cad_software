@@ -214,6 +214,19 @@ impl<'a> Fields<'a> {
         self.group = key.into();
         let mut data = self.data();
         data["classes"] = json!(["drawing-group", key]);
+        if matches!(
+            key,
+            "paper"
+                | "sheet-actions"
+                | "notes"
+                | "display-options"
+                | "dimension-format"
+                | "leader-elbows"
+                | "table-columns"
+                | "source-rows"
+        ) {
+            data["default_expanded"] = json!(false);
+        }
         self.out.push(SemanticElement {
             id: self.id(&format!("group/{key}")),
             role: "drawing-editor-group".into(),
@@ -675,7 +688,7 @@ fn context_fields(f: &mut Fields<'_>, section: &str) {
     );
     f.transient(
         "section",
-        "Controls",
+        "Edit",
         json!(section),
         choices(&[
             ("sheet", "Sheet"),
@@ -686,14 +699,23 @@ fn context_fields(f: &mut Fields<'_>, section: &str) {
             ("tables", "Tables"),
         ]),
     );
-    for (kind, label) in [
+}
+fn sheet_management(f: &mut Fields<'_>) {
+    f.group("sheet-actions", "Manage sheet");
+    for (command, label) in [
         ("drawing.sheet-add", "New sheet"),
         ("drawing.sheet-template-load", "From template"),
+        ("drawing.sheet-duplicate", "Duplicate"),
+        ("drawing.sheet-up", "Move up"),
+        ("drawing.sheet-down", "Move down"),
+        ("drawing.sheet-delete", "Delete sheet"),
+        ("drawing.sheet-template-save", "Save template"),
+        ("drawing.sheet-format-load", "Load format"),
     ] {
         f.action(
-            kind,
+            command,
             label,
-            json!({"kind":"existing","command":kind}),
+            json!({"kind":"existing","command":command}),
             true,
             "Close Settings first",
         );
@@ -717,31 +739,6 @@ fn sheet_fields(f: &mut Fields<'_>) {
             )
             .collect();
     f.select("/definition", "Model", scopes);
-    f.group("paper", "Paper");
-    f.number("/paper_mm/0", "Paper width", "mm", Some(50.), Some(2000.));
-    f.number("/paper_mm/1", "Paper height", "mm", Some(50.), Some(2000.));
-    for (label, size) in [
-        ("A4", [297., 210.]),
-        ("A3", [420., 297.]),
-        ("A2", [594., 420.]),
-        ("Letter", [279.4, 215.9]),
-        ("Ledger", [431.8, 279.4]),
-    ] {
-        f.action(
-            label,
-            label,
-            json!({"kind":"paper","value":size}),
-            true,
-            "Close Settings first",
-        );
-    }
-    f.action(
-        "orientation",
-        "Swap orientation",
-        json!({"kind":"orientation"}),
-        true,
-        "Close Settings first",
-    );
     let mut exploded = vec![choice("Assembled", Value::Null)];
     if f.sheet.definition == f.w.session.visible().root
         && let Some(a) = f.w.session.visible().assemblies.get(&f.sheet.definition)
@@ -763,7 +760,6 @@ fn sheet_fields(f: &mut Fields<'_>) {
         );
     }
     f.group("projection", "Projection");
-    f.select("/exploded_view", "Assembly state", exploded);
     let mut display_states = vec![choice("Normal display", Value::Null)];
     if let Some(assembly) = f.w.session.visible().assemblies.get(&f.sheet.definition) {
         display_states.extend(
@@ -804,7 +800,6 @@ fn sheet_fields(f: &mut Fields<'_>) {
                 .unwrap_or("Unavailable nested state");
         display_states.push(choice(name, json!(selected)));
     }
-    f.select("/display_state", "Display state", display_states);
     let views = view_keys(f.sheet);
     f.transient(
         "projection",
@@ -825,6 +820,67 @@ fn sheet_fields(f: &mut Fields<'_>) {
             ("custom", "Custom views"),
         ]),
     );
+    f.group("scale", "Scale");
+    let saved_scale = f
+        .sheet
+        .view_layouts
+        .get("front")
+        .and_then(|layout| layout.scale);
+    let mut scale_choices = vec![choice("Automatic standard scale", Value::Null)];
+    for scale in [0.1, 0.2, 0.25, 0.5, 1., 2., 5., 10.] {
+        scale_choices.push(choice(scale_label(scale), scale));
+    }
+    if let Some(scale) = saved_scale
+        && !scale_choices
+            .iter()
+            .any(|option| option["value"].as_f64() == Some(scale))
+    {
+        scale_choices.push(choice(format!("{} (saved)", scale_label(scale)), scale));
+    }
+    f.transient(
+        "scale",
+        "Shared view scale",
+        json!(saved_scale),
+        scale_choices,
+    );
+    f.group(
+        "paper",
+        &format!(
+            "Paper · {} × {} mm",
+            f.sheet.paper_mm[0], f.sheet.paper_mm[1]
+        ),
+    );
+    f.number("/paper_mm/0", "Paper width", "mm", Some(50.), Some(2000.));
+    f.number("/paper_mm/1", "Paper height", "mm", Some(50.), Some(2000.));
+    for (label, size) in [
+        ("A4", [297., 210.]),
+        ("A3", [420., 297.]),
+        ("A2", [594., 420.]),
+        ("Letter", [279.4, 215.9]),
+        ("Ledger", [431.8, 279.4]),
+    ] {
+        f.action(
+            label,
+            label,
+            json!({"kind":"paper","value":size}),
+            true,
+            "Close Settings first",
+        );
+    }
+    f.action(
+        "orientation",
+        "Swap orientation",
+        json!({"kind":"orientation"}),
+        true,
+        "Close Settings first",
+    );
+    f.group("display-options", "View display");
+    if exploded.len() > 1 || f.sheet.exploded_view.is_some() {
+        f.select("/exploded_view", "Assembly state", exploded);
+    }
+    if display_states.len() > 1 || f.sheet.display_state.is_some() {
+        f.select("/display_state", "Display state", display_states);
+    }
     let modes = views
         .iter()
         .filter(|key| key.as_str() != "section-z")
@@ -866,46 +922,6 @@ fn sheet_fields(f: &mut Fields<'_>) {
         "Third-angle projection · Top above Front, Right beside Front",
         "ready",
     );
-    f.group("scale", "Scale");
-    let saved_scale = f
-        .sheet
-        .view_layouts
-        .get("front")
-        .and_then(|layout| layout.scale);
-    let mut scale_choices = vec![choice("Automatic standard scale", Value::Null)];
-    for scale in [0.1, 0.2, 0.25, 0.5, 1., 2., 5., 10.] {
-        scale_choices.push(choice(scale_label(scale), scale));
-    }
-    if let Some(scale) = saved_scale
-        && !scale_choices
-            .iter()
-            .any(|option| option["value"].as_f64() == Some(scale))
-    {
-        scale_choices.push(choice(format!("{} (saved)", scale_label(scale)), scale));
-    }
-    f.transient(
-        "scale",
-        "Shared view scale",
-        json!(saved_scale),
-        scale_choices,
-    );
-    f.group("sheet-actions", "Manage sheet");
-    for (command, label) in [
-        ("drawing.sheet-duplicate", "Duplicate"),
-        ("drawing.sheet-up", "Move up"),
-        ("drawing.sheet-down", "Move down"),
-        ("drawing.sheet-delete", "Delete sheet"),
-        ("drawing.sheet-template-save", "Save template"),
-        ("drawing.sheet-format-load", "Load format"),
-    ] {
-        f.action(
-            command,
-            label,
-            json!({"kind":"existing","command":command}),
-            true,
-            "Close Settings first",
-        );
-    }
     f.group("notes", "Sheet notes");
     for (i, _) in f.sheet.annotations.iter().enumerate() {
         let path = format!("/annotations/{i}");
@@ -2336,9 +2352,14 @@ fn build_semantics(w: &Workspace) -> Vec<SemanticElement> {
         "tables" => table_fields(&mut fields),
         _ => sheet_fields(&mut fields),
     }
+    sheet_management(&mut fields);
     if !current_source_is_valid(w) {
         fields.group("validation", "Drawing validation");
-        fields.note("source-invalid", "Correct the staged drawing fields before applying. Hidden invalid fields also remain pending.", "error");
+        fields.note(
+            "source-invalid",
+            "Correct the marked drawing fields before applying.",
+            "error",
+        );
     }
     fields.group("confirmation", "Preview and save");
     for (command, label, enabled) in [

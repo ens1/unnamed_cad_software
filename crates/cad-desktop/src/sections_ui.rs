@@ -1,8 +1,12 @@
 //! Docked section intent over the shared native feature draft.
-use crate::{Workspace, cad_ui, reference_ui};
+use crate::{
+    Workspace, cad_ui,
+    cad_ui::profile_features::{options_section, scope_fields, thin_fields},
+    reference_ui,
+};
 use bevy_egui::egui;
 use cad_core::{
-    Document, NodeRef, Operation, Profile, Sketch, ThinExtrude, ThinExtrudeMode,
+    Document, NodeRef, Operation, Profile, Sketch,
     reference_geometry::{AxisSource, OriginAxis},
     solid_sections::{Connector, End, LoftOptions, Orientation, Placement, SweepOptions},
 };
@@ -62,88 +66,6 @@ fn path_entities(doc: &Document, path: &NodeRef) -> Option<PathEntities> {
         })
         .collect();
     Some((members, sketch.points.keys().cloned().collect()))
-}
-fn thin(ui: &mut egui::Ui, thin: &mut Option<ThinExtrude>) -> bool {
-    let mut changed = false;
-    let mut enabled = thin.is_some();
-    if ui.checkbox(&mut enabled, "Thin Feature").changed() {
-        *thin = enabled.then(|| ThinExtrude {
-            mode: ThinExtrudeMode::OneSide,
-            thickness: "2 mm".into(),
-            second_thickness: None,
-            reverse: false,
-        });
-        changed = true;
-    }
-    if let Some(thin) = thin {
-        egui::ComboBox::from_label("Thickness Mode")
-            .selected_text(match thin.mode {
-                ThinExtrudeMode::OneSide => "One Side",
-                ThinExtrudeMode::TwoSide => "Two Sides",
-                ThinExtrudeMode::MidPlane => "Mid Plane",
-            })
-            .show_ui(ui, |ui| {
-                for (mode, label) in [
-                    (ThinExtrudeMode::OneSide, "One Side"),
-                    (ThinExtrudeMode::TwoSide, "Two Sides"),
-                    (ThinExtrudeMode::MidPlane, "Mid Plane"),
-                ] {
-                    changed |= ui.selectable_value(&mut thin.mode, mode, label).changed();
-                }
-            });
-        changed |= cad_ui::expression(ui, "Thickness", &mut thin.thickness);
-        if thin.mode == ThinExtrudeMode::TwoSide {
-            if thin.second_thickness.is_none() {
-                thin.second_thickness = Some("2 mm".into());
-                changed = true;
-            }
-            changed |=
-                cad_ui::expression(ui, "Thickness 2", thin.second_thickness.as_mut().unwrap());
-        }
-        changed |= ui
-            .checkbox(&mut thin.reverse, "Reverse Thickness Side")
-            .changed();
-        ui.small("Straight and circular sketch offsets; open chains receive flat ends.");
-    }
-    changed
-}
-fn scope(
-    ui: &mut egui::Ui,
-    doc: &Document,
-    current: &str,
-    body: Option<&NodeRef>,
-    scope: &mut Vec<NodeRef>,
-) -> bool {
-    let mut changed = false;
-    egui::CollapsingHeader::new("Additional Feature Scope").show(ui, |ui| {
-        for part in doc.parts.values() {
-            for feature in part
-                .features
-                .iter()
-                .take_while(|feature| feature.id != current)
-                .filter(|feature| !feature.suppressed && feature.operation.produces_solid())
-            {
-                let reference = part.reference(&feature.id);
-                if Some(&reference) == body {
-                    continue;
-                }
-                let mut included = scope.contains(&reference);
-                if ui
-                    .checkbox(&mut included, format!("{} / {}", part.name, feature.name))
-                    .changed()
-                {
-                    if included {
-                        scope.push(reference);
-                    } else {
-                        scope.retain(|old| old != &reference);
-                    }
-                    changed = true;
-                }
-            }
-        }
-        ui.small("Includes all current solid bodies produced by each selected feature.");
-    });
-    changed
 }
 fn end(
     ui: &mut egui::Ui,
@@ -219,49 +141,184 @@ pub(crate) fn loft(
         ui,
         w,
         doc,
+        current,
         profiles,
         &mut options.contours,
         options.thin.is_some(),
     );
-    egui::CollapsingHeader::new("Profile Connectors").show(ui,|ui| {
-        let mut remove=None;
-        for (index,connector) in options.connectors.iter_mut().enumerate(){ui.push_id(index,|ui| {
-            let profile_index=profiles.iter().position(|profile|profile==&connector.profile);
-            egui::ComboBox::from_label("Section").selected_text(profile_index.map(|i|format!("Section {}",i+1)).unwrap_or("Missing Section".into())).show_ui(ui,|ui| {
-                for (index,profile) in profiles.iter().enumerate(){changed|=ui.selectable_value(&mut connector.profile,profile.clone(),format!("Section {}",index+1)).changed();}
+    let connectors = if options.connectors.is_empty() {
+        "Profile connectors".into()
+    } else {
+        format!("Profile connectors · {}", options.connectors.len())
+    };
+    options_section(ui, current, "connectors", &connectors, false, |ui| {
+        let mut remove = None;
+        for (index, connector) in options.connectors.iter_mut().enumerate() {
+            ui.push_id(index, |ui| {
+                let profile_index = profiles
+                    .iter()
+                    .position(|profile| profile == &connector.profile);
+                egui::ComboBox::from_label("Section")
+                    .selected_text(
+                        profile_index
+                            .map(|i| format!("Section {}", i + 1))
+                            .unwrap_or("Missing Section".into()),
+                    )
+                    .show_ui(ui, |ui| {
+                        for (index, profile) in profiles.iter().enumerate() {
+                            changed |= ui
+                                .selectable_value(
+                                    &mut connector.profile,
+                                    profile.clone(),
+                                    format!("Section {}", index + 1),
+                                )
+                                .changed();
+                        }
+                    });
+                let members = crate::contours_ui::members(doc, &connector.profile);
+                let region_label = connector
+                    .region_member
+                    .as_ref()
+                    .and_then(|id| {
+                        members
+                            .iter()
+                            .find(|(member, _)| member == id)
+                            .map(|(_, label)| format!("Contour through {label}"))
+                    })
+                    .unwrap_or(if connector.region_member.is_some() {
+                        "Missing Region Member".into()
+                    } else {
+                        format!("Legacy Region {}", connector.region)
+                    });
+                egui::ComboBox::from_label("Material Region")
+                    .selected_text(region_label)
+                    .show_ui(ui, |ui| {
+                        for (member, label) in &members {
+                            changed |= ui
+                                .selectable_value(
+                                    &mut connector.region_member,
+                                    Some(member.clone()),
+                                    format!("Contour through {label}"),
+                                )
+                                .changed();
+                        }
+                    });
+                if connector.region_member.is_none() {
+                    ui.horizontal(|ui| {
+                        ui.label("Region number");
+                        changed |= ui
+                            .add(egui::DragValue::new(&mut connector.region).range(0..=1023))
+                            .changed();
+                    });
+                }
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Boundary");
+                    let mut hole = connector.contour > 0;
+                    if ui.selectable_value(&mut hole, false, "Outer").changed() {
+                        connector.contour = 0;
+                        changed = true;
+                    }
+                    if ui.selectable_value(&mut hole, true, "Hole").changed() {
+                        connector.contour = 1;
+                        changed = true;
+                    }
+                    if hole {
+                        changed |= ui
+                            .add(
+                                egui::DragValue::new(&mut connector.contour)
+                                    .range(1..=1023)
+                                    .prefix("Hole "),
+                            )
+                            .changed();
+                    }
+                });
+                let points = source(doc, &connector.profile)
+                    .map(|sketch| sketch.points.keys().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default();
+                let selected = points
+                    .iter()
+                    .position(|point| point == &connector.vertex)
+                    .map(|i| format!("Vertex {}", i + 1))
+                    .unwrap_or("Missing Vertex".into());
+                egui::ComboBox::from_label("Connector Vertex")
+                    .selected_text(selected)
+                    .show_ui(ui, |ui| {
+                        for (index, point) in points.iter().enumerate() {
+                            changed |= ui
+                                .selectable_value(
+                                    &mut connector.vertex,
+                                    point.clone(),
+                                    format!("Vertex {}", index + 1),
+                                )
+                                .changed();
+                        }
+                    });
+                if ui.small_button("Remove Connector").clicked() {
+                    remove = Some(index);
+                }
             });
-            let members=crate::contours_ui::members(doc,&connector.profile);
-            let region_label=connector.region_member.as_ref().and_then(|id|members.iter().find(|(member,_)|member==id).map(|(_,label)|format!("Contour through {label}"))).unwrap_or(if connector.region_member.is_some(){"Missing Region Member".into()}else{format!("Legacy Region {}",connector.region)});
-            egui::ComboBox::from_label("Material Region").selected_text(region_label).show_ui(ui,|ui| {
-                for (member,label) in &members {changed|=ui.selectable_value(&mut connector.region_member,Some(member.clone()),format!("Contour through {label}")).changed();}
-            });
-            if connector.region_member.is_none(){ui.horizontal(|ui| {ui.label("Legacy Region Index");changed|=ui.add(egui::DragValue::new(&mut connector.region).range(0..=1023)).changed();});ui.small("This older connector uses a region index. Choose an outer-boundary member to make its region association stable.");}
-            ui.horizontal(|ui| {ui.label("Contour");changed|=ui.add(egui::DragValue::new(&mut connector.contour).range(0..=1023)).changed();});
-            let points=source(doc,&connector.profile).map(|sketch|sketch.points.keys().cloned().collect::<Vec<_>>()).unwrap_or_default();
-            let selected=points.iter().position(|point|point==&connector.vertex).map(|i|format!("Vertex {}",i+1)).unwrap_or("Missing Vertex".into());
-            egui::ComboBox::from_label("Connector Vertex").selected_text(selected).show_ui(ui,|ui| {
-                for (index,point) in points.iter().enumerate(){changed|=ui.selectable_value(&mut connector.vertex,point.clone(),format!("Vertex {}",index+1)).changed();}
-            });
-            if ui.small_button("Remove Connector").clicked(){remove=Some(index);}
-        });}
-        if let Some(index)=remove {options.connectors.remove(index);changed=true;}
-        if ui.button("Add Connector").clicked()&&let Some((profile,member,vertex))=profiles.iter().find_map(|profile| {
-            let sketch=source(doc,profile)?;
-            crate::contours_ui::members(doc,profile).into_iter().find_map(|(member,_)| {
-                let curve=&sketch.members[&member].curve;
-                if matches!(curve,cad_core::SketchCurve::Circle {..}|cad_core::SketchCurve::Ellipse {..}){return None;}
-                curve.points().first().map(|point|(profile.clone(),member.clone(),(*point).to_string()))
-            })
-        }) {
-            options.connectors.push(Connector {profile,region:0,region_member:Some(member),contour:0,vertex});changed=true;
         }
-        ui.small("Choose a region by an outer-boundary member and an actual boundary vertex to align its seam. Contour 0 is the outside; contained holes follow source-member order.");
+        if let Some(index) = remove {
+            options.connectors.remove(index);
+            changed = true;
+        }
+        let candidate = profiles.iter().find_map(|profile| {
+            let sketch = source(doc, profile)?;
+            crate::contours_ui::members(doc, profile)
+                .into_iter()
+                .find_map(|(member, _)| {
+                    let curve = &sketch.members[&member].curve;
+                    if matches!(
+                        curve,
+                        cad_core::SketchCurve::Circle { .. }
+                            | cad_core::SketchCurve::Ellipse { .. }
+                    ) {
+                        return None;
+                    }
+                    curve
+                        .points()
+                        .first()
+                        .map(|point| (profile.clone(), member.clone(), (*point).to_string()))
+                })
+        });
+        if ui
+            .add_enabled(candidate.is_some(), egui::Button::new("Add connector"))
+            .on_disabled_hover_text("Choose a section with a boundary vertex.")
+            .clicked()
+            && let Some((profile, member, vertex)) = candidate
+        {
+            options.connectors.push(Connector {
+                profile,
+                region: 0,
+                region_member: Some(member),
+                contour: 0,
+                vertex,
+            });
+            changed = true;
+        }
     });
-    changed |= end(ui, w, doc, current, "Start Constraint", &mut options.start);
-    changed |= end(ui, w, doc, current, "End Constraint", &mut options.end);
-    changed |= thin(ui, &mut options.thin);
-    changed |= scope(ui, doc, current, body, &mut options.scope);
-    ui.small("Use parallel sketch sections. Tangent influence controls the end shape; folded or incompatible sections report an error before Apply.");
+    options_section(
+        ui,
+        current,
+        "ends",
+        "End conditions",
+        !matches!(options.start, End::Default) || !matches!(options.end, End::Default),
+        |ui| {
+            changed |= end(ui, w, doc, current, "Start", &mut options.start);
+            changed |= end(ui, w, doc, current, "End", &mut options.end);
+        },
+    );
+    options_section(
+        ui,
+        current,
+        "wall",
+        "Thin wall",
+        options.thin.is_some(),
+        |ui| {
+            changed |= thin_fields(ui, &mut options.thin);
+        },
+    );
+    changed |= scope_fields(ui, doc, current, body, &mut options.scope);
     changed
 }
 pub(crate) fn sweep(
@@ -279,117 +336,144 @@ pub(crate) fn sweep(
         ui,
         w,
         doc,
+        current,
         std::slice::from_ref(profile),
         &mut options.contours,
         options.thin.is_some(),
     );
-    egui::ComboBox::from_label("Profile Orientation")
-        .selected_text(match options.orientation {
-            Orientation::Fixed => "Keep Normal Constant",
-            Orientation::FollowTangent => "Follow Path Tangent",
-        })
-        .show_ui(ui, |ui| {
-            changed |= ui
-                .selectable_value(
-                    &mut options.orientation,
-                    Orientation::Fixed,
-                    "Keep Normal Constant",
-                )
-                .changed();
-            changed |= ui
-                .selectable_value(
-                    &mut options.orientation,
-                    Orientation::FollowTangent,
-                    "Follow Path Tangent",
-                )
-                .changed();
-        });
-    egui::ComboBox::from_label("Section Placement")
-        .selected_text(match options.placement {
-            Placement::KeepSource => "Use Sketch Position",
-            Placement::AtPathStart => "Align at Path Start",
-        })
-        .show_ui(ui, |ui| {
-            changed |= ui
-                .selectable_value(
-                    &mut options.placement,
-                    Placement::KeepSource,
-                    "Use Sketch Position",
-                )
-                .changed();
-            changed |= ui
-                .selectable_value(
-                    &mut options.placement,
-                    Placement::AtPathStart,
-                    "Align at Path Start",
-                )
-                .changed();
-        });
-    if let Some((members, points)) = path.and_then(|path| path_entities(doc, path)) {
-        let label = options
-            .path_member
-            .as_ref()
-            .and_then(|id| members.iter().position(|(key, _)| key == id))
-            .map(|index| format!("Member {}", index + 1))
-            .unwrap_or(
-                if options.path_member.is_some() {
-                    "Missing Member"
-                } else {
-                    "Whole Path"
-                }
-                .into(),
-            );
-        egui::ComboBox::from_label("Path Member")
-            .selected_text(label)
-            .show_ui(ui, |ui| {
-                changed |= ui
-                    .selectable_value(&mut options.path_member, None, "Whole Path")
-                    .changed();
-                for (id, label) in &members {
+    let path_options = options.path_member.is_some()
+        || options.path_start_vertex.is_some()
+        || options.start.0.trim() != "0"
+        || options.end.0.trim() != "1"
+        || options.reverse;
+    options_section(ui, current, "path", "Path limits", path_options, |ui| {
+        if let Some((members, points)) = path.and_then(|path| path_entities(doc, path)) {
+            let label = options
+                .path_member
+                .as_ref()
+                .and_then(|id| members.iter().position(|(key, _)| key == id))
+                .map(|index| format!("Member {}", index + 1))
+                .unwrap_or(
+                    if options.path_member.is_some() {
+                        "Missing Member"
+                    } else {
+                        "Whole Path"
+                    }
+                    .into(),
+                );
+            egui::ComboBox::from_label("Path Member")
+                .selected_text(label)
+                .show_ui(ui, |ui| {
                     changed |= ui
-                        .selectable_value(&mut options.path_member, Some(id.clone()), label)
+                        .selectable_value(&mut options.path_member, None, "Whole Path")
                         .changed();
-                }
-            });
-        let label = options
-            .path_start_vertex
-            .as_ref()
-            .and_then(|id| points.iter().position(|point| point == id))
-            .map(|index| format!("Vertex {}", index + 1))
-            .unwrap_or(
-                if options.path_start_vertex.is_some() {
-                    "Missing Vertex"
-                } else {
-                    "Use Member Start"
-                }
-                .into(),
-            );
-        egui::ComboBox::from_label("Path Start Vertex")
-            .selected_text(label)
-            .show_ui(ui, |ui| {
-                changed |= ui
-                    .selectable_value(&mut options.path_start_vertex, None, "Use Member Start")
-                    .changed();
-                for (index, point) in points.iter().enumerate() {
+                    for (id, label) in &members {
+                        changed |= ui
+                            .selectable_value(&mut options.path_member, Some(id.clone()), label)
+                            .changed();
+                    }
+                });
+            let label = options
+                .path_start_vertex
+                .as_ref()
+                .and_then(|id| points.iter().position(|point| point == id))
+                .map(|index| format!("Vertex {}", index + 1))
+                .unwrap_or(
+                    if options.path_start_vertex.is_some() {
+                        "Missing Vertex"
+                    } else {
+                        "Use Member Start"
+                    }
+                    .into(),
+                );
+            egui::ComboBox::from_label("Path Start Vertex")
+                .selected_text(label)
+                .show_ui(ui, |ui| {
+                    changed |= ui
+                        .selectable_value(&mut options.path_start_vertex, None, "Use Member Start")
+                        .changed();
+                    for (index, point) in points.iter().enumerate() {
+                        changed |= ui
+                            .selectable_value(
+                                &mut options.path_start_vertex,
+                                Some(point.clone()),
+                                format!("Vertex {}", index + 1),
+                            )
+                            .changed();
+                    }
+                });
+        }
+        changed |= cad_ui::expression(ui, "Start Parameter", &mut options.start);
+        changed |= cad_ui::expression(ui, "End Parameter", &mut options.end);
+        changed |= ui.checkbox(&mut options.reverse, "Reverse Path").changed();
+    });
+    let orientation_options = options.orientation != Orientation::Fixed
+        || options.placement != Placement::KeepSource
+        || options.roll.0.trim() != "0 deg"
+        || options.twist.0.trim() != "0 deg";
+    options_section(
+        ui,
+        current,
+        "orientation",
+        "Orientation and twist",
+        orientation_options,
+        |ui| {
+            egui::ComboBox::from_label("Profile Orientation")
+                .selected_text(match options.orientation {
+                    Orientation::Fixed => "Keep Normal Constant",
+                    Orientation::FollowTangent => "Follow Path Tangent",
+                })
+                .show_ui(ui, |ui| {
                     changed |= ui
                         .selectable_value(
-                            &mut options.path_start_vertex,
-                            Some(point.clone()),
-                            format!("Vertex {}", index + 1),
+                            &mut options.orientation,
+                            Orientation::Fixed,
+                            "Keep Normal Constant",
                         )
                         .changed();
-                }
-            });
-        ui.small("A chain needs a selected endpoint to keep its direction associated with the sketch. Single members use their declared start.");
-    }
-    changed |= cad_ui::expression(ui, "Start Parameter", &mut options.start);
-    changed |= cad_ui::expression(ui, "End Parameter", &mut options.end);
-    changed |= ui.checkbox(&mut options.reverse, "Reverse Path").changed();
-    changed |= cad_ui::expression(ui, "Initial Roll", &mut options.roll);
-    changed |= cad_ui::expression(ui, "Total Twist", &mut options.twist);
-    ui.small("Range 0–1 gives each path member an equal share. Twist changes the angle nonlinearly within each path segment.");
-    changed |= thin(ui, &mut options.thin);
-    changed |= scope(ui, doc, current, body, &mut options.scope);
-    ui.small("A fixed profile can follow lines or splines that keep moving across its sketch plane. Follow Tangent supports straight paths and sketch arcs/circles. Circular paths require zero twist and a section clear of the circle's center axis.");
+                    changed |= ui
+                        .selectable_value(
+                            &mut options.orientation,
+                            Orientation::FollowTangent,
+                            "Follow Path Tangent",
+                        )
+                        .changed();
+                });
+            egui::ComboBox::from_label("Section Placement")
+                .selected_text(match options.placement {
+                    Placement::KeepSource => "Use Sketch Position",
+                    Placement::AtPathStart => "Align at Path Start",
+                })
+                .show_ui(ui, |ui| {
+                    changed |= ui
+                        .selectable_value(
+                            &mut options.placement,
+                            Placement::KeepSource,
+                            "Use Sketch Position",
+                        )
+                        .changed();
+                    changed |= ui
+                        .selectable_value(
+                            &mut options.placement,
+                            Placement::AtPathStart,
+                            "Align at Path Start",
+                        )
+                        .changed();
+                });
+            changed |= cad_ui::expression(ui, "Initial Roll", &mut options.roll);
+            changed |= cad_ui::expression(ui, "Total Twist", &mut options.twist);
+        },
+    );
+    options_section(
+        ui,
+        current,
+        "wall",
+        "Thin wall",
+        options.thin.is_some(),
+        |ui| {
+            changed |= thin_fields(ui, &mut options.thin);
+        },
+    );
+    changed |= scope_fields(ui, doc, current, body, &mut options.scope);
     changed
 }

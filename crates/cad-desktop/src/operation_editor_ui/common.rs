@@ -28,6 +28,10 @@ pub(super) fn normalize_source(operation: &Operation, source: &mut Value) {
             ..
         } => {
             op["options"] = json!(options);
+            op["options"]["direction"] = json!(options.direction);
+            if let Some(second) = &options.second_direction {
+                op["options"]["second_direction"]["direction"] = json!(second.direction);
+            }
             op["axis_reference"] = json!(axis_reference);
         }
         Operation::Mirror {
@@ -71,12 +75,40 @@ fn optional(fields: &mut Fields<'_>, path: &str, label: &str, default: Value) ->
     enabled
 }
 
-fn plane(fields: &mut Fields<'_>, label: &str) {
+fn plane(
+    fields: &mut Fields<'_>,
+    label: &str,
+    frame: &cad_core::Plane,
+    reference: Option<&PlaneSource>,
+) {
     let path = "/operation/plane_reference";
     let mut choices = plane_choices(fields.w, fields.owner, &fields.feature.id);
-    choices.insert(0, choice("Explicit plane frame", Value::Null));
+    let origin_plane = [OriginPlane::Top, OriginPlane::Front, OriginPlane::Right]
+        .into_iter()
+        .find(|plane| &plane.plane() == frame);
+    let explicit = origin_plane.map_or("Custom plane".into(), |plane| {
+        format!("{} (fixed)", plane.label())
+    });
+    choices.insert(0, choice(&explicit, Value::Null));
+    if let Some(PlaneSource::Face { reference, .. }) = reference {
+        let value = fields.source.pointer(path).cloned().unwrap_or_default();
+        if !choices.iter().any(|item| item["value"] == value) {
+            let feature = fields
+                .w
+                .session
+                .visible()
+                .parts
+                .get(&reference.producer.definition)
+                .and_then(|p| p.features.iter().find(|f| f.id == reference.producer.node));
+            choices.push(choice(
+                feature.map_or("Model face".into(), |f| format!("{} face", f.name)),
+                value,
+            ));
+        }
+    }
     fields.choice(path, label, choices);
-    if fields.source.pointer(path).is_none_or(Value::is_null) {
+    if reference.is_none() {
+        fields.folding_group("plane-frame", "Plane coordinates", false);
         for (key, label, unit) in [
             ("origin", "Origin", "mm"),
             ("u", "U direction", ""),
@@ -84,6 +116,97 @@ fn plane(fields: &mut Fields<'_>, label: &str) {
         ] {
             fields.coordinates(&format!("/operation/plane/{key}"), label, unit);
         }
+    }
+}
+
+fn pattern_direction(
+    fields: &mut Fields<'_>,
+    path: &str,
+    step: &str,
+    slot: usize,
+    direction: Option<&cad_core::body_editing::PatternDirection>,
+) {
+    use crate::component_pattern_ui as pattern;
+    use cad_core::body_editing::PatternDirection;
+    let doc = fields.w.session.visible();
+    let mut choices = vec![choice("XYZ vector", Value::Null)];
+    for (name, axis) in pattern::axis_choices(doc, fields.owner, Some(&fields.feature.id)) {
+        choices.push(choice(
+            name,
+            PatternDirection {
+                axis,
+                occurrence: None,
+                ..direction.cloned().unwrap_or_default()
+            },
+        ));
+    }
+    let picked =
+        fields.w.selected.as_ref().and_then(|selection| {
+            pattern::picked_part_direction(fields.w, selection, direction).ok()
+        });
+    for (candidate, from_selection) in [(direction, false), (picked.as_ref(), true)] {
+        let Some(candidate) = candidate else { continue };
+        let value = json!(candidate);
+        if choices.iter().any(|item| item["value"] == value) {
+            continue;
+        }
+        let axis = pattern::axis_name(doc, &candidate.axis);
+        let name = candidate.occurrence.as_ref().map_or_else(
+            || axis.clone(),
+            |occurrence| format!("{} / {axis}", pattern::path_name(doc, &occurrence.path)),
+        );
+        choices.push(choice(
+            if from_selection {
+                format!("Use {name}")
+            } else {
+                name
+            },
+            value,
+        ));
+    }
+    fields.choice(path, "Direction", choices);
+    let picking = fields
+        .w
+        .fields
+        .get("part-pattern-pick-direction")
+        .is_some_and(|active| active == &format!("Direction {}", slot + 1));
+    let command = if picking {
+        "pattern.direction-cancel"
+    } else {
+        "pattern.direction-pick"
+    };
+    let label = if picking {
+        "Cancel direction pick"
+    } else {
+        "Pick direction on model"
+    };
+    let mut data = fields.metadata();
+    data["pattern"] = json!(fields.feature.id);
+    data["slot"] = json!(slot);
+    data["component"] = json!(false);
+    data["classes"] = json!(["modeling-action", "direction-pick", fields.group]);
+    fields.out.push(SemanticElement {
+        id: fields.identity(&format!("action/pick-direction-{slot}")),
+        role: "pattern-direction-action".into(),
+        label: label.into(),
+        value: Some("Select a straight edge, sketch line or axis.".into()),
+        state: if !fields.enabled() {
+            "disabled"
+        } else if picking {
+            "selected"
+        } else {
+            "available"
+        }
+        .into(),
+        commands: vec![command.into()],
+        relationships: vec![fields.feature.id.clone(), fields.owner.into()],
+        data,
+    });
+    if direction.is_some() {
+        fields.quantity(&format!("{path}/spacing"), "Spacing", "mm");
+        fields.toggle(&format!("{path}/reverse"), "Reverse direction");
+    } else {
+        fields.coordinates(step, "Spacing", "mm");
     }
 }
 
@@ -102,43 +225,26 @@ fn picked_face(fields: &Fields<'_>, body: &NodeRef) -> Option<Value> {
 
 pub(super) fn fields(fields: &mut Fields<'_>) {
     let operation = fields.feature.operation.clone();
-    match &operation {
-        Operation::Boolean { .. } => {
-            fields.group("sources", "Input bodies");
-            fields.reference("/operation/left", "Main body", "solid", false);
-            fields.reference("/operation/right", "Tool body", "solid", false);
-        }
-        _ => {
-            let choices = node_choices(fields.w, fields.owner, &fields.feature.id, "solid");
-            let name = choices
-                .iter()
-                .find(|candidate| {
-                    Some(&candidate["value"]) == fields.source.pointer("/operation/body")
-                })
-                .and_then(|candidate| candidate["label"].as_str());
-            let heading = name.map_or_else(
-                || "Input body".to_owned(),
-                |name| format!("Input body · {name}"),
-            );
-            fields.folding_group("sources", &heading, name.is_none());
-            fields.choice("/operation/body", "Input body", choices);
+    let mut body_choices = None;
+    if !matches!(operation, Operation::Boolean { .. }) {
+        let choices = node_choices(fields.w, fields.owner, &fields.feature.id, "solid");
+        if let Some(name) = choices
+            .iter()
+            .find(|candidate| Some(&candidate["value"]) == fields.source.pointer("/operation/body"))
+            .and_then(|candidate| candidate["label"].as_str())
+        {
+            body_choices = Some((format!("Input body · {name}"), choices));
+        } else {
+            fields.folding_group("sources", "Select input body", true);
+            fields.choice("/operation/body", "Body", choices);
         }
     }
     match &operation {
-        Operation::Fillet { .. } | Operation::Chamfer { .. } => {
-            fields.group("extent", "Edge treatment");
+        Operation::Fillet { edges, .. } | Operation::Chamfer { edges, .. } => {
+            fields.group("extent", "Dimensions");
             if let Operation::Fillet { .. } = operation {
                 fields.quantity("/operation/radius", "Radius", "mm");
             } else if let Operation::Chamfer { body, options, .. } = &operation {
-                fields.choice(
-                    "/operation/options/method",
-                    "Method",
-                    enum_choices(&[
-                        ("equal_distance", "Equal distance"),
-                        ("two_distances", "Two distances"),
-                        ("distance_angle", "Distance and angle"),
-                    ]),
-                );
                 fields.quantity(
                     "/operation/distance",
                     if options.method == cad_core::edge_features::ChamferMethod::EqualDistance {
@@ -157,6 +263,21 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                         fields.quantity("/operation/options/angle", "Angle", "deg")
                     }
                 }
+                let method_name = match options.method {
+                    cad_core::edge_features::ChamferMethod::EqualDistance => "Equal distance",
+                    cad_core::edge_features::ChamferMethod::TwoDistances => "Two distances",
+                    cad_core::edge_features::ChamferMethod::DistanceAngle => "Distance and angle",
+                };
+                fields.folding_group("chamfer-method", &format!("Method · {method_name}"), false);
+                fields.choice(
+                    "/operation/options/method",
+                    "Method",
+                    enum_choices(&[
+                        ("equal_distance", "Equal distance"),
+                        ("two_distances", "Two distances"),
+                        ("distance_angle", "Distance and angle"),
+                    ]),
+                );
                 if options.method != cad_core::edge_features::ChamferMethod::EqualDistance {
                     fields.toggle("/operation/options/flip", "Swap chamfer sides");
                     let mut choices = vec![choice("Automatic", Value::Null)];
@@ -178,11 +299,19 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                             )
                         )
                     });
-            let count = selection
+            let missing = selection
                 .iter()
-                .filter(|element| element.role == "edge-selection-item")
+                .filter(|e| e.role == "edge-selection-item" && e.state == "unresolved")
                 .count();
-            fields.group("selection", &format!("Edges ({count})"));
+            let label = if missing > 0 {
+                format!("Edges ({}) · {missing} unavailable", edges.len())
+            } else {
+                format!("Edges ({})", edges.len())
+            };
+            fields.folding_group("selection", &label, edges.is_empty() || missing > 0);
+            if edges.is_empty() {
+                fields.summary("pick-edges", "Select edges on the model.", "ready");
+            }
             let group_id = fields.identity("group/selection");
             fields.out.extend(selection.into_iter().map(|mut element| {
                 // The group already reports the count. Direct bindings still
@@ -196,7 +325,11 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                 }
                 element
             }));
-            fields.folding_group("edge-picking", "Edge chains and picking", false);
+            let mode = picking
+                .iter()
+                .find(|e| e.data["selected"] == true)
+                .map_or("Tangent chain", |e| e.label.as_str());
+            fields.folding_group("edge-picking", &format!("Pick mode · {mode}"), false);
             fields.out.extend(picking);
         }
         Operation::Shell {
@@ -208,20 +341,25 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
             fields.group("extent", "Wall thickness");
             fields.quantity("/operation/thickness", "Thickness", "mm");
             fields.toggle("/operation/options/outward", "Shell outward");
-            fields.group("selection", "Opening faces");
-            fields.topology_array("/operation/removed_faces", body, "face");
+            let openings = if removed_faces.is_empty() {
+                "Openings · Enclosed".into()
+            } else {
+                format!("Opening faces ({})", removed_faces.len())
+            };
+            fields.folding_group("selection", &openings, false);
             if removed_faces.is_empty() {
-                fields.summary(
-                    "closed-shell",
-                    "Pick a face for an opening, or leave this empty for a closed shell.",
-                    "ready",
-                );
+                fields.summary("closed-shell", "Pick a face to open the shell.", "ready");
             }
-            fields.folding_group(
-                "face-thickness",
-                "Face thickness overrides",
-                !options.face_thicknesses.is_empty(),
-            );
+            fields.topology_array("/operation/removed_faces", body, "face");
+            let overrides = if options.face_thicknesses.is_empty() {
+                "Individual wall thicknesses".into()
+            } else {
+                format!(
+                    "Individual wall thicknesses ({})",
+                    options.face_thicknesses.len()
+                )
+            };
+            fields.folding_group("face-thickness", &overrides, false);
             for (index, wall) in options.face_thicknesses.iter().enumerate() {
                 let key = format!("face-thickness/{}", item_identity(&json!(wall.face), index));
                 fields.quantity(
@@ -243,13 +381,25 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
             });
             fields.action("face-thickness/add","Set selected face thickness",json!({"kind":"append","pointer":"/operation/options/face_thicknesses","value":{"face":face,"thickness":thickness}}),face.is_some(),"Pick a face on the input body without a thickness override");
         }
-        Operation::Draft { body, .. } => {
-            fields.group("selection", "Faces to draft");
-            fields.topology_array("/operation/faces", body, "face");
+        Operation::Draft {
+            body,
+            plane: frame,
+            plane_reference,
+            faces,
+            ..
+        } => {
             fields.group("extent", "Draft");
             fields.quantity("/operation/angle", "Angle", "deg");
-            fields.group("placement", "Neutral plane");
-            plane(fields, "Neutral plane");
+            plane(fields, "Neutral plane", frame, plane_reference.as_ref());
+            fields.folding_group(
+                "selection",
+                &format!("Faces to draft ({})", faces.len()),
+                faces.is_empty(),
+            );
+            if faces.is_empty() {
+                fields.summary("pick-faces", "Select faces on the model.", "ready");
+            }
+            fields.topology_array("/operation/faces", body, "face");
         }
         Operation::Transform { .. } => {
             fields.group("placement", "Move / rotate body");
@@ -264,16 +414,14 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
             } else {
                 fields.coordinates("/operation/options/factors", "Factor", "");
             }
+            fields.folding_group("placement", "Center and copy", false);
             fields.toggle("/operation/options/keep_original", "Copy body");
-            fields.group("placement", "Scale center");
             fields.point("/operation/options/center", "Center");
-            fields.note(
-                "scale-axes",
-                "Nonuniform factors use document X, Y and Z axes.",
-                "ready",
-            );
         }
         Operation::Boolean { .. } => {
+            fields.group("sources", "Input bodies");
+            fields.reference("/operation/left", "Main body", "solid", false);
+            fields.reference("/operation/right", "Tool body", "solid", false);
             fields.group("result", "Combine result");
             fields.choice(
                 "/operation/mode",
@@ -285,15 +433,50 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                 ]),
             );
         }
-        Operation::Mirror { .. } => {
-            fields.group("placement", "Mirror plane");
-            plane(fields, "Mirror plane");
+        Operation::Mirror {
+            plane: frame,
+            plane_reference,
+            ..
+        } => {
+            fields.folding_group("placement", "Mirror", true);
             fields.toggle("/operation/keep_original", "Keep original body");
+            plane(fields, "Mirror plane", frame, plane_reference.as_ref());
         }
-        Operation::Pattern { count, options, .. } => {
-            fields.group("extent", "Pattern direction 1");
+        Operation::Pattern {
+            count,
+            options,
+            step,
+            angle,
+            ..
+        } => {
+            let value = |expression: &cad_core::Expr, dimension| {
+                cad_core::expression::value(
+                    fields.w.session.visible(),
+                    fields.owner,
+                    expression,
+                    dimension,
+                )
+                .ok()
+            };
+            let has_angle = value(angle, cad_core::Dimension::Angle) != Some(0.);
+            let circular = has_angle
+                && options.direction.is_none()
+                && step
+                    .iter()
+                    .all(|axis| value(axis, cad_core::Dimension::Length) == Some(0.));
+            fields.group("extent", "Pattern");
             fields.quantity("/operation/count", "Instances", "");
-            fields.coordinates("/operation/step", "Spacing", "mm");
+            if circular {
+                fields.folding_group("translation", "Linear spacing", false);
+            }
+            pattern_direction(
+                fields,
+                "/operation/options/direction",
+                "/operation/step",
+                0,
+                options.direction.as_ref(),
+            );
+            fields.folding_group("rotation", "Rotation", has_angle);
             fields.toggle(
                 "/operation/options/angle_is_total",
                 "Equal spacing over total angle",
@@ -336,10 +519,15 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                     "Direction 2 instances",
                     "",
                 );
-                fields.coordinates(
+                pattern_direction(
+                    fields,
+                    "/operation/options/second_direction/direction",
                     "/operation/options/second_direction/step",
-                    "Direction 2 spacing",
-                    "mm",
+                    1,
+                    options
+                        .second_direction
+                        .as_ref()
+                        .and_then(|d| d.direction.as_ref()),
                 );
             }
             fields.folding_group("skipped", "Instances to skip", !options.skipped.is_empty());
@@ -461,5 +649,9 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
             );
         }
         _ => {}
+    }
+    if let Some((label, choices)) = body_choices {
+        fields.folding_group("sources", &label, false);
+        fields.choice("/operation/body", "Body", choices);
     }
 }

@@ -3918,8 +3918,15 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         }
         ui.separator();
     }
+    let scroll_id = egui::Id::new((
+        "workspace-editor",
+        &w.session.visible().id,
+        &dialog,
+        w.fields.get("feature-editor-generation"),
+        w.sketch.as_ref().map(|s| &s.sketch_id),
+    ));
     egui::ScrollArea::vertical()
-        .id_salt("workspace-editor")
+        .id_salt(scroll_id)
         .show(ui, |ui| {
             match dialog.as_str() {
                 "reference-repair" => crate::reference_repair_ui::show(ui, w),

@@ -71,15 +71,11 @@ pub(crate) fn current_joint_previews(w: &Workspace) -> Vec<&JointPreview> {
 
 pub(crate) fn joint_help(definition: &Definition) -> &'static str {
     if !matches!(definition.seam, SeamSource::ModelEdge { .. }) && definition.supports.is_empty() {
-        return "This authored seam has no support faces. Direction and roll place a separate native bead in the owner's frame; add support faces to validate its joint contacts.";
+        return "Pick support faces to locate the bead, or set its orientation.";
     }
     match definition.profile {
-        Profile::Fillet => {
-            "Fillet beads need two joint faces with room for both toes. Choose an inside joint seam; a free outer plate edge usually places a toe outside its face. Select two support faces to make the joint explicit."
-        }
-        Profile::Butt => {
-            "Butt beads span one planar face, or two same-facing coplanar faces meeting at a butt/miter seam. Pick both joint faces for a tube corner. The complete root footprint must remain on the selected stock; a free outer edge or a gap is not a supported joint."
-        }
+        Profile::Fillet => "Use two faces that meet along the inside of the joint.",
+        Profile::Butt => "Choose one planar face or two coplanar faces that meet at the seam.",
     }
 }
 
@@ -163,31 +159,31 @@ pub(crate) fn pick_actions(w: &Workspace) -> Vec<SemanticElement> {
         .find(|preview| preview.owner == owner);
     let mut out = vec![];
     for (mode, label, enabled) in [
-        ("seam", "Pick seam on model", true),
+        ("seam", "Pick seam", true),
         ("support-0", "Pick support face 1", true),
         (
             "support-1",
             "Pick support face 2",
             !definition.supports.is_empty() || preview.is_some_and(|p| !p.supports.is_empty()),
         ),
-        ("stop", "Stop joint picking", selected.is_some()),
+        ("stop", "Stop picking", selected.is_some()),
         (
             "keep",
-            "Keep evaluated supports",
+            "Use detected faces",
             definition.supports.is_empty()
                 && preview.is_some_and(|p| p.complete && !p.supports.is_empty()),
         ),
         (
             "butt",
-            "Use butt / miter bead",
+            "Use butt bead",
             definition.profile == Profile::Fillet && preview.is_some_and(|p| !p.complete),
         ),
         (
             "trim",
             if definition.profile == Profile::Fillet {
-                "Trim ends by current leg size"
+                "Trim ends by leg size"
             } else {
-                "Trim ends by current half width"
+                "Trim ends by half width"
             },
             preview.is_some_and(|preview| {
                 preview
@@ -203,6 +199,12 @@ pub(crate) fn pick_actions(w: &Workspace) -> Vec<SemanticElement> {
                 || mode == "trim"
                 || mode == "keep"
                 || viewport::selection_evaluation(w).is_some());
+        let label = match (selected == Some(mode), mode) {
+            (true, "seam") => "Click a seam",
+            (true, "support-0") => "Click support face 1",
+            (true, "support-1") => "Click support face 2",
+            _ => label,
+        };
         let id = format!("{prefix}:{}/action/joint-{mode}", owner.node);
         let data = json!({"contract":"tcad.presentation.weld-joint-picker","version":1,"element":id,"document":w.session.visible().id,"owner":owner,"editor":generation,"source":definition,"mode":mode,"group":if part {"sources"} else {"seam"},"classes":["modeling-action","weld-joint-picker"],"shared_draft":true,"requires_current_validation":true});
         let mut data = data;
@@ -255,6 +257,35 @@ pub(crate) fn pick_actions(w: &Workspace) -> Vec<SemanticElement> {
         }
     }
     out
+}
+
+/// Keep active picking and contact problems alongside the seam. Face setup
+/// and successful contact details stay available in the support disclosure.
+pub(crate) fn joint_controls(
+    w: &Workspace,
+    owner: &str,
+    node: &str,
+    primary_group: &str,
+) -> (Vec<SemanticElement>, Vec<SemanticElement>) {
+    let mut primary = Vec::new();
+    let mut supports = Vec::new();
+    for mut element in feedback(w, owner, node).into_iter().chain(pick_actions(w)) {
+        let mode = element.data["mode"].as_str();
+        if matches!(mode, Some("stop" | "butt" | "trim")) && element.state == "disabled" {
+            continue;
+        }
+        let important = matches!(mode, Some("seam" | "stop" | "butt" | "trim"))
+            || matches!(element.state.as_str(), "invalid" | "selected")
+            || element.data["diagnostic"].get("complete").is_some();
+        let group = if important { primary_group } else { "supports" };
+        element.data["group"] = json!(group);
+        if important {
+            primary.push(element);
+        } else {
+            supports.push(element);
+        }
+    }
+    (primary, supports)
 }
 
 pub(crate) fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>) -> bool {
@@ -552,9 +583,9 @@ pub(crate) fn feedback(w: &Workspace, owner: &str, node: &str) -> Vec<SemanticEl
         "status",
         preview.message.clone().unwrap_or_else(|| {
             if preview.complete {
-                "Native bead and all support contacts validated".into()
+                "Joint verified".into()
             } else {
-                "Joint contact checks incomplete; bead is not accepted".into()
+                "Check contact at the seam".into()
             }
         }),
         if preview.complete { "ready" } else { "invalid" },
@@ -621,7 +652,13 @@ pub(crate) fn feedback(w: &Workspace, owner: &str, node: &str) -> Vec<SemanticEl
         .iter()
         .any(|guide| guide.valid == Some(false))
     {
-        push("remedy", "For an outside toe, choose the inside joint or replace the support. Reduce leg size for a narrow face; increase start/end trim only when the toe crosses an end boundary. Direction and roll do not change face-supported joints.".into(), "invalid", json!({"supports":preview.supports,"guides":preview.guides}));
+        push(
+            "remedy",
+            "Choose the inside face, reduce bead size, or trim the end that extends off the face."
+                .into(),
+            "invalid",
+            json!({"supports":preview.supports,"guides":preview.guides}),
+        );
     }
     out
 }

@@ -43,7 +43,7 @@ fn plane_label(doc: &Document, source: &PlaneSource) -> String {
         PlaneSource::Face { .. } => "Selected planar face".into(),
     }
 }
-fn axis_label(doc: &Document, source: &AxisSource) -> String {
+pub(crate) fn axis_label(doc: &Document, source: &AxisSource) -> String {
     match source {
         AxisSource::Origin { axis } => axis.label().into(),
         AxisSource::Datum { feature } => name(doc, feature),
@@ -1916,9 +1916,7 @@ pub fn optional_axis(
     source: &mut Option<AxisSource>,
 ) -> bool {
     let mut enabled = source.is_some();
-    let mut changed = ui
-        .checkbox(&mut enabled, "Use associative reference axis / sketch line")
-        .changed();
+    let mut changed = ui.checkbox(&mut enabled, "Use a reference axis").changed();
     if changed {
         *source = enabled.then(default_axis);
     }
@@ -1985,7 +1983,7 @@ pub fn axis_fields(
     reference: &mut Option<AxisSource>,
 ) -> bool {
     let mut changed = optional_axis(ui, w, doc, current, "Reference Axis", reference);
-    ui.add_enabled_ui(reference.is_none(), |ui| {
+    if reference.is_none() {
         ui.horizontal(|ui| {
             for (label, value) in [
                 ("X", [1., 0., 0.]),
@@ -2008,7 +2006,7 @@ pub fn axis_fields(
                 }
             });
         }
-    });
+    }
     changed
 }
 pub fn plane_fields(

@@ -731,10 +731,23 @@ pub fn sheet_controls(w: &Workspace) -> Vec<SemanticElement> {
     elements.push(SemanticElement {id:format!("fabrication-source:{}/chosen",owner.node),role:"fabrication-source-choice".into(),label:"Bend source".into(),value:Some(label),
         state:"draft".into(),commands:vec![],relationships:vec![owner.node.clone(),body.node.clone()],data:json!({"contract":"tcad.fabrication-source","version":CONTRACT_VERSION,"group":"attachment", "body":body,"member":member,"attachment":attachment,
             "selection_identity":"authored-member-and-source-feature","geometry_inference":false,"preview_kind":"source-reference"})});
-    elements.push(SemanticElement {id:format!("fabrication-source:{}/help",owner.node),role:"fabrication-source-help".into(),label:
-        if selected.as_deref()==Some("base-edge") {"Pick an unused base perimeter edge. The source guide shows the complete authored attachment extent."}
-        else if selected.as_deref()==Some("terminal-edge") {"Pick a free full-width terminal edge. Thickness edges are excluded; Attach bend to also names each available source feature."}
-        else {"Base edges and flange terminals are separate selection intents. Guides show input sources, independently of added/removed material previews."}.into(),value:None,state:"ready".into(),commands:vec![],relationships:vec![owner.node],data:json!({"group":"attachment"})});
+    let prompt = match selected.as_deref() {
+        Some("base-edge") => Some("Pick an unused edge of the base sheet."),
+        Some("terminal-edge") => Some("Pick a free end edge on a flange."),
+        _ => None,
+    };
+    if let Some(prompt) = prompt {
+        elements.push(SemanticElement {
+            id: format!("fabrication-source:{}/help", owner.node),
+            role: "fabrication-source-help".into(),
+            label: prompt.into(),
+            value: None,
+            state: "pending".into(),
+            commands: vec![],
+            relationships: vec![owner.node],
+            data: json!({"group":"attachment"}),
+        });
+    }
     elements
 }
 pub(crate) fn source_name(w: &Workspace, source: &NodeRef) -> Option<String> {

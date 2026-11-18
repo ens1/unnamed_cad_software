@@ -587,7 +587,7 @@ fn plane_choices(w: &Workspace, owner: &str, current: &str) -> Vec<Value> {
     if let Some(s) = w.selected.as_ref().filter(|s| {
         s.definition == owner && crate::reference_ui::selected_body(w, s).node != current
     }) {
-        if s.reference.topology == "face" {
+        if s.reference.topology == "face" && crate::reference_ui::selected_face_planar(w, s) {
             choices.push(choice(
                 "Selected planar face",
                 PlaneSource::Face {
@@ -851,8 +851,8 @@ fn surface_fields(fields: &mut Fields<'_>, operation: &cad_core::surface::Surfac
                 .collect::<Vec<_>>();
             fields.choice(&format!("{P}/faces/0"), "First face", choices.clone());
             fields.choice(&format!("{P}/faces/1"), "Second face", choices);
-            fields.group("correspondence", "Correspondence");
             fields.quantity(&format!("{P}/fraction"), "Position between faces (0–1)", "");
+            fields.folding_group("correspondence", "Surface orientation", false);
             fields.toggle(&format!("{P}/correspondence/swap_uv"), "Swap U and V");
             fields.toggle(&format!("{P}/correspondence/reverse_u"), "Reverse U");
             fields.toggle(&format!("{P}/correspondence/reverse_v"), "Reverse V");
@@ -873,15 +873,15 @@ fn surface_fields(fields: &mut Fields<'_>, operation: &cad_core::surface::Surfac
             fields.reference(&format!("{P}/profile"), "Section sketch", "profile", false);
             fields.group("axis", "Axis and angle");
             fields.axis(&format!("{P}/axis_reference"), "Rotation axis", true);
+            fields.quantity(&format!("{P}/angle"), "Angle", "deg");
             if axis_reference.is_none() {
+                fields.folding_group("axis-coordinates", "Axis coordinates", false);
                 fields.coordinates(&format!("{P}/origin"), "Axis origin", "mm");
                 fields.coordinates(&format!("{P}/axis"), "Axis direction", "");
             }
-            fields.quantity(&format!("{P}/angle"), "Angle", "deg");
         }
         S::Loft { .. } => {
             fields.node_array(&format!("{P}/profiles"), "Section", "profile");
-            fields.note("order","Sections connect in this order. Move a section up or down to change correspondence.","ready");
         }
         S::Sweep {
             path, path_sketch, ..
@@ -892,7 +892,11 @@ fn surface_fields(fields: &mut Fields<'_>, operation: &cad_core::surface::Surfac
             choices.insert(0, choice("Explicit path points", Value::Null));
             fields.choice(&format!("{P}/path_sketch"), "Path sketch", choices);
             if path_sketch.is_none() {
-                fields.group("path", "Path points");
+                fields.folding_group(
+                    "path",
+                    &format!("Path points ({})", path.len()),
+                    path.len() < 2,
+                );
                 for (index, _) in path.iter().enumerate() {
                     fields.coordinates(
                         &format!("{P}/path/{index}"),
@@ -1038,12 +1042,6 @@ fn sheet_attachment_fields(fields: &mut Fields<'_>, body: &NodeRef, attachment: 
                 .map(|(value, label)| choice(label, value))
                 .collect();
             fields.choice(&format!("{P}/member"), "Base sketch edge", choices);
-        } else {
-            fields.note(
-                "terminal-association",
-                "Full-width terminal edge; the source base member follows the selected attachment.",
-                "ready",
-            );
         }
         fields
             .out
@@ -1059,31 +1057,32 @@ fn sheet_fields(fields: &mut Fields<'_>, operation: &cad_core::sheet_metal::Shee
             fields.reference(&format!("{P}/profile"), "Base sketch", "profile", false);
             fields.group("stock", "Sheet stock");
             fields.quantity(&format!("{P}/thickness"), "Thickness", "mm");
-            fields.quantity(&format!("{P}/inside_radius"), "Default inside radius", "mm");
-            fields.quantity(&format!("{P}/k_factor"), "K factor (0–1)", "");
             thickness_side(fields, &format!("{P}/side"));
+            fields.folding_group("bend-defaults", "Bend defaults", false);
+            fields.quantity(&format!("{P}/inside_radius"), "Inside radius", "mm");
+            fields.quantity(&format!("{P}/k_factor"), "K factor (0–1)", "");
         }
         S::Tab { .. } | S::NormalCut { .. } => {
             fields.reference(&format!("{P}/body"), "Sheet stock", "sheet", false);
             fields.reference(
                 &format!("{P}/profile"),
                 if matches!(operation, S::NormalCut { .. }) {
-                    "Parallel cut sketch / stock face"
+                    "Cut sketch (parallel to sheet)"
                 } else {
-                    "Base-plane closed sketch"
+                    "Tab sketch (on base plane)"
                 },
                 "profile",
                 false,
             );
-            fields.note("blank-edit","Tabs are coplanar with the base sketch; normal cuts accept parallel sketches including a stock face. Blank edits propagate to both states and preserve bend attachment sidewalls.","ready");
         }
         S::EdgeFlange {
             body, attachment, ..
         } => {
             sheet_attachment_fields(fields, body, attachment);
             fields.group("bend", "Bend");
-            fields.quantity(&format!("{P}/length"), "Straight tangent length", "mm");
-            fields.quantity(&format!("{P}/angle"), "Signed bend angle (±180°)", "deg");
+            fields.quantity(&format!("{P}/length"), "Length after bend", "mm");
+            fields.quantity(&format!("{P}/angle"), "Bend angle (±180°)", "deg");
+            fields.folding_group("bend-defaults", "Bend overrides", false);
             fields.optional_expression(
                 &format!("{P}/inside_radius"),
                 "inside radius",
@@ -1091,18 +1090,17 @@ fn sheet_fields(fields: &mut Fields<'_>, operation: &cad_core::sheet_metal::Shee
                 "mm",
             );
             fields.optional_expression(&format!("{P}/k_factor"), "K factor", "0.4", "");
-            fields.note("flange-scope","Exact full-width circular bend; tangent length starts after the bend. Chained terminal attachments preserve source ancestry.","ready");
         }
         S::Hem {
             body, attachment, ..
         } => {
             sheet_attachment_fields(fields, body, attachment);
             fields.group("hem", "Open hem");
-            fields.quantity(&format!("{P}/length"), "Return tangent length", "mm");
-            fields.quantity(&format!("{P}/gap"), "Clear hem gap", "mm");
+            fields.quantity(&format!("{P}/length"), "Return length after bend", "mm");
+            fields.quantity(&format!("{P}/gap"), "Hem gap", "mm");
             fields.toggle(&format!("{P}/reverse"), "Reverse bend side");
+            fields.folding_group("bend-defaults", "Bend overrides", false);
             fields.optional_expression(&format!("{P}/k_factor"), "K factor", "0.4", "");
-            fields.note("hem-scope","Open 180° return: radius is half the clear gap. Closed crushed hems require forming support.","ready");
         }
         S::Jog {
             body, attachment, ..
@@ -1110,8 +1108,9 @@ fn sheet_fields(fields: &mut Fields<'_>, operation: &cad_core::sheet_metal::Shee
             sheet_attachment_fields(fields, body, attachment);
             fields.group("jog", "Two-bend jog");
             fields.quantity(&format!("{P}/offset"), "Signed mid-surface offset", "mm");
-            fields.quantity(&format!("{P}/length"), "Terminal tangent length", "mm");
-            fields.quantity(&format!("{P}/angle"), "Bend magnitude (0–90°)", "deg");
+            fields.quantity(&format!("{P}/length"), "Length after second bend", "mm");
+            fields.quantity(&format!("{P}/angle"), "Bend angle (0–90°)", "deg");
+            fields.folding_group("bend-defaults", "Bend overrides", false);
             fields.optional_expression(
                 &format!("{P}/inside_radius"),
                 "inside radius",
@@ -1119,7 +1118,6 @@ fn sheet_fields(fields: &mut Fields<'_>, operation: &cad_core::sheet_metal::Shee
                 "mm",
             );
             fields.optional_expression(&format!("{P}/k_factor"), "K factor", "0.4", "");
-            fields.note("jog-scope","Two equal opposite circular bends. Offset controls bend side and derives straight web length from radius and thickness; flat output carries two bend lines.","ready");
         }
         S::Flatten { .. } => {
             fields.reference(&format!("{P}/body"), "Sheet stock", "sheet", false);
@@ -1309,19 +1307,8 @@ fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::
     use cad_core::weld_beads::{Pattern, Profile};
     const P: &str = "/operation/definition";
     fields.group("sources", "Weld joint");
-    fields.note(
-        "joint-requirements",
-        crate::weld_beads_ui::joint_help(definition),
-        "ready",
-    );
-    fields.out.extend(crate::weld_beads_ui::feedback(
-        fields.w,
-        fields.owner,
-        &fields.feature.id,
-    ));
-    fields
-        .out
-        .extend(crate::weld_beads_ui::pick_actions(fields.w));
+    let (joint_controls, support_controls) =
+        crate::weld_beads_ui::joint_controls(fields.w, fields.owner, &fields.feature.id, "sources");
     let mut seams = crate::weld_beads_ui::seam_choices(fields.w, fields.owner, &fields.feature.id)
         .into_iter()
         .map(|(source, label)| choice(label, source))
@@ -1332,8 +1319,51 @@ fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::
     }) {
         seams.insert(0, choice("Selected joint edge / seam", source));
     }
-    fields.choice(&format!("{P}/seam"), "Seam source", seams);
-    fields.note("seam-intent","A model edge follows its native construction ancestry; a sketch/reference curve is an explicitly authored seam.","ready");
+    fields.choice(&format!("{P}/seam"), "Seam", seams);
+    fields.out.extend(joint_controls);
+    fields.group("profile", "Bead");
+    fields.choice(
+        &format!("{P}/profile"),
+        "Weld profile",
+        enum_choices(&[("fillet", "Fillet bead"), ("butt", "Butt bead")]),
+    );
+    fields.quantity(
+        &format!("{P}/size"),
+        if definition.profile == Profile::Fillet {
+            "Leg size"
+        } else {
+            "Bead width"
+        },
+        "mm",
+    );
+    fields.choice(
+        &format!("{P}/pattern"),
+        "Pattern",
+        vec![
+            choice("Continuous", Pattern::Continuous),
+            choice(
+                "Intermittent",
+                match &definition.pattern {
+                    Pattern::Intermittent { .. } => definition.pattern.clone(),
+                    Pattern::Continuous => Pattern::Intermittent {
+                        length: "20 mm".into(),
+                        gap: "20 mm".into(),
+                    },
+                },
+            ),
+        ],
+    );
+    if matches!(definition.pattern, Pattern::Intermittent { .. }) {
+        fields.quantity(&format!("{P}/pattern/length"), "Stitch length", "mm");
+        fields.quantity(&format!("{P}/pattern/gap"), "Stitch gap", "mm");
+    }
+    fields.folding_group("supports", "Support faces", false);
+    fields.out.extend(support_controls);
+    fields.summary(
+        "joint-requirements",
+        crate::weld_beads_ui::joint_help(definition),
+        "ready",
+    );
     let supports =
         crate::weld_beads_ui::support_choices(fields.w, fields.owner, &fields.feature.id)
             .into_iter()
@@ -1369,45 +1399,13 @@ fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::
     );
     fields.action(
         "infer-supports",
-        "Infer contact-proven joint faces",
+        "Use automatic faces",
         json!({"kind":"set","pointer":format!("{P}/supports"),"value":[]}),
         !definition.supports.is_empty(),
         "Adjacent faces are already inferred",
     );
-    fields.group("profile", "Deposited weld metal");
-    fields.choice(
-        &format!("{P}/profile"),
-        "Weld profile",
-        enum_choices(&[("fillet", "Fillet bead"), ("butt", "Butt bead")]),
-    );
-    fields.quantity(
-        &format!("{P}/size"),
-        if definition.profile == Profile::Fillet {
-            "Leg size"
-        } else {
-            "Bead width"
-        },
-        "mm",
-    );
-    fields.quantity(&format!("{P}/reinforcement"), "Crown rise", "mm");
-    fields.choice(
-        &format!("{P}/pattern"),
-        "Deposition",
-        vec![
-            choice("Continuous", Pattern::Continuous),
-            choice(
-                "Intermittent",
-                Pattern::Intermittent {
-                    length: "20 mm".into(),
-                    gap: "20 mm".into(),
-                },
-            ),
-        ],
-    );
-    if matches!(definition.pattern, Pattern::Intermittent { .. }) {
-        fields.quantity(&format!("{P}/pattern/length"), "Stitch length", "mm");
-        fields.quantity(&format!("{P}/pattern/gap"), "Clear gap", "mm");
-    }
+    fields.folding_group("bead-details", "Bead details", false);
+    fields.quantity(&format!("{P}/reinforcement"), "Crown height", "mm");
     fields.quantity(&format!("{P}/start_offset"), "Start offset", "mm");
     fields.quantity(&format!("{P}/end_offset"), "End offset", "mm");
     if !matches!(
@@ -1415,25 +1413,22 @@ fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::
         cad_core::weld_beads::SeamSource::ModelEdge { .. }
     ) && definition.supports.is_empty()
     {
-        fields.group("placement", "Authored seam orientation");
+        fields.group("placement", "Seam orientation");
         fields.coordinates(&format!("{P}/direction"), "Section direction", "");
         fields.quantity(&format!("{P}/roll"), "Section roll", "deg");
-    } else {
-        fields.note("joint-orientation", "The native joint faces determine bead orientation. Direction and roll apply only to an authored seam without support faces.", "ready");
-        if definition
-            .values(fields.w.session.visible(), fields.owner)
-            .is_ok_and(|values| values.roll_rad.abs() > 1e-10)
-        {
-            fields.action(
-                "reset-joint-roll",
-                "Use joint orientation",
-                json!({"kind":"set","pointer":format!("{P}/roll"),"value":"0 deg"}),
-                true,
-                "",
-            );
-        }
+    } else if definition
+        .values(fields.w.session.visible(), fields.owner)
+        .is_ok_and(|values| values.roll_rad.abs() > 1e-10)
+    {
+        fields.action(
+            "reset-joint-roll",
+            "Use joint orientation",
+            json!({"kind":"set","pointer":format!("{P}/roll"),"value":"0 deg"}),
+            true,
+            "",
+        );
     }
-    fields.group("appearance", "Finish and engineering material");
+    fields.group("appearance", "Finish and material");
     let doc = fields.w.session.visible();
     let mut finishes = vec![choice("Inherit part finish", Value::Null)];
     finishes.extend(
@@ -1447,10 +1442,9 @@ fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::
             .values()
             .map(|material| choice(&material.name, &material.id)),
     );
-    fields.choice(&format!("{P}/finish"), "Optical finish", finishes);
-    fields.choice(&format!("{P}/material"), "Engineering material", materials);
-    fields.toggle(&format!("{P}/suppressed"), "Suppress deposited bead");
-    fields.note("native-solid","The bead is a separate native solid. Size, crown, stitches and offsets rebuild before Apply. Joint support trims are validated.","ready");
+    fields.choice(&format!("{P}/finish"), "Finish", finishes);
+    fields.choice(&format!("{P}/material"), "Material", materials);
+    fields.toggle(&format!("{P}/suppressed"), "Suppress bead");
 }
 fn member_selection(fields: &mut Fields<'_>, path: &str, choices: Vec<Value>, all: bool) {
     let entries = fields
@@ -1507,11 +1501,21 @@ fn mold_fields(fields: &mut Fields<'_>, operation: &cad_core::mold::MoldOperatio
                 fields.summary(
                     "assessment",
                     if report.complete {
-                        "Every face has an exact draft classification"
+                        "All faces assessed"
                     } else {
-                        "Partial assessment: curved faces remain unassessed"
+                        "Some curved faces could not be assessed"
                     },
                     if report.complete { "ready" } else { "warning" },
+                );
+                fields.summary(
+                    "parting-count",
+                    &format!("{} planar parting edges", report.parting_edges.len()),
+                    "ready",
+                );
+                fields.folding_group(
+                    "face-results",
+                    &format!("Face angles ({})", report.faces.len()),
+                    false,
                 );
                 for (index, face) in report.faces.iter().enumerate() {
                     let label = face
@@ -1525,25 +1529,15 @@ fn mold_fields(fields: &mut Fields<'_>, operation: &cad_core::mold::MoldOperatio
                             )
                         })
                         .unwrap_or_else(|| format!("Face {} · {:?}", index + 1, face.class));
-                    fields.note(
+                    fields.summary(
                         &format!("face/{}", item_identity(&json!(face.face), index)),
                         &label,
                         "ready",
                     );
                 }
-                fields.summary(
-                    "parting-count",
-                    &format!("{} exact planar parting edges", report.parting_edges.len()),
-                    "ready",
-                );
             } else {
-                fields.summary(
-                    "assessment",
-                    "Waiting for current source and pull-direction evaluation",
-                    "pending",
-                );
+                fields.summary("assessment", "Calculating face angles…", "pending");
             }
-            fields.note("release","Draft angles assess local normals; global undercut visibility and release checks remain separate.","ready");
         }
         M::PartingSurface { body, .. } => {
             fields.group("pull", "Pull direction");
@@ -1622,6 +1616,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         "checkpoint_draft_evaluation":w.tool_checkpoint.as_ref().and_then(|s|s.draft.as_ref()).and_then(|d|d.preview_evaluation()).map(|e|&e.identity),
         "settings":w.settings.is_some(),"original":w.view.original,"history":w.view.history_cursor,
         "context_selection":w.context_selection,"edge_occurrence":w.edge_selection_path,
+        "pattern_pick":w.fields.get("part-pattern-pick-direction"),
         "selected":w.selected.as_ref().map(|s|json!([s.path,s.body,s.reference,s.point])),
         "geometry_selection":w.geometry_selection.iter().map(|s|json!([s.path,s.body,s.reference])).collect::<Vec<_>>(),
         "errors":w.fields.iter().filter(|(key,_)|key.starts_with("operation-editor:invalid:") || key.starts_with("feature-source-") || key.starts_with("edge-selection-mode/")).collect::<Vec<_>>() });
@@ -2175,6 +2170,28 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
     true
 }
 
+// Open a group once when a new field needs attention. The user can still
+// collapse it while changing a related value elsewhere.
+pub(crate) fn reveal_invalid_field(
+    ui: &egui::Ui,
+    group_id: &str,
+    invalid_id: Option<&str>,
+) -> Option<bool> {
+    let key = ui.make_persistent_id((group_id, "invalid-field"));
+    ui.data_mut(|data| {
+        if let Some(field) = invalid_id {
+            let id = egui::Id::new(field);
+            if data.get_temp::<egui::Id>(key) != Some(id) {
+                data.insert_temp(key, id);
+                return Some(true);
+            }
+        } else {
+            data.remove::<egui::Id>(key);
+        }
+        None
+    })
+}
+
 /// Render ordinary editor descriptors; source setters and commands remain
 /// registered separately so other editor families share this composition.
 pub(crate) fn render_elements(
@@ -2205,15 +2222,33 @@ pub(crate) fn render_elements(
             .flatten()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
-        let props = controls::properties(&group.id, &group.role, &classes, "draft");
+        let invalid = children.iter().find(|element| {
+            element.data.get("setter").is_some()
+                && element
+                    .state
+                    .split_whitespace()
+                    .any(|s| matches!(s, "error" | "invalid"))
+        });
+        let reveal = reveal_invalid_field(ui, &group.id, invalid.map(|field| field.id.as_str()));
+        let state = if invalid.is_some() {
+            "draft error"
+        } else {
+            "draft"
+        };
+        let label = if invalid.is_some() {
+            format!("{} · Check input", group.label)
+        } else {
+            group.label
+        };
+        let props = controls::properties(&group.id, &group.role, &classes, state);
         controls::inspector_section(
             ui,
             controls::InspectorSection {
                 id: &group.id,
                 role: &group.role,
                 classes: &classes,
-                label: &group.label,
-                state: "draft",
+                label: &label,
+                state,
                 collapse: Some(group.data["default_expanded"].as_bool().unwrap_or_else(|| {
                     !matches!(
                         group.data["group"].as_str(),
@@ -2228,7 +2263,7 @@ pub(crate) fn render_elements(
                         )
                     )
                 })),
-                open: None,
+                open: reveal,
             },
             |ui| {
                 let reference_items = children
@@ -2239,7 +2274,18 @@ pub(crate) fn render_elements(
                     .iter()
                     .filter(|element| reference_selected(element))
                     .count();
-                let query = if reference_items.len() > 2 {
+                let query = if reference_items
+                    .first()
+                    .is_some_and(|e| e.role == "edge-selection-item")
+                {
+                    // Opening Edges already asks for the list. Provide search when
+                    // the list is long enough to need it.
+                    Some(if reference_items.len() > 8 {
+                        crate::workspace_controls::reference_search(ui, w, &group.id, "edges")
+                    } else {
+                        String::new()
+                    })
+                } else if reference_items.len() > 2 {
                     crate::workspace_controls::reference_filter(
                         ui,
                         w,
@@ -2372,11 +2418,9 @@ pub(crate) fn render_elements(
 
 // Instructions may be tucked away. Keep selection labels beside their actions,
 // and keep warnings and preview summaries visible in their own group.
-fn supplementary_help(element: &SemanticElement) -> bool {
-    matches!(
-        element.role.as_str(),
-        "operation-editor-help" | "structural-member-note"
-    ) && element.data["purpose"] != "summary"
+pub(crate) fn supplementary_help(element: &SemanticElement) -> bool {
+    element.role == "operation-editor-help"
+        && element.data["purpose"] != "summary"
         && !matches!(
             element.state.as_str(),
             "warning" | "error" | "invalid" | "pending" | "required"

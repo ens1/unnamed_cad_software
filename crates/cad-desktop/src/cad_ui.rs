@@ -2,7 +2,7 @@
 use crate::{Workspace, presentation_controls as controls, sketch, ui};
 use bevy_egui::egui::{self, RichText};
 use cad_core::{Feature, Operation, Part, presentation::SemanticElement};
-mod profile_features;
+pub(crate) mod profile_features;
 
 fn tool_button(
     ui: &mut egui::Ui,
@@ -2941,8 +2941,23 @@ fn result_fields(
         "intersect" | "intersection" => "Intersect",
         other => other,
     };
+    let only_target = if let [(candidate, name)] = candidates.as_slice()
+        && body.as_ref() == Some(candidate)
+        && !matches!(mode.as_str(), "new" | "")
+    {
+        Some(name.as_str())
+    } else {
+        None
+    };
+    if candidates.is_empty() && matches!(mode.as_str(), "" | "new") {
+        ui.weak("New body");
+        return false;
+    }
     let choice = egui::ComboBox::from_label("Result")
-        .selected_text(selected)
+        .selected_text(only_target.map_or_else(
+            || selected.to_owned(),
+            |name| format!("{selected} · {name}"),
+        ))
         .show_ui(ui, |ui| {
             for (value, label) in [
                 ("new", "New body"),
@@ -2984,7 +2999,7 @@ fn result_fields(
             .or_else(|| (candidates.len() == 1).then(|| &candidates[0]))
             .map(|(reference, _)| reference.clone());
     }
-    if mode != "new" && !mode.is_empty() {
+    if mode != "new" && !mode.is_empty() && only_target.is_none() {
         let label = body
             .as_ref()
             .and_then(|r| candidates.iter().find(|(candidate, _)| candidate == r))
@@ -3049,7 +3064,6 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
         return profile_features::fields(ui, w, w.session.visible(), feature);
     }
     let doc = w.session.visible().clone();
-    let part = w.view.active_part.as_ref().and_then(|id| doc.parts.get(id));
     let name = |reference: &cad_core::NodeRef| {
         doc.parts
             .get(&reference.definition)
@@ -3470,51 +3484,47 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
             mode,
             options,
         } => {
-            ui.strong("Ordered Cross-sections");
-            ui.small("Ordered sketch sections with explicit connectors and endpoint influences.");
+            ui.strong("Sections");
             let mut remove = None;
             let mut move_up = None;
             for (index, reference) in profiles.iter_mut().enumerate() {
                 ui.push_id(index, |ui| {
-                    changed |= profile_selector(
-                        ui,
-                        &doc,
-                        &feature.id,
-                        &format!("Section {}", index + 1),
-                        reference,
-                    );
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        changed |= profile_selector(
+                            ui,
+                            &doc,
+                            &feature.id,
+                            &format!("Section {}", index + 1),
+                            reference,
+                        );
+                        if index > 0 && ui.small_button("Move up").clicked() {
+                            move_up = Some(index);
+                        }
                         if ui.small_button("Remove").clicked() {
                             remove = Some(index);
-                        }
-                        if index > 0 && ui.small_button("Move Up").clicked() {
-                            move_up = Some(index);
                         }
                     });
                 });
             }
             if let Some(index) = remove {
                 profiles.remove(index);
-                changed = true;
-            }
-            if let Some(index) = move_up {
+            } else if let Some(index) = move_up {
                 profiles.swap(index, index - 1);
-                changed = true;
             }
-            if ui.button("Add Section").clicked()
-                && let Some(reference) = doc
-                    .parts
-                    .values()
-                    .flat_map(|p| {
-                        p.features
-                            .iter()
-                            .filter(|f| {
-                                f.id != feature.id
-                                    && matches!(f.operation, Operation::Profile { .. })
-                            })
-                            .map(|f| p.reference(&f.id))
-                    })
+            changed |= remove.is_some() || move_up.is_some();
+            let next = doc.parts.values().find_map(|p| {
+                p.features
+                    .iter()
+                    .take_while(|f| f.id != feature.id)
+                    .filter(|f| !f.suppressed && matches!(f.operation, Operation::Profile { .. }))
+                    .map(|f| p.reference(&f.id))
                     .find(|r| !profiles.contains(r))
+            });
+            if ui
+                .add_enabled(next.is_some(), egui::Button::new("Add section"))
+                .on_disabled_hover_text("Create another sketch to add a section.")
+                .clicked()
+                && let Some(reference) = next
             {
                 profiles.push(reference);
                 changed = true;
@@ -3540,13 +3550,17 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
         } => {
             changed |= profile_selector(ui, &doc, &feature.id, "Section", profile);
             let mut use_sketch = path_sketch.is_some();
-            if ui
-                .checkbox(
-                    &mut use_sketch,
-                    "Use a sketch or reference curve as the path",
-                )
-                .changed()
-            {
+            egui::ComboBox::from_label("Path source")
+                .selected_text(if use_sketch {
+                    "Sketch or curve"
+                } else {
+                    "Station points"
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut use_sketch, true, "Sketch or curve");
+                    ui.selectable_value(&mut use_sketch, false, "Station points");
+                });
+            if use_sketch != path_sketch.is_some() {
                 *path_sketch = if use_sketch {
                     Some(profile.clone())
                 } else {
@@ -3568,48 +3582,48 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
                         .map(|feature| &feature.operation),
                     Some(Operation::ReferenceCurve { .. })
                 ) {
-                    if options.path_member.take().is_some()
-                        || options.path_start_vertex.take().is_some()
-                    {
-                        changed = true;
-                    }
-                    ui.small("Reference curves use their saved direction. The kernel reports unsupported path carriers before Apply.");
-                } else {
-                    ui.small(
-                    "Use one connected open chain or select a native member. A circular member can be a closed tangent-transport path.",
-                );
+                    changed |= options.path_member.take().is_some();
+                    changed |= options.path_start_vertex.take().is_some();
                 }
             } else {
-                ui.strong("Path Stations");
-                let mut remove = None;
-                for (index, point) in path.iter_mut().enumerate() {
-                    ui.push_id(index, |ui| {
-                        ui.label(format!("Station {}", index + 1));
-                        for (label, value) in ["X", "Y", "Z"].into_iter().zip(point) {
-                            changed |= ui
-                                .add(
-                                    egui::DragValue::new(value)
-                                        .speed(0.5)
-                                        .prefix(format!("{label} "))
-                                        .suffix(" mm"),
-                                )
-                                .changed();
+                profile_features::options_section(
+                    ui,
+                    &feature.id,
+                    "stations",
+                    &format!("Station points · {}", path.len()),
+                    path.len() < 2,
+                    |ui| {
+                        let mut remove = None;
+                        for (index, point) in path.iter_mut().enumerate() {
+                            ui.push_id(index, |ui| {
+                                ui.label(format!("Point {}", index + 1));
+                                for (label, value) in ["X", "Y", "Z"].into_iter().zip(point) {
+                                    changed |= ui
+                                        .add(
+                                            egui::DragValue::new(value)
+                                                .speed(0.5)
+                                                .prefix(format!("{label} "))
+                                                .suffix(" mm"),
+                                        )
+                                        .changed();
+                                }
+                                if ui.small_button("Remove").clicked() {
+                                    remove = Some(index);
+                                }
+                            });
                         }
-                        if ui.small_button("Remove").clicked() {
-                            remove = Some(index);
+                        if let Some(index) = remove {
+                            path.remove(index);
+                            changed = true;
                         }
-                    });
-                }
-                if let Some(index) = remove {
-                    path.remove(index);
-                    changed = true;
-                }
-                if ui.button("Add Station").clicked() {
-                    let mut next = *path.last().unwrap_or(&[0.; 3]);
-                    next[2] += 10.;
-                    path.push(next);
-                    changed = true;
-                }
+                        if ui.button("Add Station").clicked() {
+                            let mut next = *path.last().unwrap_or(&[0.; 3]);
+                            next[2] += 10.;
+                            path.push(next);
+                            changed = true;
+                        }
+                    },
+                );
             }
             changed |= result_fields(ui, &doc, &feature.id, body, mode);
             changed |= crate::sections_ui::sweep(
@@ -3646,12 +3660,6 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
         _ => {
             ui.small("Additional settings are available in Advanced Source.");
         }
-    }
-    if let Some(part) = part
-        && !part.parameters.is_empty()
-    {
-        ui.separator();
-        ui.small("You can use named parameters in dimension fields.");
     }
     changed
 }

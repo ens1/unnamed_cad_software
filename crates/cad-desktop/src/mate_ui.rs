@@ -864,7 +864,9 @@ fn reference_editor(
             return;
         };
         let paths = nested(doc, &instance.definition);
-        if let Some(reference) = reference {
+        if let Some(reference) = reference
+            && (paths.len() > 1 || !reference.path.is_empty())
+        {
             let selected = paths.iter().find(|(_, path, _)| path == &reference.path);
             egui::ComboBox::from_id_salt("nested-component")
                 .selected_text(
@@ -1496,7 +1498,12 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
         let old_mate = mate.clone();
         let old_kind = mate.kind.clone();
         egui::ComboBox::from_label("Mate type")
-            .selected_text(&mate.kind)
+            .selected_text(
+                assembly_geometry::MATE_MODES
+                    .iter()
+                    .find(|mode| mode.kind == mate.kind)
+                    .map_or(mate.kind.as_str(), |mode| mode.label),
+            )
             .show_ui(ui, |ui| {
                 let mut group = "";
                 for mode in assembly_geometry::MATE_MODES {
@@ -1543,12 +1550,16 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
             mate.kind.as_str(),
             "distance" | "angle" | "planar" | "coincident"
         ) {
-            ui.label(if mate.kind == "angle" {
-                "Angle / expression"
-            } else {
-                "Gap / distance / expression"
+            ui.label(match mate.kind.as_str() {
+                "angle" => "Angle",
+                "distance" => "Distance",
+                _ => "Offset",
             });
-            changed |= ui.text_edit_singleline(&mut mate.offset.0).changed();
+            let value = ui.text_edit_singleline(&mut mate.offset.0);
+            changed |= value.changed();
+            if mate.kind != "angle" {
+                value.on_hover_text("For planes, a negative value reverses the offset.");
+            }
             if mate.kind != "angle" {
                 for element in preview_semantics(w)
                     .into_iter()
@@ -1563,7 +1574,6 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
                         &element.state,
                     );
                 }
-                ui.small("For planar references, the gap is signed from first to second. Reverse the sign or swap references to place the other side.");
             }
         }
         if !matches!(
@@ -1589,6 +1599,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
                 .checkbox(&mut mate.lock_rotation, "Lock relative rotation")
                 .changed();
             if mate.lock_rotation {
+                ui.label("Rotation offset");
                 changed |= ui
                     .text_edit_singleline(&mut mate.rotation_offset.0)
                     .changed();
@@ -1680,17 +1691,36 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
                 .map(String::as_str),
         ))
     {
-        if let Some(id) = w.fields.get("mate-editor")
-            && let Some(diagnostic) = evaluated.diagnostics.get(id)
-        {
-            ui.small(format!(
-                "{} independent equations · residual {:.3e}",
-                diagnostic.independent_equations, diagnostic.maximum_residual
-            ));
-            if let Some(t) = diagnostic.curve_parameter {
-                ui.small(format!("Solved carrier parameter {:.6}", t));
-            }
-        }
-        egui::CollapsingHeader::new("Solved placements / component motion").show(ui,|ui|{for(id,motion)in &evaluated.component_motion{crate::assembly_tools_ui::show_placement(ui,w,assembly,id);ui.small(format!("{} translational / {} rotational motion directions",motion.translation_directions.len(),motion.rotation_directions.len()));}ui.small("Directions describe local infinitesimal motion; coupled components may share a degree of freedom. Input coordinates are solver seeds; solved placements are the current model positions.");});
+        crate::presentation_controls::collapsing(
+            ui,
+            "mate/solver-details",
+            "inspector-section",
+            "Solver details",
+            false,
+            |ui| {
+                if let Some(diagnostic) = w
+                    .fields
+                    .get("mate-editor")
+                    .and_then(|id| evaluated.diagnostics.get(id))
+                {
+                    ui.small(format!(
+                        "{} independent equations · residual {:.3e}",
+                        diagnostic.independent_equations, diagnostic.maximum_residual
+                    ));
+                    if let Some(t) = diagnostic.curve_parameter {
+                        ui.small(format!("Curve parameter {t:.6}"));
+                    }
+                }
+                for (id, motion) in &evaluated.component_motion {
+                    crate::assembly_tools_ui::show_placement(ui, w, assembly, id);
+                    ui.small(format!(
+                        "{} translation / {} rotation directions",
+                        motion.translation_directions.len(),
+                        motion.rotation_directions.len()
+                    ))
+                    .on_hover_text("Local motion directions can be shared by coupled components.");
+                }
+            },
+        );
     }
 }

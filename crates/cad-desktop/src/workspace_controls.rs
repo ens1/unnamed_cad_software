@@ -380,15 +380,23 @@ pub(crate) fn reference_filter(
     {
         return None;
     }
-    let element = reference_controls(w, group, label).remove(1);
+    Some(reference_search(ui, w, group, label))
+}
+
+pub(crate) fn reference_search(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    group: &str,
+    label: &str,
+) -> String {
+    let mut element = reference_controls(w, group, label).remove(1);
+    element.state = "ready".into();
     crate::ui::semantic_field(ui, w, &element);
-    Some(
-        w.fields
-            .get(&format!("task-panel:query:{group}"))
-            .cloned()
-            .unwrap_or_default()
-            .to_lowercase(),
-    )
+    w.fields
+        .get(&format!("task-panel:query:{group}"))
+        .cloned()
+        .unwrap_or_default()
+        .to_lowercase()
 }
 pub(crate) fn query_value(w: &Workspace, element: &SemanticElement) -> Option<serde_json::Value> {
     Some(
@@ -599,6 +607,9 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 history_open(w),
             ),
         ] {
+            if id == "workspace.task-diagnostics" && value.is_empty() {
+                continue;
+            }
             out.push(SemanticElement { id:id.into(), role:role.into(), label:label.into(), value:Some(value),
                 state:if role == "task-status" { state.clone() } else if open { "open".into() } else { "closed".into() },
                 commands:command.into_iter().map(str::to_owned).collect(), relationships:vec!["workspace.active_operation.parameters".into()],

@@ -497,14 +497,51 @@ pub(crate) fn fields(
     ui: &mut egui::Ui,
     w: &Workspace,
     doc: &Document,
+    feature: &str,
     profiles: &[NodeRef],
     selections: &mut Vec<Selection>,
     thin: bool,
 ) -> bool {
-    let before = selections.clone();
-    let sources = choices(w, doc, profiles, thin);
+    let none_selected = !selections.is_empty()
+        && selections
+            .iter()
+            .all(|selection| selection.outer_members.is_empty());
+    let label = if none_selected {
+        "Contours · Choose contours"
+    } else if !selections.is_empty() {
+        "Contours · Custom selection"
+    } else if thin {
+        "Contours · All"
+    } else {
+        "Contours · All closed"
+    };
+    let mut changed = false;
+    controls::collapsing(
+        ui,
+        &format!("operation-editor:{feature}/group/contours"),
+        "operation-editor-group",
+        label,
+        none_selected,
+        |ui| {
+            let sources = choices(w, doc, profiles, thin);
+            let before = selections.clone();
+            contour_list(ui, doc, profiles, selections, thin, &sources);
+            changed = *selections != before;
+        },
+    );
+    changed
+}
+
+fn contour_list(
+    ui: &mut egui::Ui,
+    doc: &Document,
+    profiles: &[NodeRef],
+    selections: &mut Vec<Selection>,
+    thin: bool,
+    sources: &[SourceChoices],
+) {
     let listed = !selections.is_empty();
-    let can_choose = can_choose_contours(&sources);
+    let can_choose = can_choose_contours(sources);
     ui.horizontal_wrapped(|ui| {
         if controls::selectable(
             ui,
@@ -532,55 +569,49 @@ pub(crate) fn fields(
             listed,
         )
         .on_hover_text("Choose which contours this feature uses.")
-        .on_disabled_hover_text(contour_availability_hint(&sources))
+        .on_disabled_hover_text(contour_availability_hint(sources))
         .clicked()
             && selections.is_empty()
         {
-            *selections = select_all(&sources, thin);
+            *selections = select_all(sources, thin);
         }
     });
-    if selections.is_empty() {
-        for source in &sources {
-            if let Some(error) = &source.error {
-                controls::label(ui, "contours.error", "diagnostic", &[], error, "error");
+    if !selections.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            if controls::button(
+                ui,
+                "contours.select-all",
+                "contour-action",
+                &[],
+                "Select all",
+                can_choose,
+                false,
+            )
+            .on_hover_text("Select all contours currently available.")
+            .on_disabled_hover_text(contour_availability_hint(sources))
+            .clicked()
+            {
+                *selections = select_all(sources, thin);
             }
-        }
-        return *selections != before;
+            if controls::button(
+                ui,
+                "contours.clear",
+                "contour-action",
+                &[],
+                "Clear selection",
+                !profiles.is_empty(),
+                false,
+            )
+            .clicked()
+            {
+                *selections = clear(sources);
+            }
+        });
     }
-    ui.horizontal_wrapped(|ui| {
-        if controls::button(
-            ui,
-            "contours.select-all",
-            "contour-action",
-            &[],
-            "Select all",
-            can_choose,
-            false,
-        )
-        .on_hover_text("Select all contours currently available.")
-        .on_disabled_hover_text(contour_availability_hint(&sources))
-        .clicked()
-        {
-            *selections = select_all(&sources, thin);
-        }
-        if controls::button(
-            ui,
-            "contours.clear",
-            "contour-action",
-            &[],
-            "Clear selection",
-            !profiles.is_empty(),
-            false,
-        )
-        .clicked()
-        {
-            *selections = clear(&sources);
-        }
-    });
     let props = controls::properties("contours.list", "contour-list", &["scrollable"], "ready");
     let height = controls::number(&props, "max-height", 170.).max(24.);
     egui::ScrollArea::vertical().id_salt(("contours", profiles.iter().map(|profile| (&profile.definition, &profile.node)).collect::<Vec<_>>())).max_height(height).show(ui, |ui| {
-        for source in &sources {
+        for source in sources {
             if sources.len() > 1 { controls::label(ui, &format!("contours.source.{}", source.profile.node), "contour-source", &[], &profile_name(doc, &source.profile), "ready"); }
             if !source.current && source.native { controls::label(ui, "contours.pending", "context-hint", &[], "Waiting for current contour preview…", "pending"); }
             if let Some(error) = &source.error { controls::label(ui, "contours.error", "diagnostic", &[], error, "error"); }
@@ -594,9 +625,9 @@ pub(crate) fn fields(
                         painter.line_segment([center + egui::vec2(0., size * 0.2), rect.right_top()], egui::Stroke::new(1.5, color));
                     }
                 };
-                if controls::icon_button(ui, &format!("contours.option.{}.{}", source.profile.node, contour.members[0]), "contour-option", &["selectable"], &contour_label(index, contour), enabled(source, contour, thin), selected, Some(&check))
-                    .on_disabled_hover_text(if !source.current { "Waiting for the current sketch preview." } else if contour.status == ContourStatus::Branched { "Resolve branching or duplicate members before making a feature." } else { "Solid features require valid closed material regions; open chains need Thin Feature." }).clicked() {
-                    toggle(&sources, selections, &source.profile, contour, thin);
+                if controls::icon_button(ui, &format!("contours.option.{}.{}", source.profile.node, contour.members[0]), "contour-option", &["selectable"], &contour_label(index, contour), can_choose && enabled(source, contour, thin), selected, Some(&check))
+                    .on_disabled_hover_text(if !ready(sources) { "Waiting for the current sketch preview." } else if contour.status == ContourStatus::Branched { "Resolve branching or duplicate members before making a feature." } else { "Solid features require valid closed material regions; open chains need Thin Feature." }).clicked() {
+                    toggle(sources, selections, &source.profile, contour, thin);
                 }
             }
             if source.contours.is_empty() && source.error.is_none() && (source.current || !source.native) {
@@ -622,7 +653,7 @@ pub(crate) fn fields(
         } else if let Some((ordinal, contour)) = group {
             contour_label(ordinal, contour)
         } else {
-            if ready(&sources) {
+            if ready(sources) {
                 "Missing contour member — select its replacement".into()
             } else {
                 "Contour classification pending".into()
@@ -637,7 +668,7 @@ pub(crate) fn fields(
                     "selected-contour",
                     &[],
                     &format!("{}. {label}", index + 1),
-                    if group.is_none() && !ready(&sources) {
+                    if group.is_none() && !ready(sources) {
                         "pending"
                     } else if group.is_none() {
                         "error"
@@ -693,20 +724,8 @@ pub(crate) fn fields(
         });
     }
     if let Some(change) = change {
-        apply_change(&sources, selections, thin, &change);
+        apply_change(sources, selections, thin, &change);
     }
-    controls::label(
-        ui,
-        "contours.hint",
-        "context-hint",
-        &[],
-        selection_hint(false, thin),
-        "ready",
-    );
-    if profiles.len() > 1 {
-        ui.small("Selected regions pair in this order within each source sketch.");
-    }
-    *selections != before
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

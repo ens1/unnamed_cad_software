@@ -290,9 +290,10 @@ fn identity(w: &Workspace, key: &str) -> String {
 fn choice<T: serde::Serialize>(label: impl Into<String>, value: T) -> Value {
     json!({"label":label.into(),"value":value})
 }
-fn group(w: &Workspace, out: &mut Vec<SemanticElement>, key: &str, label: &str) {
+fn group(w: &Workspace, out: &mut Vec<SemanticElement>, key: &str, label: &str, expanded: bool) {
     let mut data = metadata(w);
     data["group"] = json!(key);
+    data["default_expanded"] = json!(expanded);
     data["classes"] = json!(["modeling-group", key]);
     out.push(SemanticElement {
         id: identity(w, &format!("group/{key}")),
@@ -319,8 +320,17 @@ fn field(
     let Some(value) = source.pointer(path).cloned() else {
         return;
     };
-    if !choices.is_empty() && !choices.iter().any(|choice| choice["value"] == value) {
-        choices.push(choice("Saved source", value.clone()));
+    if (!choices.is_empty() || value.is_object())
+        && !choices.iter().any(|choice| choice["value"] == value)
+    {
+        let saved = if path == "/seam" {
+            "Saved seam"
+        } else if path.starts_with("/supports/") {
+            "Saved support face"
+        } else {
+            "Saved value"
+        };
+        choices.push(choice(saved, value.clone()));
     }
     let id = identity(w, path.trim_start_matches('/'));
     let enabled = source_is_current(w)
@@ -358,7 +368,8 @@ fn field(
     } else {
         "text"
     });
-    if let Some(error) = w.fields.get(&format!("{ERRORS}{id}")) {
+    let error = w.fields.get(&format!("{ERRORS}{id}"));
+    if let Some(error) = error {
         data["diagnostics"] = json!([error]);
     }
     out.push(SemanticElement {
@@ -371,7 +382,14 @@ fn field(
                 .map(str::to_owned)
                 .unwrap_or_else(|| value.to_string()),
         ),
-        state: if enabled { "draft" } else { "disabled" }.into(),
+        state: if error.is_some() {
+            "invalid"
+        } else if enabled {
+            "draft"
+        } else {
+            "disabled"
+        }
+        .into(),
         commands: vec![],
         relationships: vec![w.fields.get(EDITOR).cloned().unwrap_or_default()],
         data,
@@ -390,12 +408,26 @@ fn command_element(
     let mut data = metadata(w);
     data["element"] = json!(id);
     data["mutation"] = mutation;
-    data["actions"] = json!([{"command":command,"label":label,"enabled":enabled,"disabled_reason":(!enabled).then_some("Use the current configured assembly source and selected geometry"),"arguments":data.clone()}]);
+    if let Some(group) = out
+        .iter()
+        .rev()
+        .find(|element| element.role == "assembly-weld-group")
+    {
+        data["group"] = group.data["group"].clone();
+    }
+    data["classes"] = json!(["modeling-action"]);
+    let reason = (!enabled).then_some(match key {
+        "selected-seam" => "Select a different edge or seam on a component.",
+        "add-support" => "Select an unused support face. A bead uses up to two faces.",
+        "infer-supports" => "The bead already uses automatic faces.",
+        _ => "Preview the current weld before changing it.",
+    });
+    data["actions"] = json!([{"command":command,"label":label,"enabled":enabled,"disabled_reason":reason,"arguments":data.clone()}]);
     out.push(SemanticElement {
         id,
         role: "assembly-weld-action".into(),
         label: label.into(),
-        value: None,
+        value: reason.map(str::to_owned),
         state: if enabled { "ready" } else { "disabled" }.into(),
         commands: vec![command.into()],
         relationships: vec![w.fields.get(EDITOR).cloned().unwrap_or_default()],
@@ -521,77 +553,103 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             w,
             &mut out,
             "deletion",
-            &format!("Delete {}", definition.name),
+            &format!("Delete {}?", definition.name),
+            true,
         );
         return out;
     }
     let source = editable(&definition);
-    group(w, &mut out, "identity", "Assembly weld");
-    field(
-        w,
-        &mut out,
-        &source,
-        "identity",
-        "/name",
-        "Name",
-        None,
-        vec![],
-    );
-    field(
-        w,
-        &mut out,
-        &source,
-        "identity",
-        "/suppressed",
-        "Base weld suppression",
-        None,
-        vec![],
-    );
-    group(w, &mut out, "seam", "Seam and support faces");
-    let mut note = |key: &str, label: &str| {
-        out.push(SemanticElement {
-        id: identity(w, key), role: "assembly-weld-help".into(), label: label.into(), value: None,
-        state: "ready".into(), commands: vec![], relationships: vec![definition.id.clone()],
-        data: json!({"group":"seam","classes":["modeling-status","weld-feedback"],"owner":owner,"weld":definition.id}),
-    })
-    };
-    note(
-        "joint-requirements",
-        crate::weld_beads_ui::joint_help(&definition),
-    );
-    note(
-        "owner-frame",
-        "Seam and support geometry is evaluated in the owning assembly's frame using each component's current solved placement.",
-    );
-    out.extend(crate::weld_beads_ui::feedback(w, owner, &definition.id));
-    out.extend(crate::weld_beads_ui::pick_actions(w));
+    group(w, &mut out, "seam", "Weld joint", true);
+    let (joint_controls, support_controls) =
+        crate::weld_beads_ui::joint_controls(w, owner, &definition.id, "seam");
     let (seams, supports) = geometry_choices(w, owner);
+    field(w, &mut out, &source, "seam", "/seam", "Seam", None, seams);
+    if let Some(selected) = selected_seam(w, owner).filter(|seam| seam != &definition.seam) {
+        command_element(
+            w,
+            &mut out,
+            "selected-seam",
+            "Use selected seam",
+            ACTION,
+            json!({"kind":"set","pointer":"/seam","value":selected}),
+            source_is_current(w),
+        );
+    }
+    out.extend(joint_controls);
+    group(w, &mut out, "profile", "Bead", true);
     field(
         w,
         &mut out,
         &source,
-        "seam",
-        "/seam",
-        "Seam source",
+        "profile",
+        "/profile",
+        "Weld profile",
         None,
-        seams,
+        vec![
+            choice("Fillet bead", Profile::Fillet),
+            choice("Butt bead", Profile::Butt),
+        ],
     );
-    let selected = selected_seam(w, owner);
-    command_element(
+    field(
         w,
         &mut out,
-        "selected-seam",
-        "Use selected seam",
-        ACTION,
-        json!({"kind":"set","pointer":"/seam","value":selected}),
-        source_is_current(w) && selected.is_some(),
+        &source,
+        "profile",
+        "/size",
+        if definition.profile == Profile::Fillet {
+            "Leg size"
+        } else {
+            "Bead width"
+        },
+        Some("mm"),
+        vec![],
     );
+    let mut patterns = vec![
+        choice("Continuous", Pattern::Continuous),
+        choice(
+            "Intermittent",
+            Pattern::Intermittent {
+                length: "20 mm".into(),
+                gap: "20 mm".into(),
+            },
+        ),
+    ];
+    if let Pattern::Intermittent { .. } = &definition.pattern {
+        patterns[1] = choice("Intermittent", &definition.pattern);
+    }
+    field(
+        w, &mut out, &source, "profile", "/pattern", "Pattern", None, patterns,
+    );
+    if let Pattern::Intermittent { .. } = &definition.pattern {
+        field(
+            w,
+            &mut out,
+            &source,
+            "profile",
+            "/pattern/length",
+            "Stitch length",
+            Some("mm"),
+            vec![],
+        );
+        field(
+            w,
+            &mut out,
+            &source,
+            "profile",
+            "/pattern/gap",
+            "Stitch gap",
+            Some("mm"),
+            vec![],
+        );
+    }
+    group(w, &mut out, "supports", "Support faces", false);
+    out.extend(support_controls);
     for index in 0..definition.supports.len() {
         field(
             w,
             &mut out,
             &source,
-            "seam",
+            "supports",
             &format!("/supports/{index}"),
             &format!("Support face {}", index + 1),
             None,
@@ -624,101 +682,29 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         w,
         &mut out,
         "infer-supports",
-        "Infer contact-proven joint faces",
+        "Use automatic faces",
         ACTION,
         json!({"kind":"set","pointer":"/supports","value":[]}),
         source_is_current(w) && !definition.supports.is_empty(),
     );
-    group(w, &mut out, "profile", "Visible deposited metal");
+    group(w, &mut out, "details", "Bead details", false);
     field(
         w,
         &mut out,
         &source,
-        "profile",
-        "/profile",
-        "Weld profile",
-        None,
-        vec![
-            choice("Fillet bead", Profile::Fillet),
-            choice("Butt bead", Profile::Butt),
-        ],
-    );
-    field(
-        w,
-        &mut out,
-        &source,
-        "profile",
-        "/size",
-        if definition.profile == Profile::Fillet {
-            "Leg size"
-        } else {
-            "Bead width"
-        },
-        Some("mm"),
-        vec![],
-    );
-    field(
-        w,
-        &mut out,
-        &source,
-        "profile",
+        "details",
         "/reinforcement",
-        "Crown rise",
+        "Crown height",
         Some("mm"),
         vec![],
     );
-    let mut patterns = vec![
-        choice("Continuous", Pattern::Continuous),
-        choice(
-            "Intermittent",
-            Pattern::Intermittent {
-                length: "20 mm".into(),
-                gap: "20 mm".into(),
-            },
-        ),
-    ];
-    if let Pattern::Intermittent { .. } = &definition.pattern {
-        patterns[1] = choice("Intermittent", &definition.pattern);
-    }
     field(
         w,
         &mut out,
         &source,
-        "profile",
-        "/pattern",
-        "Deposition",
-        None,
-        patterns,
-    );
-    if let Pattern::Intermittent { .. } = &definition.pattern {
-        field(
-            w,
-            &mut out,
-            &source,
-            "profile",
-            "/pattern/length",
-            "Stitch length",
-            Some("mm"),
-            vec![],
-        );
-        field(
-            w,
-            &mut out,
-            &source,
-            "profile",
-            "/pattern/gap",
-            "Clear stitch gap",
-            Some("mm"),
-            vec![],
-        );
-    }
-    field(
-        w,
-        &mut out,
-        &source,
-        "profile",
+        "details",
         "/start_offset",
-        "Start trim",
+        "Start offset",
         Some("mm"),
         vec![],
     );
@@ -726,19 +712,14 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         w,
         &mut out,
         &source,
-        "profile",
+        "details",
         "/end_offset",
-        "End trim",
+        "End offset",
         Some("mm"),
         vec![],
     );
     if !matches!(definition.seam, SeamSource::ModelEdge { .. }) && definition.supports.is_empty() {
-        group(
-            w,
-            &mut out,
-            "orientation",
-            "Owning assembly frame · bead orientation",
-        );
+        group(w, &mut out, "orientation", "Seam orientation", false);
         for (index, axis) in ["X", "Y", "Z"].iter().enumerate() {
             field(
                 w,
@@ -746,7 +727,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 &source,
                 "orientation",
                 &format!("/direction/{index}"),
-                &format!("Owner-frame direction {axis}"),
+                &format!("Direction {axis}"),
                 Some(""),
                 vec![],
             );
@@ -757,36 +738,26 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             &source,
             "orientation",
             "/roll",
-            "Roll about seam",
+            "Roll",
             Some("deg"),
             vec![],
         );
-    } else {
-        out.push(SemanticElement {
-            id: identity(w, "joint-orientation"), role: "assembly-weld-help".into(),
-            label: "Joint faces determine bead orientation; direction and roll apply only to an authored seam without support faces.".into(), value: None, state: "ready".into(), commands: vec![], relationships: vec![definition.id.clone()], data: json!({"group":"seam","classes":["modeling-status","weld-feedback"]}),
-        });
-        if definition
-            .values(w.session.visible(), owner)
-            .is_ok_and(|values| values.roll_rad.abs() > 1e-10)
-        {
-            command_element(
-                w,
-                &mut out,
-                "reset-joint-roll",
-                "Use joint orientation",
-                ACTION,
-                json!({"kind":"set","pointer":"/roll","value":"0 deg"}),
-                source_is_current(w),
-            );
-        }
+    } else if definition
+        .values(w.session.visible(), owner)
+        .is_ok_and(|values| values.roll_rad.abs() > 1e-10)
+    {
+        group(w, &mut out, "orientation", "Seam orientation", true);
+        command_element(
+            w,
+            &mut out,
+            "reset-joint-roll",
+            "Use joint orientation",
+            ACTION,
+            json!({"kind":"set","pointer":"/roll","value":"0 deg"}),
+            source_is_current(w),
+        );
     }
-    group(
-        w,
-        &mut out,
-        "assignments",
-        "Finish and engineering material",
-    );
+    group(w, &mut out, "assignments", "Finish and material", false);
     let mut finishes = vec![choice("Default finish", Option::<String>::None)];
     finishes.extend(
         w.session
@@ -801,14 +772,11 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         &source,
         "assignments",
         "/finish",
-        "Optical finish",
+        "Finish",
         None,
         finishes,
     );
-    let mut materials = vec![choice(
-        "Default engineering material",
-        Option::<String>::None,
-    )];
+    let mut materials = vec![choice("Default material", Option::<String>::None)];
     materials.extend(
         w.session
             .visible()
@@ -822,9 +790,30 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         &source,
         "assignments",
         "/material",
-        "Engineering material",
+        "Material",
         None,
         materials,
+    );
+    group(w, &mut out, "identity", "Weld properties", false);
+    field(
+        w,
+        &mut out,
+        &source,
+        "identity",
+        "/name",
+        "Name",
+        None,
+        vec![],
+    );
+    field(
+        w,
+        &mut out,
+        &source,
+        "identity",
+        "/suppressed",
+        "Suppress base weld",
+        None,
+        vec![],
     );
     out
 }
@@ -1189,60 +1178,31 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&Value>) -> bool {
 }
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     guard(w);
-    for element in semantics(w).into_iter().filter(|element| {
-        element.id.starts_with("assembly-weld-editor:") || element.role == "weld-joint-feedback"
-    }) {
-        match element.role.as_str() {
-            "assembly-weld-group" => {
-                controls::label(
-                    ui,
-                    &element.id,
-                    &element.role,
-                    &["modeling-group"],
-                    &element.label,
-                    &element.state,
-                );
-            }
-            "assembly-weld-field" => crate::ui::semantic_field(ui, w, &element),
-            "assembly-weld-help" | "weld-joint-feedback" => {
-                controls::label(
-                    ui,
-                    &element.id,
-                    &element.role,
-                    &["modeling-status", "weld-feedback"],
-                    &element.label,
-                    &element.state,
-                );
-            }
-            "assembly-weld-action"
-                if controls::button(
-                    ui,
-                    &element.id,
-                    &element.role,
-                    &["modeling-action"],
-                    &element.label,
-                    element
-                        .action_descriptors()
-                        .iter()
-                        .any(|action| action.enabled),
-                    element.state == "selected",
-                )
-                .clicked() =>
-            {
-                if let Some(descriptor) =
-                    element.action_descriptors().into_iter().find(|a| a.enabled)
-                {
-                    let mut target = element.clone();
-                    target.data = descriptor.arguments;
-                    crate::ui::semantic_action(w, &target, &descriptor.command);
-                }
-            }
-            _ => {}
+    let elements = semantics(w)
+        .into_iter()
+        .filter(|element| element.role != "assembly-weld")
+        .collect::<Vec<_>>();
+    if w.fields.contains_key("assembly-weld-deletion") {
+        if let Some(prompt) = elements.first() {
+            controls::label(
+                ui,
+                &prompt.id,
+                &prompt.role,
+                &["modeling-group"],
+                &prompt.label,
+                "draft",
+            );
         }
+        return;
     }
-    egui::CollapsingHeader::new("Advanced Source")
-        .id_salt("assembly-weld-source")
-        .show(ui, |ui| {
+    crate::operation_editor_ui::render_elements(ui, w, elements);
+    controls::collapsing(
+        ui,
+        "assembly-weld-source",
+        "assembly-weld-group",
+        "Advanced Source",
+        false,
+        |ui| {
             if ui
                 .add(
                     egui::TextEdit::multiline(&mut w.json)
@@ -1267,7 +1227,8 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             {
                 action(w, "assembly.weld-preview-source", None);
             }
-        });
+        },
+    );
 }
 pub fn tree(ui: &mut egui::Ui, w: &mut Workspace) {
     let elements = semantics(w)

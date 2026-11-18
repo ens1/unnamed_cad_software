@@ -583,16 +583,12 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let help_groups = elements
         .iter()
         .filter(|group| {
-            matches!(
-                group.role.as_str(),
-                "operation-editor-group" | "structural-member-group"
-            ) && elements.iter().any(|element| {
-                matches!(
-                    element.role.as_str(),
-                    "operation-editor-help" | "structural-member-note"
-                ) && element.data["group"] == group.data["group"]
-                    && element.data["feature"] == group.data["feature"]
-            })
+            group.role == "operation-editor-group"
+                && elements.iter().any(|element| {
+                    crate::operation_editor_ui::supplementary_help(element)
+                        && element.data["group"] == group.data["group"]
+                        && element.data["feature"] == group.data["feature"]
+                })
         })
         .map(|group| format!("{}/instructions", group.id))
         .collect::<Vec<_>>();

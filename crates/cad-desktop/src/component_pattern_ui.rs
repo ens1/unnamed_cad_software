@@ -393,7 +393,11 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
     }
 }
 
-fn axis_choices(doc: &Document, owner: &str, current: Option<&str>) -> Vec<(String, AxisSource)> {
+pub(super) fn axis_choices(
+    doc: &Document,
+    owner: &str,
+    current: Option<&str>,
+) -> Vec<(String, AxisSource)> {
     let mut choices = [OriginAxis::X, OriginAxis::Y, OriginAxis::Z]
         .into_iter()
         .map(|axis| (axis.label().into(), AxisSource::Origin { axis }))
@@ -475,7 +479,7 @@ fn feature_name(doc: &Document, node: &NodeRef) -> String {
         .map(|f| f.name.clone())
         .unwrap_or_else(|| "Missing geometry".into())
 }
-fn axis_name(doc: &Document, axis: &AxisSource) -> String {
+pub(super) fn axis_name(doc: &Document, axis: &AxisSource) -> String {
     match axis {
         AxisSource::Origin { axis } => axis.label().into(),
         AxisSource::Datum { feature } => feature_name(doc, feature),
@@ -515,7 +519,7 @@ fn axis_name(doc: &Document, axis: &AxisSource) -> String {
         _ => "Unsupported curved direction".into(),
     }
 }
-fn path_name(doc: &Document, path: &[cad_core::Id]) -> String {
+pub(super) fn path_name(doc: &Document, path: &[cad_core::Id]) -> String {
     let mut definition = doc.root.as_str();
     let mut names = vec![];
     for key in path {
@@ -610,7 +614,7 @@ fn selected_axis(
     .validate()?;
     Ok(axis)
 }
-fn picked_part_direction(
+pub(super) fn picked_part_direction(
     w: &Workspace,
     selected: &crate::viewport::Selection,
     previous: Option<&PatternDirection>,
