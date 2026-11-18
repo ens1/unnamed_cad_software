@@ -92,6 +92,16 @@ pub fn expression_with(settings: &ModelSettings, source: &str) -> Option<String>
     }
     None
 }
+/// In a length entry, a bare numeric literal uses the document display unit.
+/// Leave expressions and explicit units intact so their design intent survives edits.
+pub(crate) fn input_length(settings: &ModelSettings, text: &str) -> cad_core::Expr {
+    let text = text.trim();
+    if text.parse::<f64>().is_ok() {
+        cad_core::Expr(format!("{text} {}", settings.display_length_unit.symbol()))
+    } else {
+        text.into()
+    }
+}
 pub fn expression(source: &str) -> String {
     SETTINGS.with(|settings| {
         expression_with(&settings.borrow(), source).unwrap_or_else(|| source.into())

@@ -5,6 +5,8 @@ use bevy_egui::egui::{self, Color32, Stroke};
 use cad_core::{commands::Command, protocol::EvaluatedSketch, *};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) mod rectangle;
+
 pub const ORIGIN_PLANES: [&str; 3] = ["Front Plane", "Top Plane", "Right Plane"];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,6 +81,7 @@ pub struct EditingSketch {
     pub chain: Vec<Id>,
     pending_chain: Option<ChainPlacement>,
     pub clicks: Vec<[f64; 2]>,
+    rectangle: Option<rectangle::Input>,
     /// A multi-click tool only merges the endpoints explicitly snapped on that click.
     pub click_join: Vec<bool>,
     pub construction: bool,
@@ -538,6 +541,7 @@ pub fn begin(w: &mut Workspace, existing: Option<Feature>) {
         chain: vec![],
         pending_chain: None,
         clicks: vec![],
+        rectangle: None,
         click_join: vec![],
         construction: false,
         conversions: BTreeMap::new(),
@@ -860,6 +864,7 @@ pub fn set_tool(w: &mut Workspace, tool: Tool) {
         s.dimension_model = None;
         w.selection_popup = None;
         s.chain.clear();
+        s.rectangle = None;
         s.clicks.clear();
         s.click_join.clear();
         s.anchor = None;
@@ -931,6 +936,7 @@ pub(crate) fn restore(s: &mut EditingSketch, source: Sketch) {
     s.closed = !s.members.is_empty();
     s.chain.clear();
     s.pending_chain = None;
+    s.rectangle = None;
     s.clicks.clear();
     s.click_join.clear();
     s.error = None;
@@ -991,6 +997,7 @@ pub fn escape(w: &mut Workspace) -> bool {
     {
         s.chain.clear();
         s.clicks.clear();
+        s.rectangle = None;
         s.click_join.clear();
         s.tool = Tool::Select;
         w.status = "Sketch tool stopped; completed geometry retained. Escape again exits and keeps the sketch.".into();
@@ -2857,7 +2864,7 @@ fn selected_sketch(w: &Workspace, instance: &PlacedPart, feature: &Feature) -> b
         && w.view.active_part.as_ref() == Some(&instance.definition)
         && w.view.active_node.as_ref() == Some(&feature.id)
 }
-fn visible_sketch(w: &Workspace, instance: &PlacedPart, feature: &Feature) -> bool {
+pub(crate) fn visible_sketch(w: &Workspace, instance: &PlacedPart, feature: &Feature) -> bool {
     if matches!(
         crate::sketch_overlay::mode(w, true),
         cad_core::presentation::OverlayVisibility::Hidden
@@ -3445,31 +3452,33 @@ pub fn overlay(
         if let Some(hover) = cursor {
             preview.push(hover);
         }
-        draw_polyline(
-            w,
-            ui,
-            r,
-            (&plane, &matrix),
-            &preview,
-            false,
-            Stroke::new(1., blue),
-        );
-        if let Ok(paths) = cad_core::sketch_transform::dynamic_preview(
-            w.session.visible(),
-            &s.definition,
-            &sketch_definition(s),
-            &preview,
-        ) {
-            for points in paths {
-                draw_polyline(
-                    w,
-                    ui,
-                    r,
-                    (&plane, &matrix),
-                    &points,
-                    false,
-                    Stroke::new(1., blue.gamma_multiply(0.65)),
-                );
+        if !matches!(s.tool, Tool::Rectangle | Tool::CenterRectangle) {
+            draw_polyline(
+                w,
+                ui,
+                r,
+                (&plane, &matrix),
+                &preview,
+                false,
+                Stroke::new(1., blue),
+            );
+            if let Ok(paths) = cad_core::sketch_transform::dynamic_preview(
+                w.session.visible(),
+                &s.definition,
+                &sketch_definition(s),
+                &preview,
+            ) {
+                for points in paths {
+                    draw_polyline(
+                        w,
+                        ui,
+                        r,
+                        (&plane, &matrix),
+                        &points,
+                        false,
+                        Stroke::new(1., blue.gamma_multiply(0.65)),
+                    );
+                }
             }
         }
         if s.tool.is_spline() && preview.len() >= 2 {
@@ -3733,7 +3742,16 @@ pub fn overlay(
         }
         return;
     }
-    let mut handle_clicked = crate::sketch_ui::annotations(w, ui, r);
+    let rectangle_handled = rectangle::overlay(
+        w,
+        ui,
+        r,
+        response,
+        toolbar,
+        cursor,
+        snapped.is_some() || origin_snap,
+    );
+    let mut handle_clicked = crate::sketch_ui::annotations(w, ui, r) || rectangle_handled;
     handle_clicked |= crate::sketch_overlay::candidate_controls(w, ui, r);
     handle_clicked |= crate::sketch_handles::overlay(w, ui, r);
     let mut selection_click = None;
@@ -3779,7 +3797,8 @@ pub fn overlay(
         && let Some(s) = &mut w.sketch
     {
         let selecting = s.tool == Tool::Select;
-        if !selecting {
+        let starting_rectangle = matches!(s.tool, Tool::Rectangle | Tool::CenterRectangle);
+        if !selecting && !starting_rectangle {
             s.placement_error = None;
             let before = sketch_definition(s);
             if (s.tool.is_spline() || s.tool == Tool::Polyline)
@@ -3860,9 +3879,11 @@ pub fn overlay(
                 s.click_join.push(snapped.is_some() || origin_snap);
                 placed_conic = s.clicks.len() == if s.tool == Tool::ArcSlot { 4 } else { 3 };
             }
-            Tool::Rectangle
-            | Tool::CenterRectangle
-            | Tool::Circle
+            Tool::Rectangle | Tool::CenterRectangle => {
+                rectangle::begin(s, cursor, snapped.is_some() || origin_snap);
+                ui.ctx().request_repaint();
+            }
+            Tool::Circle
             | Tool::Polygon
             | Tool::Arc
             | Tool::Ellipse
@@ -3911,64 +3932,6 @@ pub fn overlay(
                     let a = s.clicks[0];
                     let b = s.clicks[1];
                     match s.tool {
-                        Tool::Rectangle | Tool::CenterRectangle => {
-                            let (lo, hi) = if s.tool == Tool::CenterRectangle {
-                                let half = [(b[0] - a[0]).abs(), (b[1] - a[1]).abs()];
-                                (
-                                    [a[0] - half[0], a[1] - half[1]],
-                                    [a[0] + half[0], a[1] + half[1]],
-                                )
-                            } else {
-                                (
-                                    [a[0].min(b[0]), a[1].min(b[1])],
-                                    [a[0].max(b[0]), a[1].max(b[1])],
-                                )
-                            };
-                            let keys = [lo, [hi[0], lo[1]], hi, [lo[0], hi[1]]]
-                                .map(|p| add_point(s, p, join_existing(p)));
-                            for i in 0..4 {
-                                line(s, keys[i].clone(), keys[(i + 1) % 4].clone());
-                            }
-                            for (kind, a, b, value) in [
-                                ("horizontal", 0, 1, "0 mm".into()),
-                                ("vertical", 1, 2, "0 mm".into()),
-                                ("horizontal", 2, 3, "0 mm".into()),
-                                ("vertical", 3, 0, "0 mm".into()),
-                            ] {
-                                s.constraints.push(SketchConstraint {
-                                    driven: false,
-                                    distance_side: None,
-                                    contact: None,
-                                    id: id(),
-                                    kind: kind.into(),
-                                    entities: vec![keys[a].clone(), keys[b].clone()],
-                                    value: Expr(value),
-                                });
-                            }
-                            if s.tool == Tool::CenterRectangle {
-                                let center = add_point(s, a, join_existing(a));
-                                let diagonal = id();
-                                s.members.insert(
-                                    diagonal.clone(),
-                                    SketchMember {
-                                        construction: true,
-                                        curve: SketchCurve::Line {
-                                            start: keys[0].clone(),
-                                            end: keys[2].clone(),
-                                        },
-                                    },
-                                );
-                                s.constraints.push(SketchConstraint {
-                                    driven: false,
-                                    distance_side: None,
-                                    contact: None,
-                                    id: id(),
-                                    kind: "midpoint".into(),
-                                    entities: vec![center, diagonal],
-                                    value: Expr::from("0 mm"),
-                                });
-                            }
-                        }
                         Tool::ThreePointRectangle
                         | Tool::ThreePointCenterRectangle
                         | Tool::Parallelogram => {
@@ -4425,7 +4388,7 @@ pub fn overlay(
                 }
             }
         }
-        edited |= !selecting;
+        edited |= !selecting && !starting_rectangle;
     }
     if response.secondary_clicked() && !handle_clicked {
         selection_click = Some((picked_entity.clone(), response.clone()));
