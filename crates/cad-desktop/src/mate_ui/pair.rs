@@ -180,7 +180,12 @@ fn accept(w: &mut Workspace, selection: &viewport::Selection) -> Result<()> {
         lock_placement: None,
     };
     let owner = picker.assembly.clone();
+    let anchor = picker.concentric.as_ref().map(|m| m.id.clone());
     begin(w, &owner, mate.clone());
+    if let Some(anchor) = anchor {
+        w.fields.insert("seat-guide-editor".into(), mate.id.clone());
+        w.fields.insert("seat-guide-anchor".into(), anchor);
+    }
     submit(w, &owner, mate);
     Ok(())
 }
@@ -331,6 +336,51 @@ pub(crate) fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
     was_picking || w.mate_picker.is_some()
 }
 
+fn motion_anchor<'a>(
+    w: &Workspace,
+    assembly: &'a Assembly,
+    solution: &assembly_geometry::EvaluatedAssembly,
+    active: &'a Mate,
+) -> &'a Mate {
+    if active.kind != "coincident" {
+        return active;
+    }
+    let Some(seat) = solution.frames.get(&active.id) else {
+        return active;
+    };
+    if !seat.iter().all(|f| f.kind == FrameKind::Plane) {
+        return active;
+    }
+    let axes = assembly.mates.iter().filter(|m| {
+        m.kind == "concentric"
+            && ((m.first == active.first && m.second == active.second)
+                || (m.second == active.first && m.first == active.second))
+    });
+    if w.fields.get("seat-guide-editor") == Some(&active.id)
+        && let Some(id) = w.fields.get("seat-guide-anchor")
+        && let Some(axis) = axes
+            .clone()
+            .find(|m| &m.id == id && solution.frames.contains_key(id))
+    {
+        return axis;
+    }
+    // When a saved seat is reopened, a unique shared axis normal to its seating
+    // plane identifies the shaft. Match directions in the same component frame.
+    let mut aligned = axes.filter(|m| {
+        solution.frames.get(&m.id).is_some_and(|frames| {
+            let frame = &frames[usize::from(m.second == active.first)];
+            DVec3::from_array(frame.axis)
+                .dot(DVec3::from_array(seat[0].axis))
+                .abs()
+                > 1. - 1e-8
+        })
+    });
+    match (aligned.next(), aligned.next()) {
+        (Some(axis), None) => axis,
+        _ => active,
+    }
+}
+
 fn motion(w: &Workspace) -> Vec<SemanticElement> {
     if w.dialog.as_deref() != Some("assembly")
         || w.mate_picker
@@ -349,24 +399,31 @@ fn motion(w: &Workspace) -> Vec<SemanticElement> {
     let Ok(e) = current_evaluation(w) else {
         return vec![];
     };
+    let Some(assembly) = w.session.visible().assemblies.get(owner) else {
+        return vec![];
+    };
     let mut result = vec![];
+    let mut anchors = std::collections::BTreeMap::new();
     for (path, matrix, key) in crate::component_pattern_ui::assembly_contexts(w, e, owner) {
         let Some(solution) = e.assemblies.get(&key) else {
             continue;
         };
-        let Some(frames) = solution.frames.get(&mate.id) else {
+        let anchor = *anchors
+            .entry(key)
+            .or_insert_with(|| motion_anchor(w, assembly, solution, &mate));
+        let Some(frames) = solution.frames.get(&anchor.id) else {
             continue;
         };
-        for (id, frame) in [(&mate.first, &frames[0]), (&mate.second, &frames[1])] {
+        for (id, frame) in [(&anchor.first, &frames[0]), (&anchor.second, &frames[1])] {
             let (Some(motion), Some(placement)) = (
-                solution.component_motion.get(id),
+                solution
+                    .component_motion
+                    .get(id)
+                    .and_then(|m| m.joints.get(&anchor.id)),
                 solution.placements.get(id),
             ) else {
                 continue;
             };
-            if motion.grounded {
-                continue;
-            }
             let Ok(frame) = frame.transformed(&placement.matrix()) else {
                 continue;
             };
@@ -392,14 +449,29 @@ fn motion(w: &Workspace) -> Vec<SemanticElement> {
                 .and_then(|a| a.instances.get(id))
                 .map(|i| cad_core::occurrence_names::instance(w.session.visible(), owner, i))
                 .unwrap_or_else(|| "Component".into());
-            let value = match (moves.len(), turns.len()) {
-                (0, 0) => "Fully constrained".into(),
-                (0, 1) => "Can rotate".into(),
-                (1, 0) => "Can slide".into(),
-                (1, 1) => "Can slide and rotate".into(),
+            let coupled = moves.len() + turns.len() > motion.degrees_of_freedom;
+            let value = match (moves.len(), turns.len(), coupled) {
+                (0, 0, _) => "Fixed to mate".into(),
+                (0, 1, _) => "Can rotate".into(),
+                (1, 0, _) => "Can slide".into(),
+                (1, 1, true) => "Slide and rotation linked".into(),
+                (1, 1, false) => "Can slide and rotate".into(),
+                (_, _, true) => format!(
+                    "{} degrees of freedom · linked motion",
+                    motion.degrees_of_freedom
+                ),
                 _ => format!("{} degrees of freedom", motion.degrees_of_freedom),
             };
-            result.push(SemanticElement{id:format!("mate:{}/motion/{}/{id}",mate.id,path.join("/")),role:"mate-motion-guide".into(),label:name,value:Some(value),commands:vec![],state:"evaluated".into(),relationships:vec![mate.id.clone(),id.clone()],data:json!({"contract":"tcad.presentation.mate-motion","version":1,"identity":e.identity,"origin":origin,"translation":moves,"rotation":turns,"degrees_of_freedom":motion.degrees_of_freedom})});
+            result.push(SemanticElement {
+                id: format!("mate:{}/motion/{}/{id}", mate.id, path.join("/")),
+                role: "mate-motion-guide".into(),
+                label: name,
+                value: Some(value),
+                commands: vec![],
+                state: "evaluated".into(),
+                relationships: vec![mate.id.clone(), id.clone()],
+                data: json!({"contract":"tcad.presentation.mate-motion","version":2,"identity":e.identity,"origin":origin,"anchor_mate":anchor.id,"relative_to":if id == &anchor.first {&anchor.second} else {&anchor.first},"translation":moves,"rotation":turns,"coupled":coupled,"degrees_of_freedom":motion.degrees_of_freedom}),
+            });
         }
     }
     result
