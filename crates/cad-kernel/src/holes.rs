@@ -1,5 +1,6 @@
 //! Exact drill stock with shared circular station boundaries and planar shoulders.
-use crate::adapter::{MonstertruckAdapter, Shape};
+use crate::adapter::{KernelAdapter, MonstertruckAdapter, Shape};
+use cad_core::solver::{ConstraintSolver, NativeSolver};
 use cad_core::{
     CadError, Dimension, Document, NodeRef, Result, expression,
     holes::{Definition, End, Head},
@@ -166,18 +167,18 @@ pub(crate) fn operation(
     } else {
         None
     };
+    let mut positions = adapter.prepare_sketch(doc, source, &plane, inputs)?;
+    NativeSolver.solve_sketch(doc, &definition.positions.definition, &mut positions)?;
     let mut drills: Vec<crate::drilled_pockets::Drill> = Vec::new();
     for point in &definition.points {
-        let p = adapter.resolve_surface_point(
-            doc,
-            &owner.definition,
-            &cad_core::reference_geometry::PointSource::SketchPoint {
-                profile: definition.positions.clone(),
-                point: point.clone(),
-            },
-            inputs,
-        )?;
-        let origin = Point3::from(p) + axis * start;
+        let uv = positions
+            .points
+            .get(point)
+            .ok_or_else(|| invalid("The hole position was removed"))?;
+        let origin = Point3::from(plane.origin)
+            + Vector3::from(plane.u) * uv[0]
+            + Vector3::from(plane.v) * uv[1]
+            + axis * start;
         if drills
             .iter()
             .any(|drill| (drill.origin - origin).magnitude2() < 1e-14)

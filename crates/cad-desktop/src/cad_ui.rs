@@ -1267,6 +1267,9 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
     if !crate::assembly_tools_ui::valid(w) {
         return Some("Validate the current assembly group or copy before applying");
     }
+    if !crate::matching_holes_ui::ready(w) {
+        return Some("Pick a cover face, source holes and a clearance diameter.");
+    }
     if !crate::assembly_welds_ui::current_source_is_valid(w) {
         return Some("Correct the current assembly weld source before applying");
     }
@@ -1351,6 +1354,11 @@ pub fn confirmation_available(w: &Workspace) -> bool {
 /// One availability policy for menus, command search and user-composed controls.
 /// These are prerequisites only; each operation still validates its actual input.
 pub fn command_disabled_reason(w: &Workspace, command: &str) -> Option<&'static str> {
+    if command == "feature.match-holes"
+        && let Some(reason) = crate::matching_holes_ui::start_reason(w)
+    {
+        return Some(reason);
+    }
     if w.sketch
         .as_ref()
         .is_some_and(|sketch| sketch.edit.is_some())

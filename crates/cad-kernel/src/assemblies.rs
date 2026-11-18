@@ -109,8 +109,7 @@ pub(crate) fn build_shapes_report<K: KernelAdapter>(
             .find(|f| f.id == node.node)
             .ok_or_else(|| CadError::Invalid("Missing feature".into()))?;
         if defer_placement
-            && ((matches!(feature.operation, Operation::ReferenceBody { .. })
-                || matches!(&feature.operation, Operation::Pattern { options, .. } if options.requires_placement()))
+            && (part.feature_requires_placement(feature)
                 || part
                     .feature_dependencies(feature)
                     .iter()
@@ -196,10 +195,8 @@ fn dependency_closure(doc: &Document, roots: Vec<NodeRef>) -> Result<BTreeSet<No
             .iter()
             .find(|f| f.id == node.node)
             .ok_or_else(|| CadError::Invalid("Mate reference feature is missing".into()))?;
-        if (matches!(feature.operation, Operation::ReferenceBody { .. })
-            || matches!(&feature.operation, Operation::Pattern { options, .. } if options.requires_placement()))
-        {
-            return Err(CadError::Unsupported("Associative mate geometry cannot depend on an in-context Reference Body: its assembly placement feeds back into geometry. Select an independent local face, edge, sketch, or datum".into()));
+        if part.feature_requires_placement(feature) {
+            return Err(CadError::Unsupported("Associative mate geometry cannot depend on geometry driven by an assembly placement. Select an independent local face, edge, sketch, or datum".into()));
         }
         pending.extend(part.feature_dependencies(feature));
     }

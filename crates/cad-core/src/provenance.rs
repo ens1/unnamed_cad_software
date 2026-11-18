@@ -608,6 +608,29 @@ pub fn normalized_reference(reference: &TopologyRef) -> Result<Value> {
     };
     Ok(serde_json::json!({"producer":reference.producer,"role":role,"topology":reference.topology}))
 }
+/// Follow only the seed-face relationship through nested affine copies. Other
+/// construction ancestors can represent stock rather than the hole being copied.
+pub fn pattern_seed_producer(reference: &TopologyRef) -> Result<crate::NodeRef> {
+    if !reference.role.starts_with("pattern:") {
+        return Ok(reference.producer.clone());
+    }
+    let normalized = normalized_reference(reference)?;
+    let closure = &normalized["role"]["intent"];
+    let mut current = &closure["root"];
+    let table = &closure["references"];
+    for _ in 0..MAX_DEPTH {
+        let index = link_index(&current["source"])?
+            .ok_or_else(|| invalid("Pattern face has no seed source"))?;
+        let seed = table
+            .get(index)
+            .ok_or_else(|| invalid("Pattern seed source is missing"))?;
+        if seed["role"]["contract"] != "pattern" {
+            return Ok(serde_json::from_value(seed["producer"].clone())?);
+        }
+        current = &seed["role"]["intent"];
+    }
+    Err(exhausted("Pattern seed depth"))
+}
 pub fn equivalent(first: &TopologyRef, second: &TopologyRef) -> Result<bool> {
     if first.producer != second.producer || first.topology != second.topology {
         return Ok(false);

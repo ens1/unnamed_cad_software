@@ -899,6 +899,7 @@ pub(crate) fn visible(w: &Workspace, i: &PlacedPart) -> bool {
         return false;
     }
     !w.view.isolation
+        || crate::matching_holes_ui::active(w)
         || w.peek
         || crate::assembly_motion_ui::component_selected(w, &i.path)
         || active_context(w, i)
@@ -1204,7 +1205,8 @@ pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
     if crate::contours_ui::input_feature(w).is_some() {
         return crate::contours_ui::input_evaluation(w);
     }
-    let selecting_input = crate::fabrication_sources_ui::input_body(w).is_some()
+    let selecting_input = crate::matching_holes_ui::active(w)
+        || crate::fabrication_sources_ui::input_body(w).is_some()
         || part_pattern_input(w).is_some()
         || w.fields.contains_key("assembly-weld-editor")
         || w.dialog.as_deref() == Some("feature")
@@ -1382,7 +1384,8 @@ fn pick_geometry(
         if repairing_mate && !crate::edit_review::mate::eligible(w, &instance.path) {
             continue;
         }
-        let context_references = repairing_mate
+        let context_references = crate::matching_holes_ui::active(w)
+            || repairing_mate
             || w.fields.contains_key("pick-context-references")
             || crate::component_pattern_ui::picking_direction(w);
         if !visible(w, instance)
@@ -1475,7 +1478,8 @@ fn pick_geometry(
     }
     if let Some(picker) = &w.mate_picker {
         hits.retain(|s| picker.accepts_candidate(w.session.visible(), s));
-    } else if !repairing_mate
+    } else if !crate::matching_holes_ui::active(w)
+        && !repairing_mate
         && !crate::component_pattern_ui::picking_direction(w)
         && !crate::contours_ui::picking_target(w)
     {

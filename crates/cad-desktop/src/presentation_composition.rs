@@ -499,6 +499,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::fabrication_ui::state_semantics(w));
     elements.extend(crate::assembly_tools_ui::semantics(w));
     elements.extend(crate::edit_review::semantics(w));
+    elements.extend(crate::matching_holes_ui::semantics(w));
     elements.extend(crate::assembly_welds_ui::semantics(w));
     elements.extend(crate::weld_beads_ui::semantics(w));
     elements.extend(crate::drawing_ui::workspace_semantics(w));
@@ -1047,6 +1048,11 @@ fn build_value_adapters() -> ValueAdapters {
         "drawing-editor",
         crate::drawing_editor_ui::set_value,
         crate::drawing_editor_ui::current_value,
+    );
+    adapters.register(
+        "match-holes",
+        crate::matching_holes_ui::set_value,
+        crate::matching_holes_ui::current_value,
     );
     adapters.register(
         "assembly-weld",

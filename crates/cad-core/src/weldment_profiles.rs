@@ -572,6 +572,7 @@ impl Origin {
             profile_order: vec![],
             circles: BTreeMap::new(),
             members: BTreeMap::new(),
+            matched_centers: None,
             conversions: BTreeMap::new(),
             offsets: BTreeMap::new(),
             fillets: BTreeMap::new(),

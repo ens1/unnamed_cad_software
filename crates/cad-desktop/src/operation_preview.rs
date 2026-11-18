@@ -17,6 +17,9 @@ pub struct RequestKey {
 }
 
 pub fn focus(w: &Workspace) -> Option<NodeRef> {
+    if crate::matching_holes_ui::active(w) {
+        return crate::matching_holes_ui::preview_focus(w);
+    }
     if w.dialog.as_deref() != Some("feature") {
         return None;
     }

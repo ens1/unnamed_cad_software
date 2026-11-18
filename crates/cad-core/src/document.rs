@@ -804,6 +804,20 @@ pub struct Part {
     pub configuration_details: BTreeMap<Id, crate::configuration::Definition>,
 }
 impl Part {
+    pub fn feature_requires_placement(&self, feature: &Feature) -> bool {
+        match &feature.operation {
+            Operation::ReferenceBody { .. } => true,
+            Operation::Pattern { options, .. } => options.requires_placement(),
+            Operation::Profile {
+                profile: Profile::Sketch { sketch },
+                ..
+            } => self
+                .sketches
+                .get(sketch)
+                .is_some_and(|s| s.matched_centers.is_some()),
+            _ => false,
+        }
+    }
     pub fn feature_dependencies(&self, feature: &Feature) -> Vec<NodeRef> {
         let mut dependencies = feature.operation.dependencies();
         if let Operation::Profile {
@@ -812,6 +826,9 @@ impl Part {
         } = &feature.operation
             && let Some(sketch) = self.sketches.get(sketch)
         {
+            if let Some(link) = &sketch.matched_centers {
+                dependencies.extend(link.centers.values().map(|source| source.body.clone()));
+            }
             dependencies.extend(sketch.conversions.values().map(|c| c.body.clone()));
         }
         let mut seen = BTreeSet::new();
@@ -934,7 +951,7 @@ pub struct Assembly {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rigid_groups: BTreeMap<Id, crate::assembly_groups::Definition>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Sketch {
     pub id: Id,
     pub name: String,
@@ -949,6 +966,8 @@ pub struct Sketch {
     pub members: BTreeMap<Id, SketchMember>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub conversions: BTreeMap<Id, crate::sketch_edit::Conversion>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matched_centers: Option<crate::matching_holes::Definition>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub offsets: BTreeMap<Id, crate::sketch_edit::Offset>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1289,6 +1308,7 @@ impl Document {
         )
     }
     pub fn validate(&self) -> Result<()> {
+        crate::matching_holes::validate(self)?;
         crate::component_fork::validate(self)?;
         crate::feature_transfer::validate(self)?;
         for origin in self

@@ -347,6 +347,12 @@ pub fn driven_points(sketch: &Sketch) -> BTreeSet<Id> {
         .flat_map(|c| c.points.clone())
         .chain(
             sketch
+                .matched_centers
+                .iter()
+                .flat_map(|link| link.centers.keys().cloned()),
+        )
+        .chain(
+            sketch
                 .offsets
                 .values()
                 .flat_map(|o| o.members.iter().flat_map(|m| m.points.clone())),

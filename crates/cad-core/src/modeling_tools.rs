@@ -113,6 +113,13 @@ pub const TOOLS: &[ModelingTool] = &[
         requires_body: false,
     },
     ModelingTool {
+        command: "feature.match-holes",
+        label: "Match Holes",
+        group: "Remove",
+        preset: "Match Holes",
+        requires_body: true,
+    },
+    ModelingTool {
         command: "feature.tapped-hole",
         label: "Tapped Hole",
         group: "Remove",

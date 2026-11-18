@@ -44,6 +44,7 @@ pub mod holes;
 pub mod inspection;
 pub mod manufacturing;
 pub mod manufacturing_columns;
+pub mod matching_holes;
 mod mate_solver;
 pub mod material_csv;
 pub mod material_library;

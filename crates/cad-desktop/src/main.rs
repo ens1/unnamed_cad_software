@@ -51,6 +51,7 @@ mod graph_ui;
 mod history;
 mod holes_ui;
 mod inspection_ui;
+mod matching_holes_ui;
 mod mate_ui;
 mod materials_ui;
 mod model_dimensions_ui;
@@ -237,6 +238,7 @@ pub struct Workspace {
     pub active_plane: Option<String>,
     pub manager_tree: bool,
     pub command_tab: String,
+    pub matching_holes: Option<matching_holes_ui::Editor>,
     pub tool_checkpoint: Option<Session>,
     pub confirm_requested: bool,
     pub after_confirm: Option<String>,
@@ -414,6 +416,7 @@ impl Workspace {
             active_plane: None,
             manager_tree: true,
             command_tab: "Features".into(),
+            matching_holes: None,
             tool_checkpoint: None,
             confirm_requested: false,
             after_confirm: None,
@@ -692,6 +695,11 @@ impl Workspace {
             self.confirm_requested = false;
             return;
         }
+        if !matching_holes_ui::ready(self) {
+            self.status = "Select the holes and enter a valid clearance diameter.".into();
+            self.confirm_requested = false;
+            return;
+        }
         if !assembly_welds_ui::current_source_is_valid(self) {
             self.status = "Correct the current assembly weld source before applying".into();
             self.confirm_requested = false;
@@ -792,6 +800,7 @@ impl Workspace {
         let imported_context = self.fields.get("step-import-active-part").cloned();
         match self.session.apply() {
             Ok(()) => {
+                matching_holes_ui::reset(self);
                 sketch3d_ui::cancel(self);
                 assembly_scope_ui::close(self);
                 component_fork_ui::finish(self);
@@ -868,6 +877,7 @@ impl Workspace {
         components_ui::cancel(self);
         component_pattern_ui::cancel(self);
         assembly_tools_ui::cancel(self);
+        matching_holes_ui::reset(self);
         assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
         drawing_interaction_ui::reset(self);
@@ -1050,6 +1060,7 @@ impl Workspace {
         components_ui::cancel(self);
         component_pattern_ui::cancel(self);
         assembly_tools_ui::cancel(self);
+        matching_holes_ui::reset(self);
         assembly_welds_ui::cancel(self);
         drawing_editor_ui::reset(self);
         drawing_interaction_ui::reset(self);
@@ -1226,6 +1237,11 @@ impl Workspace {
                     mate_ui::pair::Picker::prompt,
                 )
                 .into();
+            self.confirm_requested = false;
+            return;
+        }
+        if !matching_holes_ui::ready(self) {
+            self.status = "Select the holes and enter a valid clearance diameter.".into();
             self.confirm_requested = false;
             return;
         }

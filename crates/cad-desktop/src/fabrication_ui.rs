@@ -1022,6 +1022,7 @@ pub(crate) fn source_sketch(w: &Workspace, profile: &NodeRef) -> Option<cad_core
                 profile_order: vec![],
                 circles: Default::default(),
                 members: Default::default(),
+                matched_centers: None,
                 conversions: Default::default(),
                 offsets: Default::default(),
                 fillets: Default::default(),

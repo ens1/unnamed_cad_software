@@ -446,7 +446,7 @@ pub(crate) fn source(
                 .sketches
                 .get(sketch)
                 .ok_or_else(|| invalid("Missing sketch definition"))?;
-            let mut sketch = adapter.prepare_sketch(sketch, &plane, inputs)?;
+            let mut sketch = adapter.prepare_sketch(doc, sketch, &plane, inputs)?;
             NativeSolver.solve_sketch(doc, &part.id, &mut sketch)?;
             sketch
         }
@@ -625,6 +625,7 @@ fn empty_sketch() -> Sketch {
         profile_order: vec![],
         circles: BTreeMap::new(),
         members: BTreeMap::new(),
+        matched_centers: None,
         conversions: BTreeMap::new(),
         offsets: BTreeMap::new(),
         fillets: BTreeMap::new(),

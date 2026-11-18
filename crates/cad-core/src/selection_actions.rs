@@ -541,6 +541,11 @@ pub fn project(
                         solid_reason
                             .or((!*planar)
                                 .then_some("Hole positioning sketches require a planar face"));
+                    if document.assemblies.contains_key(&document.root)
+                        && editable_part == Some(part.id.as_str())
+                    {
+                        add("feature.match-holes", "Match Holes", "Model", hole_reason);
+                    }
                     add("feature.drilled-holes", "Hole", "Model", hole_reason);
                     add("feature.tapped-hole", "Tapped Hole", "Model", hole_reason);
                     add("feature.counterbore", "Counterbore", "Model", hole_reason);

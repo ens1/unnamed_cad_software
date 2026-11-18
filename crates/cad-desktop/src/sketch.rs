@@ -85,6 +85,7 @@ pub struct EditingSketch {
     /// A multi-click tool only merges the endpoints explicitly snapped on that click.
     pub click_join: Vec<bool>,
     pub construction: bool,
+    pub matched_centers: Option<cad_core::matching_holes::Definition>,
     pub conversions: BTreeMap<Id, cad_core::sketch_edit::Conversion>,
     pub offsets: BTreeMap<Id, cad_core::sketch_edit::Offset>,
     pub fillets: BTreeMap<Id, cad_core::sketch_edit::Fillet>,
@@ -550,6 +551,7 @@ pub fn begin(w: &mut Workspace, existing: Option<Feature>) {
         rectangle: None,
         click_join: vec![],
         construction: false,
+        matched_centers: None,
         conversions: BTreeMap::new(),
         offsets: BTreeMap::new(),
         fillets: BTreeMap::new(),
@@ -606,6 +608,7 @@ pub fn begin(w: &mut Workspace, existing: Option<Feature>) {
                     scratch.keys = source.points.keys().cloned().collect();
                     scratch.points = scratch.keys.iter().map(|id| source.points[id]).collect();
                     scratch.members = source.members.clone();
+                    scratch.matched_centers = source.matched_centers.clone();
                     scratch.conversions = source.conversions.clone();
                     scratch.offsets = source.offsets.clone();
                     scratch.fillets = source.fillets.clone();
@@ -909,6 +912,7 @@ pub(crate) fn restore(s: &mut EditingSketch, source: Sketch) {
     s.keys = source.points.keys().cloned().collect();
     s.points = s.keys.iter().map(|id| source.points[id]).collect();
     s.members = source.members;
+    s.matched_centers = source.matched_centers;
     s.conversions = source.conversions;
     s.offsets = source.offsets;
     s.fillets = source.fillets;
@@ -1122,6 +1126,7 @@ pub(crate) fn sketch_definition(s: &EditingSketch) -> Sketch {
         profile_order: vec![],
         circles: BTreeMap::new(),
         members: s.members.clone(),
+        matched_centers: s.matched_centers.clone(),
         conversions: s.conversions.clone(),
         offsets: s.offsets.clone(),
         fillets: s.fillets.clone(),

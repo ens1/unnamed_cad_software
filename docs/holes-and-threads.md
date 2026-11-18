@@ -2,6 +2,20 @@
 
 Hole, Counterbore, Countersink and Tapped Hole share one docked editor and the ordinary feature draft. Select a planar model face to start a position sketch, place and constrain its native sketch points, select the intended points, and finish the sketch. The requested hole editor opens with those stable point identities. Existing position sketches can also be selected explicitly. Profile corners are never selected automatically. Changing a target body or position sketch remains part of the preview; removed or suppressed centers require an explicit replacement.
 
+## Match holes in a cover to holes in the base
+
+1. Open the assembly. Choose **Edit in Place** on the cover occurrence.
+2. Select the planar cover face where the drill should enter. Choose **Match Holes** from the face menu. You can also find the command in **Features → Remove**, then pick the cover face.
+3. Click each source hole on the base. You can pick a circular rim or the inside cylindrical wall. Click a selected hole again to remove it. Adjacent parts appear as context while picking.
+4. Choose **Follow the base** to keep each selected center aligned when the source hole or the assembly placement moves. Choose **Copy once** to create independent sketch points at the current positions.
+5. Enter the **Clearance diameter**, review the through cuts, then confirm. One undo removes the holes and their position sketch. You can later edit the hole feature to change its diameter.
+
+Each selected source axis must be perpendicular to the cover face. TCAD projects the axis into the cover’s own sketch coordinates using both solved occurrence placements. The suggested diameter adds 10% to the largest selected diameter. For a designed tapped hole or its identified pattern copy, TCAD uses the nominal thread diameter. For other bores it uses the measured opening. Set the diameter to the clearance required by your design.
+
+Following uses the specific occurrences you picked and the identified source geometry. Moving a selected pattern instance moves its matching center. Adding more holes to the base does not add picks to an existing feature. A suppressed, replaced, or ambiguous source needs attention. The cover uses its active configuration. A following link also requires the source occurrence’s active configuration. An independent copy can use a differently configured source. All occurrences of the edited cover part share the resulting geometry. For a cover that needs a unique hole pattern, make that occurrence unique first.
+
+## Hole definitions
+
 The application-owned drilled-hole contract version 2 retains the target solid output, native position sketch, 1–1000 explicit point IDs, a simple/counterbore/countersink head, bore end condition, reverse sketch-normal entry and signed entry offset. Bore dimensions, head dimensions and countersink included angle remain unit-aware source expressions evaluated in f64. Blind bores have flat bottoms. Through All obtains a conservative exact native control-hull bound and extends the cutter beyond it. The supported convex planar stock path crops exact circular station wires to a proven entry and parallel exit and shares those wires with the new cavity; other stock uses the validated native Boolean path.
 
 Tapped Hole adds optional `thread` intent to the same feature, and the Cosmetic Thread checkbox can enable it on an existing simple, counterbored or countersunk hole. The saved `CosmeticThread` stores explicit nominal diameter, pitch, tap-drill diameter, handedness, depth and Blind/Through All end condition. The kernel constructs the exact tap-drill bore. Nominal diameter and pitch describe the cosmetic thread; they do not create a modeled helix, screw surface or teeth. When thread intent is present, its tap-drill diameter controls geometry and the ordinary unthreaded diameter stays saved as an inactive value. Disabling the thread restores that unthreaded diameter.

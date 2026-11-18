@@ -84,6 +84,7 @@ pub fn source(key: &str, definition: &Definition) -> Sketch {
         segments: vec![],
         profile_order: vec![],
         circles: BTreeMap::new(),
+        matched_centers: None,
         conversions: BTreeMap::new(),
         offsets: BTreeMap::new(),
         fillets: BTreeMap::new(),

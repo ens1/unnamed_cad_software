@@ -828,11 +828,11 @@ impl<K: KernelAdapter> Evaluator<K> {
             .assemblies
             .values()
             .any(|a| !a.mates.is_empty() || !a.component_patterns.is_empty())
-            || solved.parts.values().any(|p| {
-                p.features
-                    .iter()
-                    .any(|f| matches!(f.operation, cad_core::Operation::ReferenceBody { .. }) || matches!(&f.operation, cad_core::Operation::Pattern { options, .. } if options.requires_placement()))
-            }) {
+            || solved
+                .parts
+                .values()
+                .any(|p| p.features.iter().any(|f| p.feature_requires_placement(f)))
+        {
             let report = crate::assemblies::build_shapes_report(
                 &self.adapter,
                 &solved,
@@ -843,7 +843,8 @@ impl<K: KernelAdapter> Evaluator<K> {
             if !report.failures.is_empty() {
                 let diagnostics = report
                     .failures
-                    .values().cloned()
+                    .values()
+                    .cloned()
                     .chain(report.blocked.iter().map(|(target, message)| Diagnostic {
                         edge_recovery: None,
                         severity: "blocked".into(),
@@ -901,6 +902,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                     &self.shapes,
                 )?;
                 let mut resolved = self.adapter.prepare_sketch(
+                    doc,
                     &doc.parts[&node.definition].sketches[&sketch],
                     &plane,
                     &self.shapes,
@@ -1293,6 +1295,7 @@ impl<K: KernelAdapter> Evaluator<K> {
                     }
                     cad_core::Profile::Sketch { sketch } => {
                         let mut sketch = self.adapter.prepare_sketch(
+                            doc,
                             &part.sketches[sketch],
                             &plane,
                             &self.shapes,

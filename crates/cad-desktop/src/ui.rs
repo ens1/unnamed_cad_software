@@ -1251,6 +1251,7 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         || crate::assembly_tree_ui::action(w, command, Some(&element.data))
         || crate::assembly_motion_ui::action(w, command, Some(&element.data))
         || crate::assembly_tools_ui::action(w, command, Some(&element.data))
+        || crate::matching_holes_ui::action(w, command, Some(&element.data))
         || crate::assembly_welds_ui::action(w, command, Some(&element.data))
     {
         return;
@@ -2274,7 +2275,8 @@ fn model_view(
     {
         let p = response.interact_pointer_pos().unwrap_or(r.center());
         w.selection_popup = None;
-        let weld_pick = crate::weld_beads_ui::seam_pick::capture_click(w, r, p);
+        let weld_pick = crate::matching_holes_ui::capture_click(w, r, p)
+            || crate::weld_beads_ui::seam_pick::capture_click(w, r, p);
         let direction_pick = weld_pick || crate::component_pattern_ui::capture_sketch_pick(w, r, p);
         let structural_pick = !direction_pick
             && crate::structural_member_ui::capture_click(
@@ -2527,6 +2529,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         || crate::drawing_editor_ui::action(w, cmd, None)
         || crate::assembly_motion_ui::action(w, cmd, None)
         || crate::assembly_tools_ui::action(w, cmd, None)
+        || crate::matching_holes_ui::action(w, cmd, None)
         || crate::assembly_welds_ui::action(w, cmd, None)
     {
         return;
@@ -3193,11 +3196,16 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
     w.open_editor("feature");
 }
 pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
+    if name == "Match Holes" {
+        crate::matching_holes_ui::start(w);
+        return;
+    }
     if name == "Weld Bead" {
         crate::weld_beads_ui::preset(w);
         return;
     }
-    if crate::assembly_tools_ui::active(w)
+    if crate::matching_holes_ui::active(w)
+        || crate::assembly_tools_ui::active(w)
         || w.fields.contains_key("appearance-tool")
         || w.fields.contains_key("material-tool")
         || w.fields.contains_key("display-state-editor")
@@ -3886,6 +3894,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 | "standard-parts"
                 | "tolerance-stacks"
                 | "model-dimensions"
+                | "matching-holes"
                 | "weld-seam"
                 | "properties"
                 | "reference-repair"
@@ -3992,6 +4001,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 "configurations" => crate::configuration_ui::show(ui, w),
                 "inspection" => crate::inspection_ui::controls(ui, w),
                 "model-dimensions" => crate::model_dimensions_ui::show(ui, w),
+                "matching-holes" => crate::matching_holes_ui::show(ui, w),
                 "weld-seam" => crate::weld_beads_ui::seam_pick::show(ui, w),
                 "sensors" => crate::sensors_ui::show(ui, w),
                 "sketch-block-library" => crate::sketch_block_library_ui::show(ui, w),

@@ -77,6 +77,7 @@ pub trait KernelAdapter {
     }
     fn prepare_sketch(
         &self,
+        doc: &Document,
         sketch: &cad_core::Sketch,
         plane: &CadPlane,
         inputs: &BTreeMap<NodeRef, Shape>,
@@ -1034,11 +1035,43 @@ impl KernelAdapter for MonstertruckAdapter {
     }
     fn prepare_sketch(
         &self,
+        doc: &Document,
         source: &cad_core::Sketch,
         plane: &CadPlane,
         inputs: &BTreeMap<NodeRef, Shape>,
     ) -> Result<cad_core::Sketch> {
         let mut sketch = source.clone();
+        if let Some(link) = &source.matched_centers {
+            let resolver = DatumResolver {
+                adapter: self,
+                doc,
+                inputs,
+            };
+            let target = resolver.checked_placement(
+                &link.assembly,
+                &link.target_path,
+                Some(&link.target_part),
+            )?;
+            let mut placements = BTreeMap::new();
+            for (point, center) in &link.centers {
+                let placement = match placements.entry((&center.path, &center.body.definition)) {
+                    std::collections::btree_map::Entry::Occupied(entry) => *entry.get(),
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        *entry.insert(resolver.checked_placement(
+                            &link.assembly,
+                            &center.path,
+                            Some(&center.body.definition),
+                        )?)
+                    }
+                };
+                let axis = self.resolve_surface_axis(doc, &center.axis_source()?, inputs)?;
+                let uv = cad_core::matching_holes::position(plane, target, placement, &axis)?;
+                *sketch
+                    .points
+                    .get_mut(point)
+                    .ok_or_else(|| err("Matching hole point is missing"))? = uv;
+            }
+        }
         let histories = self.histories.borrow();
         for conversion in sketch.conversions.values_mut() {
             let shape = inputs
@@ -1474,7 +1507,7 @@ impl KernelAdapter for MonstertruckAdapter {
                             .get(sketch)
                             .ok_or_else(|| err("Missing sketch"))?
                             .clone();
-                        let mut s = self.prepare_sketch(&s, &plane, inputs)?;
+                        let mut s = self.prepare_sketch(doc, &s, &plane, inputs)?;
                         use cad_core::solver::ConstraintSolver;
                         cad_core::solver::NativeSolver.solve_sketch(
                             doc,
@@ -3894,9 +3927,14 @@ struct DatumResolver<'a> {
     doc: &'a Document,
     inputs: &'a BTreeMap<NodeRef, Shape>,
 }
-impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
-    fn occurrence_placement(&self, path: &[cad_core::Id]) -> Result<[[f64; 4]; 4]> {
-        let mut definition = self.doc.root.clone();
+impl DatumResolver<'_> {
+    fn checked_placement(
+        &self,
+        assembly: &str,
+        path: &[cad_core::Id],
+        expected_part: Option<&str>,
+    ) -> Result<[[f64; 4]; 4]> {
+        let mut definition = assembly.to_owned();
         let mut configuration = self.doc.active_configurations.get(&definition).cloned();
         let mut matrix = nalgebra::Matrix4::<f64>::identity();
         let placements = self.adapter.assembly_placements.borrow();
@@ -3906,22 +3944,27 @@ impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
             let a = scoped
                 .assemblies
                 .get(&definition)
-                .ok_or_else(|| err("Pattern direction occurrence path enters a part"))?;
+                .ok_or_else(|| err("Reference occurrence path enters a part"))?;
             let i = a
                 .instances
                 .get(key)
-                .ok_or_else(|| err("Pattern direction component is missing"))?;
-            let solved=placements.get(&cad_core::configuration::key(&definition,configuration.as_deref())).and_then(|p|p.get(key)).ok_or_else(||err("Pattern direction component is suppressed or its current placement has not been solved"))?;
+                .ok_or_else(|| err("Reference component is missing"))?;
+            let solved=placements.get(&cad_core::configuration::key(&definition,configuration.as_deref())).and_then(|p|p.get(key)).ok_or_else(||err("Referenced component is suppressed or its current placement has not been solved"))?;
             matrix *= solved.matrix();
             definition = i.definition.clone();
             configuration =
                 cad_core::configuration::selected(self.doc, &definition, i.configuration.as_ref())
                     .cloned();
         }
+        if expected_part.is_some_and(|part| part != definition) {
+            return Err(err(
+                "The reference occurrence now contains a different part. Reselect the hole in its original component.",
+            ));
+        }
         if self.doc.parts.contains_key(&definition)
             && configuration.as_ref() != self.doc.active_configurations.get(&definition)
         {
-            return Err(CadError::Unsupported("An in-context part-pattern direction needs the reference occurrence's currently active part configuration. Activate that configuration or choose an independent local reference axis; a different configured geometry carrier cannot be substituted".into()));
+            return Err(CadError::Unsupported("Activate the configuration used by the referenced occurrence to rebuild this in-context feature".into()));
         }
         let scoped = cad_core::configuration::source_variant(
             self.doc,
@@ -3936,7 +3979,11 @@ impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
             std::array::from_fn(|c| matrix[(r, c)])
         }))
     }
-
+}
+impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
+    fn occurrence_placement(&self, path: &[cad_core::Id]) -> Result<[[f64; 4]; 4]> {
+        self.checked_placement(&self.doc.root, path, None)
+    }
     fn tangent_plane(
         &self,
         reference: &TopologyRef,
@@ -4026,7 +4073,9 @@ impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
         if cad_core::sketch_transform::suppressed_members(source).contains(member) {
             return Err(err("Referenced path sketch member is suppressed"));
         }
-        let mut solved = self.adapter.prepare_sketch(source, &plane, self.inputs)?;
+        let mut solved = self
+            .adapter
+            .prepare_sketch(self.doc, source, &plane, self.inputs)?;
         use cad_core::solver::ConstraintSolver;
         cad_core::solver::NativeSolver.solve_sketch(self.doc, &profile.definition, &mut solved)?;
         let get = |id: &str| {
@@ -4350,7 +4399,9 @@ impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
             reference_body.as_ref(),
             self.inputs,
         )?;
-        let mut solved = self.adapter.prepare_sketch(source, &plane, self.inputs)?;
+        let mut solved = self
+            .adapter
+            .prepare_sketch(self.doc, source, &plane, self.inputs)?;
         use cad_core::solver::ConstraintSolver;
         cad_core::solver::NativeSolver.solve_sketch(self.doc, &profile.definition, &mut solved)?;
         let get = |key: &str| {
@@ -4502,7 +4553,9 @@ impl cad_core::reference_geometry::Resolver for DatumResolver<'_> {
         if cad_core::sketch_transform::suppressed_points(source).contains(point_id) {
             return Err(err("Referenced sketch point is suppressed"));
         }
-        let mut solved = self.adapter.prepare_sketch(source, &plane, self.inputs)?;
+        let mut solved = self
+            .adapter
+            .prepare_sketch(self.doc, source, &plane, self.inputs)?;
         use cad_core::solver::ConstraintSolver;
         cad_core::solver::NativeSolver.solve_sketch(self.doc, &profile.definition, &mut solved)?;
         let p = solved
