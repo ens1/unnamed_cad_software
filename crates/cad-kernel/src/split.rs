@@ -912,3 +912,90 @@ pub(crate) fn operation(
     }
     Ok(Shape::Bodies(result))
 }
+
+/// Material faces on a drawing cut. Prefer the analytic layered constructor for
+/// drilled prismatic stock. Other supported carriers use the native plane cut.
+pub(crate) fn section_faces(
+    solid: &Solid,
+    section: &cad_core::drawing_sections::Frame,
+    tolerance: f64,
+) -> Result<Vec<Face>> {
+    let frame = Frame {
+        origin: section.origin.into(),
+        u: section.u.into(),
+        v: section.v.into(),
+        n: section.normal.into(),
+    };
+    let mut bounds = [[f64::INFINITY; 3], [f64::NEG_INFINITY; 3]];
+    for enclosure in crate::native_bounds::solid(solid)? {
+        for (i, axis) in [frame.u, frame.v, frame.n].into_iter().enumerate() {
+            let (low, high) = enclosure.projection(frame.origin, axis)?;
+            bounds[0][i] = bounds[0][i].min(low);
+            bounds[1][i] = bounds[1][i].max(high);
+        }
+    }
+    if bounds[0][2] >= -tolerance || bounds[1][2] <= tolerance {
+        return Ok(Vec::new());
+    }
+    if solid.face_iter().any(|face| {
+        let Surface::Plane(p) = face.surface() else {
+            return false;
+        };
+        p.normal().normalize().cross(frame.n).magnitude() <= 1e-10
+            && (p.subs(0., 0.) - frame.origin).dot(frame.n).abs() <= tolerance
+    }) {
+        return Err(unsupported(
+            "The cutting line coincides with an existing face. Move it into the material",
+        ));
+    }
+    let cutter = tool(&frame, bounds, true, tolerance)?;
+    let caps = if let Some(result) = crate::prismatic_boolean::binary(
+        solid,
+        &cutter.solid,
+        crate::boolean_ops::Mode::Intersection,
+    )? {
+        let Some(clipped) = result.solid else {
+            return Ok(Vec::new());
+        };
+        clipped
+            .face_iter()
+            .filter(|face| {
+                let Surface::Plane(plane) = face.surface() else {
+                    return false;
+                };
+                plane.normal().normalize().cross(frame.n).magnitude() <= 1e-10
+                    && (plane.subs(0., 0.) - frame.origin).dot(frame.n).abs() <= tolerance
+            })
+            .cloned()
+            .collect()
+    } else {
+        let inverse = frame
+            .matrix()
+            .invert()
+            .ok_or_else(|| invalid("Invalid section plane"))?;
+        monstertruck::solid::plane_cut(solid, inverse, true, tolerance)
+            .map_err(|err| {
+                unsupported(&format!(
+                    "Cannot intersect this cutting plane with the native body ({err})"
+                ))
+            })?
+            .section
+    };
+    if caps.is_empty()
+        && solid.boundaries().iter().any(|shell| {
+            let mut above = false;
+            let mut below = false;
+            for vertex in shell.vertex_iter() {
+                let d = (vertex.point() - frame.origin).dot(frame.n);
+                above |= d > tolerance;
+                below |= d < -tolerance;
+            }
+            above && below
+        })
+    {
+        return Err(unsupported(
+            "The native cut produced no material boundary on a crossing shell",
+        ));
+    }
+    Ok(caps)
+}

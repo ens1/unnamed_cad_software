@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod symbols;
 pub use symbols::*;
 
-pub const CONTRACT_VERSION: u32 = 12;
+pub const CONTRACT_VERSION: u32 = 13;
 pub const FORMAT_VERSION: u32 = 4;
 const TITLE_CELL_PADDING_MM: f64 = 1.;
 const TITLE_LABEL_SCALE: f64 = 0.65;
@@ -242,6 +242,12 @@ pub enum Tolerance {
 pub enum PointReference {
     /// A proved circular carrier center; it follows the native curve and occurrence.
     CurveCenter { curve: Box<CurveReference> },
+    SectionVertex {
+        section: Id,
+        source: Box<CurveReference>,
+        crossing: usize,
+        count: usize,
+    },
     SketchPoint {
         sketch: NodeRef,
         point: Id,
@@ -504,13 +510,23 @@ pub enum Primitive {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ViewProjection {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_frame: Option<crate::drawing_sections::Frame>,
     pub rect_mm: [f64; 4],
     pub model_center: [f64; 2],
     pub scale: f64,
 }
 impl ViewProjection {
     pub fn paper_point(&self, key: &str, point: [f64; 3]) -> Result<[f64; 2]> {
-        Ok(self.paper_projected(project(key, point)?))
+        Ok(self.paper_projected(self.model_point(key, point)?))
+    }
+    pub fn model_point(&self, key: &str, p: [f64; 3]) -> Result<[f64; 2]> {
+        project_frame(key, p, self.section_frame)
+    }
+    pub fn unscale(&self, p: [f64; 2]) -> [f64; 2] {
+        std::array::from_fn(|i| {
+            self.model_center[i] + (p[i] - self.rect_mm[i] - self.rect_mm[i + 2] * 0.5) / self.scale
+        })
     }
     pub fn paper_projected(&self, point: [f64; 2]) -> [f64; 2] {
         std::array::from_fn(|axis| {
@@ -976,6 +992,7 @@ pub fn new_sheet(doc: &Document, definition: &str, name: String) -> Result<Drawi
             .into_iter()
             .collect(),
         view_visibility_geometry: BTreeMap::new(),
+        section: None,
         exploded_view: None,
         display_state: None,
     };
@@ -1126,6 +1143,16 @@ pub fn set_views(sheet: &mut Drawing, views: Vec<String>) -> Result<()> {
             sheet.view_visibility_geometry.insert(key.clone(), mode);
         }
     }
+    if let Some(section) = &sheet.section {
+        if views.iter().any(|key| key == "section-z") && !views.contains(&section.parent) {
+            return Err(invalid(
+                "Keep the cutting line’s parent view or remove its section first",
+            ));
+        }
+        if !views.iter().any(|key| key == "section-z") {
+            sheet.section = None;
+        }
+    }
     sheet.views = views;
     sheet
         .view_layouts
@@ -1145,9 +1172,17 @@ impl SheetTemplate {
             name: sheet.name.clone(),
             paper_mm: sheet.paper_mm,
             format: sheet.format.clone().unwrap_or_default(),
-            views: view_keys(sheet),
+            views: view_keys(sheet)
+                .into_iter()
+                .filter(|k| sheet.section.is_none() || k != "section-z")
+                .collect(),
             annotations: sheet.annotations.clone(),
-            view_layouts: sheet.view_layouts.clone(),
+            view_layouts: sheet
+                .view_layouts
+                .iter()
+                .filter(|(k, _)| sheet.section.is_none() || k.as_str() != "section-z")
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             view_display_modes: sheet.view_display_modes.clone(),
             view_visibility_geometry: sheet.view_visibility_geometry.clone(),
             title_block: sheet.title_block.clone(),
@@ -1177,6 +1212,7 @@ impl SheetTemplate {
             view_layouts: self.view_layouts.clone(),
             view_display_modes: self.view_display_modes.clone(),
             view_visibility_geometry: self.view_visibility_geometry.clone(),
+            section: None,
             exploded_view: None,
             display_state: None,
         };
@@ -1378,7 +1414,11 @@ pub(crate) fn table_placement(
     let placement = unique_placement(doc, evaluation, sheet, definition, path)?;
     Ok((placement.key, placement.matrix))
 }
-fn body_matches(doc: &Document, actual: &Option<NodeRef>, required: &Option<NodeRef>) -> bool {
+pub(crate) fn body_matches(
+    doc: &Document,
+    actual: &Option<NodeRef>,
+    required: &Option<NodeRef>,
+) -> bool {
     let Some(required) = required else {
         return true;
     };
@@ -1485,6 +1525,9 @@ pub fn point(
         return Ok(fallback);
     };
     match reference {
+        PointReference::SectionVertex { .. } => {
+            crate::drawing_sections::vertex(doc, e, sheet, reference)
+        }
         PointReference::CurveCenter { curve } => Ok(circular(doc, e, sheet, curve)?.center),
         PointReference::SketchPoint {
             sketch,
@@ -1690,10 +1733,15 @@ pub fn parallel_lines(
     }
     let a = linear(doc, e, sheet, first)?;
     let b = linear(doc, e, sheet, second)?;
-    let origin = project(view, a.start)?;
-    let other = project(view, b.start)?;
-    let end = project(view, a.end)?;
-    let other_end = project(view, b.end)?;
+    let frame = if view == "section-z" && sheet.section.is_some() {
+        crate::drawing_sections::current(e, sheet)?.frame
+    } else {
+        None
+    };
+    let origin = project_frame(view, a.start, frame)?;
+    let other = project_frame(view, b.start, frame)?;
+    let end = project_frame(view, a.end, frame)?;
+    let other_end = project_frame(view, b.end, frame)?;
     let delta = [end[0] - origin[0], end[1] - origin[1]];
     let peer = [other_end[0] - other[0], other_end[1] - other[1]];
     let length = delta[0].hypot(delta[1]);
@@ -1730,9 +1778,15 @@ pub fn edge_separation_points(
             .as_ref()
             .ok_or_else(|| invalid("Select the second straight edge"))?,
     )?;
-    let picked = project(
+    let frame = if dimension.view == "section-z" && sheet.section.is_some() {
+        crate::drawing_sections::current(e, sheet)?.frame
+    } else {
+        None
+    };
+    let picked = project_frame(
         &dimension.view,
         point(doc, e, sheet, dimension.first, &dimension.options.first).unwrap_or(dimension.first),
+        frame,
     )?;
     let along = (picked[0] - first[0]) * direction[0] + (picked[1] - first[1]) * direction[1];
     let a = [
@@ -1831,23 +1885,36 @@ pub fn circular(
             instance_path,
         } => {
             let (edge, place) = resolve_edge(doc, e, sheet, edge, body, instance_path)?;
-            let curve = edge.curve.as_ref().ok_or_else(|| {
-                CadError::Unsupported(
-                    "Circular model-edge dimensions require exact rational curve data".into(),
-                )
-            })?;
-            circular_carrier(curve, place.matrix)
+            circular_edge(edge, place.matrix)
         }
     }
 }
 /// Recognize an exact carrier already obtained from the represented evaluation.
 /// Candidate generation can use its known edge/placement directly; saved
 /// references still go through `circular` and its unique provenance lookup.
-pub(crate) fn circular_carrier(
-    curve: &crate::sketch_edit::Curve3,
-    matrix: [[f64; 4]; 4],
-) -> Result<CircularGeometry> {
-    let mut circle = conic_circle(curve)?;
+pub(crate) fn circular_edge(edge: &EdgeData, matrix: [[f64; 4]; 4]) -> Result<CircularGeometry> {
+    let mut circle = match &edge.center {
+        Some(crate::protocol::EdgeCenter::Circle {
+            version,
+            center,
+            normal,
+            radius_mm,
+            radial,
+        }) if *version == crate::protocol::EDGE_CENTER_VERSION
+            && radius_mm.is_finite()
+            && *radius_mm > 0. =>
+        {
+            CircularGeometry {
+                center: *center,
+                normal: *normal,
+                radius: *radius_mm,
+                start: std::array::from_fn(|i| center[i] + radius_mm * radial[i]),
+            }
+        }
+        _ => conic_circle(edge.curve.as_ref().ok_or_else(|| {
+            CadError::Unsupported("This model edge has no native circular carrier".into())
+        })?)?,
+    };
     circle.center = transform(circle.center, matrix);
     circle.start = transform(circle.start, matrix);
     let n = Vector3::from(circle.normal);
@@ -1945,6 +2012,9 @@ fn conic_circle(curve: &crate::sketch_edit::Curve3) -> Result<CircularGeometry> 
 }
 
 pub fn validate_definition(sheet: &Drawing) -> Result<()> {
+    if let Some(section) = &sheet.section {
+        section.validate(sheet)?;
+    }
     let mut ids = std::collections::BTreeSet::new();
     if sheet.id.is_empty()
         || sheet.name.trim().is_empty()
@@ -2247,6 +2317,7 @@ pub fn validate_definition(sheet: &Drawing) -> Result<()> {
 
 #[derive(Clone)]
 struct View {
+    section_frame: Option<crate::drawing_sections::Frame>,
     name: String,
     at: [f64; 2],
     size: [f64; 2],
@@ -2365,9 +2436,23 @@ pub(crate) fn project(name: &str, p: [f64; 3]) -> Result<[f64; 2]> {
         _ => return Err(CadError::Unsupported(format!("Drawing view {name}"))),
     })
 }
+fn project_frame(
+    key: &str,
+    p: [f64; 3],
+    frame: Option<crate::drawing_sections::Frame>,
+) -> Result<[f64; 2]> {
+    if let Some(f) = frame {
+        Ok(f.project(p))
+    } else {
+        project(key, p)
+    }
+}
 impl View {
+    fn project(&self, p: [f64; 3]) -> Result<[f64; 2]> {
+        project_frame(&self.name, p, self.section_frame)
+    }
     fn screen(&self, p: [f64; 3]) -> Result<[f64; 2]> {
-        let p = project(&self.name, p)?;
+        let p = self.project(p)?;
         Ok([
             self.at[0] + self.size[0] / 2. + (p[0] - self.center[0]) * self.scale,
             self.at[1] + self.size[1] / 2. + (p[1] - self.center[1]) * self.scale,
@@ -3014,6 +3099,7 @@ pub(crate) fn dimension_for_placement(
         evaluation,
         sheet,
         &View {
+            section_frame: projection.section_frame,
             name: source.view.clone(),
             at: [projection.rect_mm[0], projection.rect_mm[1]],
             size: [projection.rect_mm[2], projection.rect_mm[3]],
@@ -3088,7 +3174,7 @@ fn dimension(
                 "The edge carriers no longer support this axis separation; use Perpendicular or reattach the dimension",
             ));
         }
-        let picked = project(&view.name, first)?;
+        let picked = view.project(first)?;
         let first_along =
             (picked[0] - carrier[0]) * direction[0] + (picked[1] - carrier[1]) * direction[1];
         let origin = [
@@ -3157,8 +3243,8 @@ fn dimension(
         if u.norm() < 1e-9 || v.norm() < 1e-9 {
             return Err(invalid("Angular dimension requires two nonzero rays"));
         }
-        let projected_u = project(&view.name, u.into())?;
-        let projected_v = project(&view.name, v.into())?;
+        let projected_u = view.project(u.into())?;
+        let projected_v = view.project(v.into())?;
         if (projected_u[0].powi(2) + projected_u[1].powi(2) - u.norm_squared()).abs()
             > u.norm_squared() * 1e-8
             || (projected_v[0].powi(2) + projected_v[1].powi(2) - v.norm_squared()).abs()
@@ -3226,18 +3312,18 @@ fn dimension(
     let (d1, d2) = match d.options.kind {
         DimensionKind::Horizontal => {
             if d.options.second_curve.is_none() {
-                value = owner_parameter(doc, d)?.map(|(v, _)| v).unwrap_or(
-                    (project(&view.name, second)?[0] - project(&view.name, first)?[0]).abs(),
-                );
+                value = owner_parameter(doc, d)?
+                    .map(|(v, _)| v)
+                    .unwrap_or((view.project(second)?[0] - view.project(first)?[0]).abs());
             }
             let y = a[1].max(b[1]) + d.offset_mm;
             ([a[0], y], [b[0], y])
         }
         DimensionKind::Vertical => {
             if d.options.second_curve.is_none() {
-                value = owner_parameter(doc, d)?.map(|(v, _)| v).unwrap_or(
-                    (project(&view.name, second)?[1] - project(&view.name, first)?[1]).abs(),
-                );
+                value = owner_parameter(doc, d)?
+                    .map(|(v, _)| v)
+                    .unwrap_or((view.project(second)?[1] - view.project(first)?[1]).abs());
             }
             let x = a[0].max(b[0]) + d.offset_mm;
             ([x, a[1]], [x, b[1]])
@@ -3452,6 +3538,7 @@ fn annotation(
         }
         AnnotationKind::DimensionGroup { group } => {
             let projection = ViewProjection {
+                section_frame: view.section_frame,
                 rect_mm: [view.at[0], view.at[1], view.size[0], view.size[1]],
                 model_center: view.center,
                 scale: view.scale,
@@ -3806,6 +3893,7 @@ pub fn sheets(doc: &Document, e: &Evaluation) -> Result<Vec<Sheet>> {
                 .into_iter()
                 .collect(),
             view_visibility_geometry: BTreeMap::new(),
+            section: None,
             exploded_view: None,
             display_state: None,
         }]
@@ -4195,14 +4283,16 @@ fn build_sheet_mode(
                 }
             }));
         }
-        triangle_dashes.extend(std::iter::repeat_n(ghost, mesh.indices.len() / 3));
-        triangles.extend(
-            mesh.indices
-                .as_chunks::<3>()
-                .0
-                .iter()
-                .map(|tri| tri.map(|v| transform(mesh.positions[v as usize], instance.matrix))),
-        );
+        if sheet.section.is_none() && sheet.views.iter().any(|view| view == "section-z") {
+            triangle_dashes.extend(std::iter::repeat_n(ghost, mesh.indices.len() / 3));
+            triangles.extend(
+                mesh.indices
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|tri| tri.map(|v| transform(mesh.positions[v as usize], instance.matrix))),
+            );
+        }
     }
     let names = view_keys(sheet);
     if names.len() > 16 {
@@ -4294,6 +4384,25 @@ fn build_sheet_mode(
     // resolved view copies its relationship into editable source; an explicit
     // unlinked layout remains the user's independent override.
     let mut effective = sheet.clone();
+    let section = if sheet.section.is_some() {
+        match crate::drawing_sections::current(e, sheet) {
+            Ok(cut) => Some(cut),
+            Err(error) if repair => {
+                result
+                    .diagnostics
+                    .insert(view_id(sheet, "section-z"), error.to_string());
+                None
+            }
+            Err(error) => {
+                return Err(crate::CadError::EvaluationTarget {
+                    target: view_id(sheet, crate::drawing_sections::KEY),
+                    message: format!("Section A-A · {error}"),
+                });
+            }
+        }
+    } else {
+        None
+    };
     for (index, name) in names.iter().enumerate() {
         let mut lines = world.clone();
         let mut view_curves = curves.clone();
@@ -4303,7 +4412,29 @@ fn build_sheet_mode(
         } else {
             "Exact projected B-rep wireframe".to_string()
         };
-        if name == "section-z" {
+        let section_frame = section
+            .filter(|_| name == "section-z")
+            .and_then(|cut| cut.frame);
+        if name == "section-z" && sheet.section.is_some() {
+            lines.clear();
+            view_curves.clear();
+            view_dashes.clear();
+            if let Some(cut) = section {
+                for region in &cut.regions {
+                    for curve in region.loops.iter().flatten() {
+                        lines.push(vec![]);
+                        view_curves.push(Some(curve.clone()));
+                        view_dashes.push(region.ghost);
+                    }
+                }
+            }
+            note = if section.is_some() {
+                "Native cut boundaries and material hatching"
+            } else {
+                "Section A-A needs a current cutting line"
+            }
+            .into();
+        } else if name == "section-z" {
             let lo = triangles
                 .iter()
                 .flatten()
@@ -4360,7 +4491,7 @@ fn build_sheet_mode(
             // line modes preserves view scale and dimension origins.
             .chain(surface_extents.iter().filter(|_| name != "section-z"))
         {
-            let p = project(name, *p)?;
+            let p = project_frame(name, *p, section_frame)?;
             for i in 0..2 {
                 min[i] = min[i].min(p[i]);
                 max[i] = max[i].max(p[i]);
@@ -4393,6 +4524,7 @@ fn build_sheet_mode(
             (index.rem_euclid(columns), rows - 1 - index / columns)
         };
         let mut view = View {
+            section_frame,
             name: name.clone(),
             at: [
                 bounds[0][0] + 4. + column as f64 * cell[0],
@@ -4642,6 +4774,7 @@ fn build_sheet_mode(
         result.projections.insert(
             name.clone(),
             ViewProjection {
+                section_frame: view.section_frame,
                 rect_mm: [x, y, width, height],
                 model_center: view.center,
                 scale: view.scale,
@@ -4673,7 +4806,13 @@ fn build_sheet_mode(
             } else {
                 None
             };
-        let visibility = if name == "section-z" {
+        let visibility = if name == "section-z" && section.is_some() {
+            crate::drawing_visibility::Fidelity::NativeSection {
+                tolerance_mm: e.accuracy.modeling.linear_mm,
+            }
+        } else if name == "section-z" && sheet.section.is_some() {
+            crate::drawing_visibility::Fidelity::Unavailable
+        } else if name == "section-z" {
             crate::drawing_visibility::Fidelity::SectionIntersection {
                 chord_tolerance_mm: e.accuracy.display_mm,
             }
@@ -4719,8 +4858,9 @@ fn build_sheet_mode(
             name.clone(),
             ViewFidelity {
                 approximate: visibility.approximate()
-                    || ((occlusion.is_none()
-                        || geometry == crate::drawing_visibility::GeometryMode::DisplayMesh)
+                    || (view.section_frame.is_none()
+                        && (occlusion.is_none()
+                            || geometry == crate::drawing_visibility::GeometryMode::DisplayMesh)
                         && curves.iter().any(Option::is_none))
                     || name == "detail-front"
                     || layout_invalid,
@@ -4735,7 +4875,51 @@ fn build_sheet_mode(
             },
         );
         let view_start = out.len();
-        text(out, [view.at[0], view.at[1] + view.size[1] + 4.], 3.5, name);
+        text(
+            out,
+            [view.at[0], view.at[1] + view.size[1] + 4.],
+            3.5,
+            if name == "section-z" && sheet.section.is_some() {
+                "Section A-A"
+            } else {
+                name
+            },
+        );
+        if let Some(cut) = section {
+            if let Some(frame) = cut.frame
+                && name == &cut.source.parent
+            {
+                cutting_line(out, &view, frame)?;
+            } else if name == "section-z" {
+                let projection = &result.projections[name];
+                for region in cut.regions.iter().filter(|region| !region.ghost) {
+                    let hatches = match crate::drawing_sections::hatch(region, projection) {
+                        Ok(hatches) => hatches,
+                        Err(error) if repair => {
+                            result
+                                .diagnostics
+                                .insert(view_id(sheet, name), error.to_string());
+                            if let Some(info) = result.view_fidelity.get_mut(name) {
+                                info.approximate = true;
+                                info.description = error.to_string();
+                            }
+                            continue;
+                        }
+                        Err(error) => {
+                            return Err(crate::CadError::EvaluationTarget {
+                                target: view_id(sheet, name),
+                                message: format!("Section A-A · {error}"),
+                            });
+                        }
+                    };
+                    for [a, b] in hatches {
+                        if let Some([a, b]) = clipped_segment(a, b, &view) {
+                            line(out, a, b)
+                        }
+                    }
+                }
+            }
+        }
         text(
             out,
             [view.at[0], view.at[1] + view.size[1] + 1.],
@@ -4750,7 +4934,10 @@ fn build_sheet_mode(
                 }
             ),
         );
-        for connector in &exploded_lines {
+        for connector in exploded_lines
+            .iter()
+            .filter(|_| view.section_frame.is_none())
+        {
             let a = view.screen(connector.start_mm)?;
             let b = view.screen(connector.end_mm)?;
             if let Some([a, b]) = clipped_segment(a, b, &view) {
@@ -4909,7 +5096,10 @@ fn build_sheet_mode(
             if let Err(error) = dimension(doc, e, sheet, &view, d, out) {
                 let message = format!("{} / Dimension {}: {error}", sheet.name, d.id);
                 if !repair {
-                    return Err(invalid(message));
+                    return Err(crate::CadError::EvaluationTarget {
+                        target: d.id.clone(),
+                        message,
+                    });
                 }
                 out.truncate(start);
                 let at = view
@@ -4932,7 +5122,10 @@ fn build_sheet_mode(
             if let Err(error) = annotation(doc, e, sheet, &view, entity, out) {
                 let message = format!("{} / Annotation {}: {error}", sheet.name, entity.id);
                 if !repair {
-                    return Err(invalid(message));
+                    return Err(crate::CadError::EvaluationTarget {
+                        target: entity.id.clone(),
+                        message,
+                    });
                 }
                 out.truncate(start);
                 let at = [
@@ -5151,7 +5344,11 @@ pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation
         out.push(crate::presentation::SemanticElement {id:sheet.id.clone(),role:"drawing-sheet".into(),label:sheet.name.clone(),value:Some(format!("Sheet {} / {}",index+1,doc.drawings.len())),state:state.into(),commands,relationships:vec![sheet.definition.clone()].into_iter().chain(sheet.exploded_view.iter().cloned()).collect(),data:serde_json::json!({"contract":"tcad.drawing","version":CONTRACT_VERSION,"sheet_id":sheet.id,"sheet":sheet,"paper_units":"mm","template_contract":"tcad.drawing-sheet-template","template_version":FORMAT_VERSION})});
         out.push(crate::presentation::SemanticElement {id:format!("{}::format",sheet.id),role:"drawing-sheet-format".into(),label:"Sheet format and linked title block".into(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-format-load".into(),"drawing.sheet-template-save".into()],relationships:vec![sheet.id.clone()],data:serde_json::json!({"contract":"tcad.drawing-sheet-format","version":FORMAT_VERSION,"sheet_id":sheet.id,"format":sheet.format,"paper_units":"mm","vectors":format_geometry(doc,sheet).ok()})});
         for key in view_keys(sheet) {
-            out.push(crate::presentation::SemanticElement {id:view_id(sheet,&key),role:"drawing-view".into(),label:key.clone(),value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-preview".into()],relationships:vec![sheet.id.clone()].into_iter().chain(sheet.view_layouts.get(&key).and_then(|layout|layout.alignment.as_ref()).map(|alignment|view_id(sheet,&alignment.parent))).collect(),data:serde_json::json!({"sheet_id":sheet.id,"view_key":key,"layout":sheet.view_layouts.get(&key),"display_mode":crate::drawing_visibility::mode_for(sheet,&key),"visibility_geometry":crate::drawing_visibility::geometry_for(sheet,&key),"paper_units":"mm","identity_scope":"sheet","exploded_view":sheet.exploded_view})});
+            let section = sheet
+                .section
+                .as_ref()
+                .filter(|_| key == crate::drawing_sections::KEY);
+            out.push(crate::presentation::SemanticElement {id:view_id(sheet,&key),role:"drawing-view".into(),label:if section.is_some(){"Section A–A".into()}else{key.clone()},value:None,state:state.into(),commands:vec!["drawing.sheet-edit".into(),"drawing.sheet-preview".into()],relationships:vec![sheet.id.clone()].into_iter().chain(sheet.view_layouts.get(&key).and_then(|layout|layout.alignment.as_ref()).map(|alignment|view_id(sheet,&alignment.parent))).collect(),data:serde_json::json!({"sheet_id":sheet.id,"view_key":key,"cutting_line":section,"layout":sheet.view_layouts.get(&key),"display_mode":crate::drawing_visibility::mode_for(sheet,&key),"visibility_geometry":crate::drawing_visibility::geometry_for(sheet,&key),"paper_units":"mm","identity_scope":"sheet","exploded_view":sheet.exploded_view})});
         }
         for cell in sheet
             .format
@@ -5191,4 +5388,36 @@ pub fn semantic_elements(doc: &Document, state: &str) -> Vec<crate::presentation
         }
     }
     out
+}
+
+fn cutting_line(
+    out: &mut Vec<Primitive>,
+    view: &View,
+    cut: crate::drawing_sections::Frame,
+) -> Result<()> {
+    let center = view.screen(cut.origin)?;
+    let d = view.project(cut.u)?;
+    let n = view.project(cut.normal)?;
+    let reach = (center[0] - view.at[0]).abs()
+        + (center[1] - view.at[1]).abs()
+        + view.size[0]
+        + view.size[1];
+    let at = |t: f64| [center[0] + t * d[0], center[1] + t * d[1]];
+    let Some([a, b]) = clipped_segment(at(-reach), at(reach), view) else {
+        return Ok(());
+    };
+    let inset = 2f64.min((b[0] - a[0]).hypot(b[1] - a[1]) * 0.2);
+    let a = [a[0] + inset * d[0], a[1] + inset * d[1]];
+    let b = [b[0] - inset * d[0], b[1] - inset * d[1]];
+    out.push(Primitive::Polyline {
+        points: vec![a, b],
+        dashed: true,
+    });
+    for tip in [a, b] {
+        let tail = [tip[0] + 4. * n[0], tip[1] + 4. * n[1]];
+        line(out, tail, tip);
+        arrow(out, tip, tail);
+        text(out, [tail[0] + 0.6, tail[1] + 0.6], 2.8, "A");
+    }
+    Ok(())
 }

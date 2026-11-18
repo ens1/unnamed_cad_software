@@ -81,6 +81,10 @@ pub enum Fidelity {
         chord_tolerance_mm: f64,
         tolerance_mm: f64,
     },
+    Unavailable,
+    NativeSection {
+        tolerance_mm: f64,
+    },
     SectionIntersection {
         chord_tolerance_mm: f64,
     },
@@ -121,7 +125,7 @@ impl Fidelity {
     pub fn approximate(&self) -> bool {
         matches!(
             self,
-            Self::Tessellated { .. } | Self::SectionIntersection { .. }
+            Self::Tessellated { .. } | Self::SectionIntersection { .. } | Self::Unavailable
         )
     }
 }
@@ -930,7 +934,7 @@ pub(crate) fn line_curve(points: [Point; 2]) -> Curve3 {
         degree: 1,
     }
 }
-fn bezier_spans(curve: &Curve3) -> Result<Vec<Curve3>> {
+pub(crate) fn bezier_spans(curve: &Curve3) -> Result<Vec<Curve3>> {
     if curve.degree > 32
         || curve.control_points.len() > 100_000
         || curve
@@ -981,7 +985,7 @@ fn coefficients(controls: &[Point], weights: &[f64], plane: [f64; 4]) -> Vec<f64
         })
         .collect()
 }
-fn roots(
+pub(crate) fn roots(
     values: &[f64],
     parameter_tolerance: f64,
     zero_tolerance: f64,

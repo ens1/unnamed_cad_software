@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
 mod paper_cache;
+mod section_tool;
 pub use paper_cache::PaperWorker;
 
 #[derive(Clone, PartialEq)]
@@ -57,6 +58,7 @@ enum DimensionMode {
 enum Tool {
     #[default]
     Select,
+    Section(section_tool::Placement),
     Dimension {
         first: Option<Box<ReferenceHit>>,
     },
@@ -204,6 +206,11 @@ fn refresh(w: &Workspace, state: &mut State, source: &Drawing, page: u32) -> Res
         cache.evaluation.identity.backend == w.session.backend
             && cache.evaluation.identity.protocol == cad_core::protocol::PROTOCOL_VERSION
             && geometry_equal(&cache.geometry, w.session.visible())
+            && (source.section.is_none()
+                || (cache.source.section == source.section
+                    && cache.source.definition == source.definition
+                    && cache.source.exploded_view == source.exploded_view
+                    && cache.source.display_state == source.display_state))
     });
     if current.is_none() && !can_reuse {
         return Err(invalid(
@@ -1153,6 +1160,12 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "Smart Dimension",
             !active(w),
         ),
+        command(
+            &context,
+            "drawing.interact-section",
+            "Section View",
+            !active(w) && page(w) == 0,
+        ),
         command(&context, "drawing.interact-fit", "Fit Sheet", !active(w)),
         field(
             &context,
@@ -1650,6 +1663,12 @@ fn execute(w: &mut Workspace, state: &mut State, cmd: &str, data: Option<&Value>
             state.context_target = None;
         }
         "drawing.interact-select" => state.tool = Tool::Select,
+        "drawing.interact-section" => {
+            if page(w) != 0 {
+                return Err(invalid("Place a section on the sheet’s first page"));
+            }
+            state.tool = Tool::Section(section_tool::Placement::Anchor);
+        }
         "drawing.interact-dimension" => {
             if page(w) != 0 {
                 return Err(invalid("Model dimensions belong on the first paper page"));
@@ -1862,6 +1881,9 @@ fn click_reference(
     point: [f64; 2],
     tolerance: f64,
 ) -> Result<()> {
+    if let Tool::Section(placement) = state.tool.clone() {
+        return section_tool::click(w, state, source, scene, point, tolerance, placement);
+    }
     let view = match &state.tool {
         Tool::Dimension { first: Some(first) } => Some(first.view.as_str()),
         Tool::Reattach { target, .. } | Tool::ReattachCurve { target } => scene
@@ -1990,7 +2012,7 @@ fn click_reference(
             state.dimension_hint = Some(hint.clone());
             w.status = format!("{hint}; select geometry for another dimension");
         }
-        Tool::Select => {}
+        Tool::Select | Tool::Section(_) => {}
     }
     Ok(())
 }
@@ -2231,6 +2253,7 @@ pub fn frame(
             for (command, label) in [
                 ("drawing.interact-select", "Select"),
                 ("drawing.interact-dimension", "Dimension"),
+                ("drawing.interact-section", "Section View"),
                 ("drawing.interact-fit", "Fit"),
             ] {
                 if controls::button(
@@ -2239,13 +2262,25 @@ pub fn frame(
                     "drawing-tool",
                     &["compact"],
                     label,
-                    state.capture.is_none(),
-                    false,
+                    state.capture.is_none()
+                        && (page(w) == 0
+                            || !matches!(
+                                command,
+                                "drawing.interact-dimension" | "drawing.interact-section"
+                            )),
+                    matches!(
+                        (&state.tool, command),
+                        (Tool::Dimension { .. }, "drawing.interact-dimension")
+                            | (Tool::Section(_), "drawing.interact-section")
+                    ),
                 )
                 .clicked()
                 {
                     match command {
                         "drawing.interact-select" => state.tool = Tool::Select,
+                        "drawing.interact-section" => {
+                            state.tool = Tool::Section(section_tool::Placement::Anchor)
+                        }
                         "drawing.interact-dimension" => {
                             state.tool = Tool::Dimension { first: None }
                         }
@@ -2639,6 +2674,20 @@ pub fn frame(
             }
         });
     }
+    if let Tool::Section(placement) = &state.tool
+        && let Some(pointer) = pointer
+        && over
+    {
+        section_tool::preview(
+            placement,
+            &source,
+            &rendered,
+            paper_point(paper, scale, pointer),
+            &painter,
+            (paper, scale),
+            accent,
+        );
+    }
     for (index, guide) in state.guides.iter().enumerate() {
         let properties = controls::properties(
             &format!("drawing.snap-guide:{index}"),
@@ -2732,6 +2781,15 @@ pub fn frame(
         }
     } else {
         match &state.tool {
+            Tool::Section(section_tool::Placement::Anchor) => {
+                "Pick a hole, a reference point, or a position in Front, Top or Right"
+            }
+            Tool::Section(section_tool::Placement::Direction { .. }) => {
+                "Click along the cutting line to set its direction"
+            }
+            Tool::Section(section_tool::Placement::View { .. }) => {
+                "Click the sheet to place Section A-A. The side you choose sets the viewing direction"
+            }
             Tool::Select => {
                 "Command-click toggles · Shift-click adds · drag selected annotations together · pinch zoom · two-finger pan"
             }

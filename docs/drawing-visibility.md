@@ -1,6 +1,6 @@
 # Drawing line visibility
 
-Drawing contract 12 and sheet-template contract 4 save two independent choices
+Drawing contract 13 and sheet-template contract 4 save two independent choices
 per ordinary view:
 
 - Line display: Wireframe, Hidden lines removed, or Hidden lines dashed.
@@ -15,8 +15,29 @@ Its error offers Wireframe or an explicit Display mesh choice.
 
 View placement, scale, dimensions and annotations remain independent. Layout
 interaction uses the cheaper layout calculation. Full drawing preview,
-validation and exports use the saved visibility choices. Section-Z retains its
-separate sampled section behavior.
+validation and exports use the saved visibility choices.
+
+## Section A–A
+
+Choose **Section View** on the drawing sheet. Click a hole rim or center in
+Front, Top or Right to pass the cutting line through its center. You can also
+pick another model point or a free position. Click again to set the line
+direction. Click the sheet on the desired viewing side to place the hatched
+section. **Views** lets you reverse the arrows or redraw the line. Use **Smart
+Dimension** on two section intersection points to measure a bore or depth.
+
+The model worker intersects the current solid with the cutting plane. Drilled
+line-and-arc extrusion stock uses analytic layered intersection. Other solids
+use the native plane-cut operation when it returns bounded rational cap edges.
+Interior patch seams cancel and hatching follows the material loops, including
+holes. Sheet preview, PDF and DXF share these vectors. Dimensions follow the
+source model edge and occurrence and report a changed or missing intersection
+for reattachment. Saved sheets with the original midpoint Section-Z still open
+with their original sampled view until you place a cutting line.
+
+Each sheet currently supports one straight removed section. Stepped and aligned
+cutting paths, detail behind the section plane, broken-out depths, and custom
+per-component hatching remain open.
 
 ## Native geometry and authority
 
@@ -87,7 +108,7 @@ certified visibility result. Ghost geometry provides reference strokes but does
 not occlude; hidden components are excluded in either mode.
 
 Each view reports `wireframe`, `native_surfaces`, `native_planar`, `tessellated`,
-or `section_intersection` fidelity. Native surfaces report both the modeling
+`native_section`, or legacy `section_intersection` fidelity. Native surfaces report both the modeling
 tolerance and the finite curve-output bound. Sampled geometry, unsupported wireframe carriers, detail clipping and
 repair clipping are marked approximate. The older native-planar numerical path
 is distinct from the outward-interval native-surface path.
@@ -97,8 +118,8 @@ bounded finite polylines; their exact implicit/parametric definitions stay in
 the evaluated sheet metadata, not embedded in production PDF/DXF. The existing
 rational wireframe and sampled-visibility edge paths retain supported rational
 SPLINE/LINE output. Hidden strokes use the separate `TCAD_HIDDEN` line style;
-ghost/reference strokes keep their long-short pattern. General exact sections,
-hatching, auxiliary views and symbolic export of implicit silhouettes are
+ghost/reference strokes keep their long-short pattern. General freeform and stepped sections,
+auxiliary views and symbolic export of implicit silhouettes are
 separate work.
 
 ## Limits and validation

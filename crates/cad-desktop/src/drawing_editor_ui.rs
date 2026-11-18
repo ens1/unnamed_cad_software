@@ -973,7 +973,7 @@ fn view_fields(f: &mut Fields<'_>) {
         }
         let mut sheet = f.sheet.clone();
         let available = set_views(&mut sheet, updated).is_ok();
-        f.action(&format!("view/{key}/toggle"),key,json!({"kind":"view-toggle","view":key}),available,"Keep at least one view and move its dimensions, annotations and hole tables before removing it");
+        f.action(&format!("view/{key}/toggle"),if key=="section-z" {"Section A-A"} else {key},json!({"kind":"view-toggle","view":key}),available,"Keep at least one view and move its dimensions, annotations and hole tables before removing it");
         if selected && let Some(e) = f.out.last_mut() {
             e.state = "selected".into();
         }
@@ -1007,7 +1007,34 @@ fn view_fields(f: &mut Fields<'_>) {
                 element.data["default_json"] =
                     json!(cad_core::drawing_visibility::GeometryMode::Native);
             }
+        } else if let Some(cut) = &f.sheet.section {
+            f.note(
+                "section-parent",
+                &format!("A–A cuts the {} view", cut.parent),
+                "ready",
+            );
+            f.emit(
+                "/section/reversed",
+                "Reverse viewing direction",
+                json!(cut.reversed),
+                vec![],
+                None,
+            );
+            f.action(
+                "section/redefine",
+                "Redraw cutting line",
+                json!({"kind":"section-place"}),
+                true,
+                "",
+            );
         } else {
+            f.action(
+                "section/redefine",
+                "Place cutting line",
+                json!({"kind":"section-place"}),
+                true,
+                "",
+            );
             f.note(
                 "section-line-display",
                 "Section contours use the current tessellated section. Hidden-line display applies to the other views.",
@@ -3337,6 +3364,10 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
         match kind {
             "paper" => sheet.paper_mm = serde_json::from_value(mutation["value"].clone())?,
             "orientation" => sheet.paper_mm.swap(0, 1),
+            "section-place" => {
+                crate::drawing_interaction_ui::action(w, "drawing.interact-section", None);
+                return Ok(());
+            }
             "view-toggle" => {
                 let key = mutation["view"]
                     .as_str()
@@ -3344,6 +3375,9 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                 let mut views = view_keys(&sheet);
                 if views.iter().any(|v| v == key) {
                     views.retain(|v| v != key);
+                } else if key == "section-z" {
+                    crate::drawing_interaction_ui::action(w, "drawing.interact-section", None);
+                    return Ok(());
                 } else {
                     views.push(key.into());
                 }

@@ -36,6 +36,7 @@ mod curved_blend_proof;
 mod curved_shell;
 mod direct_edit;
 mod drawing_geometry;
+mod drawing_sections;
 mod drilled_pockets;
 mod edge_round;
 mod extrusion;

@@ -11,7 +11,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const CONTRACT_VERSION: u32 = 5;
+pub const CONTRACT_VERSION: u32 = 6;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
@@ -758,6 +758,26 @@ pub fn build(
             });
         }
     }
+    if page == 0
+        && let Some(projection) = rendered.projections.get("section-z")
+        && source.section.is_some()
+        && let Ok(cut) = crate::drawing_sections::current(evaluation, source)
+    {
+        for v in &cut.vertices {
+            let paper = projection.paper_point("section-z", v.position)?;
+            scene.references.push(ReferenceCandidate {
+                id: format!("section-z/{}", serde_json::to_string(&v.reference)?),
+                view: "section-z".into(),
+                paper_mm: paper,
+                model_point: v.position,
+                point: v.reference.clone(),
+                curve: None,
+                carrier: None,
+                projection: projection.clone(),
+                bounds_mm: Some([paper, paper]),
+            });
+        }
+    }
     if page == 0 {
         for displayed in drawing::sheet_display_instances(doc, evaluation, source)? {
             if matches!(
@@ -808,7 +828,7 @@ pub fn build(
                     // current displayed mesh. Looking the same reference up
                     // again scans every edge and canonicalizes its ancestry
                     // for each candidate in each view.
-                    if let Ok(circle) = drawing::circular_carrier(curve, instance.matrix) {
+                    if let Ok(circle) = drawing::circular_edge(edge, instance.matrix) {
                         let paper = projection.paper_point(view, circle.center)?;
                         scene.references.push(ReferenceCandidate {
                             id: format!(

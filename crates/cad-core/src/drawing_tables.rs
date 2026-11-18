@@ -446,7 +446,8 @@ pub fn validate_sources(doc: &Document, table: &Table) -> Result<()> {
                             ));
                         }
                     }
-                    crate::drawing::PointReference::CurveCenter { curve } => {
+                    crate::drawing::PointReference::CurveCenter { curve }
+                    | crate::drawing::PointReference::SectionVertex { source: curve, .. } => {
                         let source = match curve.as_ref() {
                             crate::drawing::CurveReference::SketchMember { sketch, .. } => sketch,
                             crate::drawing::CurveReference::ModelEdge { edge, .. } => {
@@ -1464,7 +1465,8 @@ pub fn reference_occurrence(reference: &crate::drawing::PointReference) -> (&str
             instance_path,
             ..
         } => (&face.producer.definition, instance_path),
-        PointReference::CurveCenter { curve } => match curve.as_ref() {
+        PointReference::CurveCenter { curve }
+        | PointReference::SectionVertex { source: curve, .. } => match curve.as_ref() {
             CurveReference::SketchMember {
                 sketch,
                 instance_path,

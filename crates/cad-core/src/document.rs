@@ -1186,6 +1186,8 @@ pub struct Drawing {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub view_visibility_geometry: BTreeMap<String, crate::drawing_visibility::GeometryMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<crate::drawing_sections::Definition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exploded_view: Option<Id>,
     /// Explicit drawing-only arrangement, relative to this sheet's model scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]

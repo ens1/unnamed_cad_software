@@ -235,7 +235,7 @@ pub fn layout(
         &group.datum.reference,
     )?;
     let datum_mm = projection.paper_point(view, datum_model)?;
-    let datum_coordinate = drawing::project(view, datum_model)?[axis];
+    let datum_coordinate = projection.model_point(view, datum_model)?[axis];
     let datum_label_mm =
         std::array::from_fn(|coordinate| datum_mm[coordinate] + offset[coordinate]);
     let mut previous = datum_coordinate;
@@ -249,7 +249,7 @@ pub fn layout(
             target.anchor.point,
             &target.anchor.reference,
         )?;
-        let coordinate = drawing::project(view, model)?[axis];
+        let coordinate = projection.model_point(view, model)?[axis];
         let anchor_mm = projection.paper_point(view, model)?;
         let first = if group.mode == Mode::Chain {
             previous
