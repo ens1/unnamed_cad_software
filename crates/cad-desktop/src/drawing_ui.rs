@@ -1023,14 +1023,24 @@ pub fn workspace_semantics(w: &Workspace) -> Vec<cad_core::presentation::Semanti
     if let Some(paper) = crate::drawing_interaction_ui::rendered_sheet(w) {
         for (id, item) in &paper.model_items {
             let paper_target = cad_core::drawing_interaction::Target::ModelItem { id: id.clone() };
-            out.push(tree_element(
+            let mut element = tree_element(
                 &format!("{}:model-item:{id}", paper.id),
                 w.fields.get("drawing-preview").unwrap_or(&paper.id),
                 &format!("{} · {}", item.label, item.text),
                 Some(&paper_target),
                 target == Some(&paper_target),
                 "model-item",
-            ));
+            );
+            element.data["model_item_type"] = json!(if item.weld {
+                "weld"
+            } else if item.datum {
+                "datum"
+            } else {
+                "dimension"
+            });
+            element.data["source"] = json!({"definition":item.definition, "feature_or_requirement":item.source, "configuration":item.configuration, "path":item.path, "view":item.view});
+            element.relationships.push(item.definition.clone());
+            out.push(element);
         }
         for (index, message) in paper
             .model_review
@@ -1041,7 +1051,7 @@ pub fn workspace_semantics(w: &Workspace) -> Vec<cad_core::presentation::Semanti
             out.push(SemanticElement {
                 id: format!("{}:model-requirement-info:{index}", paper.id),
                 role: "drawing-source-detail".into(),
-                label: "Model dimensions".into(),
+                label: "Model callouts".into(),
                 value: Some(message.clone()),
                 state: "warning".into(),
                 commands: vec![],

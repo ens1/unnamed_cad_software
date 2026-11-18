@@ -83,6 +83,9 @@ pub struct Selection {
 }
 const PICK_FILTER: &str = "model-pick-filter";
 fn edge_tool_active(w: &Workspace) -> bool {
+    if crate::weld_beads_ui::seam_pick::owner(w).is_some() {
+        return true;
+    }
     w.tool_checkpoint.is_some()
         && w.dialog.as_deref() == Some("feature")
         && w.view
@@ -809,7 +812,16 @@ pub(crate) fn display_evaluation(w: &Workspace) -> Option<&Evaluation> {
 }
 pub(crate) fn display_instances<'a>(w: &Workspace, e: &'a Evaluation) -> Vec<&'a PlacedPart> {
     if let Some(stage) = cad_core::exploded_views::selected(e, w.view.exploded_view.as_ref()) {
-        return stage.instances.iter().collect();
+        return stage
+            .instances
+            .iter()
+            .filter(|i| {
+                w.view.history_cursor.is_none()
+                    || !e
+                        .assembly_welds
+                        .contains_key(cad_core::history::mesh_key(i))
+            })
+            .collect();
     }
     e.instances
         .iter()

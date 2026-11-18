@@ -397,10 +397,10 @@ pub(crate) fn create(w: &Workspace, sheet: &Drawing, view: &str) -> AnnotationKi
     } else {
         let mut target = selected.clone();
         target.reference = None;
-        if view == "right" {
-            target.point[1] += 50.;
-        } else {
-            target.point[0] += 50.;
+        if let Some([horizontal, _]) = cad_core::drawing::orthographic_axes(view) {
+            for (point, direction) in target.point.iter_mut().zip(horizontal) {
+                *point += 50. * direction;
+            }
         }
         (selected, target)
     };

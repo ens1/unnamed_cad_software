@@ -1605,7 +1605,8 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         }
         self.body_sets = body_sets;
         let configurations = Some(cad_core::configuration::evaluated(document)?);
-        let exploded_views = cad_core::exploded_views::evaluate(document, &instances)?;
+        let exploded_views =
+            cad_core::exploded_views::evaluate_with_welds(document, &instances, &assembly_welds)?;
         let assembly_inspections = crate::assembly_inspection::evaluate(
             &self.adapter,
             document,

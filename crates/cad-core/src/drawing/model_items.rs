@@ -14,6 +14,9 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod welds;
+pub(super) use welds::WeldItems;
+
 const TEXT_MM: f64 = 2.6;
 type Point = [f64; 2];
 type Bounds = [Point; 2];
@@ -24,6 +27,8 @@ pub struct Placement {
     #[serde(default, skip_serializing_if = "is_main_page")]
     pub model_page: u32,
     pub view: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_offset: bool,
     /// Paper millimeters from the continuing dimension witness or datum anchor.
     pub offset_mm: Point,
 }
@@ -41,6 +46,10 @@ pub struct PaperItem {
     pub configuration: Option<Id>,
     pub path: Vec<Id>,
     pub datum: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub weld: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub weld_views: Vec<String>,
     pub label: String,
     pub text: String,
     pub view: String,
@@ -130,8 +139,8 @@ struct Item {
     style: Style,
 }
 
-#[derive(Clone, Copy, PartialEq)]
 enum Style {
+    Weld(Box<welds::Bead>),
     Linear,
     Circular,
     Angular,
@@ -348,6 +357,8 @@ struct Projection {
     /// Only draw measurement lines/arcs in a view showing their true size.
     true_size: bool,
     quality: f64,
+    weld_side: Option<welds::ProjectedSide>,
+    weld_views: Vec<String>,
 }
 
 fn choose_view(
@@ -355,10 +366,21 @@ fn choose_view(
     paper: &Sheet,
     saved: Option<&Placement>,
 ) -> Result<Option<Projection>> {
+    if let Style::Weld(bead) = &item.style {
+        return bead.choose_view(paper, saved);
+    }
     let delta: [f64; 3] = std::array::from_fn(|i| item.points[1][i] - item.points[0][i]);
     let span = delta.iter().map(|x| x * x).sum::<f64>().sqrt();
     let mut best: Option<Projection> = None;
-    for name in ["front", "top", "right", "isometric"] {
+    for name in [
+        "front",
+        "top",
+        "right",
+        "back",
+        "bottom",
+        "left",
+        "isometric",
+    ] {
         let Some(projection) = paper.projections.get(name) else {
             continue;
         };
@@ -373,7 +395,7 @@ fn choose_view(
             let projected = super::project(name, normal)?;
             let norm = normal.iter().map(|x| x * x).sum::<f64>().sqrt();
             let in_plane = (length(projected) / norm.max(f64::EPSILON)).min(1.);
-            if item.style == Style::Datum {
+            if matches!(item.style, Style::Datum) {
                 in_plane
             } else {
                 1. - in_plane
@@ -385,14 +407,14 @@ fn choose_view(
             .vertex
             .map(|p| projection.paper_point(name, p))
             .transpose()?;
-        let true_size = if item.style == Style::Angular {
+        let true_size = if matches!(item.style, Style::Angular) {
             item.normal.is_some()
                 && quality > 1. - 1e-7
                 && vertex.is_some_and(|v| length(diff(a, v)) > 1e-9 && length(diff(b, v)) > 1e-9)
         } else {
             (ratio - 1.).abs() < 1e-7
         };
-        let anchor = if item.style == Style::Circular {
+        let anchor = if matches!(item.style, Style::Circular) {
             b
         } else {
             mul(sum(a, b), 0.5)
@@ -410,6 +432,8 @@ fn choose_view(
             vertex,
             true_size,
             quality,
+            weld_side: None,
+            weld_views: Vec::new(),
         };
         if saved.is_some_and(|p| p.view == name) {
             return Ok(Some(choice));
@@ -529,12 +553,12 @@ fn draw(out: &mut Vec<Primitive>, item: &Item, p: &Projection, at: Point, label:
     let [a, b] = p.points;
     let width = label_width(label);
     let base = [at[0] + width / 2., at[1] - 0.8];
-    if item.style == Style::Angular
+    if matches!(item.style, Style::Angular)
         && p.true_size
         && let Some(vertex) = p.vertex
     {
         angular_arc(out, vertex, p.points, base);
-    } else if item.style == Style::Linear && p.true_size && length(diff(b, a)) > 1e-9 {
+    } else if matches!(item.style, Style::Linear) && p.true_size && length(diff(b, a)) > 1e-9 {
         let direction = mul(diff(b, a), 1. / length(diff(b, a)));
         let normal = [-direction[1], direction[0]];
         let label_center = [at[0] + width * 0.5, at[1] + TEXT_MM * 0.4];
@@ -565,7 +589,7 @@ fn draw(out: &mut Vec<Primitive>, item: &Item, p: &Projection, at: Point, label:
             at[1] + TEXT_MM * 0.35,
         ];
         line(out, p.anchor, elbow);
-        if item.style == Style::Datum {
+        if matches!(item.style, Style::Datum) {
             rectangle(out, [at[0] - 1., at[1] - 1.], [width + 2., TEXT_MM + 2.]);
             let d = diff(elbow, p.anchor);
             let n = mul(d, 1. / length(d).max(1e-9));
@@ -633,8 +657,10 @@ pub(super) fn project_items(
     instances: &[DisplayInstance],
     paper: &mut Sheet,
     space: PaperSpace<'_>,
+    welds: WeldItems,
 ) -> Result<Vec<CalloutLayer>> {
     let mut items = collect(doc, e, sheet, instances, paper)?;
+    welds.append(&mut items, &mut paper.model_review);
     if !paper.model_coverage.is_empty() {
         let notes = sheet.annotations.len() + sheet.title_block.len();
         text(
@@ -651,7 +677,12 @@ pub(super) fn project_items(
         return Ok(vec![]);
     }
     // A moved item reserves its original page and location before automatic placement.
-    items.sort_by_key(|item| !sheet.model_item_placements.contains_key(&item.id));
+    items.sort_by_key(|item| {
+        sheet
+            .model_item_placements
+            .get(&item.id)
+            .is_none_or(|p| p.auto_offset)
+    });
     let bounds = paper_bounds(sheet);
     let mut main_area = bounds;
     main_area[0][1] = main_area[0][1].max(space.footer + 3.);
@@ -688,10 +719,17 @@ pub(super) fn project_items(
     for item in items {
         let saved = sheet.model_item_placements.get(&item.id);
         let Some(p) = choose_view(&item, paper, saved)? else {
-            paper
-                .model_review
-                .push("Add an ordinary model view to place model dimensions and datums".into());
-            break;
+            if matches!(item.style, Style::Weld(_)) {
+                if saved.is_some() {
+                    paper.model_review.push(format!("{} is outside its saved weld view. Restore a view showing the bead or reset its placement.", item.label));
+                }
+            } else {
+                let message = "Add an ordinary model view to place model dimensions and datums";
+                if !paper.model_review.iter().any(|m| m == message) {
+                    paper.model_review.push(message.into());
+                }
+            }
+            continue;
         };
         if saved.is_some_and(|placement| placement.view != p.view) {
             paper.model_review.push(format!(
@@ -704,13 +742,18 @@ pub(super) fn project_items(
         } else {
             item.text.clone()
         };
+        let weld_layout = if let Style::Weld(bead) = &item.style {
+            Some(bead.layout(doc, &item.definition, &p)?)
+        } else {
+            None
+        };
         let width = label_width(&value);
         let mut slot = saved.map_or(current_slot, |v| v.model_page as usize);
         if slot > max_slot {
             paper.model_review.push(format!("{}'s saved page exceeds the 1024-page sheet limit. Reset its placement or split the drawing.", item.label));
             slot = 0;
         }
-        let fallback = sum(p.anchor, [2., 4.]);
+        let fallback = sum(p.anchor, [5., 6.]);
         let at = loop {
             if slot >= layers.len() {
                 layers.resize_with(slot + 1, || CalloutLayer {
@@ -718,10 +761,10 @@ pub(super) fn project_items(
                     ..Default::default()
                 });
             }
-            if let Some(saved) = saved {
+            if let Some(saved) = saved.filter(|p| !p.auto_offset) {
                 break sum(p.anchor, saved.offset_mm);
             }
-            if width + 2. > bounds[1][0] - bounds[0][0] {
+            if weld_layout.is_none() && width + 2. > bounds[1][0] - bounds[0][0] {
                 layers[slot].review.push(format!(
                     "{} is wider than the printable area. Enlarge the paper.",
                     item.label
@@ -729,14 +772,20 @@ pub(super) fn project_items(
                 break fallback;
             }
             let layer = &mut layers[slot];
-            if let Some(at) = auto_label(
-                &p,
-                width,
-                if slot == 0 { main_area } else { extra_area },
-                &paper.projections[&p.view],
-                &mut layer.occupied,
-                space.model_bounds,
-            ) {
+            let area = if slot == 0 { main_area } else { extra_area };
+            let available = if let Some(weld) = &weld_layout {
+                weld.place(area, &layer.occupied, space.model_bounds)
+            } else {
+                auto_label(
+                    &p,
+                    width,
+                    area,
+                    &paper.projections[&p.view],
+                    &mut layer.occupied,
+                    space.model_bounds,
+                )
+            };
+            if let Some(at) = available {
                 current_slot = slot;
                 break at;
             }
@@ -750,15 +799,22 @@ pub(super) fn project_items(
             slot += 1;
         };
         let layer = &mut layers[slot];
-        if !inside(label_bounds(at, width), bounds) {
+        let envelope = weld_layout
+            .as_ref()
+            .map_or_else(|| label_bounds(at, width), |weld| weld.bounds(at));
+        if !inside(envelope, bounds) {
             layer.review.push(format!(
                 "{} falls outside the paper; move its label or enlarge the sheet",
                 item.label
             ));
         }
-        layer.occupied.insert(label_bounds(at, width));
+        layer.occupied.insert(envelope);
         let start = layer.primitives.len();
-        draw(&mut layer.primitives, &item, &p, at, &value);
+        if let Some(weld) = &weld_layout {
+            weld.draw(at, &mut layer.primitives, &mut layer.review, &item.label)?;
+        } else {
+            draw(&mut layer.primitives, &item, &p, at, &value);
+        }
         layer.groups.push(PrimitiveGroup {
             target: Target::ModelItem {
                 id: item.id.clone(),
@@ -775,7 +831,9 @@ pub(super) fn project_items(
                 source: item.source,
                 configuration: item.configuration,
                 path: item.path,
-                datum: item.style == Style::Datum,
+                datum: matches!(item.style, Style::Datum),
+                weld: matches!(item.style, Style::Weld(_)),
+                weld_views: p.weld_views,
                 label: item.label,
                 text: value,
                 view: p.view,

@@ -14,6 +14,6 @@ macro_rules! native_solver_identity {
 
 pub const NATIVE_SOLVER: &str = native_solver_identity!();
 pub const BUNDLED_BACKEND: &str = concat!(
-    "monstertruck/0.4.1+6dba41312ccc;adapter/51;solver/",
+    "monstertruck/0.4.1+6dba41312ccc;adapter/52;solver/",
     native_solver_identity!()
 );

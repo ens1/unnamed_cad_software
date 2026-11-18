@@ -345,7 +345,7 @@ pub fn validate(table: &Table) -> Result<()> {
                 || features
                     .iter()
                     .any(|f| f.definition != features[0].definition || f.node.is_empty())
-                || !matches!(view.as_str(), "front" | "top" | "right")
+                || crate::drawing::orthographic_axes(view).is_none()
                 || *precision > 8
                 || tag_prefix.is_empty()
                 || tag_prefix.len() > 32

@@ -1321,6 +1321,11 @@ fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::
         seams.insert(0, choice("Selected joint edge / seam", source));
     }
     fields.choice(&format!("{P}/seam"), "Seam", seams);
+    fields.choice(
+        &format!("{P}/joint_type"),
+        "Joint type",
+        crate::weld_beads_ui::joint_choices(),
+    );
     fields.out.extend(joint_controls);
     fields.group("profile", "Bead");
     fields.choice(
@@ -1357,6 +1362,12 @@ fn weld_bead_fields(fields: &mut Fields<'_>, definition: &cad_core::weld_beads::
     if matches!(definition.pattern, Pattern::Intermittent { .. }) {
         fields.quantity(&format!("{P}/pattern/length"), "Stitch length", "mm");
         fields.quantity(&format!("{P}/pattern/gap"), "Stitch gap", "mm");
+    }
+    fields.folding_group("weld-symbol", "Drawing symbol", false);
+    fields.toggle(&format!("{P}/field_weld"), "Field weld");
+    fields.toggle(&format!("{P}/all_around"), "Weld all around");
+    if definition.profile == Profile::Butt {
+        fields.toggle(&format!("{P}/square_groove"), "Specify square groove");
     }
     fields.folding_group("supports", "Support faces", false);
     fields.out.extend(support_controls);
@@ -1914,6 +1925,12 @@ fn clear_dependent_selections(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    if kind == "weld_bead" && pointer == "/operation/definition/profile" && next == "fillet" {
+        replace_value(source, "/operation/definition/square_groove", json!(false))?;
+    }
+    if kind == "weld_bead" && pointer == "/operation/definition/seam" {
+        replace_value(source, "/operation/definition/supports", json!([]))?;
+    }
     if pointer.ends_with("/body") {
         if kind == "direct_edit" {
             replace_value(source, "/operation/definition/faces", json!([]))?;
@@ -2501,9 +2518,7 @@ fn editable_source(feature: &Feature) -> Value {
         source["operation"]["operation"]["member_mode"] = json!(member_mode);
     }
     if let Operation::WeldBead { definition } = &feature.operation {
-        source["operation"]["definition"]["supports"] = json!(definition.supports);
-        source["operation"]["definition"]["finish"] = json!(definition.finish);
-        source["operation"]["definition"]["material"] = json!(definition.material);
+        source["operation"]["definition"] = crate::weld_beads_ui::editable(definition);
     }
     if let Operation::Sheet { operation } = &feature.operation {
         use cad_core::sheet_metal::SheetOperation as S;

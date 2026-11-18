@@ -244,10 +244,53 @@ fn point(m: &Matrix4<f64>, p: Vector3<f64>) -> Result<[f64; 3]> {
 /// occurrences. Saved views on nested definitions become available when opened
 /// as the document root; they never silently replace a parent's display scope.
 pub fn evaluate(doc: &Document, instances: &[PlacedPart]) -> Result<BTreeMap<Id, Evaluated>> {
+    evaluate_with_welds(doc, instances, &BTreeMap::new())
+}
+
+pub fn evaluate_with_welds(
+    doc: &Document,
+    instances: &[PlacedPart],
+    welds: &BTreeMap<Id, crate::assembly_welds::Evaluated>,
+) -> Result<BTreeMap<Id, Evaluated>> {
     let Some(assembly) = doc.assemblies.get(&doc.root) else {
         return Ok(BTreeMap::new());
     };
     let configuration = doc.active_configurations.get(&doc.root).cloned();
+    let mut views = assembly
+        .exploded_views
+        .values()
+        .filter(|view| view.configuration.is_none() || view.configuration == configuration)
+        .peekable();
+    if views.peek().is_none() {
+        return Ok(BTreeMap::new());
+    }
+    // Deposited metal follows the component hosting the seam if an explode
+    // separates its supports. Keep the weld's own mesh key and occurrence path
+    // so geometric references and drawing callouts still resolve to the bead.
+    let mut instances = std::borrow::Cow::Borrowed(instances);
+    let mut weld_hosts = BTreeMap::new();
+    for (key, weld) in welds {
+        let source = doc
+            .assemblies
+            .get(&weld.owner.definition)
+            .and_then(|asm| asm.weld_beads.get(&weld.owner.node))
+            .ok_or_else(|| invalid("An evaluated assembly weld has lost its source definition"))?;
+        let (bead, owner_path) = weld
+            .placement
+            .path
+            .split_last()
+            .ok_or_else(|| invalid("An assembly weld has lost its occurrence"))?;
+        if bead != &source.id || crate::history::mesh_key(&weld.placement) != key {
+            return Err(invalid("Assembly weld occurrence and source do not match"));
+        }
+        let seam_path: Vec<_> = owner_path
+            .iter()
+            .chain(source.seam.path())
+            .cloned()
+            .collect();
+        weld_hosts.insert(key.as_str(), seam_path);
+        instances.to_mut().push(weld.placement.clone());
+    }
     let scoped = crate::configuration::scope(doc, doc, &doc.root, configuration.as_deref())?;
     let mut output = BTreeMap::new();
     let mut budget = 0usize;
@@ -257,15 +300,11 @@ pub fn evaluate(doc: &Document, instances: &[PlacedPart]) -> Result<BTreeMap<Id,
     // The serialized base includes all names, IDs, paths and configurations.
     // 480 bytes per placement bounds sixteen finite JSON matrix numbers plus
     // separators independently of the smaller current matrix representation.
-    let placement_bytes = serde_json::to_vec(instances)?
+    let placement_bytes = serde_json::to_vec(instances.as_ref())?
         .len()
         .checked_add(instances.len().saturating_mul(480))
         .ok_or_else(|| invalid("Display cache byte estimate overflowed"))?;
-    for view in assembly
-        .exploded_views
-        .values()
-        .filter(|v| v.configuration.is_none() || v.configuration == configuration)
-    {
+    for view in views {
         budget = budget
             .checked_add(instances.len().saturating_mul(view.steps.len() + 1))
             .ok_or_else(|| invalid("Display cache size exceeded bounds"))?;
@@ -331,10 +370,14 @@ pub fn evaluate(doc: &Document, instances: &[PlacedPart]) -> Result<BTreeMap<Id,
                 for target in &step.targets {
                     let mut active = false;
                     let anchor = vector(&scoped, &doc.root, &target.anchor, Dimension::Length)?;
-                    for i in current
-                        .iter_mut()
-                        .filter(|i| i.path.starts_with(&target.path))
-                    {
+                    for i in &mut current {
+                        let host = weld_hosts.get(crate::history::mesh_key(i));
+                        if !host
+                            .map_or(i.path.as_slice(), Vec::as_slice)
+                            .starts_with(&target.path)
+                        {
+                            continue;
+                        }
                         active = true;
                         let before = matrix(i);
                         let after = transform * before;
@@ -345,7 +388,7 @@ pub fn evaluate(doc: &Document, instances: &[PlacedPart]) -> Result<BTreeMap<Id,
                                 "Exploded display coordinates must remain within ±1e12 mm",
                             ));
                         }
-                        if target.show_line {
+                        if target.show_line && host.is_none() {
                             // Anchor expressions belong to the assembly quantities;
                             // their coordinates are in this leaf's local frame.
                             let start_mm = point(&before, anchor)?;

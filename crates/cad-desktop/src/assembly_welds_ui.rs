@@ -93,7 +93,7 @@ fn busy(w: &Workspace) -> bool {
         || w.assembly_motion.is_some()
 }
 fn start(w: &mut Workspace, owner: &str, source: Definition) -> bool {
-    if busy(w) {
+    if busy(w) && crate::weld_beads_ui::seam_pick::owner(w) != Some(owner) {
         w.status = "Confirm or cancel the current operation before editing an assembly weld".into();
         return false;
     }
@@ -147,7 +147,7 @@ fn submit(w: &mut Workspace, source: Definition) -> Result<()> {
 }
 /// Convert a selected root occurrence path to the owning assembly's frame.
 /// Never drop a path by guessing a leaf definition or instance name.
-fn relative_path(w: &Workspace, owner: &str, path: &[String]) -> Option<Vec<String>> {
+pub(super) fn relative_path(w: &Workspace, owner: &str, path: &[String]) -> Option<Vec<String>> {
     let doc = w.session.visible();
     let mut current = doc.root.as_str();
     for index in 0..=path.len() {
@@ -213,10 +213,17 @@ pub(crate) fn submit_joint_pick(w: &mut Workspace, definition: Definition) -> Re
     submit(w, definition)
 }
 pub fn new(w: &mut Workspace, owner: &str) {
+    if busy(w) {
+        w.status = "Finish the current operation before starting a weld bead.".into();
+        return;
+    }
     let Some(seam) = selected_seam(w, owner) else {
-        w.status="Select a model edge, sketch member or reference curve on a component in the owning assembly".into();
+        crate::weld_beads_ui::seam_pick::open(w, owner);
         return;
     };
+    create(w, owner, seam);
+}
+pub(super) fn create(w: &mut Workspace, owner: &str, seam: SeamSource) {
     let Some(assembly) = w.session.visible().assemblies.get(owner) else {
         w.status = "Select the owning assembly first".into();
         return;
@@ -258,13 +265,7 @@ pub fn open(w: &mut Workspace, owner: &str, id: &str) {
         w.status = "The saved weld does not belong to this assembly".into();
     }
 }
-fn editable(source: &Definition) -> Value {
-    let mut value = json!(source);
-    value["finish"] = json!(source.finish);
-    value["material"] = json!(source.material);
-    value["supports"] = json!(source.supports);
-    value
-}
+use crate::weld_beads_ui::editable;
 fn revision(w: &Workspace) -> Value {
     json!([
         w.session.generation,
@@ -564,6 +565,16 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         crate::weld_beads_ui::joint_controls(w, owner, &definition.id, "seam");
     let (seams, supports) = geometry_choices(w, owner);
     field(w, &mut out, &source, "seam", "/seam", "Seam", None, seams);
+    field(
+        w,
+        &mut out,
+        &source,
+        "seam",
+        "/joint_type",
+        "Joint type",
+        None,
+        crate::weld_beads_ui::joint_choices(),
+    );
     if let Some(selected) = selected_seam(w, owner).filter(|seam| seam != &definition.seam) {
         command_element(
             w,
@@ -639,6 +650,34 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "/pattern/gap",
             "Stitch gap",
             Some("mm"),
+            vec![],
+        );
+    }
+    group(w, &mut out, "weld-symbol", "Drawing symbol", false);
+    for (path, label) in [
+        ("/field_weld", "Field weld"),
+        ("/all_around", "Weld all around"),
+    ] {
+        field(
+            w,
+            &mut out,
+            &source,
+            "weld-symbol",
+            path,
+            label,
+            None,
+            vec![],
+        );
+    }
+    if definition.profile == Profile::Butt {
+        field(
+            w,
+            &mut out,
+            &source,
+            "weld-symbol",
+            "/square_groove",
+            "Specify square groove",
+            None,
             vec![],
         );
     }
@@ -881,6 +920,10 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
         "/suppressed" => json!(source.suppressed),
         "/seam" => json!(source.seam),
         "/profile" => json!(source.profile),
+        "/joint_type" => json!(source.joint_type),
+        "/field_weld" => json!(source.field_weld),
+        "/all_around" => json!(source.all_around),
+        "/square_groove" if source.profile == Profile::Butt => json!(source.square_groove),
         "/size" => json!(source.size),
         "/reinforcement" => json!(source.reinforcement),
         "/pattern" => json!(source.pattern),
@@ -949,6 +992,9 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
             .ok_or_else(|| invalid("Support list is missing"))? = json!([]);
     }
     if pointer == "/profile" {
+        if source["profile"] == "fillet" {
+            source["square_groove"] = json!(false);
+        }
         source["supports"]
             .as_array_mut()
             .ok_or_else(|| invalid("Support list is missing"))?

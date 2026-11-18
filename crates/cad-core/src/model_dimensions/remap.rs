@@ -41,6 +41,11 @@ impl PaperKey {
         match self.kind.as_str() {
             "dimension" => self.source = super::geometry::remap_id(&self.source, ids)?,
             "datum" => {}
+            "weld" => {
+                if let Some(replacement) = ids.get(&self.source) {
+                    self.source.clone_from(replacement);
+                }
+            }
             _ => return Err(CadError::Invalid("Unknown model drawing item.".into())),
         }
         Ok(())

@@ -95,6 +95,22 @@ pub(crate) enum Projection {
     DisplayMesh(ProjectedScene),
 }
 impl Projection {
+    /// Optional placement hint. Manufacturing vectors never depend on this extra budget.
+    pub(crate) fn callout_visible(&mut self, world: Point, remaining: &mut usize) -> Option<bool> {
+        if *remaining == 0 {
+            return None;
+        }
+        match self {
+            Self::Native(scene) => scene.callout_visible(world, remaining),
+            Self::DisplayMesh(scene) => {
+                let mut work = MAX_WORK.saturating_sub(*remaining);
+                let result = scene.callout_visible(world, &mut work);
+                *remaining = MAX_WORK.saturating_sub(work);
+                result.ok()
+            }
+        }
+    }
+
     pub fn fidelity(&self) -> Fidelity {
         match self {
             Self::Native(scene) => scene.fidelity(),
@@ -179,15 +195,7 @@ fn length(a: Point) -> f64 {
     dot(a, a).sqrt()
 }
 fn projected(view: &str, p: Point) -> Result<Point> {
-    let xy = crate::drawing::project(view, p)?;
-    let depth = match view {
-        "front" | "detail-front" => -p[1],
-        "top" | "section-z" => p[2],
-        "right" => p[0],
-        "isometric" => (-p[0] - p[1] + p[2]) / 3f64.sqrt(),
-        _ => return Err(invalid("Unknown drawing visibility view")),
-    };
-    Ok([xy[0], xy[1], depth])
+    crate::drawing::project_with_depth(view, p)
 }
 
 impl Scene {
@@ -756,6 +764,33 @@ pub(crate) struct Piece {
     pub hidden: bool,
 }
 impl ProjectedScene {
+    fn callout_visible(&self, world: Point, work: &mut usize) -> Result<bool> {
+        charge(work, 1)?;
+        let p = projected(&self.view, world)?;
+        let mut candidates = Vec::new();
+        self.bvh.query(bounds([p]), &mut candidates, work)?;
+        for id in candidates {
+            charge(work, 1)?;
+            let face = &self.occluders[id];
+            let tolerance = self.accuracy.modeling.linear_mm;
+            let bias = tolerance
+                + if face.approximate {
+                    self.accuracy.display_mm
+                        * (1. + face.depth[0].powi(2) + face.depth[1].powi(2)).sqrt()
+                } else {
+                    0.
+                };
+            if face.max_depth <= p[2] + bias {
+                continue;
+            }
+            let z = face.depth[0] * p[0] + face.depth[1] * p[1] + face.depth[2];
+            if z > p[2] + bias && face.contains(p, tolerance, work)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     pub fn fidelity(&self) -> Fidelity {
         if self.approximate {
             Fidelity::Tessellated {

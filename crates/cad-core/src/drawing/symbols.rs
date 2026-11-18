@@ -5,6 +5,9 @@ use crate::{Dimension, Document, Expr, Result};
 use serde::{Deserialize, Serialize};
 
 pub const SYMBOL_CONTRACT_VERSION: u32 = 1;
+// Version 1 manual weld annotations always extended to the right of their anchor.
+const WELD_SYMBOL_VERSION: u32 = 2;
+mod model_bead;
 fn version() -> u32 {
     SYMBOL_CONTRACT_VERSION
 }
@@ -158,6 +161,29 @@ fn number(value: f64, precision: usize) -> Result<String> {
         ));
     }
     Ok(format!("{value:.precision$}"))
+}
+fn weld_number(value: f64, precision: usize) -> Result<String> {
+    let text = number(value, precision)?;
+    if value != 0. && (value * 10_f64.powi(precision as i32)).round() == 0. {
+        Ok(format!("{value:.precision$e}"))
+    } else {
+        Ok(text)
+    }
+}
+fn stitch_and_pitch(length: f64, pitch: f64, precision: usize) -> Result<String> {
+    let length_text = weld_number(length, precision)?;
+    let pitch_text = weld_number(pitch, precision)?;
+    // Retain an actual positive gap even when ordinary precision rounds the two values together.
+    if length_text == pitch_text {
+        if length >= pitch {
+            return Err(invalid(
+                "The stitch and pitch cannot be distinguished in the printed unit",
+            ));
+        }
+        Ok(format!("{length}-{pitch}"))
+    } else {
+        Ok(format!("{length_text}-{pitch_text}"))
+    }
 }
 fn circle(out: &mut Vec<Primitive>, center: [f64; 2], radius: f64) {
     out.push(Primitive::Circle { center, radius });
@@ -377,6 +403,8 @@ pub enum WeldJointKind {
     PlugSlot,
     Spot,
     Seam,
+    /// Plain-language cap callout. Its size is the physical toe-to-toe width.
+    CapWidth,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -464,7 +492,7 @@ pub struct WeldSymbol {
 impl Default for WeldSymbol {
     fn default() -> Self {
         Self {
-            version: version(),
+            version: WELD_SYMBOL_VERSION,
             convention: WeldConvention::default(),
             arrow_side: Some(WeldJoint::default()),
             other_side: None,
@@ -483,7 +511,7 @@ impl Default for WeldSymbol {
 }
 impl WeldSymbol {
     pub fn validate(&self) -> Result<()> {
-        if self.version != SYMBOL_CONTRACT_VERSION
+        if !(1..=WELD_SYMBOL_VERSION).contains(&self.version)
             || !style_valid(self.text_size_mm, self.symbol_height_mm, self.precision)
             || !self.reference_length_mm.is_finite()
             || !(24. ..=200.).contains(&self.reference_length_mm)
@@ -491,7 +519,7 @@ impl WeldSymbol {
             || (self.arrow_side.is_none() && self.other_side.is_none())
         {
             return Err(invalid(
-                "Weld symbol version 1 requires at least one joint, up to 128 printable tail characters, precision 0..6, 1–10 mm text, 3–20 mm symbols and a 24–200 mm reference line",
+                "Use a supported weld symbol version, at least one joint, up to 128 printable tail characters, precision 0..6, 1–10 mm text, 3–20 mm symbols and a 24–200 mm reference line",
             ));
         }
         for joint in [&self.arrow_side, &self.other_side].into_iter().flatten() {
@@ -512,6 +540,15 @@ impl WeldSymbol {
             {
                 return Err(invalid(
                     "An intermittent weld needs length and pitch; a count additionally requires pitch",
+                ));
+            }
+            if joint.joint == WeldJointKind::CapWidth
+                && (joint.size.is_none()
+                    || joint.contour != WeldContour::None
+                    || !joint.finish.is_empty())
+            {
+                return Err(invalid(
+                    "A cap width callout needs its measured width and a plain cap note",
                 ));
             }
             if !joint.finish.is_empty()
@@ -573,10 +610,28 @@ impl WeldSymbol {
         offset: [f64; 2],
         out: &mut Vec<Primitive>,
     ) -> Result<()> {
-        self.validate()?;
         let at = [target[0] + offset[0], target[1] + offset[1]];
+        let right = self.version == 1 || offset[0] >= 0.;
+        let body = self.body(doc, definition, at, right)?;
         leader(out, target, at)?;
-        let end = [at[0] + self.reference_length_mm, at[1]];
+        out.extend(body);
+        Ok(())
+    }
+    /// Paper-space geometry at the leader junction. Keep weld glyphs and
+    /// dimension order readable when the flag and tail change direction.
+    pub(super) fn body(
+        &self,
+        doc: &Document,
+        definition: &str,
+        at: [f64; 2],
+        right: bool,
+    ) -> Result<Vec<Primitive>> {
+        self.validate()?;
+        let mut primitives = Vec::new();
+        let out = &mut primitives;
+        let direction = if right { 1. } else { -1. };
+        let end = [at[0] + direction * self.reference_length_mm, at[1]];
+        let left = at[0].min(end[0]);
         line(out, at, end);
         if self.all_around {
             circle(out, at, self.symbol_height_mm * 0.2);
@@ -587,7 +642,7 @@ impl WeldSymbol {
             out.push(Primitive::Polyline {
                 points: vec![
                     [at[0], at[1] + h * 1.5],
-                    [at[0] + h * 0.65, at[1] + h * 1.15],
+                    [at[0] + direction * h * 0.65, at[1] + h * 1.15],
                     [at[0], at[1] + h * 0.8],
                 ],
                 dashed: false,
@@ -603,7 +658,10 @@ impl WeldSymbol {
                 let sign = if self.identification_above { 1. } else { -1. };
                 let y = at[1] + sign * self.symbol_height_mm * 0.65;
                 out.push(Primitive::Polyline {
-                    points: vec![[at[0] + self.symbol_height_mm * 0.7, y], [end[0], y]],
+                    points: vec![
+                        [at[0] + direction * self.symbol_height_mm * 0.7, y],
+                        [end[0], y],
+                    ],
                     dashed: true,
                 });
                 (at[1], -sign, y, sign)
@@ -617,7 +675,7 @@ impl WeldSymbol {
                 doc,
                 definition,
                 joint,
-                [at[0] + self.reference_length_mm * 0.4, arrow_y],
+                [left + self.reference_length_mm * 0.4, arrow_y],
                 arrow_sign,
                 out,
             )?;
@@ -628,8 +686,7 @@ impl WeldSymbol {
                 definition,
                 joint,
                 [
-                    at[0]
-                        + self.reference_length_mm * 0.4
+                    left + self.reference_length_mm * 0.4
                         + if self.staggered {
                             self.symbol_height_mm * 1.2
                         } else {
@@ -643,14 +700,14 @@ impl WeldSymbol {
         }
         if !self.tail.is_empty() {
             let h = self.symbol_height_mm * 0.6;
-            line(out, end, [end[0] + h, end[1] + h]);
-            line(out, end, [end[0] + h, end[1] - h]);
+            line(out, end, [end[0] + direction * h, end[1] + h]);
+            line(out, end, [end[0] + direction * h, end[1] - h]);
+            let tail_width = self.tail.chars().count() as f64 * self.text_size_mm * 0.66;
+            let tail_x = end[0] + direction * (h + self.text_size_mm * 0.4)
+                - if right { 0. } else { tail_width };
             text(
                 out,
-                [
-                    end[0] + h + self.text_size_mm * 0.4,
-                    end[1] - self.text_size_mm * 0.4,
-                ],
+                [tail_x, end[1] - self.text_size_mm * 0.4],
                 self.text_size_mm,
                 &self.tail,
             );
@@ -660,7 +717,7 @@ impl WeldSymbol {
         text(
             out,
             [
-                at[0],
+                left,
                 at[1] - self.symbol_height_mm * 2.2 - self.text_size_mm * 2.,
             ],
             self.text_size_mm,
@@ -670,7 +727,7 @@ impl WeldSymbol {
                 "Weld dimensions: mm"
             },
         );
-        Ok(())
+        Ok(primitives)
     }
     fn render_joint(
         &self,
@@ -689,21 +746,25 @@ impl WeldSymbol {
         {
             return Err(invalid("Intermittent weld pitch must exceed weld length"));
         }
+        let scale = if self.units == super::Units::Inches {
+            25.4
+        } else {
+            1.
+        };
         let convert = |value: f64| {
-            number(
-                if self.units == super::Units::Inches {
-                    value / 25.4
-                } else {
-                    value
-                },
-                self.precision,
-            )
+            let format = if self.version == 1 {
+                number
+            } else {
+                weld_number
+            };
+            format(value / scale, self.precision)
         };
         let h = self.symbol_height_mm;
         let x = at[0];
         let y = at[1];
         let high = y + sign * h;
         match joint.joint {
+            WeldJointKind::CapWidth => {}
             WeldJointKind::Fillet => {
                 out.push(Primitive::Polyline {
                     points: vec![[x, y], [x, high], [x + h, y], [x, y]],
@@ -773,24 +834,28 @@ impl WeldSymbol {
             } else {
                 ""
             };
-            let value = format!("{prefix}{}", convert(size)?);
-            text(
-                out,
-                [
-                    x - h * 0.8 - value.len() as f64 * self.text_size_mm * 0.6,
-                    baseline,
-                ],
-                self.text_size_mm,
-                value,
-            );
+            let value = if joint.joint == WeldJointKind::CapWidth {
+                format!("CAP WIDTH {}", convert(size)?)
+            } else {
+                format!("{prefix}{}", convert(size)?)
+            };
+            let x = if joint.joint == WeldJointKind::CapWidth {
+                x + h * 0.55 - value.len() as f64 * self.text_size_mm * 0.66
+            } else {
+                x - h * 0.8 - value.len() as f64 * self.text_size_mm * 0.6
+            };
+            text(out, [x, baseline], self.text_size_mm, value);
         }
         if let Some(length) = length {
             let value = if let Some(pitch) = pitch {
                 if self.convention == WeldConvention::AwsA2_4 {
+                    let spacing = if self.version == 1 {
+                        format!("{}-{}", convert(length)?, convert(pitch)?)
+                    } else {
+                        stitch_and_pitch(length / scale, pitch / scale, self.precision)?
+                    };
                     format!(
-                        "{}-{}{}",
-                        convert(length)?,
-                        convert(pitch)?,
+                        "{spacing}{}",
                         joint.count.map(|n| format!(" ({n})")).unwrap_or_default()
                     )
                 } else {
@@ -926,6 +991,7 @@ pub fn semantic_fields(
                     "units" => &["millimeters", "inches"],
                     "joint" => &[
                         "fillet",
+                        "cap_width",
                         "square_groove",
                         "v_groove",
                         "bevel_groove",

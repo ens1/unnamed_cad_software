@@ -1080,6 +1080,11 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn confirm_tool(&mut self) {
+        if weld_beads_ui::seam_pick::owner(self).is_some() {
+            self.confirm_requested = false;
+            self.status = weld_beads_ui::seam_pick::PROMPT.into();
+            return;
+        }
         if named_parameter_ui::active(self) {
             self.confirm_requested = false;
             self.status = "Add or cancel the named parameter first".into();

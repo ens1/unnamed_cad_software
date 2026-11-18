@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc};
 mod paper_cache;
 mod section_tool;
+mod weld_source;
 pub use paper_cache::PaperWorker;
 
 #[derive(Clone, PartialEq)]
@@ -139,7 +140,7 @@ fn paper_page_name(sheet: &Drawing, page: u32) -> String {
     } else if page < tables {
         format!("{} · Tables", page + 1)
     } else {
-        format!("{} · Model dimensions", page + 1)
+        format!("{} · Model callouts", page + 1)
     }
 }
 pub(crate) fn current_page_count(w: &Workspace, source: &Drawing) -> u32 {
@@ -1146,12 +1147,46 @@ fn selected_commands(context: &SemanticContext<'_>, state: &State) -> Vec<Semant
         }
     }
     if let Target::ModelItem { id } = target {
+        let weld = state
+            .cache
+            .as_ref()
+            .and_then(|cache| cache.paper.model_items.get(id))
+            .filter(|item| item.weld);
+        let linked = weld.is_some_and(|item| {
+            cad_core::library::is_definition_pinned(w.session.visible(), &item.definition)
+        });
+        if let Some(item) = weld.filter(|item| !item.weld_views.is_empty()) {
+            let mut picker = field(
+                context,
+                "weld-view",
+                "Show weld in view",
+                json!(&item.view),
+                "choice",
+                None,
+                item.weld_views
+                    .iter()
+                    .map(|view| json!({"value":view,"label":view.replace('-', " ")}))
+                    .collect(),
+            );
+            picker.data["model_item"] = json!(id);
+            out.push(picker);
+        }
         let mut edit = command(
             context,
             "drawing.interact-edit-in-model",
-            "Edit in model…",
-            state.capture.is_none() && w.tool_checkpoint.is_none() && w.session.draft.is_none(),
+            if weld.is_some() {
+                "Edit weld in model…"
+            } else {
+                "Edit in model…"
+            },
+            !linked
+                && state.capture.is_none()
+                && w.tool_checkpoint.is_none()
+                && w.session.draft.is_none(),
         );
+        if linked {
+            edit.value = Some("Edit this weld in the linked component’s source project.".into());
+        }
         edit.data["model_item"] = json!(id);
         out.push(edit);
         if source.model_item_placements.contains_key(id) {
@@ -1514,6 +1549,13 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
         })),
         "annotation-spacing" => Some(json!(annotation_spacing(state))),
         "dimension-mode" => Some(json!(state.dimension_mode)),
+        "weld-view" => {
+            let Target::ModelItem { id } = selected(state)? else {
+                return None;
+            };
+            let item = state.cache.as_ref()?.paper.model_items.get(id)?;
+            (item.weld && element.data["model_item"] == id.as_str()).then(|| json!(&item.view))
+        }
         "page" if state.cache.is_some() => Some(json!(page(w))),
         _ => None,
     }
@@ -1537,7 +1579,7 @@ pub fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) -> Result
         .into_iter()
         .find(|element| element.id == e.id)
         .ok_or_else(|| invalid("This paper control is no longer available"))?;
-    if fresh.data["field"] != e.data["field"] {
+    if fresh.data["field"] != e.data["field"] || fresh.data["model_item"] != e.data["model_item"] {
         return Err(invalid("This paper field changed; use its current control"));
     }
     let descriptor = fresh.value_descriptor();
@@ -1557,6 +1599,12 @@ pub fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) -> Result
     }
     let result = (|| -> Result<()> {
         match e.data["field"].as_str().unwrap_or("") {
+            "weld-view" => {
+                let mut state = std::mem::take(&mut w.drawing_interaction);
+                let result = set_weld_view(w, &mut state, &e.data, &value);
+                w.drawing_interaction = state;
+                result?;
+            }
             "snap" => {
                 w.drawing_interaction.snapping = value
                     .as_bool()
@@ -1638,6 +1686,25 @@ pub fn set_value(w: &mut Workspace, e: &SemanticElement, value: Value) -> Result
     })();
     field_error(w, e, result.as_ref().err().map(ToString::to_string));
     result
+}
+fn set_weld_view(w: &mut Workspace, state: &mut State, data: &Value, value: &Value) -> Result<()> {
+    let Some(Target::ModelItem { id }) = selected(state) else {
+        return Err(invalid("Select a weld symbol first"));
+    };
+    if data["model_item"] != id.as_str() {
+        return Err(invalid("Select the weld symbol again"));
+    }
+    let view = value
+        .as_str()
+        .ok_or_else(|| invalid("Choose a drawing view"))?;
+    apply(
+        w,
+        state,
+        &Action::SetWeldView {
+            id: id.clone(),
+            view: view.into(),
+        },
+    )
 }
 fn execute(w: &mut Workspace, state: &mut State, cmd: &str, data: Option<&Value>) -> Result<()> {
     if let Some(data) = data {
@@ -1745,7 +1812,7 @@ fn execute(w: &mut Workspace, state: &mut State, cmd: &str, data: Option<&Value>
         "drawing.interact-edit-in-model" => {
             if w.tool_checkpoint.is_some() || w.session.draft.is_some() {
                 return Err(invalid(
-                    "Finish the drawing edit before opening the model dimension",
+                    "Finish the drawing edit before opening the model callout",
                 ));
             }
             let source = sheet(w).ok_or_else(|| invalid("Select a drawing sheet"))?;
@@ -1767,14 +1834,19 @@ fn execute(w: &mut Workspace, state: &mut State, cmd: &str, data: Option<&Value>
             if !crate::drawing_ui::leave_workspace(w) {
                 return Err(invalid("Finish the current drawing edit first"));
             }
-            if let Err(error) = crate::model_dimensions_ui::open_from_drawing(
-                w,
-                &item.definition,
-                item.configuration.as_deref(),
-                &item.path,
-                &item.source,
-                item.datum,
-            ) {
+            let result = if item.weld {
+                weld_source::open(w, &source, item)
+            } else {
+                crate::model_dimensions_ui::open_from_drawing(
+                    w,
+                    &item.definition,
+                    item.configuration.as_deref(),
+                    &item.path,
+                    &item.source,
+                    item.datum,
+                )
+            };
+            if let Err(error) = result {
                 crate::drawing_ui::open_workspace(w);
                 return Err(error);
             }
@@ -2778,6 +2850,33 @@ pub fn frame(
                 ),
             );
             for element in &commands {
+                if element.data["field"] == "weld-view" {
+                    ui.menu_button(&element.label, |ui| {
+                        for choice in element.value_descriptor().choices {
+                            let Some(view) = choice["value"].as_str() else {
+                                continue;
+                            };
+                            if controls::selectable(
+                                ui,
+                                &format!("{}:{view}", element.id),
+                                "drawing-tool",
+                                choice["label"].as_str().unwrap_or(view),
+                                element.data["json"] == view,
+                            )
+                            .clicked()
+                            {
+                                if let Err(error) =
+                                    set_weld_view(w, &mut state, &element.data, &choice["value"])
+                                {
+                                    w.status = error.to_string();
+                                }
+                                state.context_target = None;
+                                ui.close();
+                            }
+                        }
+                    });
+                    continue;
+                }
                 if let Some(command) = element.commands.first()
                     && controls::button(
                         ui,

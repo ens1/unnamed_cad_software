@@ -68,7 +68,7 @@ pub(super) fn click(
     match placement {
         Placement::Anchor => {
             let mut parents = cache.paper.projections.iter().filter(|(k, v)| {
-                matches!(k.as_str(), "front" | "top" | "right") && contains(v.rect_mm, p)
+                cad_core::drawing::orthographic_axes(k).is_some() && contains(v.rect_mm, p)
             });
             let (key, projection) = parents
                 .next()

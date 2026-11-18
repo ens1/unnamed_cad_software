@@ -327,6 +327,30 @@ struct Query {
     self_contact: Option<(usize, Domain)>,
 }
 impl ProjectedScene {
+    pub(super) fn callout_visible(
+        &mut self,
+        world: [f64; 3],
+        remaining: &mut usize,
+    ) -> Option<bool> {
+        let saved = self.budget.work;
+        self.budget.work = MAX_WORK.saturating_sub(*remaining).saturating_add(1);
+        let query = world.map(I::point);
+        let result = self.visibility(Query {
+            bounds: query,
+            center: query,
+            derivative: [I::point(0.); 3],
+            radius: 0.,
+            self_contact: None,
+        });
+        *remaining = MAX_WORK.saturating_sub(self.budget.work);
+        self.budget.work = saved;
+        match result.ok()? {
+            Visibility::Visible => Some(true),
+            Visibility::Hidden => Some(false),
+            Visibility::Uncertain => None,
+        }
+    }
+
     pub(crate) fn fidelity(&self) -> super::Fidelity {
         super::Fidelity::NativeSurfaces {
             tolerance_mm: self.accuracy.modeling.linear_mm,

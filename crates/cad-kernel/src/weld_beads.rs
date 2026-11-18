@@ -352,6 +352,8 @@ struct Section {
     area: f64,
     centroid: Vector3,
     toes: Vec<Vector3>,
+    crown: Vector3,
+    outward: Vector3,
 }
 fn section(
     definition: &Definition,
@@ -446,6 +448,8 @@ fn section(
         area,
         centroid: (triangle_centroid * triangle_area + cap_centroid * cap_area) / area,
         toes,
+        crown: (a + b) * 0.5 + outward * rise,
+        outward,
     })
 }
 
@@ -1296,6 +1300,53 @@ pub(crate) struct Built {
     pub solids: Vec<Solid>,
     pub metadata: Evaluated,
 }
+
+fn drawing_callout(
+    definition: &Definition,
+    values: &Values,
+    path: &Path,
+    section: &Section,
+    spans: &[[f64; 2]],
+) -> cad_core::weld_beads::Callout {
+    use cad_core::weld_beads::{Callout, CalloutStation};
+    // Distribute stations over deposited length. None can land in a trim or stitch gap.
+    let count = match path {
+        Path::Line { .. } => 9,
+        Path::Circle { .. } => 48,
+    };
+    let length: f64 = spans.iter().map(|[start, end]| end - start).sum();
+    let mut segment = 0;
+    let mut deposited = 0.;
+    let mut stations = Vec::with_capacity(count);
+    for i in 0..count {
+        let station = length * (i as f64 + 0.5) / count as f64;
+        while segment + 1 < spans.len()
+            && station >= deposited + spans[segment][1] - spans[segment][0]
+        {
+            deposited += spans[segment][1] - spans[segment][0];
+            segment += 1;
+        }
+        let [start, end] = spans[segment];
+        let distance = (start + (station - deposited)).clamp(start, end);
+        let turn = path.rotation(distance);
+        let point = path.point(distance) + turn * section.crown;
+        stations.push(CalloutStation {
+            point: point.into(),
+            tangent: path.tangent(distance).into(),
+            outward: (turn * section.outward).into(),
+        });
+    }
+    Callout {
+        joint_type: definition.joint_type,
+        profile: definition.profile,
+        size_mm: values.size_mm,
+        stitch_mm: values.stitch_mm,
+        field_weld: definition.field_weld,
+        all_around: definition.all_around,
+        square_groove: definition.square_groove,
+        stations,
+    }
+}
 fn guide_points(path: &Path, offset: Vector3, start: f64, end: f64) -> Vec<[f64; 3]> {
     let divisions = if matches!(path, Path::Line { .. }) {
         1
@@ -1365,6 +1416,7 @@ pub(crate) fn build(
                 real_solid: true,
                 finish: definition.finish.clone(),
                 material: definition.material.clone(),
+                callout: None,
             },
         });
     }
@@ -1400,6 +1452,19 @@ pub(crate) fn build(
     let mut sources = resolved.sources.clone();
     sources.extend(support_faces.iter().map(|(_, source)| source.clone()));
     let spans = intervals(&values, path.length())?;
+    if definition.all_around
+        && !(matches!(path, Path::Circle { angle, .. } if (angle - std::f64::consts::TAU).abs() <= REL)
+            && matches!(
+                definition.pattern,
+                cad_core::weld_beads::Pattern::Continuous
+            )
+            && values.start_offset_mm == 0.
+            && values.end_offset_mm == 0.)
+    {
+        return Err(invalid(
+            "Weld all around requires a complete closed seam with continuous deposition and zero end offsets.",
+        ));
+    }
     let assignments = if supports.is_empty() {
         vec![]
     } else {
@@ -1438,7 +1503,7 @@ pub(crate) fn build(
     }
     let mut solids = vec![];
     let mut metadata = vec![];
-    for (index, [start, end]) in spans.into_iter().enumerate() {
+    for (index, [start, end]) in spans.iter().copied().enumerate() {
         for (support_index, support) in supports.iter().enumerate() {
             for (toe_index, (_, offset)) in std::iter::once((0, Vector3::zero()))
                 .chain(assignments[support_index].iter().copied())
@@ -1612,6 +1677,9 @@ pub(crate) fn build(
             real_solid: true,
             finish: definition.finish.clone(),
             material: definition.material.clone(),
+            callout: Some(drawing_callout(
+                definition, &values, &path, &section, &spans,
+            )),
         },
     })
 }

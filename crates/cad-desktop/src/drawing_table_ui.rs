@@ -153,7 +153,7 @@ pub(crate) fn create(w: &Workspace, sheet: &Drawing, kind: &str) -> cad_core::Re
                 instance_path: vec![],
                 view: cad_core::drawing::view_keys(sheet)
                     .into_iter()
-                    .find(|v| matches!(v.as_str(), "front" | "top" | "right"))
+                    .find(|v| cad_core::drawing::orthographic_axes(v).is_some())
                     .unwrap_or("front".into()),
                 datum: HoleDatum::ModelOrigin,
                 units: cad_core::drawing::Units::Millimeters,
@@ -226,7 +226,7 @@ pub(crate) fn create(w: &Workspace, sheet: &Drawing, kind: &str) -> cad_core::Re
         if matches!(table.kind, TableKind::Holes { .. }) {
             for key in cad_core::drawing::view_keys(sheet)
                 .into_iter()
-                .filter(|v| matches!(v.as_str(), "front" | "top" | "right"))
+                .filter(|v| cad_core::drawing::orthographic_axes(v).is_some())
             {
                 if let TableKind::Holes { view, .. } = &mut table.kind {
                     *view = key;

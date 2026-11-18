@@ -749,6 +749,16 @@ fn sheet_fields(f: &mut Fields<'_>) {
     if let Some(field) = f.out.last_mut() {
         field.data["default_json"] = json!(false);
     }
+    f.emit(
+        "/show_weld_symbols",
+        "Show model weld symbols",
+        json!(f.sheet.show_weld_symbols),
+        vec![],
+        None,
+    );
+    if let Some(field) = f.out.last_mut() {
+        field.data["default_json"] = json!(true);
+    }
     let mut exploded = vec![choice("Assembled", Value::Null)];
     if f.sheet.definition == f.w.session.visible().root
         && let Some(a) = f.w.session.visible().assemblies.get(&f.sheet.definition)
@@ -1575,7 +1585,7 @@ fn annotation_fields(f: &mut Fields<'_>) {
             "Orthographic view",
             view_keys(f.sheet)
                 .into_iter()
-                .filter(|view| matches!(view.as_str(), "front" | "top" | "right"))
+                .filter(|view| cad_core::drawing::orthographic_axes(view).is_some())
                 .map(|view| choice(&view, &view))
                 .collect(),
         );
@@ -2125,7 +2135,7 @@ fn table_fields(f: &mut Fields<'_>) {
                 "Coordinate view",
                 view_keys(f.sheet)
                     .iter()
-                    .filter(|v| matches!(v.as_str(), "front" | "top" | "right"))
+                    .filter(|v| cad_core::drawing::orthographic_axes(v).is_some())
                     .map(|v| choice(v, v))
                     .collect(),
             );
@@ -2800,8 +2810,12 @@ fn optional_default(
                         invalid("Add another view before creating a parent relationship")
                     })?;
                 let axis = match (child.as_str(), parent.as_str()) {
-                    ("top", "front") | ("front", "top") => ViewAlignmentAxis::Vertical,
-                    ("right", "front") | ("front", "right") => ViewAlignmentAxis::Horizontal,
+                    ("top" | "bottom", "front") | ("front", "top" | "bottom") => {
+                        ViewAlignmentAxis::Vertical
+                    }
+                    ("right" | "left" | "back", "front") | ("front", "right" | "left" | "back") => {
+                        ViewAlignmentAxis::Horizontal
+                    }
                     _ => ViewAlignmentAxis::Free,
                 };
                 json!(ViewAlignment {

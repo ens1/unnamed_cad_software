@@ -2932,6 +2932,13 @@ pub fn select_feature(w: &mut Workspace, hit: SketchHit, response: &egui::Respon
     true
 }
 pub fn pick(w: &Workspace, rect: egui::Rect, pointer: egui::Pos2) -> Option<SketchHit> {
+    pick_with_member(w, rect, pointer).map(|(hit, _)| hit)
+}
+pub(crate) fn pick_with_member(
+    w: &Workspace,
+    rect: egui::Rect,
+    pointer: egui::Pos2,
+) -> Option<(SketchHit, Option<Id>)> {
     let evaluation = viewport::display_evaluation(w)?;
     let mut nearest = 7.;
     let mut hit = None;
@@ -2978,12 +2985,13 @@ pub fn pick(w: &Workspace, rect: egui::Rect, pointer: egui::Pos2) -> Option<Sket
                         .filter_map(|id| geometry.points.get(id).copied())
                         .collect::<Vec<_>>(),
                     true,
+                    None,
                 ))
                 .chain(geometry.circles.values().filter_map(|circle| {
                     geometry
                         .points
                         .get(&circle.center)
-                        .map(|center| (circle_points(*center, circle.radius_mm), true))
+                        .map(|center| (circle_points(*center, circle.radius_mm), true, None))
                 }))
                 .collect::<Vec<_>>()
             } else {
@@ -2991,10 +2999,10 @@ pub fn pick(w: &Workspace, rect: egui::Rect, pointer: egui::Pos2) -> Option<Sket
                     .polylines
                     .iter()
                     .filter(|path| crate::sketch_overlay::member_visible(w, path.construction))
-                    .map(|path| (path.points.clone(), path.closed))
+                    .map(|path| (path.points.clone(), path.closed, Some(&path.member)))
                     .collect()
             };
-            for (points, closed) in contours {
+            for (points, closed, member) in contours {
                 let distance = polyline_distance(
                     w,
                     rect,
@@ -3006,12 +3014,15 @@ pub fn pick(w: &Workspace, rect: egui::Rect, pointer: egui::Pos2) -> Option<Sket
                 );
                 if distance < nearest {
                     nearest = distance;
-                    hit = Some(SketchHit {
-                        definition: instance.definition.clone(),
-                        feature: feature.id.clone(),
-                        path: instance.path.clone(),
-                        instance: instance.path.last().cloned(),
-                    });
+                    hit = Some((
+                        SketchHit {
+                            definition: instance.definition.clone(),
+                            feature: feature.id.clone(),
+                            path: instance.path.clone(),
+                            instance: instance.path.last().cloned(),
+                        },
+                        member.cloned(),
+                    ));
                 }
             }
         }

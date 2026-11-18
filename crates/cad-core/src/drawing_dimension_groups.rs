@@ -212,7 +212,7 @@ pub fn layout(
     group.validate()?;
     // Orthographic X/Y has physical lengths. Isometric projection cannot be
     // called a manufacturing coordinate dimension without a different intent.
-    if !matches!(view, "front" | "top" | "right") {
+    if drawing::orthographic_axes(view).is_none() {
         return Err(CadError::Unsupported(
             "Drawing dimension groups require a standard orthographic view".into(),
         ));

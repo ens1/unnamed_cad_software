@@ -2,7 +2,7 @@
 use crate::{CadError, Dimension, Document, Expr, Id, NodeRef, Result, TopologyRef};
 use serde::{Deserialize, Serialize};
 
-pub const CONTRACT_VERSION: u32 = 2;
+pub const CONTRACT_VERSION: u32 = 3;
 pub const MAX_SEGMENTS: usize = 1024;
 pub const JOINT_PREVIEW_VERSION: u32 = 1;
 
@@ -103,6 +103,43 @@ pub enum Profile {
     /// Circular cap above the seam. Size is the toe-to-toe width.
     Butt,
 }
+
+/// Arrangement of the workpieces. A joint can accept different weld profiles.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JointType {
+    #[default]
+    Unspecified,
+    Butt,
+    Tee,
+    Lap,
+    Corner,
+    Edge,
+}
+impl JointType {
+    pub const ALL: [Self; 6] = [
+        Self::Unspecified,
+        Self::Butt,
+        Self::Tee,
+        Self::Lap,
+        Self::Corner,
+        Self::Edge,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unspecified => "Unspecified",
+            Self::Butt => "Butt",
+            Self::Tee => "Tee",
+            Self::Lap => "Lap",
+            Self::Corner => "Corner",
+            Self::Edge => "Edge",
+        }
+    }
+    fn unspecified(&self) -> bool {
+        *self == Self::Unspecified
+    }
+}
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Pattern {
@@ -128,6 +165,16 @@ pub struct Definition {
     pub supports: Vec<FaceSource>,
     #[serde(default)]
     pub profile: Profile,
+    #[serde(default, skip_serializing_if = "JointType::unspecified")]
+    pub joint_type: JointType,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub field_weld: bool,
+    /// An explicit instruction to weld the complete, closed seam.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all_around: bool,
+    /// Explicit square-groove specification for a butt cap. Width refers to the crown.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub square_groove: bool,
     pub size: Expr,
     /// Circular crown rise above the chord, in physical length units.
     pub reinforcement: Expr,
@@ -153,6 +200,10 @@ impl Definition {
             seam,
             supports: vec![],
             profile: Profile::Fillet,
+            joint_type: JointType::Unspecified,
+            field_weld: false,
+            all_around: false,
+            square_groove: false,
             size: Expr::from("3 mm"),
             reinforcement: Expr::from("0.5 mm"),
             direction: [0., 0., 1.],
@@ -185,6 +236,11 @@ impl Definition {
         out
     }
     pub fn validate(&self) -> Result<()> {
+        if self.square_groove && self.profile != Profile::Butt {
+            return Err(invalid(
+                "A square-groove designation requires a butt-cap bead.",
+            ));
+        }
         let portable = |id: &str| {
             !id.is_empty()
                 && id.len() <= 256
@@ -335,6 +391,27 @@ pub struct EvaluatedSegment {
     pub length_mm: f64,
     pub volume_mm3: f64,
 }
+/// Location and local frame on a proven section of deposited metal, in the owner's coordinates.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct CalloutStation {
+    pub point: [f64; 3],
+    pub tangent: [f64; 3],
+    pub outward: [f64; 3],
+}
+
+/// The drawing consumes these evaluated values for the exact configured occurrence.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Callout {
+    pub joint_type: JointType,
+    pub profile: Profile,
+    pub size_mm: f64,
+    /// Deposited stitch length followed by the clear gap, in millimeters.
+    pub stitch_mm: Option<[f64; 2]>,
+    pub field_weld: bool,
+    pub all_around: bool,
+    pub square_groove: bool,
+    pub stations: Vec<CalloutStation>,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Evaluated {
     pub version: u32,
@@ -349,6 +426,8 @@ pub struct Evaluated {
     pub real_solid: bool,
     pub finish: Option<Id>,
     pub material: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callout: Option<Callout>,
 }
 fn invalid(message: &str) -> CadError {
     CadError::Invalid(format!("Weld bead: {message}"))

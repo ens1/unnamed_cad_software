@@ -14,15 +14,18 @@ pub mod model_items;
 pub mod symbols;
 pub use symbols::*;
 
-pub const CONTRACT_VERSION: u32 = 14;
-pub const FORMAT_VERSION: u32 = 5;
+pub const CONTRACT_VERSION: u32 = 15;
+pub const FORMAT_VERSION: u32 = 6;
 const TITLE_CELL_PADDING_MM: f64 = 1.;
 const TITLE_LABEL_SCALE: f64 = 0.65;
 const TITLE_LINE_HEIGHT: f64 = 1.35;
-pub const VIEW_KEYS: [&str; 6] = [
+pub const VIEW_KEYS: [&str; 9] = [
     "front",
     "top",
     "right",
+    "back",
+    "left",
+    "bottom",
     "isometric",
     "section-z",
     "detail-front",
@@ -202,6 +205,11 @@ pub struct SheetTemplate {
     pub title_block: BTreeMap<String, String>,
     #[serde(default = "model_items::default_enabled")]
     pub show_model_dimensions: bool,
+    #[serde(
+        default = "crate::document::default_weld_symbols",
+        skip_serializing_if = "crate::document::weld_symbols_enabled"
+    )]
+    pub show_weld_symbols: bool,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1009,6 +1017,7 @@ pub fn new_sheet(doc: &Document, definition: &str, name: String) -> Result<Drawi
         paper_mm: [297., 210.],
         dimensions: vec![],
         show_model_dimensions: model_items::part_scope(doc, definition),
+        show_weld_symbols: true,
         model_item_placements: BTreeMap::new(),
         title_block: BTreeMap::new(),
         entities: vec![],
@@ -1220,6 +1229,7 @@ impl SheetTemplate {
             view_visibility_geometry: sheet.view_visibility_geometry.clone(),
             title_block: sheet.title_block.clone(),
             show_model_dimensions: sheet.show_model_dimensions,
+            show_weld_symbols: sheet.show_weld_symbols,
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -1240,6 +1250,7 @@ impl SheetTemplate {
             paper_mm: self.paper_mm,
             dimensions: vec![],
             show_model_dimensions: self.show_model_dimensions,
+            show_weld_symbols: self.show_weld_symbols,
             model_item_placements: BTreeMap::new(),
             title_block: self.title_block.clone(),
             entities: vec![],
@@ -1262,6 +1273,7 @@ impl SheetTemplate {
         sheet.views = self.views.clone();
         sheet.annotations = self.annotations.clone();
         sheet.show_model_dimensions = self.show_model_dimensions;
+        sheet.show_weld_symbols = self.show_weld_symbols;
         sheet.view_layouts = self.view_layouts.clone();
         sheet.view_display_modes = self.view_display_modes.clone();
         sheet.view_visibility_geometry = self.view_visibility_geometry.clone();
@@ -2462,14 +2474,33 @@ fn trim_number(number: f64) -> String {
         .trim_end_matches('.')
         .into()
 }
+/// Positive sheet X and Y for each principal view. The cross product points at the viewer.
+pub fn orthographic_axes(name: &str) -> Option<[[f64; 3]; 2]> {
+    if !matches!(name, "front" | "back" | "top" | "bottom" | "right" | "left") {
+        return None;
+    }
+    let x = project_with_depth(name, [1., 0., 0.]).ok()?;
+    let y = project_with_depth(name, [0., 1., 0.]).ok()?;
+    let z = project_with_depth(name, [0., 0., 1.]).ok()?;
+    Some([[x[0], y[0], z[0]], [x[1], y[1], z[1]]])
+}
+
 pub(crate) fn project(name: &str, p: [f64; 3]) -> Result<[f64; 2]> {
+    let [x, y, _] = project_with_depth(name, p)?;
+    Ok([x, y])
+}
+pub(crate) fn project_with_depth(name: &str, p: [f64; 3]) -> Result<[f64; 3]> {
     Ok(match name {
-        "front" | "detail-front" => [p[0], p[2]],
-        "top" | "section-z" => [p[0], p[1]],
-        "right" => [p[1], p[2]],
+        "front" | "detail-front" => [p[0], p[2], -p[1]],
+        "top" | "section-z" => [p[0], p[1], p[2]],
+        "right" => [p[1], p[2], p[0]],
+        "back" => [-p[0], p[2], p[1]],
+        "bottom" => [p[0], -p[1], -p[2]],
+        "left" => [-p[1], p[2], -p[0]],
         "isometric" => [
             (p[0] - p[1]) * std::f64::consts::FRAC_1_SQRT_2,
             p[2] * (2f64 / 3.).sqrt() + (p[0] + p[1]) / 6f64.sqrt(),
+            (-p[0] - p[1] + p[2]) / 3f64.sqrt(),
         ],
         _ => return Err(CadError::Unsupported(format!("Drawing view {name}"))),
     })
@@ -3919,6 +3950,7 @@ fn automatic_projection(doc: &Document) -> Drawing {
         paper_mm: [297., 210.],
         dimensions: vec![],
         show_model_dimensions: model_items::part_scope(doc, &doc.root),
+        show_weld_symbols: true,
         model_item_placements: BTreeMap::new(),
         title_block: BTreeMap::new(),
         entities: vec![],
@@ -4379,6 +4411,7 @@ fn build_sheet_mode(
     result.display_state = display_scope
         .as_ref()
         .map(|scope| crate::drawing_display_states::info(scope, &instances));
+    let mut weld_items = model_items::WeldItems::collect(doc, e, sheet, &instances)?;
     let exploded_lines = exploded_stage(doc, e, sheet)?
         .map(|s| {
             s.lines
@@ -4496,19 +4529,13 @@ fn build_sheet_mode(
         return Err(invalid("Each named view can occur once per sheet"));
     }
     let orthographic = names.iter().any(|name| name == "front");
-    let extra_views = names
-        .iter()
-        .filter(|name| !matches!(name.as_str(), "front" | "top" | "right" | "isometric"))
-        .count();
+    let has = |view: &str| names.iter().any(|name| name == view);
+    let standalone = |name: &str| name != "isometric" && orthographic_axes(name).is_none();
+    let extra_views = names.iter().filter(|name| standalone(name)).count();
+    let front_column = usize::from(has("left"));
+    let right_columns = usize::from(has("right") || has("isometric"));
     let columns = if orthographic {
-        if names
-            .iter()
-            .any(|name| matches!(name.as_str(), "right" | "isometric"))
-        {
-            2
-        } else {
-            1
-        }
+        front_column + 1 + right_columns + usize::from(has("back"))
     } else if names.len() == 1 {
         1
     } else {
@@ -4519,15 +4546,9 @@ fn build_sheet_mode(
     } else {
         0
     };
+    let front_row = extra_rows + usize::from(has("bottom"));
     let rows = if orthographic {
-        if names
-            .iter()
-            .any(|name| matches!(name.as_str(), "top" | "isometric"))
-        {
-            extra_rows + 2
-        } else {
-            extra_rows + 1
-        }
+        front_row + 1 + usize::from(has("top") || has("isometric"))
     } else {
         names.len().div_ceil(columns)
     };
@@ -4692,16 +4713,17 @@ fn build_sheet_mode(
         }
         let (column, row) = if orthographic {
             match name.as_str() {
-                "front" => (0, extra_rows),
-                "top" => (0, extra_rows + 1),
-                "right" => (1, extra_rows),
-                "isometric" => (1, extra_rows + 1),
+                "front" => (front_column, front_row),
+                "top" => (front_column, front_row + 1),
+                "bottom" => (front_column, front_row - 1),
+                "right" => (front_column + 1, front_row),
+                "left" => (front_column - 1, front_row),
+                "back" => (columns - 1, front_row),
+                "isometric" => (front_column + 1, front_row + 1),
                 _ => {
                     let extra_index = names[..index]
                         .iter()
-                        .filter(|name| {
-                            !matches!(name.as_str(), "front" | "top" | "right" | "isometric")
-                        })
+                        .filter(|name| standalone(name))
                         .count();
                     (
                         extra_index.rem_euclid(columns),
@@ -4740,12 +4762,12 @@ fn build_sheet_mode(
                             .is_none()
                     {
                         match name.as_str() {
-                            "top" => Some(ViewAlignment {
+                            "top" | "bottom" => Some(ViewAlignment {
                                 parent: "front".into(),
                                 axis: ViewAlignmentAxis::Vertical,
                                 shared_scale: true,
                             }),
-                            "right" => Some(ViewAlignment {
+                            "right" | "left" | "back" => Some(ViewAlignment {
                                 parent: "front".into(),
                                 axis: ViewAlignmentAxis::Horizontal,
                                 shared_scale: true,
@@ -4971,7 +4993,7 @@ fn build_sheet_mode(
                 scale: view.scale,
             },
         );
-        if sheet.show_model_dimensions && !world.is_empty() {
+        if (sheet.show_model_dimensions || sheet.show_weld_symbols) && !world.is_empty() {
             let projection = &result.projections[name];
             model_bounds.insert(
                 name.clone(),
@@ -5128,7 +5150,7 @@ fn build_sheet_mode(
             format!(
                 "Scale {}{}",
                 scale_label(view.scale),
-                if orthographic && matches!(name.as_str(), "front" | "top" | "right") {
+                if orthographic && orthographic_axes(name).is_some() {
                     "; third-angle projection"
                 } else {
                     ""
@@ -5292,9 +5314,10 @@ fn build_sheet_mode(
                 }
             }
         }
-        if matches!(name.as_str(), "front" | "right" | "top" | "isometric") {
-            view_ranges.insert(name.clone(), view_start..out.len());
+        if let Some(scene) = &mut occlusion {
+            weld_items.observe(name, scene);
         }
+        view_ranges.insert(name.clone(), view_start..out.len());
         for d in sheet.dimensions.iter().filter(|d| d.view == *name) {
             let start = out.len();
             if let Err(error) = dimension(doc, e, sheet, &view, d, out) {
@@ -5413,6 +5436,7 @@ fn build_sheet_mode(
             model_bounds: &model_bounds,
             view_ranges: &view_ranges,
         },
+        weld_items,
     )?;
     let source_info = result.source_info.clone();
     let mut pages = vec![result];

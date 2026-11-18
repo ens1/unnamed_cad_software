@@ -2243,7 +2243,8 @@ fn model_view(
     {
         let p = response.interact_pointer_pos().unwrap_or(r.center());
         w.selection_popup = None;
-        let direction_pick = crate::component_pattern_ui::capture_sketch_pick(w, r, p);
+        let weld_pick = crate::weld_beads_ui::seam_pick::capture_click(w, r, p);
+        let direction_pick = weld_pick || crate::component_pattern_ui::capture_sketch_pick(w, r, p);
         let structural_pick = !direction_pick
             && crate::structural_member_ui::capture_click(
                 w,
@@ -3814,6 +3815,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "bom" => "Bill of materials",
             "inspection" => "Mass Properties",
             "model-dimensions" => "Model Dimensions",
+            "weld-seam" => "Weld Bead",
             "sensors" => "Design Monitors",
             "sketch-block-library" => "Sketch Block Library",
             "camera-views" => "Named Views",
@@ -3860,6 +3862,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 | "standard-parts"
                 | "tolerance-stacks"
                 | "model-dimensions"
+                | "weld-seam"
                 | "properties"
                 | "reference-repair"
                 | "feature-order"
@@ -3962,6 +3965,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 "configurations" => crate::configuration_ui::show(ui, w),
                 "inspection" => crate::inspection_ui::controls(ui, w),
                 "model-dimensions" => crate::model_dimensions_ui::show(ui, w),
+                "weld-seam" => crate::weld_beads_ui::seam_pick::show(ui, w),
                 "sensors" => crate::sensors_ui::show(ui, w),
                 "sketch-block-library" => crate::sketch_block_library_ui::show(ui, w),
                 "camera-views" => crate::camera_views_ui::show(ui, w),

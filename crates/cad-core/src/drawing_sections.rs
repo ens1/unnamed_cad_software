@@ -65,7 +65,7 @@ impl Definition {
             || self.id.len() > 256
             || self.id.chars().any(char::is_control)
             || !length.is_finite()
-            || !matches!(self.parent.as_str(), "front" | "top" | "right")
+            || drawing::orthographic_axes(&self.parent).is_none()
             || !sheet.views.contains(&self.parent)
             || !sheet.views.iter().any(|s| s == KEY)
             || self
@@ -84,11 +84,8 @@ impl Definition {
     }
     pub fn frame(&self, doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Frame> {
         self.validate(sheet)?;
-        let (a, b) = match self.parent.as_str() {
-            "front" => ([1., 0., 0.], [0., 0., 1.]),
-            "right" => ([0., 1., 0.], [0., 0., 1.]),
-            _ => ([1., 0., 0.], [0., 1., 0.]),
-        };
+        let [a, b] = drawing::orthographic_axes(&self.parent)
+            .ok_or_else(|| invalid("Choose an orthographic parent for the section"))?;
         let sign = if self.reversed { -1. } else { 1. };
         let len = self.direction[0].hypot(self.direction[1]);
         let d = self.direction.map(|x| sign * x / len);

@@ -11,6 +11,27 @@ use cad_core::{
     weld_beads::{JointPreview, Profile},
 };
 use serde_json::json;
+pub(crate) mod seam_pick;
+
+/// Supply omitted defaults to both editors, without changing compact saved sources.
+pub(crate) fn editable(source: &Definition) -> serde_json::Value {
+    let mut value = json!(source);
+    value["finish"] = json!(source.finish);
+    value["material"] = json!(source.material);
+    value["supports"] = json!(source.supports);
+    value["joint_type"] = json!(source.joint_type);
+    value["field_weld"] = json!(source.field_weld);
+    value["all_around"] = json!(source.all_around);
+    value["square_groove"] = json!(source.square_groove);
+    value
+}
+
+pub(crate) fn joint_choices() -> Vec<serde_json::Value> {
+    cad_core::weld_beads::JointType::ALL
+        .iter()
+        .map(|joint| json!({"label":joint.label(), "value":joint}))
+        .collect()
+}
 
 /// Invalid current-source evaluations carry diagnostic curves; the ordinary
 /// model may still display its last valid station. Never read that fallback for
@@ -289,6 +310,9 @@ pub(crate) fn joint_controls(
 }
 
 pub(crate) fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>) -> bool {
+    if seam_pick::action(w, command, data) {
+        return true;
+    }
     if command != ACTION {
         return false;
     }
@@ -664,6 +688,9 @@ pub(crate) fn feedback(w: &Workspace, owner: &str, node: &str) -> Vec<SemanticEl
 }
 
 pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
+    if seam_pick::owner(w).is_some() {
+        return seam_pick::elements(w);
+    }
     let Some(evaluation) = joint_evaluation(w) else {
         return vec![];
     };
@@ -744,15 +771,15 @@ pub(crate) fn selected_seam(w: &Workspace, part_local: bool) -> Option<SeamSourc
         .as_ref()
         .filter(|selected| selected.reference.topology == "edge")
     {
-        return Some(SeamSource::ModelEdge {
-            body: crate::reference_ui::selected_body(w, selected),
-            reference: Box::new(selected.reference.clone()),
-            path: if part_local {
+        return edge_seam(
+            w,
+            selected,
+            if part_local {
                 vec![]
             } else {
                 selected.path.clone()
             },
-        });
+        );
     }
     if let Some(cad_core::selection_actions::SelectionTarget::Sketch {
         definition,
@@ -802,6 +829,48 @@ pub(crate) fn selected_seam(w: &Workspace, part_local: bool) -> Option<SeamSourc
         }),
         _ => None,
     }
+}
+fn edge_seam(
+    w: &Workspace,
+    selected: &viewport::Selection,
+    path: Vec<String>,
+) -> Option<SeamSource> {
+    let producer = &selected.reference.producer;
+    if w.session
+        .visible()
+        .parts
+        .get(&producer.definition)?
+        .features
+        .iter()
+        .any(|feature| {
+            feature.id == producer.node
+                && matches!(feature.operation, Operation::ReferenceCurve { .. })
+        })
+    {
+        let evaluation = viewport::selection_evaluation(w)?;
+        let instance = evaluation
+            .instances
+            .iter()
+            .find(|i| i.path == selected.path && i.definition == selected.definition)?;
+        let curve = evaluation.reference_curves.get(&format!(
+            "{}::{}",
+            cad_core::history::mesh_key(instance),
+            producer.node
+        ))?;
+        let piece = curve.pieces.iter().find(|p| {
+            cad_core::selection_sets::same_reference(&p.reference, &selected.reference)
+        })?;
+        return Some(SeamSource::ReferenceCurve {
+            feature: producer.clone(),
+            piece: Some(piece.id.clone()),
+            path,
+        });
+    }
+    Some(SeamSource::ModelEdge {
+        body: crate::reference_ui::selected_body(w, selected),
+        reference: Box::new(selected.reference.clone()),
+        path,
+    })
 }
 pub(crate) fn selected_supports(w: &Workspace, part_local: bool) -> Vec<FaceSource> {
     let mut result = vec![];
@@ -863,7 +932,17 @@ pub(crate) fn seam_choices(w: &Workspace, owner: &str, current: &str) -> Vec<(Se
             }
         }
     }
-    for feature in prior {
+    result.extend(authored_seams(w, owner, prior.into_iter(), &[]));
+    result
+}
+fn authored_seams<'a>(
+    w: &Workspace,
+    owner: &str,
+    features: impl Iterator<Item = &'a Feature>,
+    path: &[String],
+) -> Vec<(SeamSource, String)> {
+    let mut result = vec![];
+    for feature in features {
         let source = NodeRef {
             definition: owner.into(),
             node: feature.id.clone(),
@@ -876,7 +955,7 @@ pub(crate) fn seam_choices(w: &Workspace, owner: &str, current: &str) -> Vec<(Se
                             SeamSource::SketchMember {
                                 profile: source.clone(),
                                 member: member.clone(),
-                                path: vec![],
+                                path: path.to_vec(),
                             },
                             format!("{} / Member {}", feature.name, index + 1),
                         ));
@@ -887,7 +966,7 @@ pub(crate) fn seam_choices(w: &Workspace, owner: &str, current: &str) -> Vec<(Se
                 SeamSource::ReferenceCurve {
                     feature: source,
                     piece: None,
-                    path: vec![],
+                    path: path.to_vec(),
                 },
                 feature.name.clone(),
             )),
@@ -987,23 +1066,28 @@ pub(crate) fn preset(w: &mut Workspace) {
         w.status = "Confirm or cancel the current operation before adding weld metal".into();
         return;
     }
-    let Some(mut part) = w
+    let Some(part) = w
         .view
         .active_part
         .as_ref()
         .and_then(|owner| w.session.visible().parts.get(owner))
-        .cloned()
     else {
         w.status =
             "Select the intended part; assembly welds use the assembly's own Weld Bead command"
                 .into();
         return;
     };
-    let Some(seam) = selected_seam(w, true).filter(|seam| seam.dependency().definition == part.id)
+    let owner = part.id.clone();
+    let Some(seam) = selected_seam(w, true).filter(|seam| seam.dependency().definition == owner)
     else {
-        w.status =
-            "Select a joint edge, sketch member, or reusable seam curve in the intended part"
-                .into();
+        seam_pick::open(w, &owner);
+        return;
+    };
+    create_part(w, &owner, seam);
+}
+
+fn create_part(w: &mut Workspace, owner: &str, seam: SeamSource) {
+    let Some(mut part) = w.session.visible().parts.get(owner).cloned() else {
         return;
     };
     let id = cad_core::id();

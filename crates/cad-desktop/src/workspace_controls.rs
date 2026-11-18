@@ -8,6 +8,9 @@ const DIAGNOSTICS: &str = "task-panel:diagnostics";
 const HISTORY: &str = "task-panel:history";
 
 pub(crate) fn required_action(w: &Workspace) -> Option<&'static str> {
+    if crate::weld_beads_ui::seam_pick::owner(w).is_some() {
+        return Some(crate::weld_beads_ui::seam_pick::PROMPT);
+    }
     if let Some(picker) = &w.mate_picker {
         return Some(picker.prompt());
     }
@@ -108,6 +111,7 @@ pub(crate) fn task_title(w: &Workspace) -> String {
         Some("configurations") => "Configurations and Equations".into(),
         Some("drawings") => "Drawing".into(),
         Some("model-dimensions") => "Model Dimensions".into(),
+        Some("weld-seam") => "Weld Bead".into(),
         _ if !w.dialog_title.is_empty() => w.dialog_title.clone(),
         _ => "Operation".into(),
     }

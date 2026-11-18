@@ -1182,6 +1182,12 @@ pub struct Drawing {
     /// Show live finished-part characteristics. Legacy sheets keep their authored annotations.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub show_model_dimensions: bool,
+    /// A weld is documented on its owner's drawing unless the sheet opts out.
+    #[serde(
+        default = "default_weld_symbols",
+        skip_serializing_if = "weld_symbols_enabled"
+    )]
+    pub show_weld_symbols: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_item_placements: BTreeMap<Id, crate::drawing::model_items::Placement>,
     #[serde(default)]
@@ -1207,6 +1213,12 @@ pub struct Drawing {
     /// Explicit drawing-only arrangement, relative to this sheet's model scope.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_state: Option<crate::display_states::Selection>,
+}
+pub(crate) fn default_weld_symbols() -> bool {
+    true
+}
+pub(crate) fn weld_symbols_enabled(enabled: &bool) -> bool {
+    *enabled
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Document {

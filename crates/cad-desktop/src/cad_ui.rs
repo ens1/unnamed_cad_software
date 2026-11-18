@@ -1208,6 +1208,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if crate::weld_beads_ui::seam_pick::owner(w).is_some() {
+        return Some(crate::weld_beads_ui::seam_pick::PROMPT);
+    }
     if crate::named_parameter_ui::active(w) {
         return Some("Add or cancel the named parameter first");
     }

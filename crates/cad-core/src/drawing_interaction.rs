@@ -11,7 +11,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub const CONTRACT_VERSION: u32 = 7;
+pub const CONTRACT_VERSION: u32 = 8;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Target {
@@ -125,6 +125,10 @@ pub struct Snap {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Action {
+    SetWeldView {
+        id: Id,
+        view: String,
+    },
     ResetModelPlacement {
         id: Id,
     },
@@ -1588,6 +1592,23 @@ pub fn apply(
     }
     let mut sheet = source.clone();
     match action {
+        Action::SetWeldView { id, view } => {
+            let paper = drawing::build_sheet_layout(doc, evaluation, source, page)?;
+            let weld = paper
+                .model_items
+                .get(id)
+                .filter(|item| item.weld && item.weld_views.contains(view))
+                .ok_or_else(|| invalid("Choose a view that contains this weld"))?;
+            sheet.model_item_placements.insert(
+                id.clone(),
+                drawing::model_items::Placement {
+                    model_page: weld.model_page,
+                    view: view.clone(),
+                    offset_mm: [0.; 2],
+                    auto_offset: true,
+                },
+            );
+        }
         Action::ResetModelPlacement { id } => {
             if sheet.model_item_placements.remove(id).is_none() {
                 return Err(invalid("The callout already uses automatic placement"));
@@ -1663,6 +1684,7 @@ pub fn apply(
                         drawing::model_items::Placement {
                             model_page: item.model_page,
                             view: item.view.clone(),
+                            auto_offset: false,
                             offset_mm: std::array::from_fn(|i| {
                                 item.label_mm[i] - item.anchor_mm[i] + delta_mm[i]
                             }),
@@ -2120,7 +2142,10 @@ pub fn apply(
     // diagnostic. Native reference proofs above stay strict; the worker must
     // validate the complete drawing before final Apply or production export.
     // Resetting the last pinned callout can remove its continuation page.
-    let updated_page = if matches!(action, Action::ResetModelPlacement { .. }) {
+    let updated_page = if matches!(
+        action,
+        Action::ResetModelPlacement { .. } | Action::SetWeldView { .. }
+    ) {
         0
     } else {
         page
