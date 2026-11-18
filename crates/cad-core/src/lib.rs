@@ -24,7 +24,9 @@ pub mod drawing_gdt;
 pub mod drawing_geometry;
 pub mod drawing_interaction;
 pub mod drawing_layout;
+pub mod drawing_review;
 pub mod drawing_revision;
+pub mod drawing_sections;
 pub mod drawing_strokes;
 pub mod drawing_tables;
 pub mod drawing_visibility;
@@ -83,6 +85,14 @@ pub enum CadError {
     Invalid(String),
     #[error("Unsupported: {0}")]
     Unsupported(String),
+    #[error("{message}")]
+    EdgeTreatment {
+        message: String,
+        recovery: Box<edge_features::Recovery>,
+    },
+    /// An exact source object that failed evaluation, for repair and change review.
+    #[error("{message}")]
+    EvaluationTarget { target: Id, message: String },
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

@@ -324,6 +324,7 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
         } else if crate::command_palette::escape(w)
             || crate::named_parameter_ui::cancel(w)
             || crate::drawing_interaction_ui::escape(w)
+            || crate::contours_ui::cancel_replacement(w)
             || crate::assembly_motion_ui::cancel_drag(w)
             || crate::component_pattern_ui::picking_direction(w)
                 && crate::component_pattern_ui::action(w, "pattern.direction-cancel", &Value::Null)
@@ -1206,7 +1207,8 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         crate::display_states_ui::semantic_action(w, element, command);
         return;
     }
-    if crate::sketch_issues_ui::action(w, command, &element.data)
+    if crate::sketch::rectangle::action(w, command, &element.data)
+        || crate::sketch_issues_ui::action(w, command, &element.data)
         || crate::structural_member_ui::action(w, command, &element.data)
         || crate::sketch3d_ui::action(w, command, Some(&element.data))
         || crate::fabrication_sources_ui::action(w, command, &element.data)
@@ -1537,6 +1539,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 || matches!(
                     setter,
                     "operation-editor"
+                        | "feature-handle-dimension"
+                        | "sketch-rectangle-size"
                         | "structural-member"
                         | "sketch3d"
                         | "component-placement"
@@ -1896,7 +1900,9 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                     && !keep_invalid_text
                 {
                     w.fields.insert(key.clone(), current.clone());
-                    if display != current {
+                    if display != current
+                        || request_focus && element.data["setter"] == "feature-handle-dimension"
+                    {
                         crate::presentation_controls::select_exact_source(ui, edit_id, &current);
                     }
                 }
@@ -2134,7 +2140,8 @@ fn model_view(
     }
     let cube = viewport::view_cube(w, ui, r);
     crate::operation_preview::viewport_status(ui, w, r);
-    let motion_owned = crate::assembly_motion_ui::viewport(w, ui, r, &response, &[toolbar, cube]);
+    let motion_owned = crate::feature_handles::viewport(w, ui, r, &[toolbar, cube])
+        || crate::assembly_motion_ui::viewport(w, ui, r, &response, &[toolbar, cube]);
     if !motion_owned
         && !crate::sketch3d_ui::captured(w)
         && viewport::navigate(w, ui.ctx(), &response)
@@ -2196,6 +2203,7 @@ fn model_view(
         response.context_menu(|ui| crate::cad_ui::viewport_menu(ui, w));
     }
     viewport::overlay(w, ui, r);
+    crate::operation_editor_ui::recovery::overlay(w, ui, r);
     crate::sketch3d_ui::overlay_inactive(w, ui, r);
     let blocked = !response.hovered()
         || motion_owned
@@ -2217,9 +2225,11 @@ fn model_view(
         crate::sketch::overlay(w, ui, r, &response, toolbar);
     }
     crate::sketch3d_ui::overlay(w, ui, r, &response, blocked || motion_owned);
+    let contour_click = crate::contours_ui::viewport(w, ui, r, &response, blocked);
     if w.sketch.is_none()
         && !crate::sketch3d_ui::active(w)
         && !motion_owned
+        && !contour_click
         && response.clicked()
         && response
             .interact_pointer_pos()
@@ -3128,6 +3138,7 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
     if crate::selection_ui::edge_selection(&f).is_some() {
         w.edge_selection_path = edge_path;
     }
+    w.fields.remove("edge-recovery-omissions");
     w.fields.insert("feature-editor-id".into(), f.id.clone());
     w.fields
         .insert("feature-editor-generation".into(), cad_core::id());
@@ -3911,6 +3922,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         }
         ui.separator();
     }
+    crate::edit_review::show(ui, w);
     if dialog == "publish" {
         crate::publish_ui::show_actions(ui, w);
         if w.dialog.as_deref() != Some("publish") {

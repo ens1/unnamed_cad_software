@@ -916,8 +916,8 @@ fn resolve_boundary_edges(
             }
         }
         if candidates.len() != 1 {
-            return Err(err(format!(
-                "Reference {} is {} ({} candidates); select an explicit replacement",
+            let message = format!(
+                "Reference {} is {} ({} candidates). Select a replacement edge.",
                 r.role,
                 if candidates.is_empty() {
                     "unresolved"
@@ -925,7 +925,14 @@ fn resolve_boundary_edges(
                     "ambiguous"
                 },
                 candidates.len()
-            )));
+            );
+            return Err(CadError::EdgeTreatment {
+                message,
+                recovery: Box::new(cad_core::edge_features::Recovery {
+                    kind: cad_core::edge_features::RecoveryKind::UnresolvedReference,
+                    edges: vec![r.clone()],
+                }),
+            });
         }
         resolved.push(candidates[0].id());
     }

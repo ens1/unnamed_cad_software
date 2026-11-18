@@ -1553,6 +1553,9 @@ pub fn picks(
     pointer: egui::Pos2,
     evaluation: &cad_core::protocol::Evaluation,
 ) -> Vec<viewport::Selection> {
+    // Extrusion termination validates the actual point under the cursor
+    // against its upstream solid, including when hover clipping is unavailable.
+    let termination = crate::contours_ui::picking_target(w);
     let mut hits = Vec::new();
     let (origin, ray_direction) = viewport::ray(w, rect, pointer);
     let mut remaining = crate::sketch_overlay::DEPTH_WORK;
@@ -1661,9 +1664,14 @@ pub fn picks(
                         }
                         _ => center,
                     };
-                    if !xray && !viewport::visible_at(w, rect, visibility_point, &mut remaining) {
+                    let end_plane = termination && matches!(geometry, Geometry::Plane { .. });
+                    if !xray
+                        && !end_plane
+                        && !viewport::visible_at(w, rect, visibility_point, &mut remaining)
+                    {
                         continue;
                     }
+                    let pick_point = if end_plane { visibility_point } else { center };
                     hits.push(viewport::Selection {
                         instance: instance
                             .path
@@ -1680,8 +1688,8 @@ pub fn picks(
                             signature: None,
                         },
                         body: None,
-                        distance: DVec3::from_array(center).distance(DVec3::from_array(origin)),
-                        point: center,
+                        distance: DVec3::from_array(pick_point).distance(DVec3::from_array(origin)),
+                        point: pick_point,
                     });
                 }
             }
@@ -2111,13 +2119,17 @@ pub fn seed_inputs(w: &Workspace, operation: &mut Operation) {
 }
 
 pub(crate) fn selected_face_planar(w: &Workspace, selected: &viewport::Selection) -> bool {
-    viewport::display_evaluation(w).is_some_and(|evaluation| {
-        evaluation.meshes.values().flat_map(|m| &m.faces).any(|f| {
-            f.body == selected.body
-                && f.reference.producer == selected.reference.producer
-                && f.reference.role == selected.reference.role
-                && f.plane.is_some()
-        })
+    viewport::selection_evaluation(w).is_some_and(|evaluation| {
+        viewport::display_instances(w, evaluation)
+            .into_iter()
+            .filter(|i| i.path == selected.path && i.definition == selected.definition)
+            .flat_map(|i| viewport::selection_meshes(w, evaluation, i))
+            .flat_map(|m| &m.faces)
+            .any(|f| {
+                f.body == selected.body
+                    && crate::selection_ui::same_edge(&f.reference, &selected.reference)
+                    && f.plane.is_some()
+            })
     })
 }
 pub(crate) fn picked_axis(w: &Workspace, selected: &viewport::Selection) -> AxisSource {

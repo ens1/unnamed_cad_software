@@ -81,13 +81,14 @@ impl Service {
                     triangles = triangles.saturating_add(mesh.indices.len() / 3);
                     vertices = vertices.saturating_add(mesh.positions.len());
                     if triangles > MAX_TRIANGLES || vertices > MAX_VERTICES {
-                        output.diagnostics.push(Diagnostic { severity: "warning".into(), target: None,
+                        output.diagnostics.push(Diagnostic { edge_recovery: None, severity: "warning".into(), target: None,
                             message: "Viewport refinement reached its disposable mesh budget; original display detail is retained for remaining parts".into() });
                         break;
                     }
                     output.meshes.insert(target.key.clone(), mesh);
                 }
                 Err(error) => output.diagnostics.push(Diagnostic {
+                    edge_recovery: None,
                     severity: "warning".into(),
                     target: Some(target.definition.clone()),
                     message: format!("Viewport refinement retained original detail: {error}"),

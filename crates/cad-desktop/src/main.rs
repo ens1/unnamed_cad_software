@@ -33,11 +33,13 @@ mod drawing_layout_ui;
 mod drawing_revision_ui;
 mod drawing_table_ui;
 mod drawing_ui;
+mod edit_review;
 mod environment_assets;
 mod environment_filter;
 mod exploded_views_ui;
 mod fabrication_sources_ui;
 mod fabrication_ui;
+mod feature_handles;
 mod feature_order_ui;
 mod feature_transfer_ui;
 mod file_switch_ui;
@@ -176,6 +178,7 @@ pub struct Workspace {
     pub operation_values: std::sync::Mutex<operation_editor_ui::ValueCache>,
     pub production_cache: std::sync::Mutex<production_ui::Cache>,
     pub drawing_editor_cache: std::sync::Mutex<drawing_editor_ui::Cache>,
+    pub edit_review: std::sync::Mutex<edit_review::Cache>,
     pub source_cache: std::sync::Mutex<source_cache::Cache>,
     pub jobs: background::Jobs,
     pub worker: worker::WorkerClient,
@@ -224,6 +227,7 @@ pub struct Workspace {
     pub assembly_camera: Option<cad_core::camera_views::Pose>,
     pub sketch: Option<sketch::EditingSketch>,
     pub sketch3d: Option<sketch3d_ui::State>,
+    pub(crate) mate_picker: Option<mate_ui::pair::Picker>,
     pub active_plane: Option<String>,
     pub manager_tree: bool,
     pub command_tab: String,
@@ -351,6 +355,7 @@ impl Workspace {
             production_cache: Default::default(),
             drawing_editor_cache: Default::default(),
             source_cache: Default::default(),
+            edit_review: Default::default(),
             jobs: background::Jobs::new(),
             worker: worker::WorkerClient::new(),
             display_mesh: Default::default(),
@@ -395,6 +400,7 @@ impl Workspace {
             assembly_camera: None,
             sketch: None,
             sketch3d: None,
+            mate_picker: None,
             active_plane: None,
             manager_tree: true,
             command_tab: "Features".into(),
@@ -647,7 +653,14 @@ impl Workspace {
             return;
         }
         if !assembly_tools_ui::valid(self) {
-            self.status = "Validate the current assembly group or copy before applying".into();
+            self.status = self
+                .mate_picker
+                .as_ref()
+                .map_or(
+                    "Validate the current assembly group or copy before applying",
+                    mate_ui::pair::Picker::prompt,
+                )
+                .into();
             self.confirm_requested = false;
             return;
         }
@@ -1156,7 +1169,14 @@ impl Workspace {
             return;
         }
         if !assembly_tools_ui::valid(self) {
-            self.status = "Validate the current assembly group or copy before applying".into();
+            self.status = self
+                .mate_picker
+                .as_ref()
+                .map_or(
+                    "Validate the current assembly group or copy before applying",
+                    mate_ui::pair::Picker::prompt,
+                )
+                .into();
             self.confirm_requested = false;
             return;
         }

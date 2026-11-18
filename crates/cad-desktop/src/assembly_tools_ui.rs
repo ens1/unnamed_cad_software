@@ -6,15 +6,18 @@ pub fn active(w: &Workspace) -> bool {
     w.fields.contains_key("assembly-group-editor") || w.assembly_copy.is_some()
 }
 pub fn valid(w: &Workspace) -> bool {
-    crate::assembly_groups_ui::current_source_is_valid(w)
+    w.mate_picker.is_none()
+        && crate::assembly_groups_ui::current_source_is_valid(w)
         && crate::assembly_copy_ui::current_source_is_valid(w)
 }
 pub fn cancel(w: &mut Workspace) {
+    w.mate_picker = None;
     crate::assembly_groups_ui::cancel(w);
     crate::assembly_copy_ui::cancel(w);
 }
 pub fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>) -> bool {
-    crate::assembly_groups_ui::action(w, command, data)
+    crate::mate_ui::pair::action(w, command, data)
+        || crate::assembly_groups_ui::action(w, command, data)
         || crate::assembly_copy_ui::action(w, command, data)
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
@@ -28,6 +31,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         }
     }
     out.extend(crate::mate_ui::preview_semantics(w));
+    out.extend(crate::mate_ui::pair::semantics(w));
     out
 }
 

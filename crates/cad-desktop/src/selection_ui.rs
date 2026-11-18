@@ -513,7 +513,7 @@ pub(crate) fn set_action(w: &mut Workspace, command: &str) -> bool {
     true
 }
 
-fn focus_edge(
+pub(crate) fn focus_edge(
     w: &mut Workspace,
     body: &cad_core::NodeRef,
     reference: &cad_core::TopologyRef,

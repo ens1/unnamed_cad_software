@@ -1657,10 +1657,10 @@ pub fn action(w: &mut Workspace, command: &str, data: &serde_json::Value) -> boo
 fn matrix_product(a: [[f64; 4]; 4], b: [[f64; 4]; 4]) -> [[f64; 4]; 4] {
     std::array::from_fn(|i| std::array::from_fn(|j| (0..4).map(|k| a[i][k] * b[k][j]).sum()))
 }
-fn matrix_point(a: [[f64; 4]; 4], p: [f64; 3]) -> [f64; 3] {
+pub(crate) fn matrix_point(a: [[f64; 4]; 4], p: [f64; 3]) -> [f64; 3] {
     std::array::from_fn(|i| a[i][0] * p[0] + a[i][1] * p[1] + a[i][2] * p[2] + a[i][3])
 }
-fn assembly_contexts(
+pub(crate) fn assembly_contexts(
     w: &Workspace,
     e: &cad_core::protocol::Evaluation,
     owner: &str,

@@ -138,6 +138,8 @@ pub struct NativeEdgeBoundary {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Diagnostic {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_recovery: Option<crate::edge_features::Recovery>,
     pub severity: String,
     pub target: Option<Id>,
     pub message: String,
@@ -212,6 +214,10 @@ pub struct OperationPreview {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Evaluation {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub drawing_review: crate::drawing_review::Sheets,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub drawing_sections: BTreeMap<Id, crate::drawing_sections::Evaluated>,
     pub accuracy: crate::tolerance::Accuracy,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pattern_guides: BTreeMap<String, crate::body_editing::PatternGuide>,

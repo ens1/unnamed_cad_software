@@ -6,6 +6,21 @@ pub const CONTRACT_VERSION: u32 = 1;
 /// Bound authored input before native selection resolution in a worker.
 pub const MAX_SELECTED_EDGES: usize = 512;
 
+/// References from a failed treatment, in the input body's construction history.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Recovery {
+    pub edges: Vec<TopologyRef>,
+    pub kind: RecoveryKind,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryKind {
+    UnresolvedReference,
+    FailedSelection,
+    /// The kernel constructed and validated the remainder on this input solid.
+    ValidRemainder,
+}
+
 pub fn validate_selection(edges: &[TopologyRef]) -> crate::Result<()> {
     if edges.is_empty() || edges.len() > MAX_SELECTED_EDGES {
         return Err(crate::CadError::Invalid(format!(

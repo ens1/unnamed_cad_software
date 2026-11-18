@@ -332,6 +332,7 @@ fn run() -> Result<()> {
             preview.changes.clear();
             preview.baseline_instances.clear();
             preview.diagnostics = vec![Diagnostic {
+                edge_recovery: None,
                 severity: "warning".into(),
                 target: preview.focus.as_ref().map(|focus| focus.node.clone()),
                 message: "Localized highlights were omitted to keep the validated CAD result within the worker transport limit".into(),

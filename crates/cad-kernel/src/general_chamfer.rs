@@ -1059,6 +1059,76 @@ pub(crate) fn construct(
     treatment: Treatment,
     history: &mut ShellHistory,
 ) -> Result<Option<Solid>> {
+    use cad_core::edge_features::RecoveryKind;
+    let error = match construct_selection(solid, selected, spec, treatment, history) {
+        Ok(Some(output)) => return Ok(Some(output)),
+        Ok(None) => unsupported("The adjoining faces do not support this edge transition"),
+        Err(error) => error,
+    };
+    // Only diagnose small failed selections. Every trial uses the original input
+    // and its own history. The successful alternative remains an explicit user edit.
+    if (2..=6).contains(&selected.len()) && solid.face_iter().take(49).count() <= 48 {
+        let start = std::time::Instant::now();
+        for (index, edge) in selected.iter().enumerate() {
+            if start.elapsed() >= std::time::Duration::from_millis(200) {
+                break;
+            }
+            let remaining = selected
+                .iter()
+                .enumerate()
+                .filter_map(|(i, id)| (i != index).then_some(*id))
+                .collect::<Vec<_>>();
+            let mut scratch = history.clone();
+            if let Ok(Some(candidate)) =
+                construct_selection(solid, &remaining, spec, treatment, &mut scratch)
+                && crate::validation::solid(&candidate).is_ok()
+            {
+                return Err(diagnosis(
+                    history,
+                    &[*edge],
+                    RecoveryKind::ValidRemainder,
+                    error,
+                ));
+            }
+        }
+    }
+    if matches!(error, CadError::EdgeTreatment { .. }) {
+        return Err(error);
+    }
+    Err(diagnosis(
+        history,
+        selected,
+        RecoveryKind::FailedSelection,
+        error,
+    ))
+}
+
+fn diagnosis(
+    history: &ShellHistory,
+    ids: &[EdgeId],
+    kind: cad_core::edge_features::RecoveryKind,
+    error: CadError,
+) -> CadError {
+    let Ok(edges) = ids
+        .iter()
+        .map(|id| history.edge(*id))
+        .collect::<Result<Vec<_>>>()
+    else {
+        return error;
+    };
+    CadError::EdgeTreatment {
+        message: error.to_string(),
+        recovery: Box::new(cad_core::edge_features::Recovery { edges, kind }),
+    }
+}
+
+fn construct_selection(
+    solid: &Solid,
+    selected: &[EdgeId],
+    spec: &ChamferSpec,
+    treatment: Treatment,
+    history: &mut ShellHistory,
+) -> Result<Option<Solid>> {
     if selected.is_empty() {
         return Err(invalid("Select at least one edge"));
     }
@@ -1182,8 +1252,20 @@ pub(crate) fn construct(
             flip: spec.flip,
             first_face,
         };
-        let Some(next) = attempt(&output, group, &current_spec, treatment, &mut candidate)? else {
-            return Err(original_diagnostic.unwrap_or_else(|| unsupported("An independent selected edge group has no complete native treatment constructor")));
+        let next = match attempt(&output, group, &current_spec, treatment, &mut candidate) {
+            Ok(Some(next)) => next,
+            result => {
+                let error = result
+                    .err()
+                    .or(original_diagnostic)
+                    .unwrap_or_else(|| unsupported("Cannot construct this independent edge group"));
+                return Err(diagnosis(
+                    history,
+                    group,
+                    cad_core::edge_features::RecoveryKind::FailedSelection,
+                    error,
+                ));
+            }
         };
         let remaining = groups
             .iter()

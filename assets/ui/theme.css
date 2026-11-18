@@ -997,3 +997,8 @@
 [role=sketch-plane-action].plane-choice { icon-size: 16px; }
 
 .menu-choice { icon-size: 13px; gap: 6px; icon-position: left; text-align: left; }
+
+
+[role=edge-repair-guide] { color: var(--error); stroke-width: 4px; }
+[role=mate-motion-guide] { color: var(--reference); stroke-width: 2px; }
+[role=edit-impact-item][state=error], [role=operation-editor-help][state=error] { color: var(--error); }

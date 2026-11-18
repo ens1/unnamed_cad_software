@@ -1,4 +1,5 @@
 //! Docked, shared-draft assembly mating with exact persistent geometry references.
+pub(crate) mod pair;
 use crate::{Workspace, viewport};
 use bevy::math::DVec3;
 use bevy_egui::egui;
@@ -355,6 +356,13 @@ pub(crate) fn selected_reference(w: &Workspace, assembly: &Assembly) -> Result<(
                 .into(),
         )
     })?;
+    reference_from_pick(w, assembly, selected)
+}
+fn reference_from_pick(
+    w: &Workspace,
+    assembly: &Assembly,
+    selected: &viewport::Selection,
+) -> Result<(Id, Reference)> {
     let doc = w.session.visible();
     let (participant, path) = participant_path(doc, assembly, &selected.path)?;
     let source = match selected.reference.topology.as_str() {
@@ -409,7 +417,7 @@ pub(crate) fn selected_reference(w: &Workspace, assembly: &Assembly) -> Result<(
 }
 fn current_evaluation(w: &Workspace) -> Result<&cad_core::protocol::Evaluation> {
     viewport::display_evaluation(w)
-        .filter(|e| e.valid && e.identity == w.session.identity())
+        .filter(|e| e.valid && e.identity == crate::source_cache::identity(w))
         .ok_or_else(|| {
             CadError::Invalid(
                 "Wait for the current component placements to finish validation".into(),
@@ -635,6 +643,7 @@ pub fn begin(w: &mut Workspace, assembly: &str, mate: Mate) {
         w.status = "Confirm or cancel the current assembly operation before editing mates".into();
         return;
     }
+    w.mate_picker = None;
     w.start_tool();
     w.fields.insert("assembly-id".into(), assembly.into());
     w.fields.insert("mate-editor".into(), mate.id.clone());
@@ -642,7 +651,9 @@ pub fn begin(w: &mut Workspace, assembly: &str, mate: Mate) {
     w.json = serde_json::to_string_pretty(&mate).unwrap_or_default();
     w.open_editor("assembly");
 }
-pub fn new(w: &mut Workspace, assembly: &str) {
+pub use pair::new;
+
+fn manual(w: &mut Workspace, assembly: &str) {
     let doc = w.session.visible();
     let Some(a) = doc.assemblies.get(assembly).cloned() else {
         return;
@@ -1481,6 +1492,9 @@ fn relationship_editor(
 }
 
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace, assembly: &str) {
+    if pair::show(ui, w) {
+        return;
+    }
     if !w.fields.contains_key("mate-editor") {
         return;
     }

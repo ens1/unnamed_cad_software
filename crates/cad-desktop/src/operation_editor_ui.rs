@@ -13,6 +13,7 @@ const CONTRACT: &str = "tcad.presentation.operation-editor";
 const VERSION: u32 = 1;
 const ACTION: &str = "operation-editor.action";
 mod common;
+pub(crate) mod recovery;
 
 /// Disposable value projection. A displayed field must not regenerate all of
 /// the editor's topology/provenance choices just to read its current value.
@@ -1612,6 +1613,8 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         "editor":w.fields.get("feature-editor-generation"),"feature":w.fields.get("feature-editor-id"),
         "evaluation":w.session.evaluation.as_ref().map(|e|&e.identity),
         "draft_evaluation":w.session.draft.as_ref().and_then(|d|d.preview_evaluation()).map(|e|&e.identity),
+        "failed_evaluation":w.session.draft.as_ref().and_then(|d|d.evaluation.as_ref()).filter(|e|!e.valid).map(|e|&e.identity),
+        "omissions":w.fields.get("edge-recovery-omissions"),
         "checkpoint_evaluation":w.tool_checkpoint.as_ref().and_then(|s|s.evaluation.as_ref()).map(|e|&e.identity),
         "checkpoint_draft_evaluation":w.tool_checkpoint.as_ref().and_then(|s|s.draft.as_ref()).and_then(|d|d.preview_evaluation()).map(|e|&e.identity),
         "settings":w.settings.is_some(),"original":w.view.original,"history":w.view.history_cursor,
@@ -1644,6 +1647,7 @@ fn build_semantics(w: &Workspace) -> Vec<SemanticElement> {
         return vec![];
     };
     let mut fields = Fields::new(w, owner, feature);
+    recovery::fields(&mut fields);
     match &feature.operation {
         Operation::Surface { operation } => surface_fields(&mut fields, operation),
         Operation::DirectEdit { definition } => direct_fields(&mut fields, definition),
@@ -2065,6 +2069,12 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
             .data
             .get("mutation")
             .ok_or_else(|| invalid("This modeling action has no mutation"))?;
+        if matches!(
+            mutation["kind"].as_str(),
+            Some("omit_failed" | "restore_omitted" | "focus_failed")
+        ) {
+            return recovery::edit(w, &feature.clone(), mutation);
+        }
         let pointer = mutation
             .get("pointer")
             .and_then(Value::as_str)

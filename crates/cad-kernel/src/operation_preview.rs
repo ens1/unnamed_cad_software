@@ -20,6 +20,7 @@ fn unsupported(message: impl ToString) -> CadError {
 
 pub(crate) fn warning(owner: Option<&NodeRef>, message: impl Into<String>) -> Diagnostic {
     Diagnostic {
+        edge_recovery: None,
         severity: "warning".into(),
         target: owner.map(|owner| owner.node.clone()),
         message: message.into(),

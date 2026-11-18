@@ -166,6 +166,8 @@ impl<K: KernelAdapter> Evaluator<K> {
         self.surface_sets.clear();
         self.history_cache.clear();
         Ok(Some(Evaluation {
+            drawing_review: BTreeMap::new(),
+            drawing_sections: BTreeMap::new(),
             accuracy: cad_core::tolerance::Accuracy::new(
                 source.settings.modeling,
                 display_tolerance_mm,
@@ -665,13 +667,10 @@ impl<K: KernelAdapter> Evaluator<K> {
         if !report.failures.is_empty() {
             let diagnostics = report
                 .failures
-                .iter()
-                .map(|(target, message)| Diagnostic {
-                    severity: "error".into(),
-                    target: Some(target.node.clone()),
-                    message: message.clone(),
-                })
+                .values()
+                .cloned()
                 .chain(report.blocked.iter().map(|(target, message)| Diagnostic {
+                    edge_recovery: None,
                     severity: "blocked".into(),
                     target: Some(target.node.clone()),
                     message: message.clone(),
@@ -689,14 +688,31 @@ impl<K: KernelAdapter> Evaluator<K> {
             return Err(CadError::Invalid(message));
         }
         let shapes = report.shapes;
-        let assemblies = crate::assemblies::solve(
+        let assemblies = match crate::assemblies::solve(
             &self.adapter,
             doc,
             &mut solved,
             &shapes,
             root,
             search_resolution_mm,
-        )?;
+        ) {
+            Ok(assemblies) => assemblies,
+            Err(CadError::EvaluationTarget { target, message }) => {
+                let diagnostic = Diagnostic {
+                    severity: "error".into(),
+                    target: Some(target.clone()),
+                    edge_recovery: None,
+                    message: message.clone(),
+                };
+                self.shapes = shapes;
+                self.assemblies.clear();
+                self.history_cache.clear();
+                self.failed_build = Some((solved, vec![diagnostic]));
+                return Err(CadError::EvaluationTarget { target, message });
+            }
+            Err(error) => return Err(error),
+        };
+
         self.adapter.set_assembly_placements(&assemblies);
         // Restore base topology provenance after configured reference evaluation and
         // regenerate in-context geometry from the current solved assembly placements.
@@ -719,13 +735,9 @@ impl<K: KernelAdapter> Evaluator<K> {
             if !report.failures.is_empty() {
                 let diagnostics = report
                     .failures
-                    .iter()
-                    .map(|(target, message)| Diagnostic {
-                        severity: "error".into(),
-                        target: Some(target.node.clone()),
-                        message: message.clone(),
-                    })
+                    .values().cloned()
                     .chain(report.blocked.iter().map(|(target, message)| Diagnostic {
+                        edge_recovery: None,
                         severity: "blocked".into(),
                         target: Some(target.node.clone()),
                         message: message.clone(),
@@ -1503,6 +1515,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                     Ok(result) => result,
                     Err(error) => {
                         diagnostics.push(Diagnostic {
+                            edge_recovery: None,
                             severity: "error".into(),
                             target: Some(weld.id.clone()),
                             message: format!("{} / {}: {error}", assembly.name, weld.name),
@@ -1565,6 +1578,8 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             &self.body_sets,
         )?;
         let mut evaluated = Evaluation {
+            drawing_review: BTreeMap::new(),
+            drawing_sections: BTreeMap::new(),
             accuracy: cad_core::tolerance::Accuracy::new(
                 document.settings.modeling,
                 display_tolerance_mm,
@@ -1598,13 +1613,44 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
         };
         // Preserve only complete current native geometry for explicit drawing
         // repair. A drawing failure still rejects this document for Apply/export.
-        if let Err(error) = cad_core::drawing::validate_evaluation(document, &evaluated) {
+        if evaluated.geometry_valid {
+            evaluated.drawing_sections =
+                crate::drawing_sections::evaluate(document, &evaluated, &self.body_sets);
+        }
+        // Collect change evidence from the same production vectors used to validate.
+        // Leave geometry available for repairing individual broken references.
+        let mut issues = Vec::new();
+        for sheet in &document.drawings {
+            let mut items = BTreeMap::new();
+            let mut complete = true;
+            for page in 0..cad_core::drawing_tables::page_count(sheet) {
+                match cad_core::drawing::build_sheet_page(document, &evaluated, sheet, page) {
+                    Ok(output) => {
+                        cad_core::drawing_review::collect(sheet, &output, page, &mut items)
+                    }
+                    Err(error) => {
+                        let (target, message) = match error {
+                            CadError::EvaluationTarget { target, message } => (target, message),
+                            error => (sheet.id.clone(), format!("{} · {error}", sheet.name)),
+                        };
+                        issues.push(Diagnostic {
+                            edge_recovery: None,
+                            severity: "error".into(),
+                            target: Some(target),
+                            message,
+                        });
+                        complete = false;
+                        break;
+                    }
+                }
+            }
+            if complete {
+                evaluated.drawing_review.insert(sheet.id.clone(), items);
+            }
+        }
+        if !issues.is_empty() {
             evaluated.valid = false;
-            evaluated.diagnostics.push(Diagnostic {
-                severity: "error".into(),
-                target: None,
-                message: error.to_string(),
-            });
+            evaluated.diagnostics.extend(issues);
         }
         Ok(evaluated)
     }

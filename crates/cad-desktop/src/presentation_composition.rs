@@ -453,6 +453,8 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         })
     });
     elements.extend(crate::viewport_guides::semantics(hover));
+    elements.extend(crate::sketch::rectangle::semantics(w));
+    elements.extend(crate::feature_handles::semantics(w));
     elements.extend(crate::sketch_edit_ui::semantics(w));
     for element in crate::sketch_blocks_ui::semantics(w) {
         if let Some(existing) = elements
@@ -495,6 +497,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::fabrication_sources_ui::semantics(w));
     elements.extend(crate::fabrication_ui::state_semantics(w));
     elements.extend(crate::assembly_tools_ui::semantics(w));
+    elements.extend(crate::edit_review::semantics(w));
     elements.extend(crate::assembly_welds_ui::semantics(w));
     elements.extend(crate::weld_beads_ui::semantics(w));
     elements.extend(crate::drawing_ui::workspace_semantics(w));
@@ -845,6 +848,16 @@ fn value_adapters() -> &'static ValueAdapters {
 
 fn build_value_adapters() -> ValueAdapters {
     let mut adapters = ValueAdapters::default();
+    adapters.register(
+        "feature-handle-dimension",
+        crate::feature_handles::set_value,
+        crate::feature_handles::current_value,
+    );
+    adapters.register(
+        "sketch-rectangle-size",
+        crate::sketch::rectangle::set_value,
+        crate::sketch::rectangle::current_value,
+    );
     adapters.register(
         "readme-preview",
         crate::readme_preview_ui::set_value,

@@ -85,7 +85,7 @@ fn suppressed_shape<K: KernelAdapter>(
 }
 pub(crate) struct ShapeBuildReport {
     pub shapes: BTreeMap<NodeRef, Shape>,
-    pub failures: BTreeMap<NodeRef, String>,
+    pub failures: BTreeMap<NodeRef, cad_core::protocol::Diagnostic>,
     pub blocked: BTreeMap<NodeRef, String>,
 }
 /// Retain current-source upstream results when a feature fails. Partial results
@@ -144,27 +144,35 @@ pub(crate) fn build_shapes_report<K: KernelAdapter>(
             continue;
         }
         let shape = if feature.suppressed {
-            let shape = match suppressed_shape(adapter, part, feature, &shapes) {
-                Ok(shape) => shape,
-                Err(error) => {
-                    failures.insert(node, format!("{} / {}: {error}", part.name, feature.name));
-                    continue;
-                }
-            };
-            let Some(shape) = shape else {
-                continue;
-            };
-            shape
+            suppressed_shape(adapter, part, feature, &shapes)
         } else {
-            match adapter.operation(doc, &node, &feature.operation, &shapes, root, tolerance) {
-                Ok(shape) => shape,
-                Err(error) => {
-                    failures.insert(node, format!("{} / {}: {error}", part.name, feature.name));
-                    continue;
-                }
-            }
+            adapter
+                .operation(doc, &node, &feature.operation, &shapes, root, tolerance)
+                .map(Some)
         };
-        shapes.insert(node, shape);
+        match shape {
+            Ok(Some(shape)) => {
+                shapes.insert(node, shape);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let message = format!("{} / {}: {error}", part.name, feature.name);
+                let edge_recovery = match (&feature.operation, error) {
+                    (
+                        Operation::Fillet { .. } | Operation::Chamfer { .. },
+                        CadError::EdgeTreatment { recovery, .. },
+                    ) => Some(*recovery),
+                    _ => None,
+                };
+                let diagnostic = cad_core::protocol::Diagnostic {
+                    severity: "error".into(),
+                    target: Some(node.node.clone()),
+                    message,
+                    edge_recovery,
+                };
+                failures.insert(node, diagnostic);
+            }
+        }
     }
     Ok(ShapeBuildReport {
         shapes,
@@ -329,43 +337,51 @@ impl<K: KernelAdapter> Resolver<'_, K> {
         let mut frames = BTreeMap::new();
         let mut auxiliary = BTreeMap::new();
         for mate in mates {
-            let mut pair = Vec::new();
-            for (participant, reference, first) in [
-                (&mate.first, mate.first_reference.as_ref(), true),
-                (&mate.second, mate.second_reference.as_ref(), false),
-            ] {
-                let instance = assembly.instances.get(participant).ok_or_else(|| {
-                    CadError::Invalid("Mate participant is suppressed or missing".into())
-                })?;
-                pair.push(if let Some(reference) = reference {
-                    self.frame(context, instance, reference).map_err(|e| {
-                        CadError::Invalid(format!(
-                            "{} / {} mate / {}: {e}",
-                            assembly.name, mate.kind, instance.name
-                        ))
-                    })?
-                } else {
-                    Frame::legacy(mate, first)?
-                });
-            }
-            frames.insert(mate.id.clone(), [pair.remove(0), pair.remove(0)]);
-            if let Some(relationship) = &mate.relationship {
-                let mut resolved = Vec::new();
-                for endpoint in relationship.endpoints() {
-                    let instance = assembly.instances.get(&endpoint.instance).ok_or_else(|| {
-                        CadError::Invalid(
-                            "Additional mate participant is suppressed or missing".into(),
-                        )
+            (|| -> Result<()> {
+                let mut pair = Vec::new();
+                for (participant, reference, first) in [
+                    (&mate.first, mate.first_reference.as_ref(), true),
+                    (&mate.second, mate.second_reference.as_ref(), false),
+                ] {
+                    let instance = assembly.instances.get(participant).ok_or_else(|| {
+                        CadError::Invalid("Mate participant is suppressed or missing".into())
                     })?;
-                    resolved.push(assembly_geometry::ResolvedEndpoint {
-                        instance: endpoint.instance.clone(),
-                        frame: self.frame(context, instance, &endpoint.reference)?,
+                    pair.push(if let Some(reference) = reference {
+                        self.frame(context, instance, reference).map_err(|e| {
+                            CadError::Invalid(format!(
+                                "{} / {} mate / {}: {e}",
+                                assembly.name, mate.kind, instance.name
+                            ))
+                        })?
+                    } else {
+                        Frame::legacy(mate, first)?
                     });
                 }
-                if !resolved.is_empty() {
-                    auxiliary.insert(mate.id.clone(), resolved);
+                frames.insert(mate.id.clone(), [pair.remove(0), pair.remove(0)]);
+                if let Some(relationship) = &mate.relationship {
+                    let mut resolved = Vec::new();
+                    for endpoint in relationship.endpoints() {
+                        let instance =
+                            assembly.instances.get(&endpoint.instance).ok_or_else(|| {
+                                CadError::Invalid(
+                                    "Additional mate participant is suppressed or missing".into(),
+                                )
+                            })?;
+                        resolved.push(assembly_geometry::ResolvedEndpoint {
+                            instance: endpoint.instance.clone(),
+                            frame: self.frame(context, instance, &endpoint.reference)?,
+                        });
+                    }
+                    if !resolved.is_empty() {
+                        auxiliary.insert(mate.id.clone(), resolved);
+                    }
                 }
-            }
+                Ok(())
+            })()
+            .map_err(|error| CadError::EvaluationTarget {
+                target: mate.id.clone(),
+                message: format!("{} / {} mate: {error}", assembly.name, mate.kind),
+            })?;
         }
         Ok((frames, auxiliary))
     }
@@ -410,7 +426,10 @@ impl<K: KernelAdapter> Resolver<'_, K> {
             self.mate_geometry(&scoped, &assembly, &assembly.mates)?;
         let solution = NativeSolver
             .solve_assembly_geometry(&scoped, &mut assembly, &frames, &auxiliary_frames)
-            .map_err(|e| CadError::Invalid(format!("{}: {e}", assembly.name)))?;
+            .map_err(|e| CadError::EvaluationTarget {
+                target: assembly.id.clone(),
+                message: format!("{}: {e}", assembly.name),
+            })?;
         let report = Some(solution.report);
         let mut diagnostics = solution.diagnostics;
         let component_motion = solution.component_motion;

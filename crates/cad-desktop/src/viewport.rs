@@ -156,7 +156,7 @@ pub fn picking_semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticE
         });
     }
     for (index, candidate) in w.candidates.iter().enumerate() {
-        elements.push(SemanticElement {id:format!("viewport.pick-candidate/{index}"),role:"selection-candidate".into(),label:format!("{} · {}",candidate.name,candidate.reference.topology),value:Some(candidate_label(w,candidate)),state:if index==w.candidate_index {"selected"}else{"ready"}.into(),commands:vec!["viewport.pick-candidate".into()],relationships:vec!["workspace.viewport".into()],data:serde_json::json!({"contract":"tcad.model-picking","version":1,"document":w.session.visible().id,"generation":w.session.generation,"index":index,"path":candidate.path,"reference":candidate.reference,"definition":candidate.definition,"body":candidate.body,"preview":"native-boundary-thumbnail","geometry_changes":false})});
+        elements.push(SemanticElement {id:format!("viewport.pick-candidate/{index}"),role:"selection-candidate".into(),label:candidate_label(w,candidate),value:Some(candidate.reference.topology.clone()),state:if index==w.candidate_index {"selected"}else{"ready"}.into(),commands:vec!["viewport.pick-candidate".into()],relationships:vec!["workspace.viewport".into()],data:serde_json::json!({"contract":"tcad.model-picking","version":1,"document":w.session.visible().id,"generation":w.session.generation,"index":index,"path":candidate.path,"reference":candidate.reference,"definition":candidate.definition,"body":candidate.body,"preview":"native-boundary-thumbnail","geometry_changes":false})});
     }
     elements
 }
@@ -208,7 +208,114 @@ pub fn picking_action(w: &mut Workspace, command: &str, data: Option<&serde_json
 fn candidate_label(w: &Workspace, candidate: &Selection) -> String {
     let name = cad_core::occurrence_names::path(w.session.visible(), &candidate.path)
         .unwrap_or_else(|| candidate.name.clone());
-    format!("{} · {}", name, candidate.reference.topology)
+    let doc = w.session.visible();
+    let producer = doc
+        .parts
+        .get(&candidate.reference.producer.definition)
+        .and_then(|part| {
+            part.features
+                .iter()
+                .find(|f| f.id == candidate.reference.producer.node)
+        })
+        .map(|f| f.name.as_str());
+    let settings = &doc.settings;
+    let length = |mm| {
+        settings
+            .display_length_unit
+            .format_length(mm, settings.length_decimal_places)
+    };
+    let mut description = candidate.reference.topology.clone();
+    if let Some(e) = selection_evaluation(w)
+        && let Some(i) = display_instances(w, e)
+            .into_iter()
+            .find(|i| selected_instance(candidate, i))
+    {
+        for mesh in selection_meshes(w, e, i) {
+            if let Some(face) = mesh
+                .faces
+                .iter()
+                .find(|face| selected_topology(candidate, &face.reference, &face.body))
+            {
+                use cad_core::drawing_geometry::Carrier;
+                if let Some(plane) = &face.plane {
+                    let normal = mesh
+                        .indices
+                        .get(face.start)
+                        .and_then(|v| mesh.normals.get(*v as usize))
+                        .copied()
+                        .unwrap_or_else(|| {
+                            DVec3::from_array(plane.u)
+                                .cross(DVec3::from_array(plane.v))
+                                .normalize_or_zero()
+                                .to_array()
+                        });
+                    description = normal
+                        .iter()
+                        .position(|n| n.abs() > 0.99999)
+                        .map(|axis| {
+                            format!(
+                                "{} face · {} = {}",
+                                [["Left", "Right"], ["Front", "Back"], ["Bottom", "Top"]][axis]
+                                    [usize::from(normal[axis] >= 0.)],
+                                ["X", "Y", "Z"][axis],
+                                length(plane.origin[axis])
+                            )
+                        })
+                        .unwrap_or_else(|| "Inclined face".into());
+                } else {
+                    description = match face.native_geometry.as_ref().map(|g| &g.carrier) {
+                        Some(Carrier::Sphere { .. }) => "Spherical face",
+                        Some(Carrier::Torus { .. }) => "Toroidal face",
+                        Some(Carrier::Revolution {
+                            axis,
+                            profile: cad_core::drawing_geometry::Curve3::Line { start, end },
+                            ..
+                        }) if DVec3::from_array(*axis)
+                            .normalize_or_zero()
+                            .dot(
+                                (DVec3::from_array(*end) - DVec3::from_array(*start))
+                                    .normalize_or_zero(),
+                            )
+                            .abs()
+                            >= 1. - 1e-12 =>
+                        {
+                            "Cylindrical wall"
+                        }
+                        Some(Carrier::Revolution { .. }) => "Revolved face",
+                        Some(Carrier::Plane { .. }) => "Planar face",
+                        _ => "Curved face",
+                    }
+                    .into();
+                }
+                break;
+            }
+            if let Some((index, edge)) = mesh
+                .edges
+                .iter()
+                .enumerate()
+                .find(|(_, edge)| selected_topology(candidate, &edge.reference, &edge.body))
+            {
+                use cad_core::protocol::EdgeCenter;
+                description = match &edge.center {
+                    Some(EdgeCenter::Line { start, end, .. }) => format!(
+                        "Straight edge {} · {}",
+                        index + 1,
+                        length(DVec3::from_array(*start).distance(DVec3::from_array(*end)))
+                    ),
+                    Some(EdgeCenter::Circle { radius_mm, .. }) => {
+                        format!("Circular edge {} · Ø {}", index + 1, length(2. * radius_mm))
+                    }
+                    None => format!("Edge {}", index + 1),
+                };
+                break;
+            }
+        }
+    }
+    if let Some(feature) = producer {
+        format!("{description} · {feature} · {name}")
+    } else {
+        format!("{description} · {name}")
+    }
 }
 pub fn picking_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     let current = pick_filter(w);
@@ -284,12 +391,76 @@ pub fn candidate_controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 index == w.candidate_index,
             )
             .on_hover_ui(|ui| candidate_thumbnail(ui, w, candidate));
+            if response.hovered() || response.has_focus() {
+                let frame = ui.ctx().cumulative_frame_nr();
+                ui.ctx().data_mut(|data| {
+                    data.insert_temp(
+                        egui::Id::new("hovered-model-candidate"),
+                        (frame, candidate.clone()),
+                    )
+                });
+            }
             if response.clicked() && select(w, candidate.clone()) {
                 w.candidate_index = index;
                 ui.close();
             }
         }
     });
+}
+/// Show the native boundary while the chooser owns pointer focus. The explicit
+/// "Select other" path can reveal a candidate behind the front face.
+pub(crate) fn candidate_feedback(
+    w: &Workspace,
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    s: &Selection,
+    reveal: bool,
+) {
+    let Some(e) = selection_evaluation(w) else {
+        return;
+    };
+    let Some(i) = display_instances(w, e)
+        .into_iter()
+        .find(|i| selected_instance(s, i) && visible(w, i))
+    else {
+        return;
+    };
+    let color = selection_color(w);
+    let painter = ui.painter().with_clip_rect(rect);
+    let mut work = crate::sketch_overlay::DEPTH_WORK;
+    for mesh in selection_meshes(w, e, i) {
+        let lines = mesh
+            .edges
+            .iter()
+            .filter(|edge| {
+                selected_topology(s, &edge.reference, &edge.body)
+                    || (s.reference.topology == "face"
+                        && s.body == edge.body
+                        && edge.faces.iter().any(|f| {
+                            f.producer == s.reference.producer && f.role == s.reference.role
+                        }))
+            })
+            .flat_map(|edge| {
+                edge.points
+                    .windows(2)
+                    .map(|p| [placed(p[0], i), placed(p[1], i)])
+            });
+        let segments = if reveal {
+            lines
+                .filter_map(|[a, b]| Some([project(w, rect, a)?, project(w, rect, b)?]))
+                .collect()
+        } else {
+            crate::overlay_depth::segments_batch(w, rect, lines, &mut work)
+        };
+        painter.extend(
+            segments
+                .into_iter()
+                .map(|line| egui::Shape::line_segment(line, egui::Stroke::new(2.5, color))),
+        );
+    }
+    if let Some(p) = project(w, rect, s.point) {
+        painter.circle_stroke(p, 4., egui::Stroke::new(1.5, color));
+    }
 }
 fn candidate_thumbnail(ui: &mut egui::Ui, w: &Workspace, selection: &Selection) {
     let Some(evaluation) = selection_evaluation(w) else {
@@ -451,7 +622,13 @@ pub(crate) fn visible_at(
     crate::overlay_depth::visible(w, rect, point, remaining)
 }
 
-fn triangle(o: [f64; 3], d: [f64; 3], a: [f64; 3], b: [f64; 3], c: [f64; 3]) -> Option<f64> {
+pub(crate) fn triangle(
+    o: [f64; 3],
+    d: [f64; 3],
+    a: [f64; 3],
+    b: [f64; 3],
+    c: [f64; 3],
+) -> Option<f64> {
     let o = DVec3::from_array(o);
     let d = DVec3::from_array(d);
     let a = DVec3::from_array(a);
@@ -606,6 +783,9 @@ fn render_mesh(source: &MeshData, instance: &PlacedPart) -> Mesh {
     .with_inserted_indices(Indices::U32(source.indices.clone()))
 }
 pub(crate) fn display_evaluation(w: &Workspace) -> Option<&Evaluation> {
+    if crate::contours_ui::picking_target(w) {
+        return crate::contours_ui::input_evaluation(w);
+    }
     if let Some(evaluation) = crate::reference_repair_ui::display_evaluation(w) {
         return Some(evaluation);
     }
@@ -641,6 +821,11 @@ pub(crate) fn display_meshes<'a>(
     e: &'a Evaluation,
     i: &PlacedPart,
 ) -> Vec<&'a MeshData> {
+    if w.view.active_part.as_ref() == Some(&i.definition) && crate::contours_ui::picking_target(w) {
+        return selection_evaluation(w)
+            .map(|input| selection_meshes(w, input, i))
+            .unwrap_or_default();
+    }
     let mut meshes = crate::display_mesh::replacement(w, e, i)
         .map(|mesh| vec![mesh])
         .unwrap_or_else(|| cad_core::history::display_meshes(e, i, w.view.history_cursor.as_ref()));
@@ -716,7 +901,7 @@ struct PreviewMesh<'a> {
     kind: PreviewKind,
 }
 fn preview_meshes(w: &Workspace) -> Vec<PreviewMesh<'_>> {
-    if w.view.original || w.view.history_cursor.is_some() {
+    if crate::contours_ui::picking_target(w) || w.view.original || w.view.history_cursor.is_some() {
         return vec![];
     }
     let Some(evaluation) = display_evaluation(w) else {
@@ -955,6 +1140,9 @@ pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
     {
         return Some(evaluation);
     }
+    if crate::contours_ui::input_feature(w).is_some() {
+        return crate::contours_ui::input_evaluation(w);
+    }
     let selecting_input = crate::fabrication_sources_ui::input_body(w).is_some()
         || part_pattern_input(w).is_some()
         || w.fields.contains_key("assembly-weld-editor")
@@ -990,6 +1178,28 @@ pub(crate) fn selection_meshes<'a>(
     e: &'a Evaluation,
     i: &PlacedPart,
 ) -> Vec<&'a MeshData> {
+    if w.view.active_part.as_ref() == Some(&i.definition)
+        && let Some(feature) = crate::contours_ui::input_feature(w)
+    {
+        let part = &w.session.visible().parts[&i.definition];
+        let previous = part
+            .features
+            .iter()
+            .take_while(|f| f.id != feature.id)
+            .last();
+        return previous
+            .map(|previous| {
+                cad_core::history::display_meshes(
+                    e,
+                    i,
+                    Some(&cad_core::NodeRef {
+                        definition: i.definition.clone(),
+                        node: previous.id.clone(),
+                    }),
+                )
+            })
+            .unwrap_or_default();
+    }
     if let Some(body) = part_pattern_input(w)
         && w.view.active_part.as_ref() == Some(&i.definition)
     {
@@ -1075,14 +1285,18 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
     let Some(e) = selection_evaluation(w) else {
         return vec![];
     };
+    let target_pick = crate::contours_ui::picking_target(w);
     let (o, d) = ray(w, rect, p);
     let mut hits = vec![];
     for instance in display_instances(w, e) {
+        if target_pick && w.view.active_part.as_ref() != Some(&instance.definition) {
+            continue;
+        }
         let context_references = w.fields.contains_key("pick-context-references")
             || crate::component_pattern_ui::picking_direction(w);
         if !visible(w, instance)
             || (!context_references
-                && (ghost_neighbor(w, instance)
+                && ((w.mate_picker.is_none() && ghost_neighbor(w, instance))
                     || !crate::display_states_ui::pickable(w, &instance.path)))
         {
             continue;
@@ -1118,6 +1332,9 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
                         point,
                     });
                 }
+            }
+            if target_pick {
+                continue;
             }
             // Edges are projected with a forgiving hit target and remain cycleable through occlusion.
             for edge in &mesh.edges {
@@ -1162,7 +1379,11 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
         }
     }
     hits.extend(crate::reference_ui::picks(w, rect, p, e));
-    if !crate::component_pattern_ui::picking_direction(w) {
+    if let Some(picker) = &w.mate_picker {
+        hits.retain(|s| picker.accepts_candidate(w.session.visible(), s));
+    } else if !crate::component_pattern_ui::picking_direction(w)
+        && !crate::contours_ui::picking_target(w)
+    {
         match pick_filter(w) {
             "edge" => hits.retain(|hit| hit.reference.topology == "edge"),
             "face" => hits.retain(|hit| hit.reference.topology == "face"),
@@ -1183,6 +1404,9 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
                 .is_none_or(|path| path == &b.path);
         let edge_a = a.reference.topology == "edge";
         let edge_b = b.reference.topology == "edge";
+        if w.mate_picker.is_some() {
+            return a.distance.total_cmp(&b.distance);
+        }
         active_b.cmp(&active_a).then_with(|| {
             edge_b
                 .cmp(&edge_a)
@@ -1247,6 +1471,18 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
             w.context_selection = None;
             return false;
         }
+    }
+    if w.mate_picker.is_some() {
+        if !crate::mate_ui::pair::capture(w, &s) {
+            return false;
+        }
+        w.selected = Some(s.clone());
+        w.geometry_selection = vec![s.clone()];
+        w.selected_component = Some(s.path.clone());
+        w.context_selection = None;
+        w.selection_popup = None;
+        w.rendered_key.clear();
+        return true;
     }
     if direction_pick && crate::component_pattern_ui::capture_selection(w, &s) {
         w.context_selection = None;
@@ -1868,7 +2104,8 @@ pub fn sync_scene(
         ))
     );
     let key = format!(
-        "{key}:{}:{:?}:{:?}",
+        "{key}:{}:{}:{:?}:{:?}",
+        crate::contours_ui::picking_target(&w),
         w.display_mesh.epoch,
         display_evaluation(&w).map(|e| (&e.identity, e.valid)),
         w.geometry_selection
@@ -2350,8 +2587,19 @@ fn weld_guides(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
     }
 }
 pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
+    if let Some((frame, candidate)) = ui
+        .ctx()
+        .data(|data| data.get_temp::<(u64, Selection)>(egui::Id::new("hovered-model-candidate")))
+        && ui.ctx().cumulative_frame_nr().saturating_sub(frame) <= 1
+        && w.candidates.iter().any(|s| {
+            s.path == candidate.path && selected_topology(s, &candidate.reference, &candidate.body)
+        })
+    {
+        candidate_feedback(w, ui, rect, &candidate, true);
+    }
     let mut spatial_depth_work = crate::sketch_overlay::DEPTH_WORK;
     weld_guides(w, ui, rect);
+    crate::mate_ui::pair::overlay(w, ui, rect);
     crate::fabrication_sources_ui::overlay(w, ui, rect);
     crate::structural_member_ui::overlay(w, ui, rect);
     crate::reference_ui::overlay(w, ui, rect);

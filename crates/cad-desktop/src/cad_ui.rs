@@ -1257,6 +1257,9 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
     if !crate::drawing_editor_ui::current_source_is_valid(w) {
         return Some("Correct the current drawing fields before applying");
     }
+    if let Some(picker) = &w.mate_picker {
+        return Some(picker.prompt());
+    }
     if !crate::assembly_tools_ui::valid(w) {
         return Some("Validate the current assembly group or copy before applying");
     }
@@ -3061,7 +3064,12 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
         feature.operation,
         Operation::Extrude { .. } | Operation::Revolve { .. }
     ) {
-        return profile_features::fields(ui, w, w.session.visible(), feature);
+        let mut requested = None;
+        let changed = profile_features::fields(ui, w, w.session.visible(), feature, &mut requested);
+        if let Some(second) = requested {
+            crate::contours_ui::arm_target(w, second);
+        }
+        return changed;
     }
     let doc = w.session.visible().clone();
     let name = |reference: &cad_core::NodeRef| {
@@ -3781,6 +3789,7 @@ pub fn status(ui: &mut egui::Ui, w: &mut Workspace) {
             }
             if w.session.draft.is_some() && w.tool_checkpoint.is_none() {
                 completion_buttons(ui, w);
+                crate::edit_review::status_menu(ui, w);
             }
             controls::bounded_label(
                 ui,

@@ -8,6 +8,9 @@ const DIAGNOSTICS: &str = "task-panel:diagnostics";
 const HISTORY: &str = "task-panel:history";
 
 pub(crate) fn required_action(w: &Workspace) -> Option<&'static str> {
+    if let Some(picker) = &w.mate_picker {
+        return Some(picker.prompt());
+    }
     if w.dialog.as_deref() != Some("feature") {
         return None;
     }
