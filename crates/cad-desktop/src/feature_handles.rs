@@ -766,49 +766,53 @@ pub(crate) fn viewport(
                     .chain(&labels)
                     .any(|other| other.intersects(*b))
             });
-        let Some(panel) = default.and_then(|default| {
+        let panel = default.and_then(|default| {
             controls::overlay_rect(
                 &format!("viewport.dimension.{}", field.key()),
                 "viewport-dimension-input",
                 r,
                 default,
             )
-        }) else {
-            continue;
-        };
-        labels.push(panel);
-        let mut bar = ui.new_child(
-            egui::UiBuilder::new()
-                .id_salt(("dimension-field", &element.id))
-                .max_rect(panel),
-        );
-        let label = format!(
-            "{}  {}",
-            field.label(),
-            w.session.visible().settings.format_length(value)
-        );
-        let chip = controls::button(
-            &mut bar,
-            &format!("{}:label", element.id),
-            "dimension-value-button",
-            &["viewport-dimension", "viewport-overlay"],
-            &label,
-            true,
-            false,
-        )
-        .on_hover_text("Enter a length or expression");
-        if chip.clicked() || response.clicked() {
+        });
+        let mut open_at = response.clicked().then_some(tip);
+        if let Some(panel) = panel {
+            labels.push(panel);
+            let mut bar = ui.new_child(
+                egui::UiBuilder::new()
+                    .id_salt(("dimension-field", &element.id))
+                    .max_rect(panel),
+            );
+            let label = format!(
+                "{}  {}",
+                field.label(),
+                w.session.visible().settings.format_length(value)
+            );
+            let chip = controls::button(
+                &mut bar,
+                &format!("{}:label", element.id),
+                "dimension-value-button",
+                &["viewport-dimension", "viewport-overlay"],
+                &label,
+                true,
+                false,
+            )
+            .on_hover_text("Enter a length or expression");
+            if chip.clicked() {
+                open_at = Some(panel.min);
+            }
+            captured |= chip.hovered() || chip.clicked() || chip.is_pointer_button_down_on();
+        }
+        if let Some(point) = open_at {
             let size = egui::vec2(185., 78.).min(r.size());
             let location = egui::pos2(
-                panel.left().min((r.right() - size.x).max(r.left())),
-                panel.top().min((r.bottom() - size.y).max(r.top())),
+                point.x.clamp(r.left(), (r.right() - size.x).max(r.left())),
+                point.y.clamp(r.top(), (r.bottom() - size.y).max(r.top())),
             );
             ui.data_mut(|d| d.insert_temp(input_id, egui::Rect::from_min_size(location, size)));
             w.fields
                 .insert(format!("focus-request:{}", element.id), "true".into());
             ui.ctx().request_repaint();
         }
-        captured |= chip.hovered() || chip.clicked() || chip.is_pointer_button_down_on();
     }
     captured
 }
