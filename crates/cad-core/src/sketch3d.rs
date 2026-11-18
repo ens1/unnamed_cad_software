@@ -1941,6 +1941,62 @@ pub fn drag(
     *d = candidate;
     Ok(report)
 }
+/// Return the constraints carrying the unfulfilled cursor load at the solved position.
+/// This optional worker diagnostic shares the solver's equations and bounded coordinates.
+pub fn drag_blockers(
+    doc: &Document,
+    owner: &str,
+    d: &Definition,
+    targets: &[DragTarget],
+) -> Result<Vec<Id>> {
+    if !targets.iter().any(|target| {
+        d.points.get(&target.point).is_some_and(|actual| {
+            (Vector3::from(target.position) - Vector3::from(*actual)).norm() > 1e-5
+        })
+    }) {
+        return Ok(vec![]);
+    }
+    let system = System::new(doc, owner, d)?;
+    let residual = system.residuals(&system.seed)?;
+    if residual.is_empty()
+        || residual.iter().any(|v| v.abs() > 1e-6)
+        || residual.len().saturating_mul(system.seed.len())
+            > crate::sketch_diagnostics::MAX_DRAG_COEFFICIENTS
+    {
+        return Ok(vec![]);
+    }
+    let j = crate::solver::jacobian(&system.seed, &residual, &|x| system.residuals(x))?;
+    let (scaled, scale) = crate::solver::scaled_jacobian(&j);
+    let mut load = DVector::zeros(system.seed.len());
+    for target in targets {
+        let Some(index) = system.keys.iter().position(|key| key == &target.point) else {
+            continue;
+        };
+        for axis in 0..3 {
+            let col = 3 * index + axis;
+            load[col] = (target.position[axis] - d.points[&target.point][axis]) / scale[col];
+        }
+    }
+    let svd = scaled.transpose().svd(true, true);
+    let cutoff = (svd.singular_values.amax() * 1e-8).max(1e-12);
+    let reaction = svd.solve(&load, cutoff).map_err(invalid)?;
+    let mut row = 0;
+    let mut scores = vec![];
+    for c in d.constraints.iter().filter(|c| !c.driven) {
+        let (values, _) = relation_residual(doc, owner, &system.base, &c.relation)?;
+        let end = row + values.len();
+        if end > reaction.len() {
+            return Ok(vec![]);
+        }
+        let score = (row..end)
+            .map(|i| reaction[i].abs() * j.row(i).norm())
+            .fold(0., f64::max);
+        scores.push((&c.id, score));
+        row = end;
+    }
+    Ok(crate::sketch_diagnostics::ranked_reactions(scores))
+}
+
 /// Local infinitesimal point freedom from the same current native equations.
 /// This does not claim finite reachability or a minimal conflict set.
 pub fn point_motion(

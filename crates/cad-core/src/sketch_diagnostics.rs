@@ -7,7 +7,9 @@ use nalgebra::{DMatrix, DVector};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const CONTRACT_VERSION: u32 = 1;
+pub const CONTRACT_VERSION: u32 = 2;
+// Bound the additional background work and worker reply used by drag explanations.
+pub(crate) const MAX_DRAG_COEFFICIENTS: usize = 128_000;
 pub const MAX_VARIABLES: usize = 512;
 pub const MAX_EQUATIONS: usize = 2048;
 pub const MAX_POINT_DERIVATIVES: usize = 2_000_000;
@@ -29,6 +31,8 @@ pub struct EquationDiagnostic {
     /// Equations with no current positional derivative, including direct size expressions.
     pub nonpositional_equations: usize,
 }
+pub type PointReactions = BTreeMap<Id, BTreeMap<Id, Vec<[f64; 2]>>>;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Analysis {
     pub version: u32,
@@ -38,6 +42,10 @@ pub struct Analysis {
     pub maximum_residual: f64,
     pub points: BTreeMap<Id, PointMotion>,
     pub constraints: BTreeMap<Id, EquationDiagnostic>,
+    /// Constraint reactions to unit X/Y loads at authored sketch points, one pair per equation.
+    /// Absent for older workers and sketches above the diagnostic work limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drag_reactions: Option<PointReactions>,
 }
 
 /// Shared coordinate layout and derivation for native solving and diagnostics.
@@ -191,12 +199,44 @@ pub(crate) fn analyze(doc: &Document, owner: &str, sketch: &Sketch) -> Result<An
     let j = solver::jacobian(x, &r, &|x| system.residuals(x))?;
     let (scaled, scale) = solver::scaled_jacobian(&j);
     let mut projector = DMatrix::identity(x.len(), x.len());
+    let mut drag_reactions = None;
     let mut rank = 0;
     let mut threshold = 1e-9;
     if !r.is_empty() && !x.is_empty() {
-        let svd = scaled.clone().svd(false, true);
+        let explain = r.len().saturating_mul(x.len()) <= MAX_DRAG_COEFFICIENTS;
+        let svd = scaled.clone().svd(explain, true);
         threshold = (svd.singular_values.amax() * 1e-8).max(1e-12);
         rank = svd.rank(threshold);
+        if explain {
+            // A blocked cursor displacement acts as a load on the point. The transpose
+            // of the pseudoinverse distributes its reaction across the actual equations,
+            // including constraints on geometry connected indirectly to this point.
+            let inverse = svd
+                .clone()
+                .pseudo_inverse(threshold)
+                .map_err(|message| CadError::Invalid(message.into()))?;
+            let row_norms: Vec<_> = j.row_iter().map(|row| row.norm()).collect();
+            let mut points = BTreeMap::new();
+            for (i, key) in system.keys.iter().enumerate() {
+                let mut reactions = BTreeMap::new();
+                let mut row = 0;
+                for block in &blocks {
+                    let weights: Vec<_> = (row..row + block.values.len())
+                        .map(|k| {
+                            [0, 1].map(|axis| {
+                                inverse[(i * 2 + axis, k)] * row_norms[k] / scale[i * 2 + axis]
+                            })
+                        })
+                        .collect();
+                    row += block.values.len();
+                    if weights.iter().flatten().any(|value| value.abs() > 1e-7) {
+                        reactions.insert(block.constraint.clone(), weights);
+                    }
+                }
+                points.insert(key.clone(), reactions);
+            }
+            drag_reactions = Some(points);
+        }
         let vt = svd.v_t.unwrap();
         for i in 0..svd.singular_values.len() {
             if svd.singular_values[i] > threshold {
@@ -368,5 +408,40 @@ pub(crate) fn analyze(doc: &Document, owner: &str, sketch: &Sketch) -> Result<An
         maximum_residual,
         points,
         constraints,
+        drag_reactions,
     })
+}
+
+impl Analysis {
+    /// Rank the equations that oppose the remaining (unsatisfied) handle goals
+    /// in sketch XY. Summing signed loads first cancels internal forces when a
+    /// whole member translates.
+    pub fn drag_blockers(&self, loads: &[(Id, [f64; 2])]) -> Option<Vec<Id>> {
+        let reactions = self.drag_reactions.as_ref()?;
+        let mut total = BTreeMap::<&Id, Vec<f64>>::new();
+        for (point, load) in loads {
+            for (constraint, weights) in reactions.get(point)? {
+                let rows = total
+                    .entry(constraint)
+                    .or_insert_with(|| vec![0.; weights.len()]);
+                for (row, weight) in rows.iter_mut().zip(weights) {
+                    *row += weight[0] * load[0] + weight[1] * load[1];
+                }
+            }
+        }
+        Some(ranked_reactions(total.into_iter().map(|(key, rows)| {
+            (key, rows.into_iter().map(f64::abs).fold(0., f64::max))
+        })))
+    }
+}
+
+pub(crate) fn ranked_reactions<'a>(values: impl IntoIterator<Item = (&'a Id, f64)>) -> Vec<Id> {
+    let mut scores: Vec<_> = values.into_iter().collect();
+    scores.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    let threshold = scores.first().map_or(0., |(_, max)| max * 1e-5).max(1e-9);
+    scores
+        .into_iter()
+        .take_while(|(_, score)| *score > threshold)
+        .map(|(id, _)| id.clone())
+        .collect()
 }

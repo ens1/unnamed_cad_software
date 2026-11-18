@@ -107,6 +107,8 @@ impl Entity {
         }
     }
 }
+mod drag_limit;
+
 struct Drag {
     point: Id,
     axis: Option<Axis>,
@@ -227,6 +229,7 @@ fn start_drag(
         }];
         state.popup = None;
         state.dimension = None;
+        state.drag_limit = None;
         state.drag = Some(Drag {
             point,
             axis: direction,
@@ -287,6 +290,7 @@ pub fn escape_drag(w: &mut Workspace) -> bool {
     };
     if let Some(state) = &mut w.sketch3d {
         state.worker.cancel();
+        state.drag_limit = None;
         state.history.truncate(drag.history_len);
         state.hover = None;
         state.error = None;
@@ -350,7 +354,12 @@ pub fn poll(w: &mut Workspace) {
             continue;
         }
         match reply {
-            WorkerResponse::Sketch3dSolved { solved, report, .. } => {
+            WorkerResponse::Sketch3dSolved {
+                solved,
+                report,
+                drag_blockers,
+                ..
+            } => {
                 let Some(mut definition) = source(w) else {
                     continue;
                 };
@@ -400,20 +409,22 @@ pub fn poll(w: &mut Workspace) {
                         *parameter = result_parameter.clone();
                     }
                 }
-                let limited = goal.is_some_and(|(point, goal)| {
-                    definition.points.get(&point).is_some_and(|actual| {
-                        DVec3::from_array(*actual).distance(DVec3::from_array(goal)) > 1e-4
-                    })
-                });
+                let limit = drag_limit::Limit::from_goal(&definition, goal, drag_blockers);
+                let limited = limit.is_some();
                 if let Some(state) = &mut w.sketch3d
                     && let Some(drag) = &mut state.drag
                 {
                     drag.pending = None;
                 }
-                if let Err(error) = publish(w, definition)
-                    && let Some(state) = &mut w.sketch3d
-                {
-                    state.error = Some(error.to_string());
+                let result = publish(w, definition);
+                if let Some(state) = &mut w.sketch3d {
+                    match result {
+                        Ok(()) => state.drag_limit = limit,
+                        Err(error) => {
+                            state.error = Some(error.to_string());
+                            state.drag_limit = None;
+                        }
+                    }
                 }
                 w.status = if limited {
                     "Movement limited by dimensions and relations · last solved geometry retained"
@@ -433,6 +444,7 @@ pub fn poll(w: &mut Workspace) {
             | WorkerResponse::Error { message, .. } => {
                 w.status = format!("{message} · last solved sketch retained");
                 if let Some(state) = &mut w.sketch3d {
+                    state.drag_limit = None;
                     state.error = Some(message);
                     if let Some(drag) = &mut state.drag {
                         drag.pending = None;
@@ -582,6 +594,7 @@ pub struct State {
     history: Vec<Definition>,
     redo: Vec<Definition>,
     drag: Option<Drag>,
+    drag_limit: Option<drag_limit::Limit>,
     dimension: Option<DimensionEdit>,
     popup: Option<egui::Pos2>,
     worker: WorkerClient,
@@ -883,6 +896,7 @@ pub fn begin(w: &mut Workspace, existing: Option<Feature>) {
         history: vec![],
         redo: vec![],
         drag: None,
+        drag_limit: None,
         dimension: None,
         popup: None,
         worker: WorkerClient::new(),
@@ -938,6 +952,7 @@ fn publish(w: &mut Workspace, definition: Definition) -> Result<()> {
     w.json = serde_json::to_string_pretty(&expected)?;
     w.dialog_title = expected.name;
     if let Some(state) = &mut w.sketch3d {
+        state.drag_limit = None;
         state.error = None;
     }
     Ok(())
@@ -2082,6 +2097,7 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
             cancel_placement(w);
             if let Some(state) = &mut w.sketch3d {
                 state.tool = tool;
+                state.drag_limit = None;
                 state.clicks.clear();
                 state.popup = None;
             }
@@ -2342,7 +2358,17 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
         }
         _ => return Err(invalid("Unsupported spatial field")),
     }
-    publish(w, definition)
+    let editing = w
+        .sketch3d
+        .as_ref()
+        .and_then(|state| state.drag_limit.as_ref())
+        .filter(|limit| limit.editing_field(key))
+        .cloned();
+    publish(w, definition)?;
+    if let Some(state) = &mut w.sketch3d {
+        state.drag_limit = editing;
+    }
+    Ok(())
 }
 fn change_plane(w: &mut Workspace, plane: DrawingPlane) -> Result<()> {
     let displayed = displayed(w).ok_or_else(|| invalid("The sketch is unavailable"))?;
@@ -2836,7 +2862,16 @@ pub fn action(w: &mut Workspace, command: &str, payload: Option<&Value>) -> bool
         if captured(w) && !matches!(kind, "cancel-drag") {
             return Err(invalid("Release or cancel the active spatial handle first"));
         }
+        if !kind.starts_with("drag-driver/")
+            && let Some(state) = &mut w.sketch3d
+        {
+            state.drag_limit = None;
+        }
+        let state = w.sketch3d.as_ref().expect("Current spatial editor");
         match kind {
+            _ if kind.starts_with("drag-driver/") => {
+                drag_limit::activate(w, kind.trim_start_matches("drag-driver/"))
+            }
             "fit-selection" => {
                 fit_selection(w);
                 Ok(())
@@ -4196,6 +4231,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             element.data["accessibility_label"] = json!(format!("{} · {reason}", element.label));
         }
     }
+    out.extend(drag_limit::elements(w, &definition));
     out
 }
 
@@ -4473,6 +4509,7 @@ fn select(w: &mut Workspace, entity: Option<Entity>, toggle: bool, dimension: bo
         }
     }
     if let Some(state) = &mut w.sketch3d {
+        state.drag_limit = None;
         state.popup = None;
         if let Some(entity) = entity {
             if toggle || dimension {
@@ -4567,6 +4604,11 @@ fn draw(w: &Workspace, ui: &mut egui::Ui, rect: egui::Rect) {
         return;
     };
     let painter = ui.painter().with_clip_rect(rect);
+    let limited = state
+        .drag_limit
+        .as_ref()
+        .map(|limit| limit.highlights(&definition))
+        .unwrap_or_default();
     let current = current_evaluation(w).is_some();
     let accent = viewport::selection_color(w);
     let mut work = 250_000;
@@ -4620,9 +4662,10 @@ fn draw(w: &Workspace, ui: &mut egui::Ui, rect: egui::Rect) {
             {
                 continue;
             }
-            let selected = state.selection.contains(&Entity::Member {
-                member: line.member.clone(),
-            });
+            let selected = limited.contains(&line.member)
+                || state.selection.contains(&Entity::Member {
+                    member: line.member.clone(),
+                });
             let props = overlay_properties(
                 w,
                 &format!("member/{}", line.member),
@@ -4712,9 +4755,10 @@ fn draw(w: &Workspace, ui: &mut egui::Ui, rect: egui::Rect) {
         if !crate::sketch_overlay::point3d_visible(w, &definition, id) {
             continue;
         }
-        let selected = state
-            .selection
-            .contains(&Entity::Point { point: id.clone() });
+        let selected = limited.contains(id)
+            || state
+                .selection
+                .contains(&Entity::Point { point: id.clone() });
         let props = overlay_properties(
             w,
             &format!("point/{id}"),
@@ -4960,6 +5004,8 @@ pub fn overlay(
         return false;
     }
     poll(w);
+    let over_limit = drag_limit::overlay(w, ui, rect);
+    let blocked = blocked || over_limit;
     let modifiers = ui.input(|input| input.modifiers);
     let cycle_plane = response.hovered()
         && !blocked
@@ -5180,7 +5226,7 @@ pub fn overlay(
     }
     draw(w, ui, rect);
     popup(w, ui, rect);
-    captured(w)
+    captured(w) || over_limit
 }
 fn popup(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) {
     let Some(position) = w.sketch3d.as_ref().and_then(|state| state.popup) else {

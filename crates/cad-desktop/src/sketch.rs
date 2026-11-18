@@ -111,6 +111,7 @@ pub struct EditingSketch {
     pub dimension_model: Option<viewport::Selection>,
     pub last_valid: Option<Sketch>,
     pub drag: Option<crate::sketch_handles::DragGesture>,
+    pub drag_limit: Option<crate::sketch_handles::DragLimit>,
     pub pick_candidates: Vec<PickCandidate>,
     pub pick_index: usize,
     pick_pointer: Option<egui::Pos2>,
@@ -575,6 +576,7 @@ pub fn begin(w: &mut Workspace, existing: Option<Feature>) {
         dimension_model: None,
         last_valid: None,
         drag: None,
+        drag_limit: None,
         pick_candidates: vec![],
         pick_index: 0,
         pick_pointer: None,
@@ -860,6 +862,7 @@ pub fn set_tool(w: &mut Workspace, tool: Tool) {
     w.context_selection = None;
     w.fields.remove("smart-dimension-mode");
     if let Some(s) = &mut w.sketch {
+        s.drag_limit = None;
         s.tool = tool;
         s.selection.clear();
         s.selected = None;
@@ -954,6 +957,7 @@ pub(crate) fn restore(s: &mut EditingSketch, source: Sketch) {
     s.last_valid = None;
     s.feedback = crate::sketch_relations_ui::Feedback::default();
     s.drag = None;
+    s.drag_limit = None;
 }
 pub fn undo_point(w: &mut Workspace) {
     if crate::sketch_handles::cancel(w) {
@@ -1443,7 +1447,8 @@ fn preview_document(w: &Workspace, s: &EditingSketch) -> cad_core::Result<Docume
 }
 pub(crate) fn solve(w: &mut Workspace) {
     use cad_core::solver::ConstraintSolver;
-    let Some(s) = &w.sketch else { return };
+    let Some(s) = &mut w.sketch else { return };
+    s.drag_limit = None;
     if s.choosing_plane {
         return;
     }

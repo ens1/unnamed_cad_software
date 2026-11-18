@@ -129,6 +129,7 @@ pub fn poll(w: &mut Workspace) {
                     source.feedback.motion = Some(*analysis);
                     source.feedback.motion_error = None;
                     source.feedback.motion_pending = false;
+                    crate::sketch_handles::refresh_limit(source);
                 }
             }
             WorkerResponse::Error {

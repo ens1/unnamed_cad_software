@@ -180,10 +180,18 @@ fn run() -> Result<()> {
                             &targets,
                         )?
                     };
-                    Ok((solved, report))
+                    let blockers = cad_core::sketch3d::drag_blockers(
+                        &configured,
+                        &feature.definition,
+                        &solved,
+                        &targets,
+                    )
+                    .unwrap_or_default();
+                    Ok((solved, report, blockers))
                 })();
                 Ok(match solved {
-                    Ok((solved, report)) => WorkerResponse::Sketch3dSolved {
+                    Ok((solved, report, drag_blockers)) => WorkerResponse::Sketch3dSolved {
+                        drag_blockers,
                         identity,
                         feature,
                         editor,

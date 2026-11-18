@@ -267,6 +267,9 @@ pub fn problem_entities(w: &Workspace) -> BTreeSet<Id> {
 }
 
 pub fn constraint_emphasized(s: &sketch::EditingSketch, relation: &SketchConstraint) -> bool {
+    if let Some(limit) = &s.drag_limit {
+        return limit.constraints.contains(&relation.id);
+    }
     s.selection.iter().any(|entity| match entity {
         SketchEntity::Constraint { constraint } => constraint == &relation.id,
         SketchEntity::Point { point } => relation.entities.iter().any(|key| {
@@ -1239,6 +1242,20 @@ pub fn action(w: &mut Workspace, command: &str) -> bool {
 }
 
 pub fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) -> bool {
+    if element.role == "sketch-drag-driver"
+        && w.sketch.as_ref().is_none_or(|s| {
+            s.edit.is_some()
+                || s.drag.is_some()
+                || s.drag_limit.as_ref().is_none_or(|limit| {
+                    !limit
+                        .constraints
+                        .iter()
+                        .any(|id| Some(id.as_str()) == element.data["constraint"].as_str())
+                })
+        })
+    {
+        return true;
+    }
     if element.role == "sketch-point-motion" && command == "sketch.select-entity" {
         if let Some(point) = element
             .data
@@ -1286,6 +1303,7 @@ pub fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &s
             | "sketch-constraint-delete"
             | "sketch-dimension-mode"
             | "sketch-constraint-focus"
+            | "sketch-drag-driver"
     ) || w.sketch.as_ref().is_none_or(|s| {
         element.data.get("sketch").and_then(|value| value.as_str()) != Some(&s.sketch_id)
     }) {
@@ -1509,6 +1527,11 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let source = sketch::sketch_definition(s);
     let selected_keys = selection_keys(&source, &s.selection);
     let prefix = format!("{}::feedback", s.sketch_id);
+    // Keep the worker's numerical reaction coefficients out of frame-by-frame
+    // presentation data. Themes receive the affected constraint IDs instead.
+    let motion_summary = motion(s).map(|a| serde_json::json!({"version":a.version,
+        "variables":a.variables,"equation_rank":a.equation_rank,"degrees_of_freedom":a.degrees_of_freedom,
+        "maximum_residual":a.maximum_residual,"points":a.points,"constraints":a.constraints}));
     let mut out = vec![SemanticElement {
         id: prefix.clone(),
         role: "sketch-feedback".into(),
@@ -1522,8 +1545,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         .into(),
         commands: vec![],
         relationships: vec![s.sketch_id.clone()],
-        data: serde_json::json!({"renderer":"sketch-feedback","definition":s.definition,"sketch":s.sketch_id,"filter":filter(w),"solve_report":retain_report(s),"equation_residuals":s.feedback.residuals,"maximum_equation_residual":s.feedback.maximum_residual,"unsatisfied":s.feedback.unsatisfied,"residual_error":s.feedback.error,"residual_geometry":"current-authored-geometry","residual_length_unit":"mm","residual_angle_scale_mm_per_rad":100.0,"residual_threshold":1e-6,"minimal_conflicts":false,"current_error":s.error,"shared_draft":true,"motion_analysis":motion(s),"motion_error":s.feedback.motion_error,"motion_pending":s.feedback.motion_pending,"analysis_token":s.feedback.analysis_token,"show_motion":motion_display(w),"exact_duplicates":s.feedback.duplicates,"dependency_geometry":"local-linearized-authoritative-equations"}),
+        data: serde_json::json!({"renderer":"sketch-feedback","definition":s.definition,"sketch":s.sketch_id,"filter":filter(w),"solve_report":retain_report(s),"equation_residuals":s.feedback.residuals,"maximum_equation_residual":s.feedback.maximum_residual,"unsatisfied":s.feedback.unsatisfied,"residual_error":s.feedback.error,"residual_geometry":"current-authored-geometry","residual_length_unit":"mm","residual_angle_scale_mm_per_rad":100.0,"residual_threshold":1e-6,"minimal_conflicts":false,"current_error":s.error,"shared_draft":true,"motion_analysis":motion_summary,"motion_error":s.feedback.motion_error,"motion_pending":s.feedback.motion_pending,"analysis_token":s.feedback.analysis_token,"show_motion":motion_display(w),"exact_duplicates":s.feedback.duplicates,"dependency_geometry":"local-linearized-authoritative-equations"}),
     }];
+    out.extend(crate::sketch_handles::limit_semantics(w));
     out.extend(browser_fields(w));
     out.push(SemanticElement {
         id: format!("{prefix}.clear-filters"),

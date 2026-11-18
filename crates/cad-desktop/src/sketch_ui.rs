@@ -522,6 +522,7 @@ pub fn select(w: &mut Workspace, entity: Option<SketchEntity>, additive: bool) {
     crate::navigation::stop(w);
     let dimension_mode = w.fields.contains_key("smart-dimension-mode");
     if let Some(s) = &mut w.sketch {
+        s.drag_limit = None;
         let repeat_pick = dimension_mode
             && s.dimension.is_some()
             && entity
@@ -715,7 +716,10 @@ fn open_dimension(w: &mut Workspace, driven: bool, extend_pick: bool, preferred:
                 let document = checkpoint.document;
                 let history_len = checkpoint.history_len;
                 s.history.push(source.clone());
-                let constraint = attach_dimension(s, &choices[choice], driven);
+                let constraint = match s.selection.as_slice() {
+                    [SketchEntity::Constraint { constraint }] => constraint.clone(),
+                    _ => attach_dimension(s, &choices[choice], driven),
+                };
                 s.dimension = Some(DimensionEditor {
                     choices,
                     choice,
@@ -2629,10 +2633,18 @@ pub fn annotations(w: &mut Workspace, ui: &mut egui::Ui, r: egui::Rect) -> bool 
         ));
     }
     if let Some((constraint, response)) = clicked {
+        let edit_driver = w.sketch.as_ref().is_some_and(|s| {
+            s.drag_limit
+                .as_ref()
+                .is_some_and(|limit| limit.constraints.contains(&constraint))
+                && s.constraints
+                    .iter()
+                    .any(|c| c.id == constraint && a::is_dimension(&c.kind))
+        });
         select(w, Some(SketchEntity::Constraint { constraint }), false);
         if w.fields.contains_key("smart-dimension-mode") {
             selection_changed(w);
-        } else if response.double_clicked() {
+        } else if response.double_clicked() || edit_driver {
             smart_dimension(w);
         } else {
             selection_ui::open(w, &response, response.rect.right_bottom());

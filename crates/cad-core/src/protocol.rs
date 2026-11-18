@@ -442,6 +442,8 @@ pub enum WorkerResponse {
         editor: Id,
         sequence: u64,
         solved: Box<crate::sketch3d::Definition>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        drag_blockers: Vec<Id>,
         report: crate::solver::SolveReport,
     },
     Sketch3dSolveFailed {

@@ -8,6 +8,10 @@ use cad_core::{
 };
 use std::time::Instant;
 
+mod limits;
+pub use limits::{DragLimit, semantics as limit_semantics};
+pub(crate) use limits::{panel_ui as limit_panel, refresh as refresh_limit};
+
 pub struct DragGesture {
     viewport: egui::Id,
     handle: SketchHandle,
@@ -116,7 +120,7 @@ fn start(w: &mut Workspace, handle: SketchHandle, grab: [f64; 2], viewport: egui
         });
     }
 }
-fn update(w: &mut Workspace, cursor: [f64; 2], snap: bool) {
+fn update(w: &mut Workspace, cursor: [f64; 2], snap: bool, rect: egui::Rect) {
     let Some(s) = &w.sketch else {
         return;
     };
@@ -127,7 +131,7 @@ fn update(w: &mut Workspace, cursor: [f64; 2], snap: bool) {
         g.handle.position[0] + cursor[0] - g.grab[0],
         g.handle.position[1] + cursor[1] - g.grab[1],
     ];
-    if snap && s.snap {
+    if snap && s.snap && g.handle.disabled_reason.is_none() {
         goal = goal.map(|v| (v / s.grid).round() * s.grid);
     }
     if g.last_goal == Some(goal) {
@@ -135,6 +139,18 @@ fn update(w: &mut Workspace, cursor: [f64; 2], snap: bool) {
     }
     let handle = g.handle.clone();
     let mut source = g.source.clone();
+    if let Some(reason) = &handle.disabled_reason {
+        let limit = limits::explain(w, g, &g.display, goal, rect);
+        if let Some(s) = &mut w.sketch {
+            s.drag_limit = limit;
+            if let Some(g) = &mut s.drag {
+                g.last_goal = Some(goal);
+                g.feedback = reason.clone();
+            }
+            limits::refresh(s);
+        }
+        return;
+    }
     let result = handles::drag(
         &cad_core::solver::NativeSolver,
         w.session.visible(),
@@ -145,6 +161,7 @@ fn update(w: &mut Workspace, cursor: [f64; 2], snap: bool) {
     );
     match result {
         Ok(_) => {
+            let limit = limits::explain(w, g, &source, goal, rect);
             let did_change = w
                 .sketch
                 .as_ref()
@@ -181,19 +198,11 @@ fn update(w: &mut Workspace, cursor: [f64; 2], snap: bool) {
             if did_change {
                 sketch::solve(w);
             }
-            let limited = match &handle.target {
-                HandleTarget::Point { point } => w
-                    .sketch
-                    .as_ref()
-                    .and_then(|s| {
-                        s.keys
-                            .iter()
-                            .position(|key| key == point)
-                            .map(|i| s.points[i])
-                    })
-                    .is_some_and(|p| (p[0] - goal[0]).hypot(p[1] - goal[1]) > 1e-4),
-                _ => false,
-            };
+            let limited = limit.is_some();
+            if let Some(s) = &mut w.sketch {
+                s.drag_limit = limit;
+                limits::refresh(s);
+            }
             let feedback = if limited {
                 "Movement limited by dimensions / relations · Esc cancels"
             } else {
@@ -205,6 +214,9 @@ fn update(w: &mut Workspace, cursor: [f64; 2], snap: bool) {
             w.status = feedback.into();
         }
         Err(error) => {
+            if let Some(s) = &mut w.sketch {
+                s.drag_limit = None;
+            }
             let feedback = format!("{error} · last valid sketch retained");
             if let Some(g) = w.sketch.as_mut().and_then(|s| s.drag.as_mut()) {
                 g.last_goal = Some(goal);
@@ -624,9 +636,7 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
         }
         if hit.drag_started() && !w.fields.contains_key("smart-dimension-mode") {
             consumed = true;
-            if let Some(reason) = &handle.disabled_reason {
-                w.status = reason.clone();
-            } else if let Some(grab) = ui
+            if let Some(grab) = ui
                 .input(|i| i.pointer.press_origin())
                 .and_then(|p| sketch::hit_plane(w, rect, p, &plane, &matrix))
             {
@@ -649,9 +659,14 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
             .filter(|p| rect.contains(*p))
         {
             if let Some(cursor) = sketch::hit_plane(w, rect, pointer, &plane, &matrix) {
-                update(w, cursor, !ui.input(|i| i.modifiers.alt));
+                update(w, cursor, !ui.input(|i| i.modifiers.alt), rect);
             }
-            if let Some(g) = w.sketch.as_ref().and_then(|s| s.drag.as_ref()) {
+            if let Some(g) = w
+                .sketch
+                .as_ref()
+                .filter(|s| s.drag_limit.is_none())
+                .and_then(|s| s.drag.as_ref())
+            {
                 painter.text(
                     pointer + egui::vec2(12., 34.),
                     egui::Align2::LEFT_TOP,
@@ -666,5 +681,5 @@ pub fn overlay(w: &mut Workspace, ui: &mut egui::Ui, rect: egui::Rect) -> bool {
         }
         ui.ctx().request_repaint();
     }
-    consumed
+    consumed | limits::overlay(w, ui, rect)
 }

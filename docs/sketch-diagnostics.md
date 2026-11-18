@@ -28,9 +28,22 @@ document preview update immediately. Invalid results block Apply Sketch; Cancel
 Sketch restores the operation checkpoint. No repair silently changes committed
 definitions or weakens engineering constraints during a drag.
 
+When a point can move in only one direction, it follows the permitted part of
+the drag. Its **Movement limited** callout highlights the dimensions and relations
+that oppose the remaining movement. Release the point and choose a dimension
+in the callout to edit its value. Selecting a relation highlights the geometry
+it connects. The same controls work with a 3D sketch point on a plane or axis.
+A dimension controlled by an active configuration shows its existing override.
+
+The solver uses the equations at the solved position, so a dimension on a
+connected point can appear. If the equations exceed the analysis work limit,
+the callout can still identify explicit coordinate locks and planar curve-size
+dimensions. Otherwise it shows a general movement limit. Reference dimensions
+never appear as drivers.
+
 ## Application-owned contract
 
-`cad-core::sketch_diagnostics` contract v1 exposes stable point and constraint IDs,
+`cad-core::sketch_diagnostics` contract v2 exposes stable point and constraint IDs,
 f64 local XY directions, variable count, equation rank, local degrees of freedom,
 actual maximum residual, generated-point provenance and per-equation dependency
 counts. `ConstraintSolver::analyze_sketch` is an optional solver capability. Native
@@ -62,7 +75,14 @@ Immediate authored-equation residuals and exact duplicate feedback remain local.
 Source equality checks prevent old analysis from appearing after local edits,
 failed solves, Cancel or document replacement.
 
+The optional drag-reaction data is bounded to 128,000 equation-by-variable
+coefficients. Spatial drag replies carry only the resulting constraint IDs.
+This diagnostic leaves the solve and the stored sketch unchanged.
+
 ## Presentation contract
+
+Both sketch editors expose `sketch-drag-limit` and `sketch-drag-driver`. The
+callout and its actions can be positioned and styled independently.
 
 The default sketch manager puts the active dimension expression and its
 Done/Cancel actions before reference choices, member properties and secondary
