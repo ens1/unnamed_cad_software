@@ -130,6 +130,18 @@ pub fn selected_inspector_open(ui: &egui::Ui, id: &str, selected: Option<&str>) 
 }
 /// Custom layouts target the same sketch entities as the native viewport.
 pub fn semantic_action(w: &mut Workspace, element: &presentation::SemanticElement, command: &str) {
+    if element.role == "sketch-plane-action" && command == "sketch.select-entity" {
+        if w.sketch
+            .as_ref()
+            .is_some_and(|s| s.choosing_plane && element.data["sketch"] == s.sketch_id)
+            && let Some(name) = element.data["plane"]
+                .as_str()
+                .filter(|name| sketch::ORIGIN_PLANES.contains(name))
+        {
+            sketch::choose_origin(w, name);
+        }
+        return;
+    }
     if matches!(
         element.role.as_str(),
         "sketch-dimension-editor" | "sketch-operation-prompt" | "sketch-relation-action"
@@ -621,7 +633,8 @@ fn open_dimension(w: &mut Workspace, driven: bool, extend_pick: bool, preferred:
             s.chain.clear();
             s.clicks.clear();
         }
-        w.status = "Smart Dimension: pick a member for its size, or a center / point then an edge for a distance. Enter a value, choose a second reference, or use Done Dimension.".into();
+        w.status =
+            "Pick a curve for its size, or pick two references for a distance or angle.".into();
         return;
     }
     if s.selection.len() == 1
@@ -635,7 +648,7 @@ fn open_dimension(w: &mut Workspace, driven: bool, extend_pick: bool, preferred:
             s.chain.clear();
             s.clicks.clear();
         }
-        w.status = "Smart Dimension: reference selected. Pick the sketch point or member to dimension from it.".into();
+        w.status = "Pick the point or curve to dimension from this reference.".into();
         return;
     }
     let choices = a::dimensions(
@@ -678,7 +691,12 @@ fn open_dimension(w: &mut Workspace, driven: bool, extend_pick: bool, preferred:
                 s.clicks.clear();
             }
             w.manager_tree = false;
-            w.status="Enter the dimension beside the geometry or in the docked field. Edits preview live; Done Dimension retains it, Cancel Dimension restores its start, Finish Sketch commits.".into();
+            w.status = if driven {
+                "Choose Done Dimension to keep this measurement."
+            } else {
+                "Enter the dimension value. Press Enter to keep it."
+            }
+            .into();
             sketch::solve(w);
         }
         Err(e) => w.status = e.to_string(),
@@ -784,11 +802,134 @@ pub fn finish_dimension(w: &mut Workspace) {
         s.dimension_pick = None;
         s.dimension_model = None;
         s.selection.clear();
+        s.selected = None;
+        s.selected_member = None;
     }
     w.selection_popup = None;
     w.context_selection = None;
-    w.status = "Dimension retained in the sketch draft. Pick the next member or reference pair; Finish Sketch commits the validated sketch.".into();
+    w.status = "Dimension added. Pick geometry for another dimension, or finish the sketch.".into();
 }
+/// The dock and theme bindings use the same prompt as picks advance.
+pub fn next_pick(w: &Workspace) -> Option<&'static str> {
+    use sketch::Tool::*;
+    let s = w.sketch.as_ref()?;
+    if s.choosing_plane {
+        return Some("Choose an origin plane or click a flat face on the model.");
+    }
+    if s.edit.is_some() || s.dimension.is_some() || s.drag.is_some() {
+        return None;
+    }
+    if w.fields.contains_key("smart-dimension-mode") {
+        return Some(if s.selection.is_empty() {
+            "Pick a curve for its size, or pick two references for a distance or angle."
+        } else {
+            "Pick the second reference."
+        });
+    }
+    let steps: &[&str] = match s.tool {
+        Select if s.keys.is_empty() && s.members.is_empty() => {
+            return Some("Start with Line, Rectangle, or Circle on the Sketch toolbar.");
+        }
+        Select if s.selection.is_empty() => {
+            return Some("Pick geometry to edit. Shift-click to select more.");
+        }
+        Select => return None,
+        Point => &["Click to place a point."],
+        Polyline if s.chain.is_empty() => &["Click the start of the line."],
+        Polyline if s.chain.len() >= 3 => {
+            &["Click the next endpoint, or click the first point to close the contour."]
+        }
+        Polyline => &["Click the next endpoint. Press Esc to end the chain."],
+        Rectangle => &["Click the first corner.", "Click the opposite corner."],
+        CenterRectangle => &["Click the center.", "Click a corner."],
+        Circle => &[
+            "Click the center.",
+            "Click the circle's rim to set its radius.",
+        ],
+        Polygon => &[
+            "Click the center.",
+            "Click a vertex to set the size and orientation.",
+        ],
+        ThreePointRectangle => &[
+            "Click the first corner.",
+            "Click the end of the first side.",
+            "Click to set the rectangle height.",
+        ],
+        ThreePointCenterRectangle => &[
+            "Click the center.",
+            "Click to set the half-width and direction.",
+            "Click to set the half-height.",
+        ],
+        Parallelogram => &[
+            "Click the first corner.",
+            "Click the second corner.",
+            "Click the third corner.",
+        ],
+        PerimeterCircle => &[
+            "Click the first point on the rim.",
+            "Click the second point on the rim.",
+            "Click the third point on the rim.",
+        ],
+        CenterArc => &[
+            "Click the arc center.",
+            "Click the start of the arc.",
+            "Click to set the end direction.",
+        ],
+        TangentArc => &[
+            "Click an endpoint of a straight line.",
+            "Click the arc endpoint.",
+        ],
+        Arc => &[
+            "Click the start of the arc.",
+            "Click the end of the arc.",
+            "Click a point on the arc to set its curvature.",
+        ],
+        CenterSlot => &[
+            "Click the midpoint of the slot.",
+            "Click the center of one rounded end.",
+            "Click to set the slot width.",
+        ],
+        Slot => &[
+            "Click the center of one rounded end.",
+            "Click the center of the other end.",
+            "Click to set the slot width.",
+        ],
+        MidpointLine => &["Click the midpoint of the line.", "Click one endpoint."],
+        Centerline => &[
+            "Click the first endpoint of the centerline.",
+            "Click the second endpoint.",
+        ],
+        Ellipse | EllipseArc => &[
+            "Click the center.",
+            "Click the end of the major axis.",
+            "Click to set the minor radius.",
+        ],
+        Conic | Parabola => &[
+            "Click the start of the curve.",
+            "Click the end of the curve.",
+            "Click where the endpoint tangents intersect.",
+        ],
+        ArcSlot => &[
+            "Click the arc center.",
+            "Click the starting radius.",
+            "Click to set the end direction.",
+            "Click to set the slot width.",
+        ],
+        Spline | InterpolatingSpline | Nurbs => {
+            return Some(if s.chain.len() < 2 {
+                if s.tool == InterpolatingSpline {
+                    "Click at least two points on the curve."
+                } else {
+                    "Click at least two control points."
+                }
+            } else {
+                "Click another point, or choose Finish Spline."
+            });
+        }
+    };
+    steps.get(s.clicks.len()).copied()
+}
+
 /// Transient editor state is semantic data; layouts need not infer pick state
 /// from viewport styling or docked widgets.
 pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> {
@@ -805,8 +946,29 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
         role: if suffix == "member-list" { "sketch-member-list" } else { "sketch-secondary-section" }.into(),
         label: label.into(), value: None, state: "ready".into(), commands: vec![],
         relationships: vec![s.sketch_id.clone()],
-        data: serde_json::json!({"sketch":s.sketch_id,"presentation_only":true,"default_collapsed":suffix != "member-list","layout_order":"active-tool-before-secondary-editors"}),
+        data: serde_json::json!({"sketch":s.sketch_id,"presentation_only":true,"default_collapsed":true,"layout_order":"active-tool-before-secondary-editors"}),
     }).collect::<Vec<_>>();
+    if s.choosing_plane {
+        elements.extend(sketch::ORIGIN_PLANES.into_iter().map(|name| presentation::SemanticElement {
+            id: format!("{}::plane:{name}", s.sketch_id),
+            role: "sketch-plane-action".into(), label: name.into(), value: None,
+            state: "ready".into(), commands: vec!["sketch.select-entity".into()],
+            relationships: vec![s.sketch_id.clone()],
+            data: serde_json::json!({"sketch": s.sketch_id, "plane": name, "classes": ["modeling-action", "compact"]}),
+        }));
+    }
+    if let Some(prompt) = next_pick(w) {
+        elements.push(presentation::SemanticElement {
+            id: format!("{}::next-pick", s.sketch_id),
+            role: "sketch-operation-prompt".into(),
+            label: prompt.into(),
+            value: None,
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec![s.sketch_id.clone()],
+            data: serde_json::json!({"sketch": s.sketch_id, "presentation_only": true}),
+        });
+    }
     let source = sketch::sketch_definition(s);
     if let Some(point) = s.selected.and_then(|index| s.keys.get(index)) {
         elements.push(presentation::SemanticElement {
@@ -1656,7 +1818,7 @@ pub fn action(w: &mut Workspace, command: &str) {
                             .is_some_and(|sketch| sketch.error.is_none())
                         {
                             w.status = format!(
-                                "Added {added} relation{} in one sketch edit · Finish Sketch applies the validated result",
+                                "Added {added} relation{}",
                                 if added == 1 { "" } else { "s" }
                             );
                         }
@@ -1726,9 +1888,6 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 s.selection.len() + usize::from(s.dimension_model.is_some())
             ));
         });
-        if dimension_mode && s.dimension.is_none() {
-            ui.small("Pick a member for size, or two references for distance / angle.");
-        }
         if let Some(editor) = &mut s.dimension {
             let previous = editor.choice;
             egui::ComboBox::from_id_salt("smart-dimension-kind")
@@ -1781,7 +1940,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                         "sketch-dimension-action",
                         &["compact"],
                         "Done Dimension",
-                        true,
+                        s.error.is_none(),
                         false,
                     )
                     .clicked()
@@ -1825,7 +1984,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                             promote =
                                 Some((c.id.clone(), c.value.clone(), a::dimension_unit(&c.kind)));
                         }
-                        ui.small("Edits preview live. Done Dimension retains the draft; Finish Sketch commits it.");
+                        ui.small("Finish Sketch applies your dimensions to the part.");
                         if c.kind == "point_line_distance" {
                             ui.small("Perpendicular distance to the oriented line. The saved side stays fixed through zero.");
                         }

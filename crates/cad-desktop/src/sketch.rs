@@ -5,6 +5,8 @@ use bevy_egui::egui::{self, Color32, Stroke};
 use cad_core::{commands::Command, protocol::EvaluatedSketch, *};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub const ORIGIN_PLANES: [&str; 3] = ["Front Plane", "Top Plane", "Right Plane"];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     Polyline,
@@ -842,6 +844,8 @@ pub fn set_tool(w: &mut Workspace, tool: Tool) {
     if let Some(s) = &mut w.sketch {
         s.tool = tool;
         s.selection.clear();
+        s.selected = None;
+        s.selected_member = None;
         s.dimension = None;
         s.dimension_pick = None;
         s.dimension_model = None;
@@ -1721,50 +1725,80 @@ pub fn finish(w: &mut Workspace) -> bool {
     }
 }
 pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    let Some(s) = &w.sketch else { return };
+    let section_id = s.sketch_id.clone();
+    if let Some(prompt) = crate::sketch_ui::next_pick(w) {
+        crate::presentation_controls::label(
+            ui,
+            &format!("{section_id}::next-pick"),
+            "sketch-operation-prompt",
+            &["operation-prompt"],
+            prompt,
+            "ready",
+        );
+    }
     crate::holes_ui::sketch_prompt(ui, w);
     if w.sketch.as_ref().is_some_and(|s| s.choosing_plane) {
-        ui.label("Choose an origin plane or a planar model face.");
-        for name in ["Front Plane", "Top Plane", "Right Plane"] {
-            if ui.button(name).clicked() {
-                choose_origin(w, name);
+        ui.horizontal_wrapped(|ui| {
+            for name in ORIGIN_PLANES {
+                if crate::presentation_controls::button(
+                    ui,
+                    &format!("{section_id}::plane:{name}"),
+                    "sketch-plane-action",
+                    &["modeling-action", "compact"],
+                    name,
+                    true,
+                    false,
+                )
+                .clicked()
+                {
+                    choose_origin(w, name);
+                }
             }
-        }
+        });
         return;
     }
     if crate::sketch_edit_ui::controls(ui, w) {
         return;
     }
-    let section_id = w
-        .sketch
-        .as_ref()
-        .map(|sketch| sketch.sketch_id.clone())
-        .unwrap_or_default();
-    crate::presentation_controls::inspector_section(
-        ui,
-        crate::presentation_controls::InspectorSection {
-            id: &format!("sketch:{section_id}:selection"),
-            role: "sketch-inspector-group",
-            classes: &["selection-dimensions"],
-            label: "Selection and dimensions",
-            state: "draft",
-            collapse: Some(true),
-            open: None,
-        },
-        |ui| crate::sketch_ui::controls(ui, w),
-    );
-    crate::presentation_controls::inspector_section(
-        ui,
-        crate::presentation_controls::InspectorSection {
-            id: &format!("sketch:{section_id}:precision"),
-            role: "sketch-inspector-group",
-            classes: &["precision"],
-            label: "Precision and snapping",
-            state: "draft",
-            collapse: Some(false),
-            open: None,
-        },
-        |ui| crate::sketch_overlay::snap_controls(ui, w),
-    );
+    if let Some(s) = &w.sketch {
+        if let Some(error) = &s.placement_error {
+            crate::presentation_controls::label(
+                ui,
+                &format!("{section_id}::placement-error"),
+                "field-diagnostic",
+                &["error"],
+                error,
+                "error",
+            );
+        }
+        let smart_dimension = w.fields.contains_key("smart-dimension-mode");
+        let selection_key = if smart_dimension {
+            Some("dimension")
+        } else if !s.selection.is_empty() {
+            Some("selection")
+        } else {
+            None
+        };
+        let open = crate::sketch_ui::selected_inspector_open(
+            ui,
+            &format!("{section_id}::selection-state"),
+            selection_key,
+        );
+        crate::presentation_controls::inspector_section(
+            ui,
+            crate::presentation_controls::InspectorSection {
+                id: &format!("sketch:{section_id}:selection"),
+                role: "sketch-inspector-group",
+                classes: &["selection-dimensions"],
+                label: "Selection and dimensions",
+                state: "draft",
+                collapse: Some(selection_key.is_some()),
+                open,
+            },
+            |ui| crate::sketch_ui::controls(ui, w),
+        );
+    }
     let evaluated_sizes = crate::sketch_ui::evaluated_member_values(w);
     let settings = w.session.visible().settings.clone();
     let mut changed = false;
@@ -1787,14 +1821,13 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 open: None,
             },
             |ui| {
-                ui.strong(&s.name);
-                ui.small(format!(
-                    "{} members · {}",
-                    s.members.len(),
-                    s.degrees_of_freedom
-                        .map(|dof| format!("{dof} DOF"))
-                        .unwrap_or_else(|| "DOF unavailable".into())
-                ));
+                if let Some(dof) = s.degrees_of_freedom {
+                    ui.small(match dof {
+                        0 => "Fully constrained".to_owned(),
+                        1 => "1 degree of freedom".to_owned(),
+                        _ => format!("{dof} degrees of freedom"),
+                    });
+                }
                 ui.checkbox(&mut s.construction, "Construction for new geometry");
                 if s.tool == Tool::Polygon {
                     ui.add(
@@ -1822,33 +1855,12 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     false,
                     |ui| {
                         ui.small(match s.tool {
-            Tool::Arc => "Arc: start, end, then a point on the arc.",
-            Tool::ThreePointRectangle => "Rectangle: first corner, next corner along an edge, then height.",
-            Tool::ThreePointCenterRectangle => "Rectangle: center, half-width axis point, then half-height.",
-            Tool::Parallelogram => "Parallelogram: three consecutive corners.",
-            Tool::PerimeterCircle => "Circle: three points on the perimeter.",
-            Tool::CenterArc => "Arc: center, start point, then end direction. Radius follows the start point.",
-            Tool::TangentArc => "Arc: an existing straight member endpoint, then the arc endpoint.",
-            Tool::CenterSlot => "Slot: overall center, an end center, then half-width.",
-            Tool::MidpointLine => "Line: midpoint, then one endpoint. The midpoint remains constrained.",
-            Tool::Centerline => "Construction centerline: first point, then second point.",
-            Tool::Ellipse => "Ellipse: center, major axis point, then minor radius.",
-            Tool::Slot => "Slot: first center, second center, then half-width.",
-            Tool::Spline => "Bézier spline: click 2–16 controls, then Finish Spline.",
-            Tool::InterpolatingSpline => "Interpolating spline: click 2–64 fit points, then Finish Spline. Fit points remain draggable and constrainable.",
-            Tool::Nurbs => "NURBS: click 2–64 controls, then Finish Spline. Edit weights and knots in the docked manager.",
-            Tool::Conic => "Conic: start, end, then the intersection of their tangent lines. Rho controls the shape.",
-            Tool::Parabola => "Parabola: start, end, then the intersection of their tangent lines.",
-            Tool::EllipseArc => "Partial ellipse: center, major-axis handle, then minor-axis handle. Edit start and sweep after placement.",
-            Tool::ArcSlot => "Arc slot: center, start direction/radius, end direction, then a radial point defining half-width.",
-            Tool::CenterRectangle => "Rectangle: center, then a corner.",
-            Tool::Polygon => "Polygon: center, then a vertex.",
-            Tool::Point => "Click to add a reference point.",
-            Tool::Select => {
-                "Drag point handles to reshape. Select a curve for size/move handles. Alt bypasses snapping; Esc cancels a drag. Shift-click adds a selection."
-            }
-            _ => "Click to draw. Snap to existing points joins members. Esc stops the tool.",
-        });
+                            Tool::Select => "Drag a handle to reshape geometry. Shift-click to select more.",
+                            Tool::Nurbs => "Edit the control weights and knots after placing the spline.",
+                            Tool::EllipseArc => "Edit the start and sweep angles after placing the ellipse.",
+                            _ => "Press Esc to stop the tool. Hold Alt while placing a point to skip snapping.",
+                        });
+                        ui.small("Closed contours can form solids. Open curves can serve as paths. Construction geometry provides references.");
                     },
                 );
                 if matches!(s.tool, Tool::InterpolatingSpline | Tool::Nurbs) {
@@ -1895,9 +1907,9 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 id: &format!("sketch:{}:members", s.sketch_id),
                 role: "sketch-inspector-group",
                 classes: &["member-list"],
-                label: "Sketch members",
+                label: &format!("Sketch members ({})", s.members.len()),
                 state: "draft",
-                collapse: Some(true),
+                collapse: Some(false),
                 open: member_inspector,
             },
             |ui| {
@@ -1996,14 +2008,14 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             .map(String::as_str);
         let point_inspector =
             crate::sketch_ui::selected_inspector_open(ui, "sketch-point-inspector", selected_point);
-        let mut point_order = (0..s.points.len()).collect::<Vec<_>>();
-        point_order.retain(|index| s.selected == Some(*index));
-        egui::CollapsingHeader::new("Point position")
-            .open(point_inspector)
-            .default_open(s.selected.is_some())
-            .show(ui, |ui| {
-                if point_order.is_empty() { ui.small("Pick a sketch point or center to move it or add a driving coordinate."); }
-                for i in point_order {
+        if let Some(i) = s
+            .selected
+            .filter(|i| *i < s.points.len() && *i < s.keys.len())
+        {
+            egui::CollapsingHeader::new("Point position")
+                .open(point_inspector)
+                .default_open(true)
+                .show(ui, |ui| {
                     let p = &mut s.points[i];
                     ui.push_id(&s.keys[i], |ui| {
                         let response =
@@ -2015,11 +2027,10 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                                 },
                             );
                         }
-                        if s.selected != Some(i) { return; }
-                        ui.small("Move seed · existing dimensions and relations remain active");
+                        ui.small("Move this point within its current constraints.");
                         let old_position = *p;
                         ui.add_enabled_ui(!driven_points.contains(&s.keys[i]), |ui| {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 changed |= crate::sketch_ui::coordinate(ui, "Move X", &mut p[0], &settings);
                                 changed |= crate::sketch_ui::coordinate(ui, "Move Y", &mut p[1], &settings);
                             });
@@ -2040,8 +2051,8 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                             }
                         });
                     });
-                }
             });
+        }
         crate::presentation_controls::collapsing(
             ui,
             &format!("{}::point-browser", s.sketch_id),
@@ -2088,13 +2099,13 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     });
             },
         );
-        egui::CollapsingHeader::new("Advanced Point Relations").show(ui, |ui| {
+        egui::CollapsingHeader::new("Relations by point number").show(ui, |ui| {
             let kind = w
                 .fields
                 .entry("sketch-relation-kind".into())
                 .or_insert("distance".into());
             egui::ComboBox::from_id_salt("sketch-relation-kind")
-                .selected_text(kind.as_str())
+                .selected_text(cad_core::sketch_actions::label(kind))
                 .show_ui(ui, |ui| {
                     for name in [
                         "fix_x",
@@ -2110,16 +2121,27 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                         "equal",
                         "angle",
                     ] {
-                        ui.selectable_value(kind, name.into(), name);
+                        ui.selectable_value(
+                            kind,
+                            name.into(),
+                            cad_core::sketch_actions::label(name),
+                        );
                     }
                 });
             let kind = kind.clone();
-            let value = w
-                .fields
-                .entry("sketch-relation-value".into())
-                .or_insert("10 mm".into());
-            ui.text_edit_singleline(value);
-            let value = value.clone();
+            let value = if cad_core::sketch_actions::is_dimension(&kind) {
+                let (key, label, initial) = if kind == "angle" {
+                    ("sketch-relation-angle", "Angle", "90 deg")
+                } else {
+                    ("sketch-relation-value", "Distance", "10 mm")
+                };
+                let value = w.fields.entry(key.into()).or_insert_with(|| initial.into());
+                ui.label(label);
+                ui.text_edit_singleline(value);
+                value.clone()
+            } else {
+                "0".to_owned()
+            };
             let mut first = w
                 .fields
                 .get("sketch-relation-first")
@@ -2135,11 +2157,14 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     .range(1..=s.keys.len().max(1))
                     .prefix("First point "),
             );
-            ui.add(
-                egui::DragValue::new(&mut second)
-                    .range(1..=s.keys.len().max(1))
-                    .prefix("Second point "),
-            );
+            let single_point = kind.starts_with("fix_");
+            if !single_point {
+                ui.add(
+                    egui::DragValue::new(&mut second)
+                        .range(1..=s.keys.len().max(1))
+                        .prefix("Second point "),
+                );
+            }
             w.fields
                 .insert("sketch-relation-first".into(), first.to_string());
             w.fields
@@ -2179,8 +2204,12 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             }
             first = first.clamp(1, s.keys.len().max(1));
             second = second.clamp(1, s.keys.len().max(1));
+            let picks_ready = !s.keys.is_empty()
+                && (single_point || first != second)
+                && (!four || third != fourth);
             if ui
-                .add_enabled(!s.keys.is_empty(), egui::Button::new("Add Relation"))
+                .add_enabled(picks_ready, egui::Button::new("Add Relation"))
+                .on_disabled_hover_text("Choose distinct endpoints for each segment.")
                 .clicked()
             {
                 s.history.push(sketch_definition(s));
@@ -2190,7 +2219,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     contact: None,
                     id: id(),
                     kind: kind.clone(),
-                    entities: if kind.starts_with("fix_") {
+                    entities: if single_point {
                         vec![s.keys[first - 1].clone()]
                     } else if four {
                         vec![
@@ -2209,20 +2238,21 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
             let mut remove = None;
             for (i, c) in s.constraints.iter().enumerate() {
                 ui.horizontal(|ui| {
-                    ui.small(&c.kind);
+                    ui.small(cad_core::sketch_actions::label(&c.kind));
                     if ui.small_button("Remove").clicked() {
                         remove = Some(i);
                     }
                 });
             }
             if let Some(i) = remove {
+                s.history.push(sketch_definition(s));
                 s.constraints.remove(i);
                 changed = true;
             }
         });
         egui::CollapsingHeader::new("Sketch Plane").show(ui, |ui| {
             if s.reference.is_some() {
-                ui.small("Plane follows its selected model face.");
+                ui.small("This sketch follows its reference plane or face.");
             } else {
                 for (label, value) in ["Offset X", "Offset Y", "Offset Z"]
                     .into_iter()
@@ -2239,15 +2269,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 }
             }
         });
-        egui::CollapsingHeader::new("Grid and Snap").show(ui, |ui| {
-            ui.checkbox(&mut s.snap, "Snap to grid");
-            ui.add(
-                egui::DragValue::new(&mut s.grid)
-                    .range(0.001..=1000.)
-                    .speed(0.1)
-                    .suffix(" mm"),
-            );
-        });
+
         egui::CollapsingHeader::new("Advanced Source").show(ui, |ui| {
             let source = sketch_definition(s);
             let key = format!("sketch-source:{}", s.sketch_id);
@@ -2301,15 +2323,30 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         if let Some(error) = &s.error {
             ui.colored_label(Color32::from_rgb(180, 45, 30), error);
         }
-        if let Some(error) = &s.placement_error {
-            ui.colored_label(Color32::from_rgb(180, 45, 30), error);
-        }
         ui.separator();
-        if ui.button("Undo Sketch Change").clicked() {
+        if ui
+            .add_enabled(
+                !s.history.is_empty(),
+                egui::Button::new("Undo Sketch Change"),
+            )
+            .clicked()
+        {
             undo = true;
         }
-        ui.small("Open members may define a sweep path. Closed contours define solids; nested contours define holes. Construction members never generate solid geometry.");
     }
+    crate::presentation_controls::inspector_section(
+        ui,
+        crate::presentation_controls::InspectorSection {
+            id: &format!("sketch:{section_id}:precision"),
+            role: "sketch-inspector-group",
+            classes: &["precision"],
+            label: "Snapping and selection filters",
+            state: "draft",
+            collapse: Some(false),
+            open: None,
+        },
+        |ui| crate::sketch_overlay::snap_controls(ui, w),
+    );
     crate::sketch_issues_ui::controls(ui, w);
     crate::sketch_ui::secondary_controls(ui, w);
     if let Some((point, axis)) = coordinate_action {
@@ -3140,9 +3177,9 @@ pub fn overlay(
                 pos + egui::vec2(12., -12.),
                 egui::Align2::LEFT_BOTTOM,
                 if origin_snap {
-                    "Coincident with Origin · persistent relation · Alt bypasses"
+                    "Snap to origin"
                 } else {
-                    "Join endpoint · persistent shared point · Alt bypasses"
+                    "Join endpoint"
                 },
                 egui::FontId::proportional(11.),
                 color,

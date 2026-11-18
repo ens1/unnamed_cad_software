@@ -464,7 +464,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         });
     }
     elements.push(SemanticElement {
-        id: "workspace.sketch-entity-snap".into(), role: "sketch-snap-setting".into(), label: "Snap entities".into(),
+        id: "workspace.sketch-entity-snap".into(), role: "sketch-snap-setting".into(), label: "Snap to endpoints and origin".into(),
         value: Some(w.view.sketch_entity_snap.to_string()), state: if w.view.sketch_entity_snap { "enabled" } else { "disabled" }.into(),
         commands: vec!["sketch.snap-entities".into()], relationships: vec!["workspace.viewport".into()],
         data: serde_json::json!({"contract":"tcad.sketch-snap","version":1,"entity_snap":w.view.sketch_entity_snap,
@@ -486,7 +486,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     if let Some(target) = w.fields.get("sketch-snap-target")
         && let Some(s) = &w.sketch
     {
-        elements.push(SemanticElement { id: "sketch.snap-target".into(), role: "sketch-snap-target".into(), label: if target == cad_core::sketch_actions::ORIGIN { "Coincident with Origin · persistent relation · Alt bypasses" } else { "Join endpoint · persistent shared point · Alt bypasses" }.into(), value: None, state: "selected".into(), commands: vec![], relationships: vec![s.sketch_id.clone(), target.clone()], data: serde_json::json!({"sketch":s.sketch_id,"target":target,"inference":"persistent","bypass":"Alt","classes":["viewport-overlay","inference"]}) });
+        elements.push(SemanticElement { id: "sketch.snap-target".into(), role: "sketch-snap-target".into(), label: if target == cad_core::sketch_actions::ORIGIN { "Snap to origin" } else { "Join endpoint" }.into(), value: None, state: "selected".into(), commands: vec![], relationships: vec![s.sketch_id.clone(), target.clone()], data: serde_json::json!({"sketch":s.sketch_id,"target":target,"inference":"persistent","bypass":"Alt","classes":["viewport-overlay","inference"]}) });
     }
     if let Some(s) = &w.sketch {
         elements.push(SemanticElement { id: format!("{}::pick-chooser", s.sketch_id), role: "sketch-pick-chooser".into(), label: "Nearby sketch geometry".into(), value: s.pick_candidates.get(s.pick_index).map(|candidate| candidate.label.clone()), state: if s.pick_candidates.len() > 1 { "available" } else { "hidden" }.into(), commands: vec![], relationships: vec![s.sketch_id.clone()],
@@ -571,12 +571,29 @@ pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     }
 }
 pub fn snap_controls(ui: &mut egui::Ui, w: &mut Workspace) {
-    visibility_controls(ui, w);
-    if controls::button(ui, "sketch.snap-entities", "sketch-snap-setting", &["sketch-control"], "Snap entities", true, w.view.sketch_entity_snap)
-        .on_hover_text("Join the highlighted endpoint, or save Coincident with Origin when the origin is highlighted. Hold Alt for independent placement; Alt also bypasses grid snapping.").clicked() {
+    if let Some(sketch) = &mut w.sketch {
+        ui.checkbox(&mut sketch.snap, "Snap to grid");
+        ui.add_enabled_ui(sketch.snap, |ui| {
+            let unit = w.session.visible().settings.display_length_unit;
+            let scale = unit.millimeters_per_unit();
+            let mut spacing = sketch.grid / scale;
+            let step = egui::DragValue::new(&mut spacing)
+                .range((0.001 / scale)..=(1000. / scale))
+                .speed(0.1 / scale)
+                .prefix("Grid step ")
+                .suffix(format!(" {}", unit.symbol()));
+            if ui.add(step).changed() {
+                sketch.grid = spacing * scale;
+            }
+        });
+    }
+    if controls::button(ui, "sketch.snap-entities", "sketch-snap-setting", &["sketch-control"], "Snap to endpoints and origin", true, w.view.sketch_entity_snap)
+        .on_hover_text("Join a highlighted endpoint or constrain a point to the origin. Hold Alt to skip snapping.").clicked() {
         action(w, "sketch.snap-entities");
     }
+    ui.label("Selection filter");
     selection_controls(ui, w);
+    visibility_controls(ui, w);
 }
 pub fn selection_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     ui.horizontal_wrapped(|ui| {
