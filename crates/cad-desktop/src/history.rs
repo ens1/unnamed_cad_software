@@ -40,6 +40,8 @@ pub fn inspect(w: &mut Workspace, target: NodeRef) -> bool {
     };
     let name = feature.name.clone();
     if w.view.active_part.as_ref() != Some(&target.definition) {
+        crate::assembly_scope_ui::close(w);
+        w.view.editing_occurrence = None;
         w.view.active_instance = None;
         w.edge_selection_path = None;
     }

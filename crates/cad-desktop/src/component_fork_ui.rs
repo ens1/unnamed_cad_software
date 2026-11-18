@@ -106,6 +106,16 @@ fn publish(w: &mut Workspace, intent: Intent) -> Result<()> {
         }
         w.view.active_node = None;
         w.selected_component = built.occurrence_path.clone();
+        w.view.editing_occurrence = built
+            .occurrence_path
+            .clone()
+            .filter(|_| state.starting_view.isolation && w.view.active_part.is_some());
+        w.view.active_instance = built
+            .occurrence_path
+            .as_ref()
+            .and_then(|path| path.last())
+            .cloned();
+        w.edge_selection_path = built.occurrence_path.clone();
         state.result = Some(built);
         Ok(())
     })();
@@ -138,6 +148,7 @@ pub fn begin(w: &mut Workspace, definition: &str, target: Target) {
     {
         intent.source_commit = cad_core::version_control::resolve_commit(&w.root(), "HEAD").ok();
     }
+    crate::assembly_scope_ui::close(w);
     let starting_view = w.view.clone();
     let starting_selection = w.selected.clone();
     let starting_component = w.selected_component.clone();

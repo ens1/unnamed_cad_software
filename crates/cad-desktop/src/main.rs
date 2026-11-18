@@ -3,6 +3,7 @@ mod assembly_copy_ui;
 mod assembly_groups_ui;
 mod assembly_inspection_ui;
 mod assembly_motion_ui;
+mod assembly_scope_ui;
 mod assembly_tools_ui;
 mod assembly_tree_ui;
 mod assembly_welds_ui;
@@ -204,6 +205,7 @@ pub struct Workspace {
     pub selected: Option<viewport::Selection>,
     pub selected_component: Option<Vec<cad_core::Id>>,
     pub assembly_tree: assembly_tree_ui::State,
+    pub assembly_scope: assembly_scope_ui::State,
     pub hover_guide: Option<viewport_guides::Guide>,
     pub hover_cache: viewport_guides::Cache,
     pub display_state_cache: std::sync::Mutex<display_states_ui::Cache>,
@@ -380,6 +382,7 @@ impl Workspace {
             source_text: String::new(),
             selected: None,
             selected_component: None,
+            assembly_scope: Default::default(),
             assembly_tree: Default::default(),
             hover_guide: None,
             hover_cache: viewport_guides::Cache::default(),
@@ -479,6 +482,7 @@ impl Workspace {
         definition: Option<cad_core::Id>,
         path: Option<Vec<cad_core::Id>>,
     ) {
+        assembly_scope_ui::close(self);
         if definition.is_some() && !self.view.isolation {
             self.assembly_camera = Some(camera_views_ui::current(self));
         }
@@ -490,6 +494,20 @@ impl Workspace {
             })
         });
         history::latest(self);
+        // Definition-level navigation can frame a representative without making it
+        // the target of an occurrence-only command. A unique placement is unambiguous.
+        self.view.editing_occurrence = occurrence
+            .filter(|i| {
+                path.is_some()
+                    || occurrences
+                        .iter()
+                        .filter(|other| other.definition == i.definition)
+                        .take(2)
+                        .count()
+                        == 1
+            })
+            .filter(|i| !i.path.is_empty() && self.has_assembly_context())
+            .map(|i| i.path.clone());
         self.view.active_instance = occurrence.and_then(|i| i.path.last().cloned());
         self.edge_selection_path = occurrence.map(|i| i.path.clone());
         self.view.active_part = definition;
@@ -768,6 +786,7 @@ impl Workspace {
         match self.session.apply() {
             Ok(()) => {
                 sketch3d_ui::cancel(self);
+                assembly_scope_ui::close(self);
                 component_fork_ui::finish(self);
                 feature_transfer_ui::cancel(self);
                 let save_as = document_identity_ui::take_after_confirm(self);
@@ -780,7 +799,7 @@ impl Workspace {
                     self.candidates.clear();
                 }
                 reference_repair_ui::reset(self);
-                self.edge_selection_path = None;
+                self.edge_selection_path = self.view.editing_occurrence.clone();
                 self.selected_feature_path = None;
                 if matches!(
                     self.context_selection,
@@ -823,6 +842,7 @@ impl Workspace {
             self.status = "Use Cancel Publish to stop the current publication".into();
             return;
         }
+        assembly_scope_ui::close(self);
         git_ui::cancel_preview(self);
         component_fork_ui::cancel(self);
         feature_transfer_ui::cancel(self);
@@ -853,7 +873,7 @@ impl Workspace {
         self.context_selection = None;
         self.selected_feature_path = None;
         self.geometry_selection.clear();
-        self.edge_selection_path = None;
+        self.edge_selection_path = self.view.editing_occurrence.clone();
         self.tool_checkpoint = None;
         self.confirm_requested = false;
         self.after_confirm = None;
@@ -919,6 +939,7 @@ impl Workspace {
         self.selected = None;
         self.selected_component = None;
         self.assembly_tree = Default::default();
+        self.assembly_scope = Default::default();
         self.selection_popup = None;
         self.dialog = None;
         self.context_selection = None;
@@ -979,6 +1000,7 @@ impl Workspace {
             self.status = "Wait for Publish to finish or cancel it before editing".into();
             return;
         }
+        assembly_scope_ui::close(self);
         if self.tool_checkpoint.is_none() {
             quantity_display::clear_errors(self);
         }
@@ -998,6 +1020,7 @@ impl Workspace {
             self.status = "Use Cancel Publish to stop the current publication".into();
             return;
         }
+        assembly_scope_ui::close(self);
         git_ui::cancel_preview(self);
         component_fork_ui::cancel(self);
         feature_transfer_ui::cancel(self);
@@ -1039,7 +1062,7 @@ impl Workspace {
         self.gesture = None;
         self.selected = None;
         self.geometry_selection.clear();
-        self.edge_selection_path = None;
+        self.edge_selection_path = self.view.editing_occurrence.clone();
         self.candidates.clear();
         self.fields.retain(|key, _| {
             !key.starts_with("mbd-")

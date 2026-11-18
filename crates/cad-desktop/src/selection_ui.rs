@@ -1572,6 +1572,8 @@ pub(crate) fn feature_selected_at(
         return;
     }
     if w.view.active_part.as_deref() != Some(definition) {
+        crate::assembly_scope_ui::close(w);
+        w.view.editing_occurrence = None;
         w.view.active_instance = None;
         w.edge_selection_path = None;
     }

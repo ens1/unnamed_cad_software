@@ -324,6 +324,7 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
         } else if crate::command_palette::escape(w)
             || crate::named_parameter_ui::cancel(w)
             || crate::drawing_interaction_ui::escape(w)
+            || crate::assembly_scope_ui::close(w)
             || crate::contours_ui::cancel_replacement(w)
             || crate::assembly_motion_ui::cancel_drag(w)
             || crate::component_pattern_ui::picking_direction(w)
@@ -1162,6 +1163,7 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
         return;
     }
     if crate::repositories_ui::action(w, command, Some(&element.data))
+        || crate::assembly_scope_ui::action(w, command, Some(&element.data))
         || crate::component_fork_ui::action(w, command, Some(&element.data))
         || crate::git_ui::action(w, command, Some(&element.data))
         || crate::feature_transfer_ui::action(w, command, Some(&element.data))
@@ -1415,10 +1417,17 @@ pub(crate) fn history_command(w: &mut Workspace, redo: bool) {
             return;
         }
         w.cancel_tool();
-    } else if redo {
-        w.session.redo();
     } else {
-        w.session.undo();
+        crate::assembly_scope_ui::close(w);
+        let route = crate::assembly_scope_ui::history_route(w);
+        if redo {
+            w.session.redo();
+        } else {
+            w.session.undo();
+        }
+        if let Some(route) = route {
+            crate::assembly_scope_ui::restore_route(w, route);
+        }
     }
     w.fields
         .retain(|key, _| !key.starts_with("drawing-editor:") && key != "drawing-source-invalid");
@@ -2463,6 +2472,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
     }
     if crate::repositories_ui::action(w, cmd, None)
         || crate::workspace_controls::action(w, cmd)
+        || crate::assembly_scope_ui::action(w, cmd, None)
         || crate::component_fork_ui::action(w, cmd, None)
         || crate::git_ui::action(w, cmd, None)
         || crate::feature_transfer_ui::action(w, cmd, None)

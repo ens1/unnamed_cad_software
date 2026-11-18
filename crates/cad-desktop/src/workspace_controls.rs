@@ -474,7 +474,7 @@ fn context(w: &Workspace) -> String {
     if let Some(sketch) = &w.sketch {
         text.push_str(&format!(" › {} · Editing", sketch.name));
     } else if in_place(w) {
-        text.push_str(" › Editing in place");
+        text = format!("Editing {text}");
     }
     if let Some(cursor) = &w.view.history_cursor {
         let name = document
@@ -713,6 +713,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data: serde_json::json!({"contract":"tcad.presentation.workspace-controls","version":1}),
         });
     }
+    out.extend(crate::assembly_scope_ui::semantics(w));
     for (id, role, label, value) in [
         (
             "workspace.model-context",
@@ -937,6 +938,7 @@ pub(crate) fn toolbar(ui: &mut egui::Ui, w: &mut Workspace) {
             &context(w),
             "ready",
         );
+        crate::assembly_scope_ui::show(ui, w, crate::assembly_scope_ui::INSPECT);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             controls::menu_button(ui, "viewport.orientation-menu", "View", |ui| {
                 crate::cad_ui::view_controls(ui, w)
@@ -966,6 +968,9 @@ pub(crate) fn toolbar(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         });
     });
+    if w.assembly_scope.highlight().is_some() {
+        crate::assembly_scope_ui::show(ui, w, crate::assembly_scope_ui::FORK);
+    }
     if w.view.history_cursor.is_some() {
         ui.horizontal(|ui| {
             crate::history::return_control(

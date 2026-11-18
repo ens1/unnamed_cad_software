@@ -175,12 +175,17 @@ fn frame(w: &Workspace, definition: &str) -> [[f64; 4]; 4] {
                     })
         })
         .and(w.selected_feature_path.as_ref());
-    let selected_path = w
-        .selected
-        .as_ref()
-        .filter(|selection| selection.definition == definition)
-        .map(|selection| &selection.path)
-        .or(feature_path);
+    let selected_path =
+        w.selected
+            .as_ref()
+            .filter(|selection| selection.definition == definition)
+            .map(|selection| &selection.path)
+            .or(feature_path)
+            .or_else(|| {
+                w.view.editing_occurrence.as_ref().filter(|_| {
+                    w.view.isolation && w.view.active_part.as_deref() == Some(definition)
+                })
+            });
     let matches = |i: &&PlacedPart| {
         i.definition == definition
             && selected_path.is_none_or(|path| path == &i.path)

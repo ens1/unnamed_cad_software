@@ -552,6 +552,11 @@ fn occurrence_owners(doc: &Document, path: &[Id], expected: &str) -> Result<Vec<
     Ok(owners)
 }
 
+/// Check a single occurrence against the same structural rules used by the fork plan.
+pub fn check_occurrence(doc: &Document, path: &[Id], definition: &str) -> Result<()> {
+    occurrence_owners(doc, path, definition).map(drop)
+}
+
 /// Find exact occurrence paths for an owner-local instance. More than one match
 /// requires an explicit tree path; callers must never pick an arbitrary match.
 pub fn occurrence_paths(doc: &Document, owner: &str, instance: &str) -> Result<Vec<Vec<Id>>> {

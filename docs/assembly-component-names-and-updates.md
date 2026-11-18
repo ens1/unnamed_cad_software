@@ -22,6 +22,20 @@ of those references, and changing a label does not change a placement or a mate.
 Evaluated leaf occurrences carry these labels, so other geometry reference
 pickers receive the same names.
 
+## In-place edit scope
+
+The instance count beside the part name includes nested uses in the current project,
+including its unplaced assembly definitions.
+Click the count to highlight the placed instances of this part. In a saved configuration
+that suppresses some uses, the control's tooltip gives both counts. Click the count
+again or press Escape to return to the editing view.
+
+Choose **Make this one independent** to preview a fork of the instance being edited.
+For a nested part, the fork copies its enclosing assemblies along that one path.
+Apply commits one undoable change. Cancel returns to the shared part. An ambiguous
+definition-level edit needs an explicit instance from the assembly tree. A component
+pattern must be detached before forking one of its generated instances or seeds.
+
 ## Name-only edits
 
 A `PutInstance` command that changes only the name can reuse the current exact,

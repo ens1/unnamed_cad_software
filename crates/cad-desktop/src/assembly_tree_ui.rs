@@ -142,7 +142,7 @@ fn refresh(w: &Workspace, state: &mut State) {
     state.roots = build(doc, &doc.root, &[], &active, 0);
     state.key = next;
 }
-fn lookup<'a>(doc: &'a Document, path: &[Id]) -> Option<(&'a str, &'a Instance)> {
+pub(crate) fn lookup<'a>(doc: &'a Document, path: &[Id]) -> Option<(&'a str, &'a Instance)> {
     let mut owner = doc.root.as_str();
     for (index, id) in path.iter().enumerate() {
         let instance = doc.assemblies.get(owner)?.instances.get(id)?;
@@ -295,7 +295,7 @@ pub(crate) fn edit_selected_part(w: &mut Workspace, path: Vec<Id>) {
     let definition = instance.definition.clone();
     let already_editing = w.view.isolation
         && w.view.active_part.as_ref() == Some(&definition)
-        && w.edge_selection_path.as_ref() == Some(&path);
+        && w.view.editing_occurrence.as_ref() == Some(&path);
     select(w, path.clone());
     if w.session.visible().parts.contains_key(&definition) {
         if !already_editing {

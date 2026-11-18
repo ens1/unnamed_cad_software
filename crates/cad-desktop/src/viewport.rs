@@ -890,10 +890,17 @@ pub(crate) fn ghost_neighbor(w: &Workspace, instance: &PlacedPart) -> bool {
             && !w.view.pinned.iter().any(|id| instance.path.contains(id))
 }
 pub(crate) fn active_context(w: &Workspace, instance: &PlacedPart) -> bool {
-    w.view.active_part.as_ref() == Some(&instance.definition)
-        && w.edge_selection_path
-            .as_ref()
-            .is_none_or(|path| path == &instance.path)
+    if w.view.active_part.as_ref() != Some(&instance.definition) {
+        return false;
+    }
+    if w.view.isolation
+        && let Some(path) = w.view.editing_occurrence.as_ref()
+    {
+        return path == &instance.path;
+    }
+    w.edge_selection_path
+        .as_ref()
+        .is_none_or(|path| path == &instance.path)
         && w.view
             .active_instance
             .as_ref()
@@ -1521,8 +1528,10 @@ pub fn select(w: &mut Workspace, s: Selection) -> bool {
     }
     let reference = w.view.isolation
         && (w.view.active_part.as_ref() != Some(&s.definition)
-            || w.edge_selection_path
+            || w.view
+                .editing_occurrence
                 .as_ref()
+                .or(w.edge_selection_path.as_ref())
                 .is_some_and(|path| path != &s.path));
     if !reference && !feature_editing {
         w.view.active_part = Some(s.definition.clone());
@@ -1636,6 +1645,10 @@ enum FitScope {
     All,
     Selection,
     Context,
+    SharedInstances,
+}
+pub(crate) fn fit_shared_instances(w: &mut Workspace) {
+    fit_region(w, FitScope::SharedInstances);
 }
 pub fn fit(w: &mut Workspace, selection: bool) {
     fit_region(
@@ -1789,6 +1802,7 @@ pub(crate) fn frame_points(
 fn in_fit_scope(w: &Workspace, instance: &PlacedPart, scope: FitScope) -> bool {
     match scope {
         FitScope::All => true,
+        FitScope::SharedInstances => crate::assembly_scope_ui::highlighted(w, instance),
         FitScope::Context => w.view.active_part.as_ref().is_none_or(|definition| {
             definition == &instance.definition
                 && w.edge_selection_path
@@ -1829,7 +1843,10 @@ fn fit_region(w: &mut Workspace, scope: FitScope) {
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     let props = style(w);
-    for i in display_instances(w, e).iter().filter(|i| visible(w, i)) {
+    for i in display_instances(w, e)
+        .iter()
+        .filter(|i| visible(w, i) || matches!(scope, FitScope::SharedInstances))
+    {
         if !in_fit_scope(w, i, scope) {
             continue;
         }
@@ -1935,6 +1952,9 @@ fn fit_region(w: &mut Workspace, scope: FitScope) {
             min = min.min(point);
             max = max.max(point);
         }
+    }
+    if matches!(scope, FitScope::SharedInstances) && (!min.is_finite() || !max.is_finite()) {
+        return;
     }
     if min.is_finite() && max.is_finite() {
         w.view.target = ((min + max) * 0.5).to_array();
@@ -2146,6 +2166,11 @@ pub fn sync_scene(
             ))
             .collect::<Vec<_>>()
     );
+    let key = format!(
+        "{key}:{:?}:{:?}",
+        w.assembly_scope.highlight(),
+        w.view.editing_occurrence
+    );
     if w.rendered_key == key {
         return;
     }
@@ -2185,7 +2210,8 @@ pub fn sync_scene(
         let default_finish = cad_core::appearance::Finish::default();
         let mut configured_parts = BTreeMap::new();
         for instance in display_instances(&w, e) {
-            if !visible(&w, instance) {
+            let shared_highlight = !history && crate::assembly_scope_ui::highlighted(&w, instance);
+            if !shared_highlight && !visible(&w, instance) {
                 continue;
             }
             let sources = display_meshes(&w, e, instance);
@@ -2219,7 +2245,7 @@ pub fn sync_scene(
                     if m.positions.is_empty() || m.indices.is_empty() {
                         continue;
                     }
-                    let ghost_neighbor = ghost_neighbor(&w, instance);
+                    let ghost_neighbor = !shared_highlight && ghost_neighbor(&w, instance);
                     let ghost = history || ghost_neighbor;
                     let mesh = meshes.add(render_mesh(m, instance));
                     let finish = assigned_finish
@@ -2256,10 +2282,9 @@ pub fn sync_scene(
                         render_appearance::SurfaceStyle {
                             tint: if ghost {
                                 Some(base_color)
-                            } else if crate::assembly_motion_ui::component_selected(
-                                &w,
-                                &instance.path,
-                            ) {
+                            } else if shared_highlight
+                                || crate::assembly_motion_ui::component_selected(&w, &instance.path)
+                            {
                                 Some(style_color(
                                     &props,
                                     "selection-color",
@@ -2867,7 +2892,8 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
     let edge_feature = crate::selection_ui::edge_feature(w);
     let mut marker = None;
     for i in display_instances(w, feedback_evaluation) {
-        if !visible(w, i) {
+        let usage_highlight = crate::assembly_scope_ui::highlighted(w, i);
+        if !usage_highlight && !visible(w, i) {
             continue;
         }
         let meshes = selection_meshes(w, feedback_evaluation, i);
@@ -2893,10 +2919,11 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
         });
         for m in meshes {
             for edge in &m.edges {
-                let active = w.selected.is_none()
-                    && w.selected_component
-                        .as_ref()
-                        .is_some_and(|path| i.path.starts_with(path))
+                let active = usage_highlight && m.indices.is_empty()
+                    || w.selected.is_none()
+                        && w.selected_component
+                            .as_ref()
+                            .is_some_and(|path| i.path.starts_with(path))
                     || selected.is_some_and(|s| {
                         selected_topology(s, &edge.reference, &edge.body)
                             || (s.reference.topology == "face"

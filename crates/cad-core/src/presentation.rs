@@ -1635,6 +1635,9 @@ pub struct PresentationState {
     pub active_part: Option<Id>,
     pub active_node: Option<Id>,
     pub active_instance: Option<Id>,
+    /// Explicit editing occurrence, independent of transient picks and tool inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editing_occurrence: Option<Vec<Id>>,
     pub isolation: bool,
     pub ghost_others: bool,
     pub pinned: Vec<Id>,
@@ -1716,6 +1719,7 @@ impl Default for PresentationState {
             active_part: None,
             active_node: None,
             active_instance: None,
+            editing_occurrence: None,
             isolation: false,
             ghost_others: true,
             pinned: vec![],
