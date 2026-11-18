@@ -15,6 +15,15 @@ actions and lets each listed edge be focused, highlighted or removed. Expanding
 a set inside either editor updates its authored edge list through the common
 draft; preselection outside an editor remains view state until used by a feature.
 
+In Fillet and Chamfer, hover over an edge to see the edges a click will pick.
+The badge shows the edge count. Click it to switch between **Tangent chain**
+and **This edge**. Rings mark the ends of the chain. A double ring marks a
+junction with several tangent continuations. The pick stops there so you can
+choose the next edge yourself. **Circular rim** is also available under
+**Pick mode**. Themes can position and style the `edge-pick-preview` control
+and style the `edge-pick-outline` with `selection-color`, `stroke-width` and
+`size`. The preview exposes the same source edge references used by a click.
+
 `cad-core::selection_sets` contract v1 uses optional native incidence in
 `EdgeData`. Vertex, component and wire tokens identify only the current mesh
 cache; they are never saved as construction references. Native endpoint

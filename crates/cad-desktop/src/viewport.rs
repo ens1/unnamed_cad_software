@@ -569,31 +569,40 @@ pub(crate) fn focal(w: &Workspace, rect: egui::Rect) -> [f64; 2] {
     ]
 }
 pub fn project(w: &Workspace, rect: egui::Rect, p: [f64; 3]) -> Option<egui::Pos2> {
+    projector(w, rect)(p)
+}
+/// Reuse camera math across all segments of a pointer query.
+pub(crate) fn projector(
+    w: &Workspace,
+    rect: egui::Rect,
+) -> impl Fn([f64; 3]) -> Option<egui::Pos2> + use<> {
     let pose = crate::camera_views_ui::current(w);
     let frame = pose.frame();
-    let offset = DVec3::from_array(p) - DVec3::from_array(frame.eye_mm);
-    let depth = offset.dot(DVec3::from_array(frame.forward));
-    if !depth.is_finite()
-        || depth <= (pose.distance_mm * 0.0001).max(0.001)
-        || depth > (pose.distance_mm * 100.).max(10000.)
-    {
-        return None;
-    }
-    let divisor = if matches!(
-        pose.projection,
-        cad_core::camera_views::Projection::Perspective { .. }
-    ) {
-        depth
-    } else {
-        1.
-    };
     let [horizontal, vertical] = focal(w, rect);
-    let x = offset.dot(DVec3::from_array(frame.right)) * horizontal / divisor;
-    let y = -offset.dot(DVec3::from_array(frame.up)) * vertical / divisor;
-    if !x.is_finite() || !y.is_finite() {
-        return None;
+    move |p| {
+        let offset = DVec3::from_array(p) - DVec3::from_array(frame.eye_mm);
+        let depth = offset.dot(DVec3::from_array(frame.forward));
+        if !depth.is_finite()
+            || depth <= (pose.distance_mm * 0.0001).max(0.001)
+            || depth > (pose.distance_mm * 100.).max(10000.)
+        {
+            return None;
+        }
+        let divisor = if matches!(
+            pose.projection,
+            cad_core::camera_views::Projection::Perspective { .. }
+        ) {
+            depth
+        } else {
+            1.
+        };
+        let x = offset.dot(DVec3::from_array(frame.right)) * horizontal / divisor;
+        let y = -offset.dot(DVec3::from_array(frame.up)) * vertical / divisor;
+        if !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        Some(rect.center() + egui::vec2(x as f32, y as f32))
     }
-    Some(rect.center() + egui::vec2(x as f32, y as f32))
 }
 pub fn ray(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> ([f64; 3], [f64; 3]) {
     let pose = crate::camera_views_ui::current(w);
@@ -1193,10 +1202,12 @@ pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
             .as_ref()
             .and_then(|d| d.preview_evaluation())
             .or(checkpoint.evaluation.as_ref())
-            .filter(|e| e.valid && e.identity == checkpoint.identity());
+            .filter(|e| {
+                e.valid && e.identity == crate::source_cache::input_identity(w, Some(checkpoint))
+            });
     }
     // Last-valid draft geometry supports navigation, but cannot establish new source references.
-    display_evaluation(w).filter(|e| e.valid && e.identity == w.session.identity())
+    display_evaluation(w).filter(|e| e.valid && e.identity == crate::source_cache::identity(w))
 }
 /// Editing an existing edge feature selects its authored input from the history
 /// cache. The checkpoint's final mesh may already contain the old fillet/chamfer.
@@ -1309,11 +1320,27 @@ fn selected_topology(
         && selection.body == *body
 }
 pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
+    pick_geometry(w, rect, p, false)
+}
+
+/// Edge tools give eligible edges priority over faces. Hover uses the same
+/// ordering and screen hit area without ray casting the body's faces.
+pub(crate) fn first_edge(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Option<Selection> {
+    pick_geometry(w, rect, p, true).into_iter().next()
+}
+
+fn pick_geometry(
+    w: &Workspace,
+    rect: egui::Rect,
+    p: egui::Pos2,
+    edges_only: bool,
+) -> Vec<Selection> {
     let Some(e) = selection_evaluation(w) else {
         return vec![];
     };
     let target_pick = crate::contours_ui::picking_target(w);
     let (o, d) = ray(w, rect, p);
+    let project = projector(w, rect);
     let mut hits = vec![];
     for instance in display_instances(w, e) {
         if target_pick && w.view.active_part.as_ref() != Some(&instance.definition) {
@@ -1334,7 +1361,8 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
                 .last()
                 .cloned()
                 .unwrap_or_else(|| instance.definition.clone());
-            for face in &mesh.faces {
+            let faces = if edges_only { &[][..] } else { &mesh.faces };
+            for face in faces {
                 let mut distance = f64::INFINITY;
                 for tri in mesh.indices[face.start..face.start + face.count]
                     .as_chunks::<3>()
@@ -1347,7 +1375,7 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
                     }
                 }
                 let point = std::array::from_fn(|i| o[i] + d[i] * distance);
-                if distance.is_finite() && project(w, rect, point).is_some() {
+                if distance.is_finite() && project(point).is_some() {
                     hits.push(Selection {
                         instance: key.clone(),
                         path: instance.path.clone(),
@@ -1373,8 +1401,8 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
                 let mut best = f32::INFINITY;
                 for line in edge.points.windows(2) {
                     if let (Some(a), Some(b)) = (
-                        project(w, rect, placed(line[0], instance)),
-                        project(w, rect, placed(line[1], instance)),
+                        project(placed(line[0], instance)),
+                        project(placed(line[1], instance)),
                     ) {
                         let ab = b - a;
                         let t = ((p - a).dot(ab) / ab.length_sq().max(1e-9)).clamp(0., 1.);
@@ -1405,7 +1433,9 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
             }
         }
     }
-    hits.extend(crate::reference_ui::picks(w, rect, p, e));
+    if !edges_only {
+        hits.extend(crate::reference_ui::picks(w, rect, p, e));
+    }
     if let Some(picker) = &w.mate_picker {
         hits.retain(|s| picker.accepts_candidate(w.session.visible(), s));
     } else if !crate::component_pattern_ui::picking_direction(w)
@@ -1420,6 +1450,28 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
             _ => {}
         }
     }
+    // A coincident edge on a neighboring body or occurrence must never mask
+    // a valid edge on the feature input. Keep all hits for Select other.
+    let feature = crate::selection_ui::edge_feature(w);
+    let edge_input = feature
+        .as_ref()
+        .and_then(crate::selection_ui::edge_selection)
+        .map(|(body, _)| body);
+    let eligible = |hit: &Selection| {
+        if edge_input.is_some_and(|body| {
+            hit.body.as_ref() == Some(body)
+                && hit.definition == body.definition
+                && crate::selection_ui::edge_occurrence(w, &hit.path)
+        }) {
+            match hit.reference.topology.as_str() {
+                "edge" => 2,
+                "face" => 1,
+                _ => 0,
+            }
+        } else {
+            0
+        }
+    };
     hits.sort_by(|a, b| {
         let active_a = w.view.active_part.as_ref() == Some(&a.definition)
             && w.edge_selection_path
@@ -1434,11 +1486,14 @@ pub fn pick(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
         if w.mate_picker.is_some() {
             return a.distance.total_cmp(&b.distance);
         }
-        active_b.cmp(&active_a).then_with(|| {
-            edge_b
-                .cmp(&edge_a)
-                .then_with(|| a.distance.total_cmp(&b.distance))
-        })
+        eligible(b)
+            .cmp(&eligible(a))
+            .then_with(|| active_b.cmp(&active_a))
+            .then_with(|| {
+                edge_b
+                    .cmp(&edge_a)
+                    .then_with(|| a.distance.total_cmp(&b.distance))
+            })
     });
     hits.dedup_by(|a, b| {
         a.path == b.path

@@ -16,33 +16,49 @@ struct Stamp {
 #[derive(Default)]
 pub struct Cache {
     current: Option<(Stamp, RequestIdentity)>,
+    checkpoint: Option<(Stamp, RequestIdentity)>,
     projection: Option<(Value, Vec<cad_core::presentation::SemanticElement>)>,
     source_json: Option<(RequestIdentity, Value)>,
 }
 pub fn identity(w: &Workspace) -> RequestIdentity {
+    input_identity(w, None)
+}
+
+/// Selection can use the unedited body even while the draft is rebuilding.
+/// Cache this identity independently so moving along an edge never re-hashes
+/// the project just to alternate between the draft and its input.
+pub fn input_identity(
+    w: &Workspace,
+    checkpoint: Option<&cad_core::transaction::Session>,
+) -> RequestIdentity {
+    let session = checkpoint.unwrap_or(&w.session);
     let stamp = Stamp {
-        document: w.session.visible().id.clone(),
-        epoch: w.session.source_epoch().into(),
-        generation: w.session.generation,
-        revision: w.session.committed.revision,
-        draft: w
-            .session
+        document: session.visible().id.clone(),
+        epoch: session.source_epoch().into(),
+        generation: session.generation,
+        revision: session.committed.revision,
+        draft: session
             .draft
             .as_ref()
             .map(|draft| (draft.id.clone(), draft.edit)),
-        backend: w.session.backend.clone(),
+        backend: session.backend.clone(),
     };
     let Ok(mut cache) = w.source_cache.lock() else {
         // A poisoned display cache must never weaken evaluation identity checks.
-        return w.session.identity();
+        return session.identity();
     };
-    if let Some((current, identity)) = &cache.current
+    let slot = if checkpoint.is_some() {
+        &mut cache.checkpoint
+    } else {
+        &mut cache.current
+    };
+    if let Some((current, identity)) = slot.as_ref()
         && current == &stamp
     {
         return identity.clone();
     }
-    let identity = w.session.identity();
-    cache.current = Some((stamp, identity.clone()));
+    let identity = session.identity();
+    *slot = Some((stamp, identity.clone()));
     identity
 }
 

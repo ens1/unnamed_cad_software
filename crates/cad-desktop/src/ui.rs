@@ -105,6 +105,7 @@ pub fn workspace_ui(
         image.texture,
     );
     crate::assembly_motion_ui::finish_ui(&mut w, ctx);
+    w.edge_hover.finish_frame(ctx.cumulative_frame_nr());
     if !w.hover_viewport_seen {
         w.hover_cache = crate::viewport_guides::Cache::default();
     }
@@ -2220,14 +2221,21 @@ fn model_view(
     viewport::overlay(w, ui, r);
     crate::operation_editor_ui::recovery::overlay(w, ui, r);
     crate::sketch3d_ui::overlay_inactive(w, ui, r);
-    let blocked = !response.hovered()
-        || motion_owned
-        || ui.input(|input| {
-            input
-                .pointer
-                .hover_pos()
-                .is_some_and(|point| toolbar.contains(point) || cube.contains(point))
-        });
+    let over_tools = ui.input(|input| {
+        input
+            .pointer
+            .hover_pos()
+            .is_some_and(|point| toolbar.contains(point) || cube.contains(point))
+    });
+    let on_edge_badge = crate::selection_ui::edge_hover::overlay(
+        w,
+        ui,
+        r,
+        &response,
+        viewport_id,
+        over_tools || motion_owned,
+    );
+    let blocked = !response.hovered() || motion_owned || over_tools || on_edge_badge;
     if response.hovered() {
         w.hover_viewport_seen = true;
         let mut hover_cache = std::mem::take(&mut w.hover_cache);
@@ -2245,6 +2253,7 @@ fn model_view(
         && !crate::sketch3d_ui::active(w)
         && !motion_owned
         && !contour_click
+        && !on_edge_badge
         && response.clicked()
         && response
             .interact_pointer_pos()

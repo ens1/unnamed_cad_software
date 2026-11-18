@@ -1,4 +1,5 @@
 //! Native presentation of application-owned selection actions.
+pub(crate) mod edge_hover;
 use crate::{Workspace, cad_ui, presentation_controls as controls, ui, viewport};
 use bevy_egui::egui;
 use cad_core::{
@@ -186,8 +187,33 @@ pub(crate) fn preferred_edges(
 }
 
 fn tangent_edges(w: &Workspace, pick: &viewport::Selection) -> Vec<viewport::Selection> {
-    // At a sharp corner or an ambiguous branch, leave the clicked edge selected.
-    expand_pick(w, pick, SetMode::TangentChain).unwrap_or_else(|_| vec![pick.clone()])
+    pick_plan(w, pick, "tangent").0
+}
+
+// The hover renderer and all picking entry points consume this same decision.
+// Stops are native endpoints in occurrence/world coordinates.
+fn pick_plan(
+    w: &Workspace,
+    pick: &viewport::Selection,
+    mode: &str,
+) -> (Vec<viewport::Selection>, Vec<selection_sets::ChainStop>) {
+    match mode {
+        "individual" => {}
+        "rim" => {
+            if let Some(rim) = circular_rim(w, pick) {
+                return (rim, vec![]);
+            }
+        }
+        _ => {
+            let mode = SetMode::TangentChain;
+            if let Ok(plan) = pick_context(w, pick, mode)
+                .and_then(|context| expand_context(w, context, mode, true))
+            {
+                return plan;
+            }
+        }
+    }
+    (vec![pick.clone()], vec![])
 }
 
 pub(crate) fn picked_edges(
@@ -195,12 +221,11 @@ pub(crate) fn picked_edges(
     feature: &str,
     pick: &viewport::Selection,
 ) -> Vec<cad_core::TopologyRef> {
-    let picks = match pick_granularity(w, feature) {
-        "individual" => return vec![pick.reference.clone()],
-        "rim" => circular_rim(w, pick).unwrap_or_else(|| vec![pick.clone()]),
-        _ => tangent_edges(w, pick),
-    };
-    picks.into_iter().map(|pick| pick.reference).collect()
+    pick_plan(w, pick, pick_granularity(w, feature))
+        .0
+        .into_iter()
+        .map(|pick| pick.reference)
+        .collect()
 }
 
 pub(crate) fn edge_key(feature: &str, edge: &cad_core::TopologyRef) -> String {
@@ -324,12 +349,10 @@ fn pick_context<'a>(
     }
     let evaluation = viewport::selection_evaluation(w)
         .ok_or_else(|| cad_core::CadError::Invalid("Wait for current model evaluation".into()))?;
-    let session = if edge_feature(w).is_some() {
-        w.tool_checkpoint.as_ref().unwrap_or(&w.session)
-    } else {
-        &w.session
-    };
-    if !evaluation.valid || evaluation.identity != session.identity() {
+    let checkpoint = edge_feature(w).and(w.tool_checkpoint.as_ref());
+    if !evaluation.valid
+        || evaluation.identity != crate::source_cache::input_identity(w, checkpoint)
+    {
         return Err(cad_core::CadError::Invalid(
             "Wait for the current native geometry; an older display cache cannot expand selections"
                 .into(),
@@ -359,7 +382,7 @@ fn pick_context<'a>(
 /// Resolve only the current native cache, on one output body and occurrence.
 /// A last-valid display fallback is useful while rebuilding but cannot author a set.
 fn expansion(w: &Workspace, mode: SetMode) -> cad_core::Result<Vec<viewport::Selection>> {
-    expand_context(w, expansion_context(w, mode)?, mode)
+    Ok(expand_context(w, expansion_context(w, mode)?, mode, false)?.0)
 }
 
 fn expand_pick(
@@ -367,14 +390,15 @@ fn expand_pick(
     pick: &viewport::Selection,
     mode: SetMode,
 ) -> cad_core::Result<Vec<viewport::Selection>> {
-    expand_context(w, pick_context(w, pick, mode)?, mode)
+    Ok(expand_context(w, pick_context(w, pick, mode)?, mode, false)?.0)
 }
 
 fn expand_context(
     w: &Workspace,
     context: ExpansionContext<'_>,
     mode: SetMode,
-) -> cad_core::Result<Vec<viewport::Selection>> {
+    stop_at_junction: bool,
+) -> cad_core::Result<(Vec<viewport::Selection>, Vec<selection_sets::ChainStop>)> {
     let ExpansionContext {
         pick,
         body,
@@ -402,7 +426,23 @@ fn expand_context(
         ));
     }
     let mesh = candidates[0];
-    let references = selection_sets::expand(mesh, body, &pick.reference, mode)?;
+    let (references, stops) = if stop_at_junction {
+        let expansion = selection_sets::tangent_chain(mesh, body, &pick.reference)?;
+        let stops = expansion
+            .stops
+            .into_iter()
+            .map(|stop| selection_sets::ChainStop {
+                point: viewport::placed(stop.point, instance),
+                ..stop
+            })
+            .collect();
+        (expansion.edges, stops)
+    } else {
+        (
+            selection_sets::expand(mesh, body, &pick.reference, mode)?,
+            vec![],
+        )
+    };
     let by_reference = mesh
         .edges
         .iter()
@@ -418,7 +458,7 @@ fn expand_context(
             )
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    Ok(references
+    let picks = references
         .into_iter()
         .map(|reference| {
             let edge = by_reference
@@ -438,7 +478,8 @@ fn expand_context(
                 ..pick.clone()
             }
         })
-        .collect())
+        .collect();
+    Ok((picks, stops))
 }
 
 fn set_descriptors(
@@ -1000,7 +1041,7 @@ fn edge_granularity_controls(
 ) -> Vec<cad_core::presentation::SemanticElement> {
     [("tangent", "Tangent chain", "Pick an edge to include its smooth continuation. Sharp corners stop the chain."),
      ("rim", "Circular rim", "Pick a circular edge to include the whole rim."),
-     ("individual", "Single edge", "Each pick selects one edge segment.")]
+     ("individual", "This edge", "Each pick selects one edge segment.")]
         .into_iter()
         .map(|(granularity, label, hint)| {
             let selected = pick_granularity(w, feature) == granularity;
@@ -1236,6 +1277,7 @@ pub fn current(w: &Workspace) -> Option<SelectionTarget> {
 
 pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> {
     let mut edge_elements = edge_controls(w);
+    edge_elements.extend(edge_hover::semantic(w));
     let Some(target) = current(w) else {
         return edge_elements;
     };

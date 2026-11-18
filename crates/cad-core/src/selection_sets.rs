@@ -98,6 +98,37 @@ fn validate_limits(mesh: &MeshData) -> Result<()> {
     }
     Ok(())
 }
+/// Coordinates are local to the same body evaluation as the returned references.
+#[derive(Clone, Debug, Serialize)]
+pub struct ChainStop {
+    pub point: [f64; 3],
+    pub junction: bool,
+}
+
+pub struct EdgeExpansion {
+    pub edges: Vec<TopologyRef>,
+    pub stops: Vec<ChainStop>,
+}
+
+enum Continuation {
+    Next(usize, usize),
+    End,
+    Junction,
+}
+
+#[derive(Clone, Copy)]
+enum WalkKind {
+    TangentLoop,
+    ConnectedLoop,
+    TangentSet,
+    TangentPick,
+}
+
+struct Walk {
+    edges: BTreeSet<usize>,
+    stops: BTreeMap<u32, ChainStop>,
+}
+
 struct Graph<'a> {
     edges: Vec<&'a EdgeData>,
     vertices: BTreeMap<u32, Vec<(usize, usize)>>,
@@ -196,12 +227,7 @@ impl<'a> Graph<'a> {
             Ok(())
         }
     }
-    fn continuation(
-        &mut self,
-        edge: usize,
-        end: usize,
-        tangent: bool,
-    ) -> Result<Option<(usize, usize)>> {
+    fn continuation(&mut self, edge: usize, end: usize, tangent: bool) -> Result<Continuation> {
         let native = self.edges[edge].native.as_ref().unwrap();
         let vertex = native.vertices[end];
         let incoming = native.tangents[end];
@@ -220,25 +246,21 @@ impl<'a> Graph<'a> {
                 continue;
             }
             if found.replace((candidate, candidate_end)).is_some() {
-                return Err(unavailable(if tangent {
-                    "The tangent chain branches; choose a face boundary or individual edges"
-                } else {
-                    "This edge belongs to several possible loops; choose a face boundary"
-                }));
+                return Ok(Continuation::Junction);
             }
         }
-        Ok(found)
+        Ok(found.map_or(Continuation::End, |(edge, end)| {
+            Continuation::Next(edge, end)
+        }))
     }
-    fn walk(
-        &mut self,
-        seed: usize,
-        tangent: bool,
-        require_closed: bool,
-    ) -> Result<BTreeSet<usize>> {
+    fn walk(&mut self, seed: usize, kind: WalkKind) -> Result<Walk> {
+        let tangent = !matches!(kind, WalkKind::ConnectedLoop);
+        let require_closed = matches!(kind, WalkKind::TangentLoop | WalkKind::ConnectedLoop);
+        let keep_partial = matches!(kind, WalkKind::TangentPick);
         let mut selected = BTreeSet::from([seed]);
         let mut visited = BTreeSet::new();
         let mut pending = VecDeque::from([(seed, 0), (seed, 1)]);
-        let mut open = false;
+        let mut stops = BTreeMap::new();
         while let Some((edge, end)) = pending.pop_front() {
             self.charge(1)?;
             if !visited.insert((edge, end)) {
@@ -248,24 +270,45 @@ impl<'a> Graph<'a> {
             if native.vertices[0] == native.vertices[1] {
                 continue;
             }
-            if let Some((next, at)) = self.continuation(edge, end, tangent)? {
-                selected.insert(next);
-                pending.push_back((next, 1 - at));
-            } else {
-                open = true;
+            let vertex = native.vertices[end];
+            let point = native.endpoints[end];
+            match self.continuation(edge, end, tangent)? {
+                Continuation::Next(next, at) => {
+                    selected.insert(next);
+                    pending.push_back((next, 1 - at));
+                }
+                Continuation::Junction if !keep_partial => {
+                    return Err(unavailable(if tangent {
+                        "The tangent chain branches; choose a face boundary or individual edges"
+                    } else {
+                        "This edge belongs to several possible loops; choose a face boundary"
+                    }));
+                }
+                stop => {
+                    stops.insert(
+                        vertex,
+                        ChainStop {
+                            point,
+                            junction: matches!(stop, Continuation::Junction),
+                        },
+                    );
+                }
             }
         }
-        if require_closed && open {
+        if require_closed && !stops.is_empty() {
             return Err(unavailable(
                 "No unambiguous complete closed rim or loop continues from this edge",
             ));
         }
-        if !require_closed && selected.len() == 1 {
+        if !require_closed && !keep_partial && selected.len() == 1 {
             return Err(unavailable(
                 "No native tangent continuation is available for this edge",
             ));
         }
-        Ok(selected)
+        Ok(Walk {
+            edges: selected,
+            stops,
+        })
     }
 }
 fn tangent_pair(a: [f64; 3], b: [f64; 3]) -> bool {
@@ -296,6 +339,22 @@ pub fn expand(
     seed: &TopologyRef,
     mode: Mode,
 ) -> Result<Vec<TopologyRef>> {
+    Ok(expansion(mesh, body, seed, mode, false)?.edges)
+}
+
+/// The fillet/chamfer picker stops at the first ambiguous junction on either
+/// side. Explicit loop and selection-set commands retain their strict rules.
+pub fn tangent_chain(mesh: &MeshData, body: &NodeRef, seed: &TopologyRef) -> Result<EdgeExpansion> {
+    expansion(mesh, body, seed, Mode::TangentChain, true)
+}
+
+fn expansion(
+    mesh: &MeshData,
+    body: &NodeRef,
+    seed: &TopologyRef,
+    mode: Mode,
+    keep_partial: bool,
+) -> Result<EdgeExpansion> {
     validate_limits(mesh)?;
     let component = if mode == Mode::FaceBoundary {
         let faces = mesh
@@ -341,7 +400,7 @@ pub fn expand(
             .component
     };
     let mut graph = Graph::new(mesh, body, component)?;
-    let indices = if mode == Mode::FaceBoundary {
+    let walk = if mode == Mode::FaceBoundary {
         let indices = graph
             .edges
             .iter()
@@ -363,7 +422,10 @@ pub fn expand(
         if indices.is_empty() {
             return Err(unavailable("This face has no complete native boundary"));
         }
-        indices
+        Walk {
+            edges: indices,
+            stops: BTreeMap::new(),
+        }
     } else {
         let index = graph
             .edges
@@ -371,18 +433,29 @@ pub fn expand(
             .position(|edge| same_reference(&edge.reference, seed))
             .ok_or_else(|| unavailable("The selected edge is absent from its native component"))?;
         match mode {
-            Mode::ClosedLoop => match graph.walk(index, true, true) {
+            Mode::ClosedLoop => match graph.walk(index, WalkKind::TangentLoop) {
                 Ok(closed) => closed,
-                Err(_) => graph.walk(index, false, true)?,
+                Err(_) => graph.walk(index, WalkKind::ConnectedLoop)?,
             },
-            Mode::TangentChain => graph.walk(index, true, false)?,
+            Mode::TangentChain => graph.walk(
+                index,
+                if keep_partial {
+                    WalkKind::TangentPick
+                } else {
+                    WalkKind::TangentSet
+                },
+            )?,
             Mode::FaceBoundary => unreachable!(),
         }
     };
-    let mut result = indices
+    let mut result = walk
+        .edges
         .into_iter()
         .map(|index| graph.edges[index].reference.clone())
         .collect::<Vec<_>>();
     result.sort_by(|a, b| key(a).cmp(&key(b)));
-    Ok(result)
+    Ok(EdgeExpansion {
+        edges: result,
+        stops: walk.stops.into_values().collect(),
+    })
 }
