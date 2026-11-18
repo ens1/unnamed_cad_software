@@ -704,6 +704,18 @@ pub struct ComponentMotion {
     pub translation_directions: Vec<[f64; 3]>,
     pub rotation_directions: Vec<[f64; 3]>,
     pub degrees_of_freedom: usize,
+    /// Relative to the partner, evaluated at this component's mate reference.
+    /// Directions are expressed in the containing assembly's coordinates.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub joints: BTreeMap<Id, JointMotion>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct JointMotion {
+    pub translation_directions: Vec<[f64; 3]>,
+    pub rotation_directions: Vec<[f64; 3]>,
+    /// Rank of the combined motion. A helical motion, for example, has two
+    /// nonempty direction lists and one independent degree of freedom.
+    pub degrees_of_freedom: usize,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AssemblySolution {

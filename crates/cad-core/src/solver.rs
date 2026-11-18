@@ -1,5 +1,5 @@
 use crate::{Assembly, CadError, Dimension, Document, Id, Placement, Result, Sketch, expression};
-use nalgebra::{DMatrix, DVector, Matrix4, Rotation3, Vector3};
+use nalgebra::{DMatrix, DVector, Matrix3, Matrix4, Rotation3, SMatrix, SVector, Vector3};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -708,6 +708,92 @@ fn motion_directions(block: &DMatrix<f64>) -> Vec<[f64; 3]> {
         .map(|i| std::array::from_fn(|j| eigen.eigenvectors[(j, i)]))
         .collect()
 }
+
+/// The left Jacobian of SO(3) maps a change in the solver's rotation vector
+/// to angular velocity in the containing assembly.
+fn angular_velocity_map(phi: Vector3<f64>) -> Matrix3<f64> {
+    let theta = phi.norm();
+    let k = phi.cross_matrix();
+    let (a, b) = if theta < 1e-4 {
+        (0.5 - theta * theta / 24., 1. / 6. - theta * theta / 120.)
+    } else {
+        (
+            (1. - theta.cos()) / theta.powi(2),
+            (theta - theta.sin()) / theta.powi(3),
+        )
+    };
+    Matrix3::identity() + k * a + k * k * b
+}
+
+fn joint_motion(
+    projector: &DMatrix<f64>,
+    bodies: [Option<usize>; 2],
+    offsets: [Vector3<f64>; 2],
+) -> crate::assembly_geometry::JointMotion {
+    // Compare both rigid bodies at the *same* point. Comparing velocities at
+    // different points would report sliding for a locked pair rotating together.
+    let mut gram = SMatrix::<f64, 6, 6>::zeros();
+    let lengths = offsets.map(|r| r.norm());
+    for generator in projector.column_iter() {
+        let mut velocity = Vector3::zeros();
+        let mut spin = Vector3::zeros();
+        let mut velocity_scale = 1.;
+        let mut spin_scale = 1.;
+        for (side, body) in bodies.iter().enumerate() {
+            if let Some(body) = body {
+                let v = generator.fixed_rows::<3>(6 * body);
+                let omega = generator.fixed_rows::<3>(6 * body + 3);
+                let tangent = omega.cross(&offsets[side]);
+                let angular_speed = omega.norm();
+                let sign = if side == 0 { 1. } else { -1. };
+                velocity += (v + tangent) * sign;
+                spin += omega * sign;
+                velocity_scale += v.norm() + angular_speed * lengths[side];
+                spin_scale += angular_speed;
+            }
+        }
+        // The numerical Jacobian leaves small residuals when the two orbital
+        // velocities cancel. Discard these before comparing directions or units.
+        if velocity.norm() <= 1e-8 * velocity_scale {
+            velocity.fill(0.);
+        }
+        if spin.norm() <= 1e-8 * spin_scale {
+            spin.fill(0.);
+        }
+        let mut twist = SVector::<f64, 6>::zeros();
+        twist.fixed_rows_mut::<3>(0).copy_from(&velocity);
+        twist.fixed_rows_mut::<3>(3).copy_from(&spin);
+        gram += twist * twist.transpose();
+    }
+    // Balance mm/s and rad/s before determining whether spin and slide are
+    // independent. The projector columns are shared; no per-mate large SVD.
+    for start in [0, 3] {
+        let scale = gram.fixed_view::<3, 3>(start, start).trace().sqrt();
+        if scale > 0. {
+            gram.fixed_rows_mut::<3>(start).scale_mut(1. / scale);
+            gram.fixed_columns_mut::<3>(start).scale_mut(1. / scale);
+        }
+    }
+    let directions = |start| {
+        let eig = gram
+            .fixed_view::<3, 3>(start, start)
+            .into_owned()
+            .symmetric_eigen();
+        (0..3)
+            .filter(|i| eig.eigenvalues[*i] > 1e-8)
+            .map(|i| std::array::from_fn(|j| eig.eigenvectors[(j, i)]))
+            .collect()
+    };
+    crate::assembly_geometry::JointMotion {
+        translation_directions: directions(0),
+        rotation_directions: directions(3),
+        degrees_of_freedom: gram
+            .symmetric_eigenvalues()
+            .iter()
+            .filter(|v| **v > 1e-8)
+            .count(),
+    }
+}
 fn solve_assembly_geometry(
     doc: &Document,
     assembly: &mut Assembly,
@@ -1027,26 +1113,16 @@ fn solve_assembly_geometry(
         let motion = if let Some(i) = index.get(id) {
             let rows = projector.rows(i * 6, 6).into_owned();
             let translations = rows.rows(0, 3).into_owned();
-            let mut rotation_map = nalgebra::Matrix3::zeros();
-            let current = assembly_matrix(&base, &index, &x, id)?;
-            for axis in 0..3 {
-                let mut shifted = x.clone();
-                shifted[i * 6 + 3 + axis] += 1e-6;
-                let next = assembly_matrix(&base, &index, &shifted, id)?;
-                let r =
-                    next.fixed_view::<3, 3>(0, 0) * current.fixed_view::<3, 3>(0, 0).transpose();
-                rotation_map.set_column(
-                    axis,
-                    &(Rotation3::from_matrix_unchecked(r).scaled_axis() / 1e-6),
-                );
-            }
+            let rotation_map = angular_velocity_map(x.fixed_rows::<3>(i * 6 + 3).into_owned());
             let rotational = rotation_map * rows.rows(3, 3);
+            projector.rows_mut(i * 6 + 3, 3).copy_from(&rotational);
             let rotations = DMatrix::from_fn(3, rotational.ncols(), |r, c| rotational[(r, c)]);
             ComponentMotion {
                 grounded: false,
                 translation_directions: motion_directions(&translations),
                 rotation_directions: motion_directions(&rotations),
                 degrees_of_freedom: matrix_rank(&rows, None),
+                joints: BTreeMap::new(),
             }
         } else {
             ComponentMotion {
@@ -1054,6 +1130,7 @@ fn solve_assembly_geometry(
                 translation_directions: vec![],
                 rotation_directions: vec![],
                 degrees_of_freedom: 0,
+                joints: BTreeMap::new(),
             }
         };
         component_motion.insert(id.clone(), motion);
@@ -1072,6 +1149,36 @@ fn solve_assembly_geometry(
             translation: std::array::from_fn(|j| x[i * 6 + j]),
             rotation_deg: [rx, ry, rz].map(f64::to_degrees),
         };
+    }
+    for mate in &candidate.mates {
+        let ids = [&mate.first, &mate.second];
+        let bodies = ids.map(|id| index.get(id).copied());
+        let placements = ids.map(|id| &candidate.instances[id].placement);
+        let origins = frames
+            .get(&mate.id)
+            .map_or([mate.first_origin, mate.second_origin], |f| {
+                [f[0].origin, f[1].origin]
+            });
+        let delta =
+            Vector3::from(placements[0].translation) - Vector3::from(placements[1].translation);
+        for end in 0..2 {
+            if bodies[end].is_none() {
+                continue;
+            }
+            let local = Vector3::from(origins[end]);
+            let offset = placements[end].matrix().fixed_view::<3, 3>(0, 0) * local;
+            let offsets = if end == 0 {
+                [offset, offset + delta]
+            } else {
+                [offset - delta, offset]
+            };
+            let joint = joint_motion(&projector, bodies, offsets);
+            component_motion
+                .get_mut(ids[end])
+                .expect("solved participant")
+                .joints
+                .insert(mate.id.clone(), joint);
+        }
     }
     *assembly = candidate;
     Ok(AssemblySolution {
