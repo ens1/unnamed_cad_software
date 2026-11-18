@@ -8,7 +8,7 @@ use cad_core::{
     selection_actions::SelectionTarget,
     selection_sets::{self, Mode as SetMode},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub struct ActionPopup {
     target: SelectionTarget,
@@ -57,10 +57,10 @@ pub(crate) fn same_edge(first: &cad_core::TopologyRef, second: &cad_core::Topolo
     selection_sets::same_reference(first, second)
 }
 
-fn individual_edges(w: &Workspace, feature: &str) -> bool {
+fn pick_granularity<'a>(w: &'a Workspace, feature: &str) -> &'a str {
     w.fields
         .get(&format!("edge-selection-mode/{feature}"))
-        .is_some_and(|mode| mode == "individual")
+        .map_or("tangent", String::as_str)
 }
 
 /// Expand only a proven native circular carrier on one current occurrence.
@@ -90,7 +90,7 @@ fn circular_rim(w: &Workspace, pick: &viewport::Selection) -> Option<Vec<viewpor
         return None;
     }
     let tolerance = (radius_mm.abs() * 1e-9).max(1e-7);
-    let picks = expansion(w, SetMode::ClosedLoop).ok()?;
+    let picks = expand_pick(w, pick, SetMode::ClosedLoop).ok()?;
     let same_carrier = picks.iter().all(|candidate| {
         meshes.iter().flat_map(|mesh| &mesh.edges).any(|edge| {
             if edge.body.as_ref() != Some(body) || !same_edge(&edge.reference, &candidate.reference)
@@ -128,17 +128,66 @@ fn circular_rim(w: &Workspace, pick: &viewport::Selection) -> Option<Vec<viewpor
 pub(crate) fn preferred_edges(
     w: &mut Workspace,
     body: &cad_core::NodeRef,
-) -> Vec<cad_core::TopologyRef> {
-    let edges = viewport::preselected_edges(w, body);
-    if edges.len() != 1 {
-        return edges;
+) -> cad_core::Result<Vec<cad_core::TopologyRef>> {
+    let Some(seed) = w
+        .selected
+        .as_ref()
+        .filter(|pick| pick.body.as_ref() == Some(body))
+    else {
+        return Ok(vec![]);
+    };
+    let too_many = || {
+        cad_core::CadError::Invalid(
+            "Too many edges. Select a smaller set of edges or faces.".into(),
+        )
+    };
+    let mut picks = Vec::new();
+    let mut seen = BTreeSet::new();
+    for pick in w.geometry_selection.iter().chain(std::iter::once(seed)) {
+        if pick.path == seed.path
+            && pick.body.as_ref() == Some(body)
+            && matches!(pick.reference.topology.as_str(), "face" | "edge")
+            && seen.insert((
+                &pick.reference.producer,
+                &pick.reference.topology,
+                &pick.reference.role,
+            ))
+        {
+            picks.push(pick);
+            if picks.len() > cad_core::edge_features::MAX_SELECTED_EDGES {
+                return Err(too_many());
+            }
+        }
     }
-    if let Some(picks) = w.selected.as_ref().and_then(|pick| circular_rim(w, pick)) {
-        let references = picks.iter().map(|pick| pick.reference.clone()).collect();
-        w.geometry_selection = picks;
-        return references;
+    let single = picks.len() == 1;
+    let mut chosen = Vec::new();
+    let mut selected_edges = BTreeSet::new();
+    for pick in picks {
+        let group = match pick.reference.topology.as_str() {
+            "face" => expand_pick(w, pick, SetMode::FaceBoundary)?,
+            _ if single => tangent_edges(w, pick),
+            _ => vec![pick.clone()],
+        };
+        for edge in group {
+            if selected_edges.insert((edge.reference.producer.clone(), edge.reference.role.clone()))
+            {
+                chosen.push(edge);
+                if chosen.len() > cad_core::edge_features::MAX_SELECTED_EDGES {
+                    return Err(too_many());
+                }
+            }
+        }
     }
-    edges
+    w.geometry_selection = chosen;
+    Ok(w.geometry_selection
+        .iter()
+        .map(|pick| pick.reference.clone())
+        .collect())
+}
+
+fn tangent_edges(w: &Workspace, pick: &viewport::Selection) -> Vec<viewport::Selection> {
+    // At a sharp corner or an ambiguous branch, leave the clicked edge selected.
+    expand_pick(w, pick, SetMode::TangentChain).unwrap_or_else(|_| vec![pick.clone()])
 }
 
 pub(crate) fn picked_edges(
@@ -146,12 +195,12 @@ pub(crate) fn picked_edges(
     feature: &str,
     pick: &viewport::Selection,
 ) -> Vec<cad_core::TopologyRef> {
-    if !individual_edges(w, feature)
-        && let Some(picks) = circular_rim(w, pick)
-    {
-        return picks.into_iter().map(|pick| pick.reference).collect();
-    }
-    vec![pick.reference.clone()]
+    let picks = match pick_granularity(w, feature) {
+        "individual" => return vec![pick.reference.clone()],
+        "rim" => circular_rim(w, pick).unwrap_or_else(|| vec![pick.clone()]),
+        _ => tangent_edges(w, pick),
+    };
+    picks.into_iter().map(|pick| pick.reference).collect()
 }
 
 pub(crate) fn edge_key(feature: &str, edge: &cad_core::TopologyRef) -> String {
@@ -236,14 +285,22 @@ struct ExpansionContext<'a> {
 /// incidence and resolving legacy provenance belong to the explicit set action,
 /// not every frame that displays the ordinary selection menu.
 fn expansion_context(w: &Workspace, mode: SetMode) -> cad_core::Result<ExpansionContext<'_>> {
+    let pick = w.selected.as_ref().ok_or_else(|| {
+        cad_core::CadError::Invalid("Select a face or edge on the model first".into())
+    })?;
+    pick_context(w, pick, mode)
+}
+
+fn pick_context<'a>(
+    w: &'a Workspace,
+    pick: &'a viewport::Selection,
+    mode: SetMode,
+) -> cad_core::Result<ExpansionContext<'a>> {
     if w.view.history_cursor.is_some() || w.sketch.is_some() {
         return Err(cad_core::CadError::Invalid(
             "Finish sketch editing and return to Latest before selecting model edge sets".into(),
         ));
     }
-    let pick = w.selected.as_ref().ok_or_else(|| {
-        cad_core::CadError::Invalid("Select a face or edge on the model first".into())
-    })?;
     let topology = if mode == SetMode::FaceBoundary {
         "face"
     } else {
@@ -302,12 +359,28 @@ fn expansion_context(w: &Workspace, mode: SetMode) -> cad_core::Result<Expansion
 /// Resolve only the current native cache, on one output body and occurrence.
 /// A last-valid display fallback is useful while rebuilding but cannot author a set.
 fn expansion(w: &Workspace, mode: SetMode) -> cad_core::Result<Vec<viewport::Selection>> {
+    expand_context(w, expansion_context(w, mode)?, mode)
+}
+
+fn expand_pick(
+    w: &Workspace,
+    pick: &viewport::Selection,
+    mode: SetMode,
+) -> cad_core::Result<Vec<viewport::Selection>> {
+    expand_context(w, pick_context(w, pick, mode)?, mode)
+}
+
+fn expand_context(
+    w: &Workspace,
+    context: ExpansionContext<'_>,
+    mode: SetMode,
+) -> cad_core::Result<Vec<viewport::Selection>> {
     let ExpansionContext {
         pick,
         body,
         evaluation,
         instance,
-    } = expansion_context(w, mode)?;
+    } = context;
     let candidates = viewport::selection_meshes(w, evaluation, instance)
         .into_iter()
         .filter(|mesh| {
@@ -863,11 +936,7 @@ pub(crate) fn edge_action(w: &mut Workspace, command: &str) -> bool {
             format!("edge-selection-mode/{}", feature.id),
             granularity.into(),
         );
-        w.status = if granularity == "individual" {
-            "Circular picks select individual segments".into()
-        } else {
-            "Circular picks select complete native rims".into()
-        };
+        w.status = control.value.clone().unwrap_or_default();
         return true;
     }
     if let Some(mode) = control
@@ -896,7 +965,11 @@ pub(crate) fn edge_action(w: &mut Workspace, command: &str) -> bool {
     };
     if command.starts_with("selection.edge-add/") {
         if let Some(pick) = &w.selected {
-            edges.push(pick.reference.clone());
+            for reference in picked_edges(w, &feature.id, pick) {
+                if !edges.iter().any(|edge| same_edge(edge, &reference)) {
+                    edges.push(reference);
+                }
+            }
         }
     } else if command.starts_with("selection.edge-clear/") {
         edges.clear();
@@ -925,16 +998,18 @@ fn edge_granularity_controls(
     feature: &str,
     body: &cad_core::NodeRef,
 ) -> Vec<cad_core::presentation::SemanticElement> {
-    [("rim", "Complete circular rims"), ("individual", "Individual edge segments")]
+    [("tangent", "Tangent chain", "Pick an edge to include its smooth continuation. Sharp corners stop the chain."),
+     ("rim", "Circular rim", "Pick a circular edge to include the whole rim."),
+     ("individual", "Single edge", "Each pick selects one edge segment.")]
         .into_iter()
-        .map(|(granularity, label)| {
-            let selected = individual_edges(w, feature) == (granularity == "individual");
+        .map(|(granularity, label, hint)| {
+            let selected = pick_granularity(w, feature) == granularity;
             let command = format!("selection.edge-mode-{granularity}/{feature}");
             cad_core::presentation::SemanticElement {
                 id: command.clone(),
                 role: "edge-selection-action".into(),
                 label: label.into(),
-                value: Some("Controls subsequent picks; existing authored selections are retained".into()),
+                value: Some(hint.into()),
                 state: if selected { "selected" } else { "ready" }.into(),
                 commands: vec![command],
                 relationships: vec![feature.into(), body.node.clone()],
@@ -1008,8 +1083,12 @@ pub(crate) fn edge_picker(
         .clicked()
             && let Some(pick) = selected
         {
-            edges.push(pick.reference);
-            changed = true;
+            for reference in picked_edges(w, feature, &pick) {
+                if !edges.iter().any(|edge| same_edge(edge, &reference)) {
+                    edges.push(reference);
+                    changed = true;
+                }
+            }
         }
         if controls::button(
             ui,

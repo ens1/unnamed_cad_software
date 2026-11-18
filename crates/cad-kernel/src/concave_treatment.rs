@@ -1,7 +1,6 @@
-//! An enclosed or planar-entry convex void is the exact material dual of a
-//! convex solid. Rounding/chamfering its edges removes void and adds material
-//! to concave pocket corners. The temporary cap is removed again, and a changed
-//! entry wire is shared with the actual stock cap.
+//! Treat a convex boss or pocket attached at one planar loop. A pocket uses
+//! the material dual; a raised boss keeps its stock orientation. Replace the
+//! temporary cap with the shared attachment wire on the original host face.
 use super::Treatment;
 use crate::{planar::ChamferSpec, shell_history::ShellHistory};
 use cad_core::{CadError, Result};
@@ -9,17 +8,18 @@ use monstertruck::modeling::*;
 use std::collections::{HashMap, HashSet};
 const EPS: f64 = 1e-7;
 fn invalid(message: &str) -> CadError {
-    CadError::Invalid(format!("Pocket edge treatment: {message}"))
+    CadError::Invalid(format!("Boss or pocket edge treatment: {message}"))
 }
 fn operate(
-    void: &Solid,
+    component: &Solid,
     selected: &[EdgeId],
     spec: &ChamferSpec,
     treatment: Treatment,
+    inverted: bool,
     history: &mut ShellHistory,
 ) -> Result<Option<Solid>> {
-    match treatment {
-        Treatment::Fillet => crate::edge_round::round(void, selected, spec.distance, history),
+    let construct = |history: &mut ShellHistory| match treatment {
+        Treatment::Fillet => crate::edge_round::round(component, selected, spec.distance, history),
         Treatment::Chamfer => {
             // Inverting both source normals reverses their lexical default
             // order. Preserve Distance 1's source-face meaning through duality.
@@ -27,11 +27,16 @@ fn operate(
                 distance: spec.distance,
                 second_distance: spec.second_distance,
                 angle: spec.angle,
-                flip: spec.flip ^ spec.first_face.is_none(),
+                flip: spec.flip ^ (inverted && spec.first_face.is_none()),
                 first_face: spec.first_face,
             };
-            crate::planar::chamfer(void, selected, &spec, history)
+            crate::planar::chamfer(component, selected, &spec, history)
         }
+    };
+    if inverted {
+        history.on_void(construct)
+    } else {
+        construct(history)
     }
 }
 fn protect_other_components(
@@ -46,7 +51,7 @@ fn protect_other_components(
     let planes = crate::planar::supporting_planes(void)?;
     if planes.len() != void.face_iter().count() || planes.len() < 4 {
         return Err(CadError::Unsupported(
-            "Pocket duality requires a proven convex planar material void".into(),
+            "A local boss or pocket treatment requires a convex planar region".into(),
         ));
     }
     for id in selected {
@@ -90,7 +95,7 @@ fn protect_other_components(
             .filter(|face| !ignored.contains(&face.id()))
         {
             if !super::local_blend::face_outside(face, &bounds, work)? {
-                return Err(CadError::Unsupported("Pocket edge treatment may reach another shell or material island; reduce the size".into()));
+                return Err(CadError::Unsupported("The edge treatment may reach another shell or material island. Reduce the size.".into()));
             }
         }
     }
@@ -110,6 +115,7 @@ pub(super) fn construct(
         return Ok(None);
     }
     while !pending.is_empty() {
+        let captures = history.material_captures();
         let Some((output, handled)) =
             single(&current, &pending, spec, treatment, history, &mut work)?
         else {
@@ -119,6 +125,9 @@ pub(super) fn construct(
             return Err(invalid(
                 "A pocket treatment did not consume a selected edge",
             ));
+        }
+        if history.material_captures() == captures {
+            history.invalidate_material();
         }
         pending.retain(|id| !handled.contains(id));
         current = output;
@@ -162,7 +171,7 @@ fn single(
         }
         let ignored = shell.iter().map(|face| face.id()).collect::<HashSet<_>>();
         protect_other_components(solid, &void, &local, &ignored, spec, treatment, work)?;
-        let Some(rounded) = operate(&void, &local, spec, treatment, history)? else {
+        let Some(rounded) = operate(&void, &local, spec, treatment, true, history)? else {
             return Ok(None);
         };
         if rounded.boundaries().len() != 1 {
@@ -213,7 +222,7 @@ fn single(
                 *work = work.saturating_add(1);
                 if *work > 4_000_000 {
                     return Err(CadError::Unsupported(
-                        "Pocket edge treatment exceeds its connectivity work budget".into(),
+                        "The edge treatment exceeds its connectivity work budget".into(),
                     ));
                 }
                 if !component.insert(id) {
@@ -249,27 +258,34 @@ fn single(
             if open_edges != opening_edges {
                 continue;
             }
-            let closure = builder::try_attach_plane(vec![opening.inverse()])
-                .map_err(|_| invalid("The pocket opening cannot form an exact planar cap"))?;
+            // A positive height proposes a boss. The supporting-plane check
+            // below must also prove the complete component lies on the correct
+            // side of this cap and all of its other faces.
+            let raised = component.iter().any(|id| {
+                faces[id]
+                    .vertex_iter()
+                    .any(|vertex| plane.signed(vertex.point()) > EPS)
+            });
+            let orient_face = |face: &Face| if raised { face.clone() } else { face.inverse() };
+            let orient_wire = |wire: &Wire| if raised { wire.clone() } else { wire.inverse() };
+            let closure = builder::try_attach_plane(vec![orient_wire(opening)])
+                .map_err(|_| invalid("The attachment loop cannot form a planar cap"))?;
             let mut shell = Shell::new();
             for face in solid
                 .face_iter()
                 .filter(|face| component.contains(&face.id()))
             {
-                shell.push(face.inverse());
+                shell.push(orient_face(face));
             }
             shell.push(closure.clone());
-            let void = match Solid::try_new(vec![shell]) {
-                Ok(void) => void,
+            let local_stock = match Solid::try_new(vec![shell]) {
+                Ok(stock) => stock,
                 Err(_) => continue,
             };
-            // Restrict the duality pass to convex planar bounded voids. This
-            // establishes that every removed void wedge remains inside the
-            // original pocket and cannot cross material elsewhere in the part.
-            let Ok(planes) = crate::planar::supporting_planes(&void) else {
+            let Ok(planes) = crate::planar::supporting_planes(&local_stock) else {
                 continue;
             };
-            if planes.len() != void.face_iter().count() {
+            if planes.len() < 4 || planes.len() != local_stock.face_iter().count() {
                 continue;
             }
             let mut sources = vec![history.face(cap.id())?];
@@ -279,35 +295,52 @@ fn single(
                     .map(|edge| history.edge(edge.id()))
                     .collect::<Result<Vec<_>>>()?,
             );
-            history.construct_face(closure.id(),&sources,serde_json::json!({"operation":treatment.name(),"constructor":"temporary_pocket_dual_cap"}))?;
+            let constructor = if raised {
+                "temporary_boss_base"
+            } else {
+                "temporary_pocket_dual_cap"
+            };
+            history.construct_face(
+                closure.id(),
+                &sources,
+                serde_json::json!({"operation":treatment.name(),"constructor":constructor}),
+            )?;
             let mut ignored = component.clone();
             ignored.insert(cap.id());
-            protect_other_components(solid, &void, &local, &ignored, spec, treatment, work)?;
-            let Some(treated) = operate(&void, &local, spec, treatment, history)? else {
+            protect_other_components(solid, &local_stock, &local, &ignored, spec, treatment, work)?;
+            let Some(treated) = operate(&local_stock, &local, spec, treatment, !raised, history)?
+            else {
                 return Ok(None);
             };
             if treated.boundaries().len() != 1 {
-                return Err(invalid("A pocket treatment unexpectedly split its void"));
+                return Err(invalid(
+                    "The local edge treatment split the attached feature",
+                ));
             }
             let mut new_caps = Vec::new();
             for face in treated.face_iter() {
                 if let Some(candidate) = crate::planar::boundary_plane(face)?
-                    && candidate.normal.dot(plane.normal) > 1. - 1e-9
+                    && candidate
+                        .normal
+                        .dot(if raised { -plane.normal } else { plane.normal })
+                        > 1. - 1e-9
                     && plane.signed(candidate.origin).abs() <= EPS
                 {
                     new_caps.push(face);
                 }
             }
             let [new_cap] = new_caps.as_slice() else {
-                return Err(invalid("The treated pocket has no unique planar entry cap"));
+                return Err(invalid(
+                    "The treated feature has no unique planar attachment",
+                ));
             };
             if new_cap.boundaries().len() != 1 {
                 return Err(invalid(
-                    "A treated convex pocket has a multiply bounded entry",
+                    "The treated feature has more than one attachment loop",
                 ));
             }
             let mut new_wires = wires.clone();
-            new_wires[opening_index] = new_cap.boundaries()[0].inverse();
+            new_wires[opening_index] = orient_wire(&new_cap.boundaries()[0]);
             let source_cap = Face::try_new(new_wires, cap.oriented_surface())
                 .map_err(|_| invalid("The treated opening cannot join the original stock cap"))?;
             history.retain_face(source_cap.id(), cap.id())?;
@@ -327,13 +360,13 @@ fn single(
                         treated
                             .face_iter()
                             .filter(|face| face.id() != new_cap.id())
-                            .map(Face::inverse),
+                            .map(orient_face),
                     );
                 }
                 shells.push(result);
             }
             let result = Solid::try_new(shells).map_err(|_| {
-                invalid("The treated pocket does not join a closed oriented stock body")
+                invalid("The treated attachment does not join a closed oriented stock body")
             })?;
             crate::validation::solid(&result)?;
             return Ok(Some((result, local)));

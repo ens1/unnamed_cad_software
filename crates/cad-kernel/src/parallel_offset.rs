@@ -152,6 +152,25 @@ impl Span {
             }
         }
     }
+    /// Infinite supports can be tangent far outside either trimmed span.
+    /// Enclose the complete circle (or line segment) before solving for roots.
+    fn separated(self, other: Self) -> Result<bool> {
+        let bounds = |span: Self, axis: usize| match span.support {
+            Support::Line { .. } => Interval::new(
+                span.start[axis].min(span.end[axis]),
+                span.start[axis].max(span.end[axis]),
+            ),
+            Support::Circle { center, radius } => Interval::exact(center[axis])?.widen(radius),
+        };
+        for axis in 0..2 {
+            let a = bounds(self, axis)?.widen(EPS)?;
+            let b = bounds(other, axis)?;
+            if a.high < b.low || b.high < a.low {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     fn contains(self, p: Point2) -> bool {
         if !finite(p) || self.support.residual(p).abs() > EPS {
             return false;
@@ -210,6 +229,74 @@ impl Span {
     }
 }
 
+/// Near a tangent join, cancellation in the squared chord length can turn
+/// one shared endpoint into a wide band of possible roots. Recompute that
+/// scalar exactly from the represented support coefficients if its outward
+/// interval alone would consume the intersection accuracy budget.
+fn refine_chord_square(a: Support, b: Support, square: Interval) -> Result<Interval> {
+    use num_rational::BigRational as Ratio;
+    use num_traits::{ToPrimitive, Zero};
+
+    if square.high < 0. || square.high.sqrt() - square.low.max(0.).sqrt() < EPS / 128. {
+        return Ok(square);
+    }
+    let q = |v| Ratio::from_float(v).ok_or_else(|| unsupported("A collar support is nonfinite"));
+    let exact = match (a, b) {
+        (Support::Line { normal, offset }, Support::Circle { center, radius })
+        | (Support::Circle { center, radius }, Support::Line { normal, offset }) => {
+            let nx = q(normal.x)?;
+            let ny = q(normal.y)?;
+            let r = q(radius)?;
+            let length2 = &nx * &nx + &ny * &ny;
+            if length2.is_zero() {
+                return Err(unsupported("A collar line has a collapsed normal"));
+            }
+            let height = q(center.x)? * nx + q(center.y)? * ny - q(offset)?;
+            &r * &r - &height * &height / length2
+        }
+        (
+            Support::Circle {
+                center: p,
+                radius: r,
+            },
+            Support::Circle {
+                center: s,
+                radius: t,
+            },
+        ) => {
+            let dx = q(p.x)? - q(s.x)?;
+            let dy = q(p.y)? - q(s.y)?;
+            let distance2 = &dx * &dx + &dy * &dy;
+            if distance2.is_zero() {
+                return Err(unsupported(
+                    "Coincident circle centers have no chord direction",
+                ));
+            }
+            let r = q(r)?;
+            let t = q(t)?;
+            let twice = &distance2 + &r * &r - &t * &t;
+            &r * &r - &twice * &twice / (q(4.)? * distance2)
+        }
+        _ => return Ok(square),
+    };
+    let value = exact
+        .to_f64()
+        .ok_or_else(|| unsupported("A collar chord exceeds finite coordinates"))?;
+    if !value.is_finite() {
+        return Err(unsupported("A collar chord exceeds finite coordinates"));
+    }
+    if q(value)? == exact {
+        return Interval::exact(value);
+    }
+    let enclosure = Interval::rounded(value)?;
+    if q(enclosure.low)? > exact || q(enclosure.high)? < exact {
+        return Err(unsupported(
+            "A collar chord cannot be enclosed at native precision",
+        ));
+    }
+    Ok(enclosure)
+}
+
 /// None denotes coincident supports; every finite intersection is otherwise
 /// returned. Tangencies remain contacts and are rejected unless native.
 fn intersections(
@@ -226,6 +313,15 @@ fn intersections(
                       direction: [Interval; 2],
                       square: Interval|
      -> Result<Vec<[Interval; 2]>> {
+        let refined = refine_chord_square(a, b, square)?;
+        // At a real shared seam the native vertex establishes contact even
+        // if the two represented supports miss by roundoff. Elsewhere retain
+        // an uncertain near-tangency unless the original enclosure excluded it.
+        let square = if refined.high < 0. && square.high >= 0. && native_contacts.is_empty() {
+            square
+        } else {
+            refined
+        };
         if square.high < 0. {
             return Ok(Vec::new());
         }
@@ -548,6 +644,9 @@ fn collars_disjoint(a: &Collar, b: &Collar) -> Result<bool> {
         .collect::<Result<Vec<_>>>()?;
     for (xi, x) in a.boundaries.iter().enumerate() {
         for (yi, y) in b.boundaries.iter().enumerate() {
+            if x.separated(*y)? {
+                continue;
+            }
             let allowed = |point: Point2| {
                 shared.iter().any(|(i, j, span)| {
                     let endpoint = |edge: &Span| {
@@ -1097,6 +1196,9 @@ pub(crate) fn certify_cap_collars(
         }
         for span in &protected {
             for boundary in &collar.boundaries {
+                if boundary.separated(*span)? {
+                    continue;
+                }
                 let points = intersections(boundary.support, span.support, &[])?;
                 let collides = match points {
                     Some(points) => points

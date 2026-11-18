@@ -1,7 +1,11 @@
 //! Exact circular edge rounds on convex planar stock. All selected edges are
 //! constructed together; a corner is never rounded against an already changed
 //! neighbour. No tessellation or fitted relay-sphere surface is authoritative.
-use crate::{planar::BoundaryPlane, shell_history::ShellHistory};
+use crate::{
+    native_bounds::{self, Enclosure, Interval},
+    planar::BoundaryPlane,
+    shell_history::ShellHistory,
+};
 use cad_core::{CadError, Result};
 use monstertruck::modeling::*;
 use std::collections::{HashMap, HashSet};
@@ -302,6 +306,62 @@ fn supporting_carriers(solid: &Solid) -> Result<HashMap<FaceId, BoundaryPlane>> 
     Ok(planes)
 }
 
+/// Positive rational strip controls enclose both end profiles and every
+/// ruling between them. Together with the old edge and topological endpoints
+/// they bound the removed wedge up to its actual (possibly oblique) ends.
+/// A three-edge junction also needs the entire transformed corner ball.
+fn clear_of_protected(
+    blend: &Blend,
+    strip: &Enclosure,
+    balls: &HashMap<VertexId, Enclosure>,
+    planes: &HashMap<FaceId, BoundaryPlane>,
+    protected: &[Enclosure],
+) -> Result<bool> {
+    let ends = [blend.source.front(), blend.source.back()];
+    let origin = ends[0].point();
+    let source = native_bounds::curve(&blend.source.curve())?;
+    let vertices = Enclosure::from_hull(vec![
+        origin,
+        ends[1].point(),
+        blend.ends[0].arc.front().point(),
+        blend.ends[0].arc.back().point(),
+        blend.ends[1].arc.front().point(),
+        blend.ends[1].arc.back().point(),
+    ])?;
+    let mut changed = vec![&source, &vertices, strip];
+    changed.extend(ends.into_iter().filter_map(|v| balls.get(&v.id())));
+    let mut bands = Vec::with_capacity(3);
+    // Try the finite axial span first, then the original side-plane slabs.
+    for axis in [
+        blend.axis,
+        planes[&blend.faces[0]].normal,
+        planes[&blend.faces[1]].normal,
+    ] {
+        let mut low = f64::INFINITY;
+        let mut high = f64::NEG_INFINITY;
+        for bounds in &changed {
+            let (first, last) = bounds.projection(origin, axis)?;
+            low = low.min(first);
+            high = high.max(last);
+        }
+        bands.push((axis, Interval::new(low, high)?.widen(EPS)?));
+    }
+    for obstacle in protected {
+        let mut separated = false;
+        for (axis, band) in &bands {
+            let (lo, hi) = obstacle.projection(origin, *axis)?;
+            if hi < band.low || lo > band.high {
+                separated = true;
+                break;
+            }
+        }
+        if !separated {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Returns `None` for stock outside this constructor's proven planar class.
 /// Once eligible, collapsed edges and excessive radii are explicit failures.
 pub(crate) fn round(
@@ -398,11 +458,8 @@ pub(crate) fn round(
             }
         }
     }
-    // Retain holes, pockets and earlier treatments only when certified native
-    // enclosures prove that they miss every selected edge's removal slabs. The
-    // wall-specific slab depths below come from all positive strip controls
-    // and complete corner-ball bounds. Axial separation is deliberately not
-    // assumed, preferring a refusal to an intersecting pocket.
+    // Preserve unrelated geometry only when native enclosures separate it
+    // from the finite strip and both corner regions of each selected edge.
     let mut protected = Vec::new();
     // Protect every distant trim, including straight coplanar subdivision
     // edges. No new round may silently cross a wire that is kept unchanged.
@@ -603,42 +660,6 @@ pub(crate) fn round(
             },
         );
     }
-    for enclosure in &protected {
-        for blend in blends.values() {
-            let safe = blend
-                .faces
-                .iter()
-                .map(|face| -> Result<bool> {
-                    let plane = &planes[face];
-                    let mut depth = blend
-                        .ends
-                        .iter()
-                        .flat_map(|end| end.controls.iter())
-                        .map(|control| -plane.signed(point(*control)))
-                        .fold(0_f64, f64::max);
-                    // The removed wedge is bounded by the original edge and its
-                    // complete positive-control strip. At fully rounded vertices
-                    // also include the complete analytic sphere, including its
-                    // interior beyond the boundary circles.
-                    for vertex in [blend.source.front(), blend.source.back()] {
-                        depth = depth.max(-plane.signed(vertex.point()));
-                        let corner = &corners[&vertex.id()];
-                        if corner.selected.len() == 3 {
-                            depth = depth.max(-plane.signed(corner.center.unwrap()) + radius);
-                        }
-                    }
-                    Ok(enclosure.projection(plane.origin, plane.normal)?.1 < -depth - EPS)
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .any(|safe| safe);
-            if !safe {
-                return Err(unsupported(
-                    "A hole or pocket is too close to the selected round for the native disjoint-carrier proof",
-                ));
-            }
-        }
-    }
     let mut trimmed = HashMap::new();
     for (id, edge) in edges.iter().filter(|(id, _)| !selected.contains(id)) {
         let endpoint = |vertex: &Vertex| -> Result<Vertex> {
@@ -746,6 +767,7 @@ pub(crate) fn round(
         history.retain_face(output.id(), face.id())?;
         faces.push(output);
     }
+    let mut strip_bounds = HashMap::new();
     for id in &selected_order {
         let blend = &blends[id];
         let net = (0..3)
@@ -779,8 +801,12 @@ pub(crate) fn round(
             &sources,
             serde_json::json!({"operation":"fillet","constructor":"circular_cylinder"}),
         )?;
+        if !protected.is_empty() {
+            strip_bounds.insert(*id, native_bounds::face(&output)?);
+        }
         faces.push(output);
     }
+    let mut ball_bounds = HashMap::new();
     let mut corner_order = corners
         .values()
         .filter(|corner| corner.selected.len() == 3)
@@ -876,7 +902,17 @@ pub(crate) fn round(
             &sources,
             serde_json::json!({"operation":"fillet","constructor":"spherical_corner"}),
         )?;
+        if !protected.is_empty() {
+            ball_bounds.insert(corner_id, native_bounds::face(&output)?);
+        }
         faces.push(output);
+    }
+    for (id, strip) in &strip_bounds {
+        if !clear_of_protected(&blends[id], strip, &ball_bounds, &planes, &protected)? {
+            return Err(unsupported(
+                "A hole or pocket is too close to the selected round for the native disjoint-carrier proof",
+            ));
+        }
     }
     let output = Solid::try_new(vec![faces.into()]).map_err(|error| invalid(&error.to_string()))?;
     crate::validation::solid(&output)?;

@@ -506,6 +506,13 @@ pub fn project(
                     add("surface.ruled", "Ruled Surface", "Surfaces", busy);
                 }
                 "face" => {
+                    add("feature.fillet", "Fillet face edges", "Model", solid_reason);
+                    add(
+                        "feature.chamfer",
+                        "Chamfer face edges",
+                        "Model",
+                        solid_reason,
+                    );
                     add(
                         "feature.split",
                         "Split With Plane",

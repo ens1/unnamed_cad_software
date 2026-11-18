@@ -3031,9 +3031,14 @@ impl MonstertruckAdapter {
                 crate::general_chamfer::chamfer(solid, &local, specification, &mut history)?
             } else {
                 crate::general_round::round(solid, &local, size, &mut history)?
-            }.ok_or_else(|| CadError::Unsupported(format!(
-                "{name}: This selection needs an unresolved carrier transition or corner junction; no complete native blend can be constructed for the selected edges"
-            )))?;
+            }.ok_or_else(|| {
+                let detail = if local.len() == 1 {
+                    "TCAD cannot finish this edge on its adjoining faces. For a rounded rim, select the complete tangent chain."
+                } else {
+                    "TCAD cannot build the transition between these edges. Select one edge or one tangent chain to narrow down the junction."
+                };
+                CadError::Unsupported(format!("{name}: {detail}"))
+            })?;
             crate::validation::solid(&output)?;
             let native = history.material().or_else(|| {
                 specification.as_ref().and_then(|_| {

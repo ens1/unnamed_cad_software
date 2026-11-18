@@ -1,7 +1,8 @@
-//! Exact cylindrical terminations for a straight planar fillet. The terminal
-//! curve is the native intersection of its two unchanged analytic carriers.
-//! A rational circle guides its transverse parameter only; it is not geometry.
+//! Native cylindrical terminations for straight planar fillets and chamfers.
+//! A fillet uses a branch-constrained intersection. A chamfer has an explicit
+//! rational ellipse arc obtained by projecting the cylinder rim onto its plane.
 use super::*;
+use crate::curved_blend_proof::Certificate;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn construct(
@@ -16,9 +17,10 @@ pub(super) fn construct(
     edges: &HashMap<EdgeId, Edge>,
     treatment: Treatment,
     surface: Option<&Surface>,
+    cylinder_extensions: &mut HashMap<FaceId, (EdgeId, Surface)>,
     history: &mut ShellHistory,
 ) -> Result<Option<End>> {
-    let (Treatment::Fillet, Some(surface)) = (treatment, surface) else {
+    let Some(surface) = surface else {
         return Ok(None);
     };
     let mut neighbours = Vec::new();
@@ -40,44 +42,94 @@ pub(super) fn construct(
     let neighbours: [Edge; 2] = neighbours
         .try_into()
         .map_err(|_| invalid("A curved terminal needs two neighbouring boundaries"))?;
-    let radius = offsets[0].magnitude();
-    let controls = [
-        (source.point() + offsets[0]).to_homogeneous(),
-        source.point().to_homogeneous() * weight,
-        (source.point() + offsets[1]).to_homogeneous(),
-    ];
-    let Some(certificate) = crate::curved_blend_proof::certify(
-        source,
-        axis,
-        offsets,
-        cap,
-        &neighbours,
-        radius,
-        &controls,
-    )?
+    let mut controls = vec![(source.point() + offsets[0]).to_homogeneous()];
+    if matches!(treatment, Treatment::Fillet) {
+        controls.push(source.point().to_homogeneous() * weight);
+    }
+    controls.push((source.point() + offsets[1]).to_homogeneous());
+    let Some(certificate) =
+        crate::curved_blend_proof::certify(source, axis, offsets, cap, &neighbours, &controls)?
     else {
         return Ok(None);
     };
-    if radius <= 2. * monstertruck::core::tolerance::TOLERANCE
+    let points = certificate.points.map(Vertex::new);
+    let arc_side = certificate.arc_side;
+    let arc = &neighbours[arc_side];
+    let generator = &neighbours[1 - arc_side];
+    // Opposite ends of one rim share exactly the same native cylinder,
+    // including its parameter frame. This preserves carrier identity on both
+    // fillet intersections as well as on the rebuilt terminal face.
+    let cap_surface = match cylinder_extensions.entry(cap.id()) {
+        std::collections::hash_map::Entry::Occupied(entry) => {
+            if entry.get().0 != arc.id() {
+                return Err(unsupported(
+                    "Two different rims on one cylindrical terminal need a joint trimming construction",
+                ));
+            }
+            &entry.into_mut().1
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            let carrier = continued_cylinder(
+                cap,
+                source,
+                generator,
+                certificate.circle_center,
+                certificate.circle_normal,
+                certificate.circle_radius,
+            )?;
+            &entry.insert((arc.id(), carrier)).1
+        }
+    };
+    let geometry = match (treatment, surface) {
+        (Treatment::Chamfer, Surface::Plane(plane)) => {
+            chamfer_ellipse(&certificate, source.point(), axis, plane)?
+        }
+        (Treatment::Chamfer, _) => return Ok(None),
+        (Treatment::Fillet, _) => fillet_intersection(
+            &certificate,
+            source.point(),
+            offsets,
+            &controls,
+            surface,
+            cap_surface,
+        )?,
+    };
+    let curve = Edge::try_new(&points[0], &points[1], geometry)
+        .map_err(|_| invalid("The cylindrical terminal has inconsistent endpoints"))?;
+    history.construct_edge(
+        curve.id(),
+        &[history.edge(edge.id())?, history.face(cap.id())?],
+        serde_json::json!({"operation":treatment.name(),"constructor":"cylindrical_terminal_intersection"}),
+    )?;
+    let arc_trim = Some((arc.id(), certificate.arc_extension));
+    Ok(Some(End {
+        source: source.clone(),
+        cap: cap.clone(),
+        points,
+        neighbours: neighbours.map(|edge| edge.id()),
+        curve,
+        controls,
+        axial_range: Some(certificate.axial_range),
+        arc_trim,
+        branch_halfspace: Some((certificate.branch_origin, certificate.branch_normal)),
+    }))
+}
+
+fn fillet_intersection(
+    certificate: &Certificate,
+    source: Point3,
+    offsets: [Vector3; 2],
+    controls: &[Vector4],
+    surface: &Surface,
+    cap_surface: &Surface,
+) -> Result<Curve> {
+    if offsets[0].magnitude() <= 2. * monstertruck::core::tolerance::TOLERANCE
         || certificate.branch_clearance <= 2. * monstertruck::core::tolerance::TOLERANCE
     {
         return Err(unsupported(
             "The terminal branches cannot be distinguished at the native intersection solver's precision",
         ));
     }
-    let points = certificate.points.map(Vertex::new);
-    let arc_side = certificate.arc_side;
-    let arc = &neighbours[arc_side];
-    let generator = &neighbours[1 - arc_side];
-    let new_arc = continued_arc(arc, source, &points[arc_side], certificate.arc_extension)?;
-    let cap_surface = continued_cylinder(
-        cap,
-        source,
-        generator,
-        certificate.circle_center,
-        certificate.circle_normal,
-        certificate.circle_radius,
-    )?;
     let guide = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
         KnotVector::bezier_knot(2),
         controls.to_vec(),
@@ -93,16 +145,14 @@ pub(super) fn construct(
     .ok_or_else(|| unsupported("The cylindrical root half-space is not finite"))?;
     for offset in offsets {
         intersection = intersection
-            .with_branch_halfspace(source.point(), offset)
-            .and_then(|intersection| {
-                intersection.with_branch_halfspace(source.point() + offset, -offset)
-            })
+            .with_branch_halfspace(source, offset)
+            .and_then(|intersection| intersection.with_branch_halfspace(source + offset, -offset))
             .ok_or_else(|| unsupported("The fillet meridian domain is not finite"))?;
     }
     // Whole-branch existence and separation are established by certify().
     // These residual checks ensure the native solver resolves that proven
     // branch and its shared endpoint vertices rather than an opposite root.
-    for (parameter, point) in [(0., points[0].point()), (1., points[1].point())] {
+    for (parameter, point) in [(0., certificate.points[0]), (1., certificate.points[1])] {
         let Some((actual, _, _)) = intersection.search_triple(parameter, 100) else {
             return Err(unsupported(
                 "The cylindrical terminal intersection did not resolve its certified endpoints",
@@ -117,63 +167,93 @@ pub(super) fn construct(
             ));
         }
     }
-    let curve = Edge::try_new(
-        &points[0],
-        &points[1],
-        Curve::IntersectionCurve(intersection),
-    )
-    .map_err(|_| invalid("The cylindrical terminal intersection has inconsistent endpoints"))?;
-    history.construct_edge(
-        curve.id(),
-        &[history.edge(edge.id())?, history.face(cap.id())?],
-        serde_json::json!({"operation":"fillet","constructor":"cylindrical_terminal_intersection"}),
-    )?;
-    let mut neighbour_curves = [None, None];
-    neighbour_curves[arc_side] = Some(new_arc);
-    Ok(Some(End {
-        source: source.clone(),
-        cap: cap.clone(),
-        points,
-        neighbours: neighbours.map(|edge| edge.id()),
-        curve,
-        controls: controls.to_vec(),
-        axial_range: Some(certificate.axial_range),
-        neighbour_curves,
-        cap_surface: Some(cap_surface),
-        branch_halfspace: Some((certificate.branch_origin, certificate.branch_normal)),
-    }))
+    Ok(Curve::IntersectionCurve(intersection))
 }
 
-fn continued_arc(
-    source: &Edge,
-    vertex: &Vertex,
-    point: &Vertex,
-    expected_angle: f64,
+/// A parallel projection along the cylinder generator preserves the circular
+/// cross section in radial coordinates and acts affinely on rational controls.
+/// The two existing rail vertices fix the ends of the bounded ellipse.
+fn chamfer_ellipse(
+    certificate: &Certificate,
+    source: Point3,
+    edge_axis: Vector3,
+    plane: &Plane,
 ) -> Result<Curve> {
-    let ((center, normal, radius), sweep) = crate::bounded_carriers::circle(&source.curve())?;
-    let changed_front = source.front().id() == vertex.id();
-    let front = if changed_front { point } else { source.front() };
-    let back = if changed_front { source.back() } else { point };
-    let old = vertex.point() - center;
-    let new = point.point() - center;
-    let angle = normal.dot(old.cross(new)).atan2(old.dot(new));
-    if (angle - expected_angle).abs() * radius > EPS {
+    let axis = certificate.circle_normal;
+    let normal = plane.normal();
+    let denominator = normal.dot(axis);
+    if !denominator.is_finite() || denominator.abs() <= 1e-10 {
         return Err(unsupported(
-            "The native rim continuation disagrees with its certified angular domain",
+            "The bevel plane is parallel to the cylindrical generator",
         ));
     }
-    let sweep = if changed_front {
-        sweep - angle
-    } else {
-        sweep + angle
-    };
-    if !sweep.is_finite() || sweep.abs() >= std::f64::consts::TAU - 1e-9 {
+    let center = certificate.circle_center;
+    let radial = source - center;
+    let radial = (radial - axis * radial.dot(axis)).normalize() * certificate.circle_radius;
+    let (sine, weight) = (certificate.arc_extension * 0.5).sin_cos();
+    if !weight.is_finite() || weight <= 0. {
         return Err(unsupported(
-            "The circular terminal continuation reaches a full turn",
+            "The chamfer ellipse has no bounded angular chart",
+        ));
+    }
+    // The homogeneous middle control of a circular arc is (w*C + R*mid, w).
+    // Project it onto the bevel plane before pairing it with the shared ends.
+    let middle_offset = radial * weight + axis.cross(radial) * sine;
+    let shift = ((plane.origin() - center) * weight - middle_offset).dot(normal) / denominator;
+    let middle = center.to_vec() * weight + (middle_offset + axis * shift);
+    let controls = [
+        certificate.points[0].to_homogeneous(),
+        middle.extend(weight),
+        certificate.points[1].to_homogeneous(),
+    ];
+    crate::curved_blend_proof::certify_bevel_arc(&controls, plane, edge_axis, certificate)?;
+    Ok(Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
+        KnotVector::bezier_knot(2),
+        controls.to_vec(),
+    ))))
+}
+
+pub(super) fn continued_arc(
+    source: &Edge,
+    front: &Vertex,
+    back: &Vertex,
+    expected_angles: [Option<f64>; 2],
+) -> Result<Edge> {
+    let ((center, normal, radius), sweep) = crate::bounded_carriers::circle(&source.curve())?;
+    let mut delta = [0.; 2];
+    for (i, (old, new)) in [(source.front(), front), (source.back(), back)]
+        .into_iter()
+        .enumerate()
+    {
+        let Some(expected) = expected_angles[i] else {
+            if old.id() != new.id() {
+                return Err(unsupported(
+                    "A changed circular rim endpoint has no verified angular domain",
+                ));
+            }
+            continue;
+        };
+        let a = old.point() - center;
+        let b = new.point() - center;
+        delta[i] = normal.dot(a.cross(b)).atan2(a.dot(b));
+        if (delta[i] - expected).abs() * radius > EPS {
+            return Err(unsupported(
+                "The native rim continuation disagrees with its certified angular domain",
+            ));
+        }
+    }
+    let trimmed = sweep + delta[1] - delta[0];
+    if !trimmed.is_finite()
+        || trimmed * sweep <= 0.
+        || trimmed.abs() * radius <= EPS
+        || trimmed.abs() >= std::f64::consts::TAU - EPS / radius
+    {
+        return Err(invalid(
+            "The combined setbacks consume, reverse or close the circular rim; reduce their size",
         ));
     }
     let radial = front.point() - center;
-    let (sine, cosine) = (sweep * 0.5).sin_cos();
+    let (sine, cosine) = (trimmed * 0.5).sin_cos();
     let transit = center + radial * cosine + normal.cross(radial) * sine;
     let edge = builder::try_circle_arc(front, back, transit)
         .map_err(|_| invalid("The circular terminal continuation collapsed"))?;
@@ -183,13 +263,13 @@ fn continued_arc(
         + (radius - actual_radius).abs()
         + (actual_normal.cross(normal)).magnitude() * radius
         > EPS
-        || (actual_sweep * actual_normal.dot(normal) - sweep).abs() * radius > EPS
+        || (actual_sweep * actual_normal.dot(normal) - trimmed).abs() * radius > EPS
     {
         return Err(unsupported(
             "The continued native circle cannot retain its source carrier within modeling tolerance",
         ));
     }
-    Ok(edge.curve())
+    Ok(edge)
 }
 
 fn continued_cylinder(

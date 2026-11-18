@@ -224,154 +224,227 @@ struct Wall {
 }
 struct Stock {
     cap: Face,
-    opposite: FaceId,
     normal: Vector3,
+    /// Positive when the adjoining walls rise out of the cap (an inside round).
+    sense: f64,
     height: f64,
     walls: HashMap<EdgeId, Wall>,
+    /// Each face projects onto exactly one bounded contour edge. Cap collar
+    /// certification therefore covers it over its entire finite height.
+    profile_walls: HashSet<FaceId>,
 }
-/// Recognize the complete finite extrusion, including all unselected contours.
-/// Every side is a complete native four-edge translation patch. No nearby face
-/// can hide inside a profile-only proof or be silently discarded.
-fn stock(solid: &Solid, cap: &Face) -> Result<Option<Stock>> {
-    if solid.boundaries().len() != 1 || cap.edge_iter().count() > MAX_EDGES {
+
+/// Boolean splits can give opposite rails different knot ranges. Line
+/// monotonicity and bounded signed arc traversal establish the same image
+/// without imposing a common parameterization on the two stock edges.
+fn translated_rail(source: &Curve, far: &Curve, delta: Vector3, carrier: Carrier) -> Result<bool> {
+    let shifted = source.transformed(Matrix4::from_translation(delta));
+    let (a, b) = shifted.range_tuple();
+    let (c, d) = far.range_tuple();
+    if shifted.subs(a).distance(far.subs(c)) > EPS / 4.
+        || shifted.subs(b).distance(far.subs(d)) > EPS / 4.
+    {
+        return Ok(false);
+    }
+    if same_curve(&shifted, far)? {
+        return Ok(true);
+    }
+    match carrier {
+        Carrier::Plane { .. } => Ok(crate::bounded_carriers::line(far).is_ok()),
+        Carrier::Cone { .. } => {
+            let ((center, axis, radius), sweep) = crate::bounded_carriers::circle(&shifted)?;
+            let ((end_center, end_axis, end_radius), end_sweep) =
+                crate::bounded_carriers::circle(far)?;
+            let orientation = axis.dot(end_axis).signum();
+            let error = center.distance(end_center)
+                + (radius - end_radius).abs()
+                + radius.max(end_radius)
+                    * ((axis - end_axis * orientation).magnitude()
+                        + (sweep - end_sweep * orientation).abs());
+            Ok(error <= EPS / 4.)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// A side must trace precisely the cap edge over one signed axial interval.
+/// The far rail may belong to a pocket floor, ledge or another wall.
+fn extrusion_wall(face: &Face, source: &Edge, normal: Vector3) -> Result<Option<(Wall, f64)>> {
+    let boundaries = face.boundaries();
+    if boundaries.len() != 1 || boundaries[0].len() != 4 {
         return Ok(None);
     }
+    let Some(carrier) = analytic_offset::recognize(face)? else {
+        return Ok(None);
+    };
+    match carrier {
+        Carrier::Plane {
+            origin,
+            normal: side,
+        } if side.dot(normal).abs() <= REL => {
+            let curve = source.oriented_curve();
+            crate::bounded_carriers::line(&curve)?;
+            let (lo, hi) = crate::native_bounds::curve(&curve)?.projection(origin, side)?;
+            if lo < -EPS / 4. || hi > EPS / 4. {
+                return Ok(None);
+            }
+        }
+        Carrier::Cone {
+            origin,
+            axis,
+            radius,
+            slope: 0.,
+        } if axis.dot(normal).abs() > 1. - REL => {
+            let ((center, circle_axis, r), _) =
+                crate::bounded_carriers::circle(&source.oriented_curve())?;
+            let residual = (center - origin).cross(axis).magnitude()
+                + (radius - r).abs()
+                + circle_axis.cross(axis).magnitude() * r;
+            if residual > EPS / 4. {
+                return Ok(None);
+            }
+        }
+        _ => return Ok(None),
+    }
+    let generator = |vertex: &Vertex| -> Result<Option<(Edge, f64)>> {
+        let mut candidates = face.edge_iter().filter(|edge| {
+            edge.id() != source.id()
+                && (edge.front().id() == vertex.id() || edge.back().id() == vertex.id())
+        });
+        let (Some(edge), None) = (candidates.next(), candidates.next()) else {
+            return Ok(None);
+        };
+        let edge = along(&edge, vertex)?;
+        if crate::bounded_carriers::line(&edge.oriented_curve()).is_err() {
+            return Ok(None);
+        }
+        let delta = edge.back().point() - vertex.point();
+        let h = delta.dot(normal);
+        if h.abs() <= EPS || (delta - normal * h).magnitude() > EPS / 8. {
+            return Ok(None);
+        }
+        Ok(Some((edge, h)))
+    };
+    let (Some((first, height)), Some((last, end_height))) =
+        (generator(source.front())?, generator(source.back())?)
+    else {
+        return Ok(None);
+    };
+    if (height - end_height).abs() > EPS / 8. {
+        return Ok(None);
+    }
+    let remaining = face
+        .edge_iter()
+        .filter(|edge| {
+            edge.id() != source.id() && edge.id() != first.id() && edge.id() != last.id()
+        })
+        .collect::<Vec<_>>();
+    let [other] = remaining.as_slice() else {
+        return Ok(None);
+    };
+    let other = along(other, first.back())?;
+    let lateral_drift = match carrier {
+        Carrier::Plane { normal: side, .. } => side.dot(normal).abs() * height.abs(),
+        Carrier::Cone { axis, .. } => axis.cross(normal).magnitude() * height.abs(),
+        _ => return Ok(None),
+    };
+    if lateral_drift > EPS / 4.
+        || other.back().id() != last.back().id()
+        || !translated_rail(
+            &source.oriented_curve(),
+            &other.oriented_curve(),
+            normal * height,
+            carrier,
+        )?
+    {
+        return Ok(None);
+    }
+    Ok(Some((
+        Wall {
+            face: face.clone(),
+            carrier,
+            side: analytic_offset::side(face, carrier)?,
+            generators: [first, last],
+        },
+        height,
+    )))
+}
+
+fn stock(solid: &Solid, cap: &Face, selected: &HashSet<EdgeId>) -> Result<Option<Stock>> {
     let Some(plane) = crate::planar::boundary_plane(cap)? else {
         return Ok(None);
     };
-    let n = plane.normal;
-    let cap_edges = cap
-        .edge_iter()
-        .map(|e| (e.id(), e))
-        .collect::<HashMap<_, _>>();
+    if cap.edge_iter().count() > MAX_EDGES {
+        return Ok(None);
+    }
+    // A partial selection on this cap belongs to a different constructor.
+    for wire in cap.boundaries() {
+        let count = wire.iter().filter(|e| selected.contains(&e.id())).count();
+        if count != 0 && count != wire.len() {
+            return Ok(None);
+        }
+    }
     let mut walls = HashMap::new();
-    let mut height: Option<f64> = None;
-    let mut opposite: Option<FaceId> = None;
-    for source in cap_edges.values() {
-        let adjoining = solid
-            .face_iter()
-            .filter(|f| f.id() != cap.id() && f.edge_iter().any(|e| e.id() == source.id()))
-            .collect::<Vec<_>>();
-        let [face] = adjoining.as_slice() else {
+    let mut profile_walls = HashSet::new();
+    let mut incident = cap
+        .edge_iter()
+        .map(|edge| (edge.id(), Vec::new()))
+        .collect::<HashMap<_, _>>();
+    for face in solid.face_iter().filter(|face| face.id() != cap.id()) {
+        for edge in face.edge_iter() {
+            if let Some(sides) = incident.get_mut(&edge.id()) {
+                sides.push(face);
+            }
+        }
+    }
+    let mut sense = None;
+    let mut height = f64::INFINITY;
+    let mut seams = HashMap::new();
+    for source in cap.boundaries().iter().flatten() {
+        let Some([face]) = incident.get(&source.id()).map(Vec::as_slice) else {
             return Ok(None);
         };
-        let boundaries = face.boundaries();
-        if boundaries.len() != 1 || boundaries[0].len() != 4 {
-            return Ok(None);
-        }
-        let Some(carrier) = analytic_offset::recognize(face)? else {
-            return Ok(None);
+        let chosen = selected.contains(&source.id());
+        let recognized = match extrusion_wall(face, source, plane.normal) {
+            Err(CadError::Unsupported(_)) if !chosen => None,
+            other => other?,
         };
-        match carrier {
-            Carrier::Plane { normal, .. } if normal.dot(n).abs() <= REL => {
-                crate::bounded_carriers::line(&source.oriented_curve())?;
-            }
-            Carrier::Cone {
-                axis, slope: 0., ..
-            } if axis.dot(n).abs() > 1. - REL => {
-                crate::bounded_carriers::circle(&source.oriented_curve())?;
-            }
-            _ => return Ok(None),
-        }
-        let mut generators = Vec::new();
-        let mut other_ends = Vec::new();
-        for vertex in [source.front(), source.back()] {
-            let candidates = face
-                .edge_iter()
-                .filter(|e| {
-                    e.id() != source.id()
-                        && (e.front().id() == vertex.id() || e.back().id() == vertex.id())
-                })
-                .collect::<Vec<_>>();
-            let [edge] = candidates.as_slice() else {
-                return Ok(None);
-            };
-            let edge = along(edge, vertex)?;
-            if crate::bounded_carriers::line(&edge.oriented_curve()).is_err() {
+        if let Some((wall, signed_height)) = recognized {
+            if !profile_walls.insert(face.id()) {
                 return Ok(None);
             }
-            let delta = edge.back().point() - edge.front().point();
-            let h = -delta.dot(n);
-            if h <= EPS || (delta + n * h).magnitude() > EPS / 8. {
-                return Ok(None);
-            }
-            if let Some(previous) = height {
-                if (previous - h).abs() > EPS / 8. {
+            if chosen {
+                if sense.is_some_and(|previous| previous != signed_height.signum()) {
                     return Ok(None);
                 }
-            } else {
-                height = Some(h);
+                sense = Some(signed_height.signum());
+                height = height.min(signed_height.abs());
+                for generator in &wall.generators {
+                    let seam = seams
+                        .entry(generator.front().id())
+                        .or_insert((generator.id(), 0));
+                    if seam.0 != generator.id() {
+                        return Ok(None);
+                    }
+                    seam.1 += 1;
+                }
+                walls.insert(source.id(), wall);
             }
-            other_ends.push(edge.back().clone());
-            generators.push(edge);
-        }
-        let remaining = face
-            .edge_iter()
-            .filter(|e| e.id() != source.id() && !generators.iter().any(|g| g.id() == e.id()))
-            .collect::<Vec<_>>();
-        let [other] = remaining.as_slice() else {
-            return Ok(None);
-        };
-        let other = along(other, &other_ends[0])?;
-        if other.back().id() != other_ends[1].id() {
+        } else if chosen {
             return Ok(None);
         }
-        let h = height.ok_or_else(|| invalid("An extrusion has no axial interval"))?;
-        if !same_curve(
-            &source
-                .oriented_curve()
-                .transformed(Matrix4::from_translation(-n * h)),
-            &other.oriented_curve(),
-        )? {
-            return Ok(None);
-        }
-        let caps = solid
-            .face_iter()
-            .filter(|f| f.id() != face.id() && f.edge_iter().any(|e| e.id() == other.id()))
-            .collect::<Vec<_>>();
-        let [other_cap] = caps.as_slice() else {
-            return Ok(None);
-        };
-        let Some(other_plane) = crate::planar::boundary_plane(other_cap)? else {
-            return Ok(None);
-        };
-        if other_plane.normal.dot(n) > -1. + REL {
-            return Ok(None);
-        }
-        if let Some(previous) = opposite {
-            if previous != other_cap.id() {
-                return Ok(None);
-            }
-        } else {
-            opposite = Some(other_cap.id());
-        }
-        walls.insert(
-            source.id(),
-            Wall {
-                face: (*face).clone(),
-                carrier,
-                side: analytic_offset::side(face, carrier)?,
-                generators: [generators.remove(0), generators.remove(0)],
-            },
-        );
     }
-    let Some(opposite) = opposite else {
-        return Ok(None);
-    };
-    let wall_ids = walls.values().map(|w| w.face.id()).collect::<HashSet<_>>();
-    if wall_ids.len() != walls.len()
-        || solid
-            .face_iter()
-            .any(|f| f.id() != cap.id() && f.id() != opposite && !wall_ids.contains(&f.id()))
-    {
+    let Some(sense) = sense else { return Ok(None) };
+    if seams.values().any(|(_, count)| *count != 2) {
         return Ok(None);
     }
     Ok(Some(Stock {
         cap: cap.clone(),
-        opposite,
-        normal: n,
-        height: height.unwrap_or(0.),
+        normal: plane.normal,
+        sense,
+        height,
         walls,
+        profile_walls,
     }))
 }
 fn distances(
@@ -408,15 +481,77 @@ struct Joint {
     cap: Vertex,
     wall: Vertex,
     meridian: Edge,
-    axial: Edge,
 }
 struct Rim {
     source: Edge,
     cap: Edge,
     wall: Edge,
     blend: Face,
-    collar: Face,
 }
+/// The rim patch, the swept stock collar and the material between them lie
+/// in the convex hull of the source curve and the native positive-weight
+/// product net. Check that enclosure against all non-profile faces, including
+/// any other shells inside the part. A candidate axis is only a direction to
+/// try; acceptance uses outward projection bounds over the complete faces.
+fn separate_nearby_faces(
+    solid: &Solid,
+    stock: &Stock,
+    rims: &HashMap<EdgeId, Rim>,
+) -> Result<bool> {
+    use crate::native_bounds::{self, Interval};
+    const WORK_LIMIT: usize = 4_000_000;
+    let mut rim_bounds = Vec::with_capacity(rims.len());
+    for rim in rims.values() {
+        let source = native_bounds::curve(&rim.source.oriented_curve())?;
+        let patch = native_bounds::face(&rim.blend)?;
+        let origin = rim.source.front().point();
+        let chord = rim.source.back().point() - origin;
+        let mut axes = vec![stock.normal];
+        if chord.magnitude() > EPS {
+            let along = chord.normalize();
+            axes.push(along);
+            axes.push(stock.normal.cross(along));
+        }
+        axes.extend([Vector3::unit_x(), Vector3::unit_y(), Vector3::unit_z()]);
+        let bands = axes
+            .into_iter()
+            .map(|axis| {
+                let (a, b) = source.projection(origin, axis)?;
+                let (c, d) = patch.projection(origin, axis)?;
+                Ok((axis, Interval::new(a.min(c), b.max(d))?.widen(EPS)?))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        rim_bounds.push((origin, bands));
+    }
+    let mut work = 0usize;
+    for face in solid
+        .face_iter()
+        .filter(|face| face.id() != stock.cap.id() && !stock.profile_walls.contains(&face.id()))
+    {
+        let other = native_bounds::face(face)?;
+        for (origin, bands) in &rim_bounds {
+            let mut separate = false;
+            for (axis, band) in bands {
+                work = work.saturating_add(other.len());
+                if work > WORK_LIMIT {
+                    return Err(unsupported(
+                        "Rim clearance exceeds the native projection budget",
+                    ));
+                }
+                let (low, high) = other.projection(*origin, *axis)?;
+                if high < band.low || low > band.high {
+                    separate = true;
+                    break;
+                }
+            }
+            if !separate {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 pub(crate) fn construct(
     solid: &Solid,
     selected: &[EdgeId],
@@ -438,7 +573,7 @@ pub(crate) fn construct(
         .collect::<Vec<_>>();
     let mut recognized = None;
     for cap in caps {
-        if let Some(value) = stock(solid, cap)? {
+        if let Some(value) = stock(solid, cap, &selected)? {
             recognized = Some(value);
             break;
         }
@@ -462,7 +597,10 @@ pub(crate) fn construct(
         .iter()
         .map(|(edge, wall)| (*edge, wall.face.clone()))
         .collect();
-    if !crate::parallel_offset::certify_cap_collars(&stock.cap, &walls, &selected, -radial, 0.)? {
+    let cap_setback = stock.sense * radial;
+    let wall_delta = stock.normal * (stock.sense * depth);
+    if !crate::parallel_offset::certify_cap_collars(&stock.cap, &walls, &selected, cap_setback, 0.)?
+    {
         return Ok(None);
     }
     let mut joints: HashMap<VertexId, Joint> = HashMap::new();
@@ -486,19 +624,18 @@ pub(crate) fn construct(
             }
             let cap_curve = wall
                 .carrier
-                .offset_curve(&source_curve, -radial * wall.side)?;
-            let wall_curve =
-                source_curve.transformed(Matrix4::from_translation(-stock.normal * depth));
+                .offset_curve(&source_curve, cap_setback * wall.side)?;
+            let wall_curve = source_curve.transformed(Matrix4::from_translation(wall_delta));
             let weight = if matches!(treatment, Treatment::Fillet) {
                 std::f64::consts::FRAC_1_SQRT_2
             } else {
                 1.
             };
-            for (index, vertex) in [source.front(), source.back()].into_iter().enumerate() {
+            for vertex in [source.front(), source.back()] {
                 let a = wall
                     .carrier
-                    .offset_point(vertex.point(), -radial * wall.side)?;
-                let b = vertex.point() - stock.normal * depth;
+                    .offset_point(vertex.point(), cap_setback * wall.side)?;
+                let b = vertex.point() + wall_delta;
                 if let Some(previous) = joints.get(&vertex.id()) {
                     if previous.cap.point().distance(a) > EPS / 8.
                         || previous.wall.point().distance(b) > EPS / 8.
@@ -533,7 +670,6 @@ pub(crate) fn construct(
                         )),
                     )
                     .map_err(|_| invalid("A junction profile has inconsistent endpoints"))?;
-                    let axial = builder::line(vertex, &b);
                     let mut incident = wire
                         .iter()
                         .filter(|edge| {
@@ -557,14 +693,12 @@ pub(crate) fn construct(
                         sources.push(history.face(stock.walls[&edge.id()].face.id())?);
                     }
                     history.construct_edge(meridian.id(),&sources,serde_json::json!({"operation":treatment.name(),"constructor":"connected_meridian","endpoints":endpoints}))?;
-                    history.construct_edge(axial.id(),&[history.edge(wall.generators[index].id())?],serde_json::json!({"operation":treatment.name(),"constructor":"connected_axial_collar"}))?;
                     joints.insert(
                         vertex.id(),
                         Joint {
                             cap: a,
                             wall: b,
                             meridian,
-                            axial,
                         },
                     );
                 }
@@ -597,16 +731,6 @@ pub(crate) fn construct(
             let blend = Face::try_new(vec![boundary], surface)
                 .map_err(|_| invalid("A connected blend strip has inconsistent boundaries"))?;
             history.construct_face(blend.id(),&[history.edge(source.id())?,history.face(stock.cap.id())?,history.face(wall.face.id())?],serde_json::json!({"operation":treatment.name(),"constructor":"connected_exact_rim_strip"}))?;
-            let collar = Face::try_new(
-                vec![Wire::from(vec![
-                    source.inverse(),
-                    start.axial.clone(),
-                    side.clone(),
-                    end.axial.inverse(),
-                ])],
-                wall.face.oriented_surface(),
-            )
-            .map_err(|_| invalid("A removed wall collar has inconsistent boundaries"))?;
             rims.insert(
                 source.id(),
                 Rim {
@@ -614,13 +738,17 @@ pub(crate) fn construct(
                     cap,
                     wall: side,
                     blend,
-                    collar,
                 },
             );
         }
     }
     if rims.len() != selected.len() {
         return Ok(None);
+    }
+    if !separate_nearby_faces(solid, &stock, &rims)? {
+        return Err(unsupported(
+            "The rim setback may reach another face; reduce the size or select a different contour",
+        ));
     }
     let mut trimmed = HashMap::new();
     for (edge, wall) in &stock.walls {
@@ -654,13 +782,14 @@ pub(crate) fn construct(
         .map_err(|_| invalid("The connected cap rails do not form a valid face"))?;
     history.retain_face(cap.id(), stock.cap.id())?;
     let mut output = Shell::new();
-    for face in solid.face_iter() {
+    let mut shells = solid.boundaries().to_vec();
+    let shell = shells
+        .iter_mut()
+        .find(|shell| shell.iter().any(|f| f.id() == stock.cap.id()))
+        .ok_or_else(|| invalid("The rim cap is missing from its source shell"))?;
+    for face in shell.iter() {
         if face.id() == stock.cap.id() {
             output.push(cap.clone());
-            continue;
-        }
-        if face.id() == stock.opposite {
-            output.push(face.clone());
             continue;
         }
         let affected = face
@@ -700,39 +829,74 @@ pub(crate) fn construct(
             }
         }
     }
-    let output = Solid::try_new(vec![output])
+    *shell = output;
+    let output = Solid::try_new(shells)
         .map_err(|_| invalid("Connected rim strips do not close the native body"))?;
     crate::validation::solid(&output)?;
-    let material = (|| -> Result<Option<crate::constructor_delta::Native>> {
-        let mut removed = Vec::new();
-        for (index, wire) in stock.cap.boundaries().into_iter().enumerate() {
-            if !wire.iter().all(|e| rims.contains_key(&e.id())) {
-                continue;
-            }
-            let rail: Wire = wire.iter().map(|e| rims[&e.id()].cap.clone()).collect();
-            let annulus = if index == 0 {
-                vec![wire.clone(), rail.inverse()]
-            } else {
-                vec![rail.inverse(), wire.clone()]
-            };
-            let mut region = Shell::from(vec![
-                Face::try_new(annulus, stock.cap.oriented_surface())
-                    .map_err(|_| invalid("The native removal collar has invalid cap boundaries"))?,
-            ]);
-            for edge in &wire {
-                region.push(rims[&edge.id()].collar.clone());
-                region.push(rims[&edge.id()].blend.inverse());
-            }
-            let region = Solid::try_new(vec![region])
-                .map_err(|_| invalid("The connected native removal collar is not closed"))?;
-            crate::validation::solid(&region)?;
-            removed.push(region);
-        }
-        Ok(Some(crate::constructor_delta::Native {
-            added: Vec::new(),
-            removed,
-        }))
-    })();
-    history.capture_material(material);
+    history.capture_material(Ok(crate::constructor_delta::capture(|| {
+        material(&stock, &rims)
+    })));
     Ok(Some(output))
+}
+
+/// The original cap annulus and wall collars plus the inverted new strips
+/// enclose removed stock. At an inside corner the same boundary encloses new
+/// material with the opposite orientation. Preview-only seams have no feature
+/// ancestry and never enter the result body.
+fn material(
+    stock: &Stock,
+    rims: &HashMap<EdgeId, Rim>,
+) -> Result<crate::constructor_delta::Native> {
+    let mut regions = Vec::new();
+    for (index, wire) in stock.cap.boundaries().into_iter().enumerate() {
+        if !wire.iter().all(|e| rims.contains_key(&e.id())) {
+            continue;
+        }
+        let rail: Wire = wire.iter().map(|e| rims[&e.id()].cap.clone()).collect();
+        let annulus = if index == 0 {
+            vec![wire.clone(), rail.inverse()]
+        } else {
+            vec![rail.inverse(), wire.clone()]
+        };
+        let mut region = Shell::from(vec![
+            Face::try_new(annulus, stock.cap.oriented_surface())
+                .map_err(|_| invalid("The native material collar has invalid cap boundaries"))?,
+        ]);
+        let mut seams = HashMap::new();
+        for edge in &wire {
+            let rim = &rims[&edge.id()];
+            let mut seam = |v: &Vertex, trimmed: &Vertex| {
+                seams
+                    .entry(v.id())
+                    .or_insert_with(|| builder::line(v, trimmed))
+                    .clone()
+            };
+            let collar = Wire::from(vec![
+                edge.inverse(),
+                seam(edge.front(), rim.wall.front()),
+                rim.wall.clone(),
+                seam(edge.back(), rim.wall.back()).inverse(),
+            ]);
+            let wall = &stock.walls[&edge.id()].face;
+            region.push(
+                Face::try_new(vec![collar], wall.oriented_surface())
+                    .map_err(|_| invalid("A material wall collar has inconsistent boundaries"))?,
+            );
+            region.push(rim.blend.inverse());
+        }
+        if stock.sense > 0. {
+            region = region.inverse().into();
+        }
+        let region = Solid::try_new(vec![region])
+            .map_err(|_| invalid("The connected material collar is not closed"))?;
+        crate::validation::solid(&region)?;
+        regions.push(region);
+    }
+    let mut delta = crate::constructor_delta::Native::default();
+    if stock.sense > 0. {
+        delta.added = regions;
+    } else {
+        delta.removed = regions;
+    }
+    Ok(delta)
 }

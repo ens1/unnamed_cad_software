@@ -1,4 +1,4 @@
-//! Complete branch certificates for a cylindrical end of a straight fillet.
+//! Complete branch certificates for a cylindrical end of a straight edge treatment.
 //!
 //! In the orthogonal frame (edge, inward cap, cylinder axis), the terminal is
 //! x = cx +/- sqrt(R² - (y - cy)²). Positive outward discriminant bounds and a
@@ -15,7 +15,7 @@ const EPS: f64 = 1e-7;
 const REL: f64 = 1e-10;
 
 fn unsupported(message: &str) -> CadError {
-    CadError::Unsupported(format!("Fillet cylindrical end: {message}"))
+    CadError::Unsupported(format!("Cylindrical edge termination: {message}"))
 }
 
 pub(crate) struct Certificate {
@@ -80,6 +80,95 @@ fn control_point(h: Vector4) -> Result<IntervalPoint> {
     ])
 }
 
+fn difference(a: IntervalPoint, b: IntervalPoint) -> Result<IntervalPoint> {
+    Ok([a[0].sub(b[0])?, a[1].sub(b[1])?, a[2].sub(b[2])?])
+}
+
+/// Check the actual stored quadratic on both analytic carriers. The five
+/// Bernstein coefficients of |radial(X-Cw)|² - R²w² bound the residual at
+/// every parameter, including roundoff introduced by the affine projection.
+pub(crate) fn certify_bevel_arc(
+    controls: &[Vector4; 3],
+    plane: &Plane,
+    edge_axis: Vector3,
+    certificate: &Certificate,
+) -> Result<()> {
+    use crate::native_bounds::exact_point;
+    let [o, a, b] = plane.defining_points();
+    let o = exact_point(o)?;
+    let u = difference(exact_point(a)?, o)?;
+    let v = difference(exact_point(b)?, o)?;
+    let cross_component = |i: usize, j: usize| u[i].mul(v[j])?.sub(u[j].mul(v[i])?);
+    let normal = [
+        cross_component(1, 2)?,
+        cross_component(2, 0)?,
+        cross_component(0, 1)?,
+    ];
+    let normal_length = norm_squared(normal)?.sqrt()?;
+    let center = exact_point(certificate.circle_center)?;
+    let cylinder_axis = vector(certificate.circle_normal)?;
+    let chart = vector(certificate.circle_normal.cross(edge_axis))?;
+    let branch_normal = vector(certificate.branch_normal)?;
+    let zero = Interval::exact(0.)?;
+    let mut projected = [[zero; 3]; 3];
+    let mut transverse = [zero; 3];
+    let mut weights = [zero; 3];
+    for (i, h) in controls.iter().copied().enumerate() {
+        let point = control_point(h)?;
+        let plane_error = dot_intervals(&difference(point, o)?, &normal)?.div(normal_length)?;
+        let relative = difference(point, center)?;
+        if plane_error.magnitude() > EPS / 4.
+            || dot_intervals(&relative, &branch_normal)?.low <= EPS
+        {
+            return Err(unsupported(
+                "The complete bevel arc cannot be certified on its plane and cylinder branch",
+            ));
+        }
+        transverse[i] = dot_intervals(&relative, &chart)?;
+        weights[i] = Interval::exact(h.w)?;
+        projected[i] = radial(relative, cylinder_axis)?;
+        for value in &mut projected[i] {
+            *value = value.mul(weights[i])?;
+        }
+    }
+    // Strictly ordered positive-weight controls make the angular chart
+    // coordinate monotone, so this rational span cannot retrace the branch.
+    let ab = transverse[1].sub(transverse[0])?;
+    let bc = transverse[2].sub(transverse[1])?;
+    if !(ab.low > 0. && bc.low > 0. || ab.high < 0. && bc.high < 0.) {
+        return Err(unsupported(
+            "The bevel arc has no regular cylindrical angular chart",
+        ));
+    }
+    let radius = Interval::exact(certificate.circle_radius)?;
+    let radius_squared = square(radius)?;
+    let min_weight = Interval::exact(controls.iter().map(|h| h.w).fold(f64::INFINITY, f64::min))?;
+    // |r - R| = |r² - R²|/(r + R) <= |r² - R²|/R for all r >= 0.
+    let denominator = square(min_weight)?.mul(radius)?;
+    let quadratic = [1., 2., 1.];
+    let quartic = [1., 4., 6., 4., 1.];
+    for (k, coefficient) in quartic.into_iter().enumerate() {
+        let mut sum = zero;
+        for i in k.saturating_sub(2)..=k.min(2) {
+            let j = k - i;
+            let residual = dot_intervals(&projected[i], &projected[j])?
+                .sub(radius_squared.mul(weights[i])?.mul(weights[j])?)?;
+            sum = sum.add(residual.mul(Interval::exact(quadratic[i] * quadratic[j])?)?)?;
+        }
+        if sum
+            .div(Interval::exact(coefficient)?)?
+            .div(denominator)?
+            .magnitude()
+            > EPS / 4.
+        {
+            return Err(unsupported(
+                "The bevel arc exceeds modeling tolerance on its cylinder",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn opposite<'a>(edge: &'a Edge, source: &Vertex) -> Option<&'a Vertex> {
     if edge.front().id() == source.id() {
         Some(edge.back())
@@ -94,7 +183,7 @@ fn same_axis(a: Vector3, b: Vector3) -> bool {
     a.cross(b).magnitude() <= REL
 }
 
-/// Certify the complete cylinder/fillet intersection branch, allowing a bounded
+/// Certify the complete cylinder/edge-treatment intersection branch, allowing a bounded
 /// continuation of the source rim at a concave profile corner. The caller must
 /// construct that continuation on the same circular carrier, retain the whole
 /// source wall, and prove the changed-material envelope clear of other trims.
@@ -104,37 +193,40 @@ pub(crate) fn certify(
     offsets: [Vector3; 2],
     terminal: &Face,
     neighbours: &[Edge; 2],
-    radius: f64,
-    guide_controls: &[Vector4; 3],
+    guide_controls: &[Vector4],
 ) -> Result<Option<Certificate>> {
-    if !radius.is_finite()
-        || radius <= EPS
-        || !axis.magnitude2().is_finite()
+    let lengths = offsets.map(|v| v.magnitude());
+    if !axis.magnitude2().is_finite()
         || (axis.magnitude2() - 1.).abs() > REL
-        || offsets.iter().any(|v| {
-            !v.magnitude2().is_finite()
-                || (v.magnitude() - radius).abs() > EPS
-                || v.dot(axis).abs() > EPS
-        })
-        || offsets[0].dot(offsets[1]).abs() > EPS * radius
+        || lengths.iter().any(|d| !d.is_finite() || *d <= EPS)
+        || offsets.iter().any(|v| v.dot(axis).abs() > EPS)
+        || offsets[0].dot(offsets[1]).abs() > EPS * lengths[0].min(lengths[1])
     {
         return Ok(None);
     }
-    let guide = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
-        KnotVector::bezier_knot(2),
-        guide_controls.to_vec(),
-    )));
-    let Ok(((guide_center, guide_axis, guide_radius), guide_sweep)) =
-        crate::bounded_carriers::circle(&guide)
-    else {
-        return Ok(None);
-    };
-    if !same_axis(guide_axis, axis)
-        || guide_center.distance(source.point() + offsets[0] + offsets[1]) > EPS
-        || (guide_radius - radius).abs() > EPS
-        || (guide_sweep.abs() - std::f64::consts::FRAC_PI_2).abs() * radius > EPS
-    {
-        return Ok(None);
+    match guide_controls.len() {
+        2 => {} // A chamfer extrudes the straight segment joining these two setbacks.
+        3 => {
+            let radius = lengths[0];
+            let guide = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
+                KnotVector::bezier_knot(2),
+                guide_controls.to_vec(),
+            )));
+            let Ok(((guide_center, guide_axis, guide_radius), guide_sweep)) =
+                crate::bounded_carriers::circle(&guide)
+            else {
+                return Ok(None);
+            };
+            if (lengths[1] - radius).abs() > EPS
+                || !same_axis(guide_axis, axis)
+                || guide_center.distance(source.point() + offsets[0] + offsets[1]) > EPS
+                || (guide_radius - radius).abs() > EPS
+                || (guide_sweep.abs() - std::f64::consts::FRAC_PI_2).abs() * radius > EPS
+            {
+                return Ok(None);
+            }
+        }
+        _ => return Ok(None),
     }
     let Some(Carrier::Cone {
         origin: carrier_origin,
@@ -180,12 +272,12 @@ pub(crate) fn certify(
         .ok_or_else(|| unsupported("The native generator lost its source vertex"))?;
     let generator_delta = generator_end.point() - source.point();
     let height = generator_delta.dot(axial);
-    if height <= radius + EPS
+    if height <= lengths[generator_side] + EPS
         || generator_delta.cross(axial).magnitude() > EPS
         || (source.point() + offsets[generator_side] - generator_end.point()).magnitude() <= EPS
     {
         return Err(unsupported(
-            "The radius consumes or leaves the cylindrical end's generator; reduce its size",
+            "The setback consumes or leaves the cylindrical end's generator; reduce its size",
         ));
     }
 
@@ -280,7 +372,7 @@ pub(crate) fn certify(
     let source_b = dot_intervals(&projected_axis, &radial(base, normal_intervals)?)?;
     if discriminant.low <= EPS * EPS || (source_b.low <= 0. && source_b.high >= 0.) {
         return Err(unsupported(
-            "The cylindrical end reaches a root tangency or branch junction; reduce the radius",
+            "The cylindrical end reaches a root tangency or branch junction; reduce the setback",
         ));
     }
     let root = discriminant.sqrt()?;
@@ -390,14 +482,12 @@ pub(crate) fn certify(
         || retained.abs() >= std::f64::consts::TAU - angular_margin
     {
         return Err(unsupported(
-            "The cylindrical end consumes, retraces or closes its rim; reduce the radius",
+            "The cylindrical end consumes, retraces or closes its rim; reduce the setback",
         ));
     }
 
-    // A transverse quarter circle has a regular rational tangent. Its tangent
-    // dotted with the two carrier normals' cross product equals the nonzero
-    // radial root times the meridian's oriented circle-speed numerator. Thus
-    // the projection-plane intersection has no singularity on this branch.
+    // The transverse meridian is a regular segment or a quarter circle.
+    // The positive discriminant excludes a root singularity throughout it.
     Ok(Some(Certificate {
         points,
         axial_range: [station_range.low.min(0.), station_range.high.max(0.)],

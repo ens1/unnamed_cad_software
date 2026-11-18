@@ -347,12 +347,16 @@ pub fn expand(
             .iter()
             .enumerate()
             .filter(|(_, edge)| {
+                // A periodic face can use one seam twice. It is internal to the
+                // face, whereas an edge used once bounds its outer wire or a hole.
                 edge.native
                     .as_ref()
                     .unwrap()
                     .boundaries
                     .iter()
-                    .any(|boundary| same_reference(&boundary.face, seed))
+                    .filter(|boundary| same_reference(&boundary.face, seed))
+                    .count()
+                    == 1
             })
             .map(|(index, _)| index)
             .collect::<BTreeSet<_>>();

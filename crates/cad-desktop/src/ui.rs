@@ -3332,7 +3332,13 @@ pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
             node: "select-profile-node".into(),
         });
     let edges = if matches!(name, "Fillet" | "Chamfer") {
-        crate::selection_ui::preferred_edges(w, &body)
+        match crate::selection_ui::preferred_edges(w, &body) {
+            Ok(edges) => edges,
+            Err(error) => {
+                w.status = error.to_string();
+                return;
+            }
+        }
     } else {
         viewport::preselected_edges(w, &body)
     };
@@ -4097,7 +4103,15 @@ fn capture_feature_selection(w: &mut Workspace, cycle: bool, toggle: bool) {
     if let Some((body, _)) = crate::selection_ui::edge_selection(&feature)
         && !crate::selection_ui::accepts_edge(w, body, &selected)
     {
-        w.status = "Select edges on this feature's input body and component".into();
+        w.status = if selected.reference.topology == "face"
+            && selected.body.as_ref() == Some(body)
+            && crate::selection_ui::edge_occurrence(w, &selected.path)
+        {
+            "Face selected. Choose “Select face boundaries” to add its edges."
+        } else {
+            "Select edges on this feature's input body and component."
+        }
+        .into();
         return;
     }
     let is_edge_feature = matches!(

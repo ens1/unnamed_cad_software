@@ -120,6 +120,18 @@ impl ShellHistory {
     pub(crate) fn invalidate_material(&mut self) {
         self.material_complete = false;
     }
+    /// A convex void is modeled as stock in its own coordinate system.
+    /// Swap the accumulation buffers around this operation so its removals
+    /// become additions to the part, leaving prior groups in their own sense.
+    pub(crate) fn on_void<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        std::mem::swap(&mut self.material.added, &mut self.material.removed);
+        let result = operation(self);
+        std::mem::swap(&mut self.material.added, &mut self.material.removed);
+        result
+    }
     pub(crate) fn capture_material(
         &mut self,
         result: Result<Option<crate::constructor_delta::Native>>,

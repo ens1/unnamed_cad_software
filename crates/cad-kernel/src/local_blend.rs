@@ -44,8 +44,8 @@ struct End {
     /// Complete terminal displacement along the selected edge, relative to
     /// its source vertex. Curved terminals carry an analytic branch enclosure.
     axial_range: Option<[f64; 2]>,
-    neighbour_curves: [Option<Curve>; 2],
-    cap_surface: Option<Surface>,
+    /// Signed change of angular position on the source circular neighbour.
+    arc_trim: Option<(EdgeId, f64)>,
     branch_halfspace: Option<(Point3, Vector3)>,
 }
 struct Blend {
@@ -191,6 +191,7 @@ fn end(
     edges: &HashMap<EdgeId, Edge>,
     treatment: Treatment,
     surface: Option<&Surface>,
+    cylinder_extensions: &mut HashMap<FaceId, (EdgeId, Surface)>,
     history: &mut ShellHistory,
 ) -> Result<Option<End>> {
     let Some(incident) = vertices.get(&source.id()) else {
@@ -218,6 +219,7 @@ fn end(
             edges,
             treatment,
             surface,
+            cylinder_extensions,
             history,
         );
     };
@@ -305,8 +307,7 @@ fn end(
         curve,
         controls,
         axial_range: None,
-        neighbour_curves: [None, None],
-        cap_surface: None,
+        arc_trim: None,
         branch_halfspace: None,
     }))
 }
@@ -318,7 +319,13 @@ fn terminal_stations(edge: &Edge, end: &End) -> Result<[f64; 2]> {
         let (low, high) =
             Enclosure::from_hull(vec![end.source.point()])?.projection(origin, axis)?;
         let interval = Interval::new(low, high)?.add(Interval::new(range[0], range[1])?)?;
-        Ok([interval.low, interval.high])
+        let mut stations = [interval.low, interval.high];
+        if matches!(end.curve.curve(), Curve::NurbsCurve(_)) {
+            let (low, high) =
+                crate::native_bounds::curve(&end.curve.curve())?.projection(origin, axis)?;
+            stations = [stations[0].min(low), stations[1].max(high)];
+        }
+        Ok(stations)
     } else {
         let curve = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
             KnotVector::bezier_knot(end.controls.len() - 1),
@@ -341,8 +348,8 @@ fn changed_hull(edge: &Edge, ends: &[End; 2]) -> Result<Vec<Point3>> {
             high = high.max(stations[1]);
         }
         // The curved terminal is contained by the analytically bounded axis
-        // stations and the unmodified rational fillet's transverse control
-        // triangle. Include outward rational-control projection roundoff.
+        // stations and the treatment's transverse control triangle. Include
+        // outward rational-control projection roundoff and explicit arc bounds.
         let transverse = [origin, ends[0].points[0].point(), ends[0].points[1].point()];
         let mut hull = Vec::new();
         for station in [low, high] {
@@ -351,6 +358,9 @@ fn changed_hull(edge: &Edge, ends: &[End; 2]) -> Result<Vec<Point3>> {
             }
         }
         for end in ends {
+            if end.axial_range.is_some() && matches!(end.curve.curve(), Curve::NurbsCurve(_)) {
+                hull.extend_from_slice(crate::native_bounds::curve(&end.curve.curve())?.points());
+            }
             let curve = Curve::NurbsCurve(NurbsCurve::new(BsplineCurve::new(
                 KnotVector::bezier_knot(end.controls.len() - 1),
                 end.controls.clone(),
@@ -490,6 +500,7 @@ pub(super) fn construct(
         }
     }
     let mut blends = Vec::new();
+    let mut cylinder_extensions = HashMap::new();
     for (_, id) in ordered {
         let edge = &edges[&id];
         let adjacent = &adjacency[&id];
@@ -547,10 +558,16 @@ pub(super) fn construct(
                 )
             }
         };
-        // Keep one unchanged cylindrical carrier when a terminal is curved.
-        // The terminal intersection trims this carrier; it must never be
-        // constructed by interpolating unequal terminal profiles.
-        let surface = if matches!(treatment, Treatment::Fillet) && sign > 0. {
+        // A curved terminal trims the same bevel plane or cylindrical fillet
+        // throughout the edge. Interpolating the two end profiles here would
+        // change the requested carrier.
+        let surface = if matches!(treatment, Treatment::Chamfer) {
+            Some(Surface::Plane(Plane::new(
+                edge.front().point() + offsets[0],
+                edge.front().point() + offsets[1],
+                edge.back().point() + offsets[0],
+            )))
+        } else if sign > 0. {
             let length = edge.front().point().distance(edge.back().point());
             let rows = [offsets[0], Vector3::zero(), offsets[1]]
                 .into_iter()
@@ -587,6 +604,7 @@ pub(super) fn construct(
             &edges,
             treatment,
             surface.as_ref(),
+            &mut cylinder_extensions,
             history,
         )?
         else {
@@ -605,6 +623,7 @@ pub(super) fn construct(
             &edges,
             treatment,
             surface.as_ref(),
+            &mut cylinder_extensions,
             history,
         )?
         else {
@@ -622,10 +641,12 @@ pub(super) fn construct(
             let length = edge.front().point().distance(edge.back().point());
             if first[1] + EPS >= last[0] {
                 return Err(invalid(
-                    "The complete curved terminal branches meet or reverse; reduce the radius",
+                    "The complete curved terminal branches meet or reverse; reduce the setback",
                 ));
             }
-            if first[0] <= -length || last[1] >= 2. * length {
+            if matches!(treatment, Treatment::Fillet)
+                && (first[0] <= -length || last[1] >= 2. * length)
+            {
                 return Err(unsupported(
                     "The cylindrical terminal leaves the finite native fillet carrier",
                 ));
@@ -662,7 +683,7 @@ pub(super) fn construct(
                     <= EPS
                 {
                     return Err(unsupported(
-                        "The complete fillet wedge reaches another branch of its cylindrical terminal",
+                        "The edge treatment reaches another branch of its cylindrical terminal",
                     ));
                 }
             }
@@ -735,8 +756,12 @@ pub(super) fn construct(
         }
     }
     let mut endpoint: HashMap<(EdgeId, VertexId), Vertex> = HashMap::new();
+    let mut arc_trims = HashMap::new();
     for blend in &blends {
         for end in &blend.ends {
+            if let Some((id, angle)) = end.arc_trim {
+                arc_trims.insert((id, end.source.id()), angle);
+            }
             for side in 0..2 {
                 endpoint.insert(
                     (end.neighbours[side], end.source.id()),
@@ -756,27 +781,17 @@ pub(super) fn construct(
         if a.id() == edge.front().id() && b.id() == edge.back().id() {
             continue;
         }
-        let direction = edge.back().point() - edge.front().point();
-        if (b.point() - a.point()).dot(direction) <= EPS * direction.magnitude() {
-            return Err(invalid(
-                "Selected treatments consume a shared neighbouring edge",
-            ));
-        }
-        let supplied = blends
-            .iter()
-            .flat_map(|blend| &blend.ends)
-            .flat_map(|end| end.neighbours.iter().zip(&end.neighbour_curves))
-            .filter_map(|(id, curve)| (*id == edge.id()).then_some(curve.as_ref()).flatten())
-            .collect::<Vec<_>>();
-        if supplied.len() > 1 {
-            return Err(unsupported(
-                "Two curved terminal treatments cannot yet extend the same neighbouring curve",
-            ));
-        }
-        let output = if let Some(curve) = supplied.first() {
-            Edge::try_new(a, b, (**curve).clone())
-                .map_err(|_| invalid("The curved terminal extension has inconsistent endpoints"))?
+        let angles =
+            [edge.front(), edge.back()].map(|v| arc_trims.get(&(edge.id(), v.id())).copied());
+        let output = if angles.iter().any(Option::is_some) {
+            curved_blend_end::continued_arc(edge, a, b, angles)?
         } else {
+            let direction = edge.back().point() - edge.front().point();
+            if (b.point() - a.point()).dot(direction) <= EPS * direction.magnitude() {
+                return Err(invalid(
+                    "Selected treatments consume a shared neighbouring edge",
+                ));
+            }
             builder::line(a, b)
         };
         history.retain_edge(output.id(), edge.id())?;
@@ -841,20 +856,9 @@ pub(super) fn construct(
             }
             wires.push(output);
         }
-        let replacements_on_face = blends
-            .iter()
-            .flat_map(|blend| &blend.ends)
-            .filter(|end| end.cap.id() == face.id())
-            .filter_map(|end| end.cap_surface.as_ref())
-            .collect::<Vec<_>>();
-        if replacements_on_face.len() > 1 {
-            return Err(unsupported(
-                "Multiple extensions of the same curved terminal carrier require a combined construction",
-            ));
-        }
-        let surface = replacements_on_face
-            .first()
-            .map_or_else(|| face.oriented_surface(), |surface| (**surface).clone());
+        let surface = cylinder_extensions
+            .get(&face.id())
+            .map_or_else(|| face.oriented_surface(), |(_, surface)| surface.clone());
         let output = Face::try_new(wires, surface)
             .map_err(|_| invalid("A setback leaves an inconsistent face boundary"))?;
         history.retain_face(output.id(), face.id())?;

@@ -6,6 +6,13 @@ paths share vertices and edges before validating the complete result. No
 sampled relay strips, fitted blend surfaces or display meshes supply modeling
 authority.
 
+In the viewport, Fillet and Chamfer follow a tangent chain from one picked
+edge. A sharp corner or a branching continuation leaves the pick on that edge.
+The property manager also offers Circular rim and Single edge. Explicit
+multi-edge preselection keeps the picked segments. Starting either operation
+from a face includes its outer boundary and holes. A periodic seam used twice
+by the same face is internal and is omitted from that face's boundary.
+
 ## Geometry paths
 
 - **Simultaneous convex planar stock:** constant-radius cylindrical edge rounds,
@@ -26,6 +33,9 @@ authority.
   edges and three supporting planar faces. Complete native enclosures protect
   distant previous blends and every retained trim against the new removal
   regions; unchanged curves and faces preserve their existing topology.
+  Clearance checks also use the finite length of the round, including end
+  profiles and three-edge corner balls. A distant hole on the same alignment
+  can clear the end of the fillet.
 - **Local planar wedges:** a straight convex or concave edge adjoining two
   planar walls and two planar terminal faces may be rounded or chamfered even
   when the rest of the body has pockets, curved walls or earlier treatments.
@@ -34,7 +44,7 @@ authority.
   The two neighbouring edges at each terminal vertex must be straight, with
   exactly three incident faces. Connected selections at one vertex use the
   simultaneous corner path rather than sequential rounding.
-- **Straight rounds ending on cylindrical walls:** a constant-radius round of
+- **Straight fillets and chamfers ending on cylindrical walls.** A constant-radius round of
   a convex right-angle planar wedge can end on a native circular extrusion wall whose
   axis follows one supporting plane's normal. The fillet retains a cylindrical
   carrier and shares its actual intersection curve with the terminal wall.
@@ -46,6 +56,20 @@ authority.
   changed material; other trims and bodies must remain separated. Native
   intersection curves retain branch halfspaces through serialization and
   transforms, and never substitute their search guides for geometry.
+  A chamfer on this wedge uses the rational ellipse where its bevel plane cuts
+  the cylinder. Equal distance, two distances and distance-and-angle use the
+  same bounded terminal. When two treated edges meet opposite ends of one
+  circular edge, they trim the remaining arc together on its original cylinder.
+- **Rounded pocket and boss perimeters.** A complete tangent loop of straight
+  and circular edges can be treated where a planar face meets perpendicular
+  walls, including the mouth and floor of a pocket and the top and base of
+  a boss. The local walls can sit on stepped stock. Other faces and shells
+  must clear the setback. The material preview shows removal at an outside
+  corner and addition at an inside corner.
+- **Raised planar bosses.** A convex boss attached at a single inner loop of
+  a planar host face can be capped temporarily at its base. Selected top and
+  side edges use the boss's own supporting planes. The treated base wire
+  rejoins the host face and the surrounding part retains its geometry.
 - **Segmented straight chains:** when selected collinear sketch or Boolean
   edges divide one planar wedge, an additional native candidate removes paired,
   oppositely oriented coplanar seams and joins the selected edges at proven

@@ -3103,9 +3103,6 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
             ui.label(format!("Edges to fillet: {}", edges.len()));
             changed |= selected_edges(ui, w, &feature.id, body, edges);
             changed |= expression(ui, "Radius", radius);
-            if edges.is_empty() {
-                ui.small("Select edges on the model to round.");
-            }
         }
         Operation::Chamfer {
             edges,
