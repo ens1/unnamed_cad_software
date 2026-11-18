@@ -130,14 +130,9 @@ fn resolve(w: &Workspace) -> cad_core::Result<Size> {
         if text.is_empty() {
             continue;
         }
-        let expr = crate::quantity_display::input_length(&w.session.visible().settings, text);
-        let length = cad_core::expression::value(
-            w.session.visible(),
-            &s.definition,
-            &expr,
-            Dimension::Length,
-        )
-        .map_err(|e| CadError::Invalid(format!("{} · {e}", AXES[i])))?;
+        let (expr, length) =
+            crate::quantity_display::input_length(w.session.visible(), &s.definition, text)
+                .map_err(|e| CadError::Invalid(format!("{} · {e}", AXES[i])))?;
         if !length.is_finite() || length <= 0. {
             return Err(CadError::Invalid(format!("{} must be positive", AXES[i])));
         }

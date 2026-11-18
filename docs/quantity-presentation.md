@@ -29,3 +29,11 @@ expressions, reference geometry, configurations, and semantic numeric camera
 fields use the shared control path. Layout and styles still address the existing
 semantic identities and roles. Formatting is presentation only; authoritative
 geometry and source quantities remain f64.
+
+## Dimensions on the model
+
+In a 2D Rectangle, click the first corner. In a Center Rectangle, click the center. Move the pointer toward the opposite corner. Type a width, press Tab to enter a height, and press Enter to place the rectangle. Each typed side becomes a driving sketch dimension. An empty field follows the pointer. Both fields measure the full rectangle. A click on the sketch can also place it.
+
+While editing a blind extrusion, a mid-plane extrusion, or a fillet with a selected edge, drag the round handle to adjust the preview. A second blind direction has its own handle. Click a dimension label to enter an exact value or a named expression. A mid-plane label shows the full depth. A formula-driven handle opens the expression for editing. Apply accepts the validated feature and Cancel restores the starting model.
+
+Bare lengths and fractions in these controls use the document display unit. For example, in an inch document, entering `3/8` gives 0.375 in. An explicit `8 mm` retains its unit. User layouts can bind `sketch-placement-field`, `sketch-placement-action` and `feature-dimension-field`. The viewport uses the theme roles `sketch-placement-input`, `feature-dimension-handle`, `dimension-value-button` and `viewport-dimension-input`.

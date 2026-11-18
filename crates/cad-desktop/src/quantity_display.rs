@@ -92,15 +92,30 @@ pub fn expression_with(settings: &ModelSettings, source: &str) -> Option<String>
     }
     None
 }
-/// In a length entry, a bare numeric literal uses the document display unit.
-/// Leave expressions and explicit units intact so their design intent survives edits.
-pub(crate) fn input_length(settings: &ModelSettings, text: &str) -> cad_core::Expr {
+/// Preserve length-valued formulas. Attach the display unit once to scalar
+/// input, including fractions, so changing the display unit later is harmless.
+pub(crate) fn input_length(
+    document: &cad_core::Document,
+    owner: &str,
+    text: &str,
+) -> cad_core::Result<(cad_core::Expr, f64)> {
+    use cad_core::{Dimension, Expr};
     let text = text.trim();
-    if text.parse::<f64>().is_ok() {
-        cad_core::Expr(format!("{text} {}", settings.display_length_unit.symbol()))
-    } else {
-        text.into()
+    let expr: Expr = text.into();
+    let quantity = cad_core::expression::quantity(document, owner, &expr)?;
+    if quantity.matches(Dimension::Length) {
+        return Ok((expr, quantity.value));
     }
+    if !quantity.matches(Dimension::Scalar) {
+        return Err(cad_core::CadError::Invalid("Enter a length".into()));
+    }
+    let unit = document.settings.display_length_unit;
+    let source = if text.parse::<f64>().is_ok() {
+        format!("{text} {}", unit.symbol())
+    } else {
+        format!("({text}) * 1 {}", unit.symbol())
+    };
+    Ok((Expr(source), quantity.value * unit.millimeters_per_unit()))
 }
 pub fn expression(source: &str) -> String {
     SETTINGS.with(|settings| {
