@@ -433,6 +433,7 @@ pub fn icon_button(
     selected: bool,
     icon: Option<IconPainter<'_>>,
 ) -> Response {
+    let enabled = enabled && ui.is_enabled();
     let state = if !enabled {
         "disabled"
     } else if selected {
@@ -493,6 +494,8 @@ pub fn icon_button(
                 "only"
             } else if classes.contains(&"icon-label") {
                 "top"
+            } else if classes.contains(&"submenu-heading") {
+                "right"
             } else {
                 "left"
             },
@@ -553,7 +556,7 @@ pub fn icon_button(
         .get("text-overflow")
         .is_some_and(|value| value == "ellipsis")
     {
-        let leading_icon = if icon_position == "left" {
+        let inline_icon = if matches!(icon_position, "left" | "right") {
             icon_size + icon_gap
         } else {
             0.
@@ -569,7 +572,7 @@ pub fn icon_button(
                         ..Default::default()
                     },
                 );
-                job.wrap.max_width = (visual.x - pad[1] - pad[3] - leading_icon).max(0.);
+                job.wrap.max_width = (visual.x - pad[1] - pad[3] - inline_icon).max(0.);
                 job.wrap.max_rows = 1;
                 job.wrap.break_anywhere = true;
                 job.break_on_newline = false;
@@ -593,15 +596,11 @@ pub fn icon_button(
     {
         return ui.interact(reserved, widget_id, egui::Sense::hover());
     }
-    let response = ui.interact(
-        reserved,
-        widget_id,
-        if enabled {
-            egui::Sense::click()
-        } else {
-            egui::Sense::hover()
-        },
-    );
+    // egui's disabled tooltips and accessibility use the registered widget
+    // state. Keep the same placement and ID for either state.
+    let response = ui.add_enabled(enabled, |ui: &mut egui::Ui| {
+        ui.interact(reserved, widget_id, egui::Sense::click())
+    });
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     let pressed = enabled
         && (response.is_pointer_button_down_on()
@@ -661,6 +660,7 @@ pub fn icon_button(
         if let Some(icon) = icon {
             let center = match icon_position {
                 "top" => egui::pos2(left + content.x * 0.5, top + icon_size * 0.5),
+                "right" => egui::pos2(rect.right() - pad[1] - icon_size * 0.5, rect.center().y),
                 _ => egui::pos2(left + icon_size * 0.5, rect.center().y),
             };
             icon(&painter, center, icon_size, color.gamma_multiply(opacity));
@@ -673,7 +673,11 @@ pub fn icon_button(
                 )
             } else {
                 egui::pos2(
-                    left + icon_size + icon_gap,
+                    left + if icon_position == "left" {
+                        icon_size + icon_gap
+                    } else {
+                        0.
+                    },
                     rect.center().y - text_size.y * 0.5,
                 )
             };
@@ -1172,13 +1176,39 @@ pub fn menu_button_as<R>(
     label: &str,
     content: impl FnOnce(&mut egui::Ui) -> R,
 ) {
-    let response = button(ui, id, role, &["menu-heading"], label, true, false);
+    let nested = egui::containers::menu::is_in_menu(ui);
+    let classes = if nested {
+        &["menu-heading", "submenu-heading"][..]
+    } else {
+        &["menu-heading"][..]
+    };
+    let chevron = |painter: &egui::Painter, center: egui::Pos2, size: f32, color| {
+        let offset = size * 0.23;
+        let tip = center + egui::vec2(offset, 0.);
+        let stroke = Stroke::new((size * 0.12).max(1.), color);
+        painter.line_segment([center - egui::vec2(offset, offset * 1.6), tip], stroke);
+        painter.line_segment([tip, center + egui::vec2(-offset, offset * 1.6)], stroke);
+    };
+    let response = icon_button(
+        ui,
+        id,
+        role,
+        classes,
+        label,
+        true,
+        false,
+        nested.then_some(&chevron as IconPainter<'_>),
+    );
     let target = STYLES.with(|snapshot| {
         let snapshot = snapshot.borrow();
-        snapshot
-            .target
-            .clone()
-            .map(|parent| parent.child(id, role, &["menu-heading".into()], "ready"))
+        snapshot.target.clone().map(|parent| {
+            parent.child(
+                id,
+                role,
+                &classes.iter().map(|c| (*c).into()).collect::<Vec<_>>(),
+                "ready",
+            )
+        })
     });
     let content = |ui: &mut egui::Ui| {
         if let Some(target) = target {
@@ -1187,7 +1217,7 @@ pub fn menu_button_as<R>(
             content(ui);
         }
     };
-    if egui::containers::menu::is_in_menu(ui) {
+    if nested {
         egui::containers::menu::SubMenu::new().show(ui, &response, content);
     } else {
         egui::Popup::menu(&response).show(content);

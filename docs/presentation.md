@@ -707,10 +707,13 @@ Explicit `\n` breaks in a caption remain separate lines; ellipsis and alignment
 apply to each line, so a narrow tile does not discard its second authored line.
 
 The shared native button adapter accepts the portable style property
-`icon-position: left | top | only`. It overrides the widget's default arrangement
+`icon-position: left | right | top | only`. It overrides the widget's default arrangement
 and works on other icon-bearing controls, including command ribbons. `icon-size`,
 `gap`, `width`, `height`, padding, colors, borders and hit sizes remain separately
 styleable. Text-only controls remain text-only even when `icon-position` is set.
+Nested menu headings expose the `submenu-heading` class. Their arrow uses the
+trailing edge by default. Style its size with `icon-size` and its placement with
+`icon-position`.
 
 ```json
 {

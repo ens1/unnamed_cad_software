@@ -1222,7 +1222,7 @@ pub fn footer(ui: &mut egui::Ui, w: &mut Workspace) {
                     false,
                 );
                 let response = if let Some(reason) = element.value {
-                    response.on_hover_text(reason)
+                    response.on_disabled_hover_text(reason)
                 } else {
                     response
                 };

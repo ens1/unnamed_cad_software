@@ -1195,7 +1195,7 @@ fn render_element(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElemen
                 element.data["enabled"].as_bool().unwrap_or(false),
                 false,
             )
-            .on_hover_text(element.data["disabled_reason"].as_str().unwrap_or_default())
+            .on_disabled_hover_text(element.data["disabled_reason"].as_str().unwrap_or_default())
             .clicked() =>
         {
             crate::ui::semantic_action(w, element, &element.commands[0]);

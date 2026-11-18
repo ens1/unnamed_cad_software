@@ -557,9 +557,9 @@ fn component_selection(ui: &mut egui::Ui, state: &mut State, w: &mut Workspace) 
                         selected,
                     );
                     if let Some(reason) = &entry.reason {
-                        response.clone().on_hover_text(reason);
+                        response.clone().on_disabled_hover_text(reason);
                     } else if component == &state.path[0] {
-                        response.clone().on_hover_text(
+                        response.clone().on_disabled_hover_text(
                             "Primary component · shared pivot belongs to this occurrence",
                         );
                     }

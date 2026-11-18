@@ -3,13 +3,19 @@
 :root {
   --panel: #F4F1E9;
   --ink: #191919;
+  --muted-text: #605B52;
+  --disabled-text: #746E63;
+  --control-surface: #FFFCF6;
+  --control-border: #A9A294;
+  --hover-surface: #E3DED3;
+  --selected-surface: #FFE3D2;
   --active: #FF5A00;
   --active-text: #A33900;
   --valid: #237536;
   --spacing: 4px;
   --reference: #006C98;
   --focus: #006C98;
-  --font-size: 11px;
+  --font-size: 12px;
   --control-height: 24px;
   --target-size: 24px;
   --warning: #855600;
@@ -26,7 +32,7 @@
   --section-heading-radius: 2px;
   --section-radius: 0px;
   --section-divider-width: 1px;
-  --section-divider-spacing: 6px;
+  --section-divider-spacing: 4px;
 }
 
 [role=sketch3d-member] { color: var(--reference); stroke-width: 1.5px; }
@@ -98,9 +104,10 @@
 }
 
 [role=selection-title] {
-  width: 180px;
+  width: 100%;
   text-overflow: ellipsis;
-  font-size: 10px;
+  font-size: 12px;
+  font-weight: bold;
 }
 [role=selection-action-group] {
   width: 100%;
@@ -149,11 +156,14 @@
   color: var(--valid);
 }
 
-[role=document-context], [role=command-manager], [role=status-bar] {
-  background: #F2F0EB;
-  padding: 5px;
+[role=document-context], [role=command-manager], [role=status-bar], [role=view-navigation] {
+  background: var(--panel);
   border: 1px solid #C2C5CA;
 }
+[role=document-context] { padding: 3px 6px; }
+[role=command-manager] { padding: 2px 6px; }
+[role=status-bar] { padding: 0px 6px; }
+[role=view-navigation] { background: #ECE8DF; padding: 3px 5px; }
 
 [role=model-viewport] {
   background: #D5D9DF;
@@ -166,7 +176,7 @@
   centerline-color: #526B87;
 }
 
-[role=dependency-view], [role=view-navigation], [role=property-manager] {
+[role=dependency-view], [role=property-manager] {
   background: var(--panel);
   padding: 6px;
 }
@@ -180,21 +190,42 @@
 
 .toolbar-control {
   height: 26px;
-  padding: 3px 5px;
-  font-size: 10.5px;
+  padding: 3px 6px;
+  font-size: 11.5px;
   icon-size: 18px;
+  background: var(--control-surface);
+  border: 1px solid var(--control-border);
+}
+
+[role=command-tab], [role=navigation-action] {
+  height: var(--control-height);
+  min-target-size: var(--target-size);
+  padding: 2px 7px;
   border: none;
-  background: #F4F1E9;
+  border-radius: 3px;
+  background: transparent;
 }
 
-.toolbar-control:hover, [role=menu-action]:hover, [role=selection-action]:hover {
-  background: #E4E0D8;
+.toolbar-control[state=ready]:hover, [role=command-tab][state=ready]:hover,
+[role=navigation-action][state=ready]:hover, [role=menu-action][state=ready]:hover,
+[role=selection-action][state=ready]:hover {
+  background: var(--hover-surface);
 }
 
-[role=command-tab][state=selected], .toolbar-control[state=selected] {
+[role=command-tab][state=selected], [role=navigation-action][state=selected], .toolbar-control[state=selected] {
   color: var(--active-text);
-  background: #FFE3D2;
-  border: 1px solid #FF5A00;
+  background: var(--selected-surface);
+  border: 1px solid var(--active-text);
+}
+
+.toolbar-control[state=disabled] {
+  color: var(--disabled-text);
+  background: transparent;
+  border: 1px solid #D8D3C9;
+}
+[role=menu-action][state=disabled], [role=selection-action][state=disabled] {
+  color: var(--disabled-text);
+  background: transparent;
 }
 
 [role=menu-action], [role=selection-action] {
@@ -204,7 +235,18 @@
   border: none;
 }
 
-[role=menu-action] { text-align: left; }
+[role=menu-action], [role=selection-action] { text-align: left; }
+.submenu-heading {
+  width: 100%;
+  height: var(--control-height);
+  padding: 3px 6px;
+  text-align: left;
+  text-overflow: ellipsis;
+  icon-size: 10px;
+  border: none;
+  background: transparent;
+}
+.submenu-heading:hover { background: var(--hover-surface); }
 
 [role=viewport-visibility-toggle] {
   width: 100%;
@@ -243,11 +285,12 @@
 
 [role=cancel-action] {
   color: var(--ink);
-  background: #F4F1E9;
+  background: var(--control-surface);
   padding: 3px 8px;
-  border: none;
+  border: 1px solid var(--control-border);
   height: 26px;
 }
+[role=cancel-action][state=ready]:hover { background: var(--hover-surface); }
 
 [role=viewport-toolbar] {
   font-size: 11px;
@@ -308,9 +351,13 @@
 [role=sketch-point-motion][state=constrained] { color: var(--valid); size: 4px; }
 [role=sketch-constraint][state=dependent] { color: var(--warning); }
 
+.feature-tree-row[state=ready]:hover, [role=history-station][state=ready]:hover {
+  background: var(--hover-surface);
+}
 .feature-tree-row[state=selected], [role=history-station][state=selected] {
   color: var(--active-text);
-  background: #FFE3D2;
+  background: var(--selected-surface);
+  border: 1px solid var(--active-text);
 }
 
 [role=history-path] {
@@ -343,17 +390,30 @@
 
 [role=settings-category] {
   height: 24px;
-  padding: 3px 6px;
+  width: 100%;
+  max-width: 175px;
+  text-align: left;
+  text-overflow: ellipsis;
+  padding: 3px 7px;
   border-radius: 3px;
+  background: transparent;
+  border: none;
 }
 
-[role=settings-category][state=selected], [role=settings-action].primary {
+[role=settings-category][state=ready]:hover { background: var(--hover-surface); }
+[role=settings-category][state=selected] {
+  color: var(--active-text);
+  background: var(--selected-surface);
+  border: 1px solid var(--active-text);
+}
+[role=settings-action].primary {
   background: var(--active);
-  color: #191919;
+  color: var(--ink);
 }
 
 [role=settings-description] {
-  font-size: 10px;
+  font-size: 11px;
+  color: var(--muted-text);
 }
 
 [role=settings-diagnostic][state=invalid] {
@@ -792,7 +852,7 @@
   color: var(--section-heading-color);
   border: 1px solid var(--section-border);
   border-radius: var(--section-heading-radius);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: bold;
   text-align: left;
   text-overflow: ellipsis;
@@ -833,7 +893,9 @@
   text-overflow: ellipsis;
   max-width: 100%;
 }
-[role=task-status][state=required] { color: var(--ink); }
+[role=task-status][state=required] { color: var(--reference); font-weight: bold; }
+[role=task-status][state=pending] { color: var(--warning); }
+[role=task-status][state=valid] { color: var(--valid); }
 [role=task-status][state=invalid] { color: var(--error); }
 [role=task-section-toggle], [role=task-reference-toggle] {
   width: 100%;

@@ -963,7 +963,7 @@ fn validate_property(name: &str, value: &str) -> Result<()> {
         "overflow" => Some(&["clip", "hidden", "scroll", "auto"]),
         "text-align" => Some(&["left", "right", "center"]),
         "text-overflow" => Some(&["clip", "ellipsis"]),
-        "icon-position" => Some(&["left", "top", "only"]),
+        "icon-position" => Some(&["left", "right", "top", "only"]),
         "shape" => Some(&["rectangle", "rounded", "circle"]),
         "anchor" => Some(&[
             "top-left",

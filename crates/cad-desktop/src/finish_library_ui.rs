@@ -535,7 +535,7 @@ fn render_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement
         element.data["enabled"].as_bool().unwrap_or(false),
         false,
     )
-    .on_hover_text(element.data["disabled_reason"].as_str().unwrap_or_default())
+    .on_disabled_hover_text(element.data["disabled_reason"].as_str().unwrap_or_default())
     .clicked()
     {
         if element.commands[0].starts_with("content-repositories.") {
