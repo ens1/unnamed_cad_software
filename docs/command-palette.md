@@ -7,11 +7,16 @@ definitions. Plain Enter invokes the selected current result; Up/Down changes
 the result selection. Cmd/Ctrl+Enter does not apply a hidden editor while search
 is open. The search field requests focus once when opened.
 
-Search matches words in command names, IDs and categories. Available actions
-sort first, followed by selected-geometry actions and named-view recall. The
-optional availability filter hides disabled actions; otherwise disabled reasons
-remain visible. At most 128 matches are displayed, with the complete match count
-and a request to refine the query when needed.
+An empty search offers up to five available commands for the current selection
+and workspace. Type to search the full catalog by name, common alias, ID or
+category. **Browse all commands** opens the catalog without a query. **Show
+suggestions** returns to the shorter list. The availability filter can hide
+commands that cannot run in the current context.
+
+Results are shown in pages of twelve. **Previous** and **Next** move between
+pages. With the search field focused, Up and Down move across page boundaries.
+Page Up and Page Down move twelve results at a time. The range above the results
+shows the current position and total match count.
 
 The palette combines the registered command catalog with current material,
 finish, lighting, property, hardware, design-monitor, tolerance-stack,
@@ -28,7 +33,7 @@ a claim that a kernel operation supports arbitrary geometry.
 
 The presentation contract is `tcad.command-palette` version 1. Semantic fields
 use the `command-palette` setter. `workspace.commands` exposes the registered
-compound renderer; query, availability, status and individual result records
+compound renderer. Query, availability, browse, paging, status and result records
 also have independent identities, roles, values and action data. User layouts
 may replace the compound presentation with repeated semantic bindings and
 CSS-like styling. Search state is transient presentation intent, outside CAD

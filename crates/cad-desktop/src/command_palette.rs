@@ -7,13 +7,16 @@ use cad_core::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 const QUERY: &str = "command-query";
 const ONLY: &str = "command-palette-only-available";
 const INDEX: &str = "command-palette-index";
 const RETURN: &str = "command-palette-return";
 const TREE: &str = "command-palette-return-tree";
-const MAX_RESULTS: usize = 128;
+const BROWSE: &str = "command-palette-browse";
+const PAGE_SIZE: usize = 12;
+const SUGGESTION_LIMIT: usize = 5;
 #[derive(Clone)]
 struct Candidate {
     id: String,
@@ -30,6 +33,7 @@ pub fn before_open(w: &mut Workspace) {
         w.fields.insert(TREE.into(), w.manager_tree.to_string());
         w.fields.remove(INDEX);
         w.fields.remove(QUERY);
+        w.fields.remove(BROWSE);
         w.fields
             .insert("focus-request:command-palette:query".into(), "true".into());
     }
@@ -190,13 +194,17 @@ fn unbound_reason(command: &str) -> Option<&'static str> {
 }
 fn candidates(w: &Workspace) -> Vec<Candidate> {
     let chrome = crate::cad_ui::semantics(w);
+    let toolbar: BTreeMap<_, _> = chrome
+        .iter()
+        .filter_map(|element| Some((element.id.strip_prefix("command-toolbar/")?, element)))
+        .collect();
     let mut out = BTreeMap::new();
     for (command, label) in cad_core::presentation::command_catalog() {
-        let source = chrome
-            .iter()
-            .find(|element| element.id == format!("command-toolbar/{command}"))
+        let source = toolbar
+            .get(command)
+            .copied()
             .cloned()
-            .unwrap_or(SemanticElement {
+            .unwrap_or_else(|| SemanticElement {
                 id: format!("command:{command}"),
                 role: "command".into(),
                 label: label.into(),
@@ -401,19 +409,101 @@ fn suggested_commands(w: &Workspace) -> &[&str] {
     }
 }
 
-fn match_summary(count: usize, only_available: bool) -> String {
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Mode {
+    Suggestions,
+    Browse,
+    Search,
+}
+fn mode(w: &Workspace) -> Mode {
+    if w.fields
+        .get(QUERY)
+        .is_some_and(|query| !query.trim().is_empty())
+    {
+        Mode::Search
+    } else if w.fields.contains_key(BROWSE) {
+        Mode::Browse
+    } else {
+        Mode::Suggestions
+    }
+}
+fn cursor(w: &Workspace, count: usize) -> usize {
+    w.fields
+        .get(INDEX)
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(count.saturating_sub(1))
+}
+fn page(index: usize, count: usize) -> Range<usize> {
+    let start = index / PAGE_SIZE * PAGE_SIZE;
+    start..(start + PAGE_SIZE).min(count)
+}
+fn match_summary(w: &Workspace, range: &Range<usize>, count: usize) -> String {
+    let mode = mode(w);
+    if mode == Mode::Suggestions {
+        return if count == 0 {
+            "Type a command name or browse the catalog."
+        } else {
+            "Suggested commands"
+        }
+        .into();
+    }
+    let noun = if mode == Mode::Browse {
+        "commands"
+    } else {
+        "matches"
+    };
     match count {
-        0 if only_available => {
+        0 if w.fields.get(ONLY).is_some_and(|value| value == "true") => {
             "No matches. Clear the availability filter or try another name.".into()
         }
         0 => "No matching commands. Try a tool name such as Extrude or Fillet.".into(),
-        1 => "1 matching command".into(),
-        n if n > MAX_RESULTS => format!("Showing {MAX_RESULTS} of {n} matches"),
-        n => format!("{n} matching commands"),
+        1 => "1 command".into(),
+        count if count > PAGE_SIZE => {
+            format!("{}–{} of {count} {noun}", range.start + 1, range.end)
+        }
+        count => format!("{count} {noun}"),
     }
 }
-
-fn filtered(w: &Workspace) -> (Vec<Candidate>, usize) {
+fn suggestion_rank(candidate: &Candidate, suggestions: &[&str]) -> Option<(usize, usize)> {
+    if !candidate.action.enabled {
+        return None;
+    }
+    let menu = &candidate.source.data["menu"];
+    if candidate.source.role == "selection-action"
+        && menu["primary"] == true
+        && candidate.action.command != "sketch.delete-selection"
+    {
+        return Some((0, menu["order"].as_u64().unwrap_or(50) as usize));
+    }
+    suggestions
+        .iter()
+        .position(|command| *command == candidate.action.command)
+        .map(|rank| (1, rank))
+}
+fn filtered(w: &Workspace) -> Vec<Candidate> {
+    if mode(w) == Mode::Suggestions {
+        let suggestions = suggested_commands(w);
+        let mut ranked = candidates(w)
+            .into_iter()
+            .filter_map(|candidate| {
+                suggestion_rank(&candidate, suggestions).map(|rank| (rank, candidate))
+            })
+            .collect::<Vec<_>>();
+        ranked.sort_by(|(a_rank, a), (b_rank, b)| {
+            a_rank
+                .cmp(b_rank)
+                .then_with(|| b.context.cmp(&a.context))
+                .then_with(|| a.label.cmp(&b.label))
+        });
+        let mut seen = BTreeSet::new();
+        return ranked
+            .into_iter()
+            .map(|(_, candidate)| candidate)
+            .filter(|candidate| seen.insert(candidate.action.command.clone()))
+            .take(SUGGESTION_LIMIT)
+            .collect();
+    }
     let query = w
         .fields
         .get(QUERY)
@@ -423,10 +513,15 @@ fn filtered(w: &Workspace) -> (Vec<Candidate>, usize) {
         .to_lowercase();
     let terms = query.split_whitespace().collect::<Vec<_>>();
     let only = w.fields.get(ONLY).is_some_and(|value| value == "true");
-    let suggestions = suggested_commands(w);
     let mut values = candidates(w)
         .into_iter()
         .filter(|candidate| {
+            if only && !candidate.action.enabled {
+                return false;
+            }
+            if terms.is_empty() {
+                return true;
+            }
             let haystack = format!(
                 "{} {} {} {}",
                 candidate.label,
@@ -435,35 +530,24 @@ fn filtered(w: &Workspace) -> (Vec<Candidate>, usize) {
                 search_aliases(&candidate.action.command)
             )
             .to_lowercase();
-            (!only || candidate.action.enabled) && terms.iter().all(|term| haystack.contains(term))
+            terms.iter().all(|term| haystack.contains(term))
         })
         .collect::<Vec<_>>();
     values.sort_by_cached_key(|candidate| {
         let label = candidate.label.to_lowercase();
         let command = candidate.action.command.as_str();
-        let suggested_rank = if query.is_empty() {
-            suggestions
-                .iter()
-                .position(|suggestion| *suggestion == command)
-                .unwrap_or(usize::MAX)
-        } else {
-            0
-        };
         (
             !query.is_empty()
                 && query != label
                 && command.rsplit('.').next() != Some(query.as_str()),
             !candidate.action.enabled,
             !candidate.context,
-            suggested_rank,
             !label.starts_with(&query),
             candidate.category.clone(),
             label,
         )
     });
-    let count = values.len();
-    values.truncate(MAX_RESULTS);
-    (values, count)
+    values
 }
 fn stamp(w: &Workspace) -> Value {
     json!({"document":w.session.visible().id,"generation":w.session.generation,"revision":w.session.visible().revision,"draft":w.session.draft.as_ref().map(|draft|(&draft.id,draft.edit))})
@@ -513,7 +597,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             state: if open { "open" } else { "closed" }.into(),
             commands: vec!["commands".into()],
             relationships: vec![],
-            data: json!({"renderer":"command-palette","contract":"tcad.command-palette","version":1,"maximum_results":MAX_RESULTS}),
+            data: json!({"renderer":"command-palette","contract":"tcad.command-palette","version":1,"maximum_results":PAGE_SIZE,"page_size":PAGE_SIZE,"suggestion_limit":SUGGESTION_LIMIT}),
         },
         field(
             w,
@@ -539,20 +623,80 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             relationships: vec!["workspace.commands".into()],
             data: json!({"accessibility_label":"Close command search"}),
         });
-        let (values, count) = filtered(w);
+        let values = filtered(w);
+        let count = values.len();
+        let range = page(cursor(w, count), count);
         out.push(SemanticElement {
             id: "command-palette:status".into(),
             role: "command-palette-status".into(),
-            label: match_summary(count, w.fields.get(ONLY).is_some_and(|v| v == "true")),
+            label: match_summary(w, &range, count),
             value: None,
             state: "ready".into(),
             commands: vec![],
             relationships: vec!["workspace.commands".into()],
-            data: json!({"matches":count,"shown":values.len()}),
+            data: json!({"matches":count,"shown":range.len(),"offset":range.start,"suggestions":mode(w) == Mode::Suggestions}),
         });
-        out.extend(values.iter().map(|candidate| result_element(w, candidate)));
+        out.extend(navigation(w, &range, count));
+        out.extend(
+            values[range]
+                .iter()
+                .map(|candidate| result_element(w, candidate)),
+        );
     }
     out
+}
+const ALL: &str = "command-palette.browse";
+const SUGGESTED: &str = "command-palette.suggestions";
+const PREVIOUS: &str = "command-palette.previous-page";
+const NEXT: &str = "command-palette.next-page";
+
+fn navigation(w: &Workspace, range: &Range<usize>, count: usize) -> Vec<SemanticElement> {
+    let mut actions = Vec::new();
+    match mode(w) {
+        Mode::Suggestions => actions.push((ALL, "Browse all commands", true)),
+        Mode::Browse => actions.push((SUGGESTED, "Show suggestions", true)),
+        Mode::Search => {}
+    }
+    if count > PAGE_SIZE {
+        actions.push((PREVIOUS, "Previous", range.start > 0));
+        actions.push((NEXT, "Next", range.end < count));
+    }
+    actions
+        .into_iter()
+        .map(|(command, label, enabled)| SemanticElement {
+            id: command.into(),
+            role: "command-palette-action".into(),
+            label: label.into(),
+            value: None,
+            state: if enabled { "ready" } else { "disabled" }.into(),
+            commands: vec![command.into()],
+            relationships: vec!["workspace.commands".into()],
+            data: json!({
+                "document": w.session.visible().id,
+                "actions": [{"command": command, "label": label, "enabled": enabled}]
+            }),
+        })
+        .collect()
+}
+fn navigate(w: &mut Workspace, command: &str, count: usize) {
+    let index = cursor(w, count);
+    let start = page(index, count).start;
+    let next = match command {
+        ALL if mode(w) == Mode::Suggestions => {
+            w.fields.insert(BROWSE.into(), "true".into());
+            0
+        }
+        SUGGESTED if mode(w) == Mode::Browse => {
+            w.fields.remove(BROWSE);
+            0
+        }
+        PREVIOUS if start > 0 => start - PAGE_SIZE,
+        NEXT if start + PAGE_SIZE < count => start + PAGE_SIZE,
+        _ => return,
+    };
+    w.fields.insert(INDEX.into(), next.to_string());
+    w.fields
+        .insert("focus-request:command-palette:query".into(), "true".into());
 }
 pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
     match element.data["field"].as_str()? {
@@ -617,6 +761,20 @@ fn execute(w: &mut Workspace, element: &SemanticElement) -> Result<()> {
     Ok(())
 }
 pub fn action(w: &mut Workspace, command: &str, data: Option<&Value>) -> bool {
+    if matches!(command, ALL | SUGGESTED | PREVIOUS | NEXT) {
+        if data.is_none_or(|data| {
+            data.get("document")
+                .is_none_or(|id| id.as_str() == Some(w.session.visible().id.as_str()))
+        }) {
+            let count = if matches!(command, PREVIOUS | NEXT) {
+                filtered(w).len()
+            } else {
+                0
+            };
+            navigate(w, command, count);
+        }
+        return true;
+    }
     if command == "command-palette.close" {
         escape(w);
         return true;
@@ -690,46 +848,72 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     let query_row = ui
         .scope(|ui| crate::ui::semantic_field(ui, w, &query))
         .response;
-    let keyboard = open
+    let keyboard = (open && focused.is_none())
         || focused.is_some_and(|field| {
             field.layer_id == query_row.layer_id && query_row.rect.contains(field.rect.center())
         });
-    let available = field(
-        w,
-        "available",
-        "Available commands only",
-        json!(w.fields.get(ONLY).is_some_and(|value| value == "true")),
-    );
-    crate::ui::semantic_field(ui, w, &available);
-    let (values, count) = filtered(w);
-    let mut index = w
-        .fields
-        .get(INDEX)
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0)
-        .min(values.len().saturating_sub(1));
-    let (up, down, enter) = ui.input_mut(|input| {
+    if mode(w) != Mode::Suggestions {
+        let available = field(
+            w,
+            "available",
+            "Available commands only",
+            json!(w.fields.get(ONLY).is_some_and(|value| value == "true")),
+        );
+        crate::ui::semantic_field(ui, w, &available);
+    }
+    let values = filtered(w);
+    let count = values.len();
+    let mut index = cursor(w, count);
+    let (up, down, page_up, page_down, enter) = ui.input_mut(|input| {
+        let mut pressed = |key| keyboard && input.consume_key(egui::Modifiers::NONE, key);
         (
-            keyboard && input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-            keyboard && input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-            keyboard && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+            pressed(egui::Key::ArrowUp),
+            pressed(egui::Key::ArrowDown),
+            pressed(egui::Key::PageUp),
+            pressed(egui::Key::PageDown),
+            pressed(egui::Key::Enter),
         )
     });
-    if up {
-        index = index.saturating_sub(1);
+    if up || page_up {
+        index = index.saturating_sub(if page_up { PAGE_SIZE } else { 1 });
     }
-    if down {
-        index = (index + 1).min(values.len().saturating_sub(1));
+    if down || page_down {
+        index = (index + if page_down { PAGE_SIZE } else { 1 }).min(count.saturating_sub(1));
     }
     w.fields.insert(INDEX.into(), index.to_string());
-    controls::label(
-        ui,
-        "command-palette:status",
-        "command-palette-status",
-        &[],
-        &match_summary(count, w.fields.get(ONLY).is_some_and(|v| v == "true")),
-        "ready",
-    );
+    let range = page(index, count);
+    let navigation_clicked = ui
+        .horizontal_wrapped(|ui| {
+            controls::label(
+                ui,
+                "command-palette:status",
+                "command-palette-status",
+                &[],
+                &match_summary(w, &range, count),
+                "ready",
+            );
+            for item in navigation(w, &range, count) {
+                if controls::button(
+                    ui,
+                    &item.id,
+                    &item.role,
+                    &["semantic-control"],
+                    &item.label,
+                    item.state != "disabled",
+                    false,
+                )
+                .clicked()
+                {
+                    navigate(w, &item.id, count);
+                    return true;
+                }
+            }
+            false
+        })
+        .inner;
+    if navigation_clicked {
+        return;
+    }
     let mut chosen = enter
         .then(|| {
             values
@@ -739,9 +923,10 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         })
         .flatten();
     egui::ScrollArea::vertical()
-        .id_salt("command-palette-results")
+        .id_salt(("command-palette-results", range.start))
         .show(ui, |ui| {
-            for (row, candidate) in values.iter().enumerate() {
+            for row in range {
+                let candidate = &values[row];
                 let response = controls::button(
                     ui,
                     &candidate.id,
@@ -771,7 +956,7 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                         "disabled",
                     );
                 }
-                if row == index && (up || down) {
+                if row == index && (up || down || page_up || page_down) {
                     response.scroll_to_me(Some(egui::Align::Center));
                 }
                 if response.clicked() {
