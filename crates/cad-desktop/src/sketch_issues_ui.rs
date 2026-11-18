@@ -159,16 +159,13 @@ fn inspect(w: &Workspace) -> Option<Inspection> {
     })
 }
 fn member_name(source: &Sketch, id: &str) -> String {
-    let index = source.members.keys().position(|key| key == id).unwrap_or(0) + 1;
-    let kind = match source.members.get(id).map(|member| &member.curve) {
-        Some(SketchCurve::Line { .. }) => "Line",
-        Some(SketchCurve::Arc { .. }) => "Arc",
-        Some(SketchCurve::Circle { .. }) => "Circle",
-        Some(SketchCurve::Ellipse { .. }) => "Ellipse",
-        Some(SketchCurve::Bezier { .. } | SketchCurve::Nurbs { .. }) => "Spline",
-        None => "Member",
-    };
-    format!("{kind} {index}")
+    source
+        .members
+        .iter()
+        .enumerate()
+        .find(|(_, (key, _))| *key == id)
+        .map(|(index, (_, member))| crate::sketch_ui::member_label(index, &member.curve))
+        .unwrap_or_else(|| "Member".into())
 }
 fn issue(
     source: &Sketch,

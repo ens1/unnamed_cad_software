@@ -1761,29 +1761,30 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     if crate::sketch_edit_ui::controls(ui, w) {
         return;
     }
-    if let Some(s) = &w.sketch {
-        if let Some(error) = &s.placement_error {
-            crate::presentation_controls::label(
-                ui,
-                &format!("{section_id}::placement-error"),
-                "field-diagnostic",
-                &["error"],
-                error,
-                "error",
-            );
-        }
-        let smart_dimension = w.fields.contains_key("smart-dimension-mode");
-        let selection_key = if smart_dimension {
-            Some("dimension")
-        } else if !s.selection.is_empty() {
-            Some("selection")
+    let Some(s) = &w.sketch else { return };
+    let dimension_mode = w.fields.contains_key("smart-dimension-mode") || s.dimension.is_some();
+    let selection_label = crate::sketch_ui::selection_label(s);
+    let status = s.placement_error.as_ref().or(s.error.as_ref());
+    if let Some(error) = status {
+        crate::presentation_controls::label(
+            ui,
+            &format!("{section_id}::placement-error"),
+            "field-diagnostic",
+            &["error"],
+            error,
+            "error",
+        );
+    }
+    if dimension_mode || selection_label.is_some() {
+        let title = if dimension_mode {
+            "Smart Dimension"
         } else {
-            None
+            selection_label.as_deref().unwrap_or("Selection")
         };
         let open = crate::sketch_ui::selected_inspector_open(
             ui,
             &format!("{section_id}::selection-state"),
-            selection_key,
+            Some(title),
         );
         crate::presentation_controls::inspector_section(
             ui,
@@ -1791,24 +1792,24 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 id: &format!("sketch:{section_id}:selection"),
                 role: "sketch-inspector-group",
                 classes: &["selection-dimensions"],
-                label: "Selection and dimensions",
+                label: title,
                 state: "draft",
-                collapse: Some(selection_key.is_some()),
+                collapse: Some(true),
                 open,
             },
-            |ui| crate::sketch_ui::controls(ui, w),
+            |ui| {
+                if !dimension_mode {
+                    selected_geometry(ui, w);
+                }
+                crate::sketch_ui::controls(ui, w);
+            },
         );
     }
-    let evaluated_sizes = crate::sketch_ui::evaluated_member_values(w);
-    let settings = w.session.visible().settings.clone();
-    let mut changed = false;
-    let mut undo = false;
-    let mut clicked_entity = None;
-    let mut delete_selected = false;
-    let mut finish_curve = false;
-    let mut coordinate_action = None;
-    let mut coordinate_relation = None;
-    if let Some(s) = &mut w.sketch {
+    if let Some(s) = &mut w.sketch
+        && !dimension_mode
+        && !matches!(s.tool, Tool::Select | Tool::Point | Tool::Centerline)
+    {
+        let mut finish_curve = false;
         crate::presentation_controls::inspector_section(
             ui,
             crate::presentation_controls::InspectorSection {
@@ -1821,14 +1822,8 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 open: None,
             },
             |ui| {
-                if let Some(dof) = s.degrees_of_freedom {
-                    ui.small(match dof {
-                        0 => "Fully constrained".to_owned(),
-                        1 => "1 degree of freedom".to_owned(),
-                        _ => format!("{dof} degrees of freedom"),
-                    });
-                }
-                ui.checkbox(&mut s.construction, "Construction for new geometry");
+                ui.checkbox(&mut s.construction, "Construction geometry")
+                    .on_hover_text("Use new curves as references for other geometry.");
                 if s.tool == Tool::Polygon {
                     ui.add(
                         egui::DragValue::new(&mut s.polygon_sides)
@@ -1847,22 +1842,6 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                         &mut s.conic_rho,
                     );
                 }
-                crate::presentation_controls::collapsing(
-                    ui,
-                    &format!("{}::tool-help", s.sketch_id),
-                    "sketch-secondary-section",
-                    "Tool help",
-                    false,
-                    |ui| {
-                        ui.small(match s.tool {
-                            Tool::Select => "Drag a handle to reshape geometry. Shift-click to select more.",
-                            Tool::Nurbs => "Edit the control weights and knots after placing the spline.",
-                            Tool::EllipseArc => "Edit the start and sweep angles after placing the ellipse.",
-                            _ => "Press Esc to stop the tool. Hold Alt while placing a point to skip snapping.",
-                        });
-                        ui.small("Closed contours can form solids. Open curves can serve as paths. Construction geometry provides references.");
-                    },
-                );
                 if matches!(s.tool, Tool::InterpolatingSpline | Tool::Nurbs) {
                     ui.add(
                         egui::DragValue::new(&mut s.spline_degree)
@@ -1881,37 +1860,262 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 {
                     finish_curve = true;
                 }
-                if !s.selection.is_empty() && ui.button("Delete Selection").clicked() {
-                    delete_selected = true;
+            },
+        );
+        if finish_curve {
+            finish_spline(w);
+        }
+    }
+    crate::sketch_issues_ui::controls(ui, w);
+    crate::sketch_ui::relation_controls(ui, w);
+    crate::presentation_controls::inspector_section(
+        ui,
+        crate::presentation_controls::InspectorSection {
+            id: &format!("sketch:{section_id}:precision"),
+            role: "sketch-inspector-group",
+            classes: &["precision"],
+            label: "Snapping and selection",
+            state: "draft",
+            collapse: Some(false),
+            open: None,
+        },
+        |ui| {
+            crate::sketch_overlay::snap_controls(ui, w);
+            if let Some(s) = &w.sketch
+                && s.selection.is_empty()
+                && !dimension_mode
+                && let Some(entity) = crate::sketch_ui::reference_menu(ui, s)
+            {
+                crate::sketch_ui::select(w, Some(entity), false);
+            }
+        },
+    );
+    let open_parameters = w.fields.contains_key("graph-parameters");
+    crate::presentation_controls::inspector_section(
+        ui,
+        crate::presentation_controls::InspectorSection {
+            id: &format!("{section_id}::details"),
+            role: "sketch-secondary-section",
+            classes: &["sketch-details"],
+            label: "Sketch details",
+            state: "draft",
+            collapse: Some(false),
+            open: open_parameters.then_some(true),
+        },
+        |ui| {
+            detail_controls(ui, w);
+            crate::sketch_ui::secondary_controls(ui, w);
+        },
+    );
+    if w.sketch.as_ref().is_some_and(|s| !s.history.is_empty())
+        && crate::presentation_controls::button(
+            ui,
+            "sketch.undo",
+            "sketch-edit-action",
+            &["compact"],
+            "Undo sketch change",
+            true,
+            false,
+        )
+        .clicked()
+    {
+        undo_point(w);
+    }
+}
+
+fn selected_geometry(ui: &mut egui::Ui, w: &mut Workspace) {
+    use cad_core::sketch_actions::SketchEntity;
+    let Some(s) = &w.sketch else { return };
+    let [entity] = s.selection.as_slice() else {
+        return;
+    };
+    let entity = entity.clone();
+    let settings = w.session.visible().settings.clone();
+    let evaluated_sizes = if matches!(entity, SketchEntity::Member { .. }) {
+        crate::sketch_ui::evaluated_member_values(w)
+    } else {
+        Default::default()
+    };
+    let Some(s) = &mut w.sketch else { return };
+    let mut toggle_construction = false;
+    let member_checkpoint = sketch_definition(s);
+    let mut changed = false;
+    let mut coordinate_action = None;
+    match entity {
+        SketchEntity::Member { member: key } => {
+            let Some(member) = s.members.get_mut(&key) else {
+                return;
+            };
+            let key = &key;
+            ui.push_id(key, |ui| {
+                let mut construction = member.construction;
+                toggle_construction = ui
+                    .checkbox(&mut construction, "Construction geometry")
+                    .changed();
+                let operation_driven =
+                    cad_core::sketch_edit::driven_member(&member_checkpoint, key);
+                match &mut member.curve {
+                    SketchCurve::Circle { radius, .. } => {
+                        ui.label("Radius");
+                        let driver = s.constraints.iter().find(|c| {
+                            !c.driven
+                                && matches!(c.kind.as_str(), "radius" | "diameter")
+                                && c.entities.first() == Some(key)
+                        });
+                        let equal = s
+                            .constraints
+                            .iter()
+                            .any(|c| c.kind == "equal_radius" && c.entities.get(1) == Some(key));
+                        if driver.is_some() || equal || operation_driven {
+                            let value = evaluated_sizes
+                                .get(&(key.clone(), "radius".into()))
+                                .map(String::as_str)
+                                .unwrap_or("Awaiting solved size");
+                            crate::presentation_controls::label(
+                                ui,
+                                &format!("{key}::radius.evaluated"),
+                                "sketch-evaluated-size",
+                                &[],
+                                value,
+                                if s.error.is_some() {
+                                    "last-valid"
+                                } else {
+                                    "evaluated"
+                                },
+                            );
+                            ui.small(if s.error.is_some() {
+                                "Last valid radius · correct the sketch to update"
+                            } else {
+                                "Controlled by dimension / relation"
+                            });
+                        } else {
+                            changed |= crate::presentation_controls::expression_edit(
+                                ui,
+                                &format!("{key}::radius"),
+                                "Radius",
+                                radius,
+                                false,
+                                "Radius, units or parameter",
+                                None,
+                            )
+                            .changed();
+                        }
+                    }
+                    SketchCurve::Ellipse {
+                        major,
+                        minor,
+                        angle,
+                        ..
+                    } => {
+                        for (label, kind, value) in [
+                            ("Major radius", "major_radius", major),
+                            ("Minor radius", "minor_radius", minor),
+                            ("Rotation", "rotation", angle),
+                        ] {
+                            ui.label(label);
+                            let driven = s.constraints.iter().any(|c| {
+                                !c.driven && c.kind == kind && c.entities.first() == Some(key)
+                            });
+                            if driven || operation_driven {
+                                let value = evaluated_sizes
+                                    .get(&(key.clone(), kind.into()))
+                                    .map(String::as_str)
+                                    .unwrap_or("Awaiting solved size");
+                                crate::presentation_controls::label(
+                                    ui,
+                                    &format!("{key}::{kind}.evaluated"),
+                                    "sketch-evaluated-size",
+                                    &[],
+                                    value,
+                                    if s.error.is_some() {
+                                        "last-valid"
+                                    } else {
+                                        "evaluated"
+                                    },
+                                );
+                                ui.small("Controlled by dimension / relation");
+                            } else {
+                                changed |= crate::presentation_controls::expression_edit(
+                                    ui,
+                                    &format!("{key}::{kind}"),
+                                    label,
+                                    value,
+                                    false,
+                                    "Value, units or parameter",
+                                    None,
+                                )
+                                .changed();
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-            },
-        );
-        let mut remove = None;
-        let member_checkpoint = sketch_definition(s);
-        let driven_points = cad_core::sketch_edit::driven_points(&member_checkpoint);
-        let mut member_order = s
-            .members
-            .keys()
-            .enumerate()
-            .map(|(index, key)| (index, key.clone()))
-            .collect::<Vec<_>>();
-        member_order.sort_by_key(|(_, key)| s.selected_member.as_ref() != Some(key));
-        let member_inspector = crate::sketch_ui::selected_inspector_open(
+            });
+        }
+        SketchEntity::Point { point } => {
+            let Some(i) = s.keys.iter().position(|key| key == &point) else {
+                return;
+            };
+            let driven = cad_core::sketch_edit::driven_points(&member_checkpoint).contains(&point);
+            ui.push_id(&point, |ui| {
+                ui.add_enabled_ui(!driven, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        changed |=
+                            crate::sketch_ui::coordinate(ui, "X", &mut s.points[i][0], &settings);
+                        changed |=
+                            crate::sketch_ui::coordinate(ui, "Y", &mut s.points[i][1], &settings);
+                    });
+                })
+                .response
+                .on_disabled_hover_text("Edit the sketch operation that positions this point.");
+                ui.horizontal_wrapped(|ui| {
+                    for (axis, label) in [(0, "Constrain X"), (1, "Constrain Y")] {
+                        if crate::presentation_controls::button(
+                            ui,
+                            &format!("{point}::constrain-{axis}"),
+                            "sketch-relation-action",
+                            &["modeling-action", "compact"],
+                            label,
+                            !driven,
+                            false,
+                        )
+                        .on_hover_text("Set a driving dimension from the sketch origin.")
+                        .on_disabled_hover_text(
+                            "Edit the sketch operation that positions this point.",
+                        )
+                        .clicked()
+                        {
+                            coordinate_action = Some((point.clone(), axis));
+                        }
+                    }
+                });
+            });
+        }
+        _ => {}
+    }
+    if changed {
+        s.history.push(member_checkpoint);
+        solve(w);
+    }
+    if toggle_construction {
+        crate::sketch_ui::action(w, "sketch.toggle-construction");
+    }
+    if let Some((point, axis)) = coordinate_action {
+        crate::sketch_ui::constrain_coordinate(w, &point, axis);
+    }
+}
+
+fn detail_controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    let settings = w.session.visible().settings.clone();
+    let mut clicked_entity = None;
+    let mut changed = false;
+    if let Some(s) = &mut w.sketch {
+        crate::presentation_controls::collapsing(
             ui,
-            "sketch-member-inspector",
-            s.selected_member.as_deref(),
-        );
-        crate::presentation_controls::inspector_section(
-            ui,
-            crate::presentation_controls::InspectorSection {
-                id: &format!("sketch:{}:members", s.sketch_id),
-                role: "sketch-inspector-group",
-                classes: &["member-list"],
-                label: &format!("Sketch members ({})", s.members.len()),
-                state: "draft",
-                collapse: Some(false),
-                open: member_inspector,
-            },
+            &format!("sketch:{}:members", s.sketch_id),
+            "sketch-inspector-group",
+            &format!("Sketch members ({})", s.members.len()),
+            false,
             |ui| {
                 let props = crate::presentation_controls::properties(
                     &format!("{}::member-list", s.sketch_id),
@@ -1919,140 +2123,25 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     &["compact"],
                     "ready",
                 );
-                if props.get("display").is_some_and(|value| value == "none") {
+                if props
+                    .get("display")
+                    .is_some_and(|display| display == "none")
+                {
                     return;
                 }
-                let height =
-                    crate::presentation_controls::number(&props, "max-height", 180.).max(24.);
-                egui::ScrollArea::vertical().id_salt(("sketch-member-list", &s.sketch_id)).max_height(height).show(ui, |ui| {
                 crate::presentation_controls::apply_properties(ui, &props);
-                for (index, member_key) in member_order {
-                    let key = &member_key;
-                    let Some(member) = s.members.get_mut(key) else { continue };
-                    ui.push_id(key, |ui| {
-                        let name = match member.curve {
-                            SketchCurve::Line { .. } => "Line",
-                            SketchCurve::Arc { .. } => "3-point arc",
-                            SketchCurve::Bezier { .. } => "Control-point spline",
-                            SketchCurve::Nurbs { .. } => "Rational spline",
-                            SketchCurve::Circle { .. } => "Circle",
-                            SketchCurve::Ellipse { .. } => "Ellipse",
-                        };
-                        ui.horizontal(|ui| {
-                            let response = ui.selectable_label(s.selection.iter().any(|e| matches!(e, cad_core::sketch_actions::SketchEntity::Member { member } if member == key)), format!("{} · {name}", index+1));
-                            if response.clicked() {
-                                clicked_entity = Some(cad_core::sketch_actions::SketchEntity::Member { member: key.clone() });
-                            }
-                            if ui
-                                .small_button("×")
-                                .on_hover_text("Delete member")
-                                .clicked()
-                            {
-                                remove = Some(key.clone());
-                            }
-                        });
-                        if s.selected_member.as_ref() == Some(key) {
-                            if ui.checkbox(&mut member.construction, "Construction").changed() { s.history.push(member_checkpoint.clone()); changed = true; }
-                            let operation_driven = cad_core::sketch_edit::driven_member(&member_checkpoint, key);
-                            match &mut member.curve {
-                                SketchCurve::Circle { radius, .. } => {
-                                    ui.label("Radius");
-                                    let driver = s.constraints.iter().find(|c| !c.driven && matches!(c.kind.as_str(), "radius" | "diameter") && c.entities.first() == Some(key));
-                                    let equal = s.constraints.iter().any(|c| c.kind == "equal_radius" && c.entities.get(1) == Some(key));
-                                    if driver.is_some() || equal || operation_driven {
-                                        let value = evaluated_sizes.get(&(key.clone(), "radius".into())).map(String::as_str).unwrap_or("Awaiting solved size");
-                                        crate::presentation_controls::label(ui, &format!("{key}::radius.evaluated"), "sketch-evaluated-size", &[], value, if s.error.is_some() { "last-valid" } else { "evaluated" });
-                                        ui.small(if s.error.is_some() { "Last valid radius · correct the sketch to update" } else { "Controlled by dimension / relation" });
-                                    } else {
-                                        changed |= crate::presentation_controls::expression_edit(ui, &format!("{key}::radius"), "Radius", radius, false, "Radius, units or parameter", None).changed();
-                                    }
-                                }
-                                SketchCurve::Ellipse { major, minor, angle, .. } => {
-                                    for (label, kind, value) in [
-                                        ("Major radius", "major_radius", major),
-                                        ("Minor radius", "minor_radius", minor),
-                                        ("Rotation", "rotation", angle),
-                                    ] {
-                                        ui.label(label);
-                                        let driven = s.constraints.iter().any(|c| !c.driven && c.kind == kind && c.entities.first() == Some(key));
-                                        if driven || operation_driven {
-                                            let value = evaluated_sizes.get(&(key.clone(), kind.into())).map(String::as_str).unwrap_or("Awaiting solved size");
-                                            crate::presentation_controls::label(ui, &format!("{key}::{kind}.evaluated"), "sketch-evaluated-size", &[], value, if s.error.is_some() { "last-valid" } else { "evaluated" });
-                                            ui.small("Controlled by dimension / relation");
-                                        } else {
-                                            changed |= crate::presentation_controls::expression_edit(ui, &format!("{key}::{kind}"), label, value, false, "Value, units or parameter", None).changed();
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
+                egui::ScrollArea::vertical().id_salt(("sketch-member-list", &s.sketch_id))
+                .max_height(crate::presentation_controls::number(&props, "max-height", 180.).max(24.)).show(ui, |ui| {
+                    for (index, (key, member)) in s.members.iter().enumerate() {
+                        if crate::presentation_controls::button(ui, key, "sketch-member", &["selection-candidate", "compact"],
+                            &crate::sketch_ui::member_label(index, &member.curve), true,
+                            s.selection.iter().any(|entity| matches!(entity, cad_core::sketch_actions::SketchEntity::Member { member } if member == key))).clicked() {
+                            clicked_entity = Some(cad_core::sketch_actions::SketchEntity::Member { member: key.clone() });
                         }
-                    });
-                }
+                    }
                 });
             },
         );
-        if let Some(key) = remove {
-            s.history.push(sketch_definition(s));
-            let mut source = sketch_definition(s);
-            cad_core::sketch_edit::delete_members(
-                &mut source,
-                &std::collections::BTreeSet::from([key]),
-            );
-            restore(s, source);
-            changed = true;
-        }
-        let selected_point = s
-            .selected
-            .and_then(|index| s.keys.get(index))
-            .map(String::as_str);
-        let point_inspector =
-            crate::sketch_ui::selected_inspector_open(ui, "sketch-point-inspector", selected_point);
-        if let Some(i) = s
-            .selected
-            .filter(|i| *i < s.points.len() && *i < s.keys.len())
-        {
-            egui::CollapsingHeader::new("Point position")
-                .open(point_inspector)
-                .default_open(true)
-                .show(ui, |ui| {
-                    let p = &mut s.points[i];
-                    ui.push_id(&s.keys[i], |ui| {
-                        let response =
-                            ui.selectable_label(s.selection.iter().any(|e| matches!(e, cad_core::sketch_actions::SketchEntity::Point { point } if point == &s.keys[i])), format!("Point {}", i + 1));
-                        if response.clicked() {
-                            clicked_entity = Some(
-                                cad_core::sketch_actions::SketchEntity::Point {
-                                    point: s.keys[i].clone(),
-                                },
-                            );
-                        }
-                        ui.small("Move this point within its current constraints.");
-                        let old_position = *p;
-                        ui.add_enabled_ui(!driven_points.contains(&s.keys[i]), |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                changed |= crate::sketch_ui::coordinate(ui, "Move X", &mut p[0], &settings);
-                                changed |= crate::sketch_ui::coordinate(ui, "Move Y", &mut p[1], &settings);
-                            });
-                        });
-                        if *p != old_position { s.history.push(member_checkpoint.clone()); }
-                        ui.horizontal_wrapped(|ui| {
-                            for (axis, label) in [(0, "Constrain X"), (1, "Constrain Y")] {
-                                if crate::presentation_controls::button(ui, &format!("{}::constrain-{axis}", s.keys[i]), "sketch-relation-action", &["modeling-action", "compact"], label,
-                                    !driven_points.contains(&s.keys[i]) && s.dimension.is_none() && s.edit.is_none(), false)
-                                    .on_hover_text("Save an editable driving dimension from the sketch origin; enter its expression with a live preview.").clicked()
-                                { coordinate_action = Some((s.keys[i].clone(), axis)); }
-                            }
-                            for (kind, label) in [("origin", "Origin"), ("on_x_axis", "X axis"), ("on_y_axis", "Y axis")] {
-                                if crate::presentation_controls::button(ui, &format!("{}::relation-action.{kind}", s.sketch_id), "sketch-relation-action", &["modeling-action", "compact"], label,
-                                    !driven_points.contains(&s.keys[i]) && s.dimension.is_none() && s.edit.is_none(), false)
-                                    .on_hover_text("Add a persistent relation to the selected sketch reference.").clicked()
-                                { clicked_entity = Some(cad_core::sketch_actions::SketchEntity::Point { point: s.keys[i].clone() }); coordinate_relation = Some(format!("sketch.relation.{kind}")); }
-                            }
-                        });
-                    });
-            });
-        }
         crate::presentation_controls::collapsing(
             ui,
             &format!("{}::point-browser", s.sketch_id),
@@ -2099,286 +2188,271 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     });
             },
         );
-        egui::CollapsingHeader::new("Relations by point number").show(ui, |ui| {
-            let kind = w
-                .fields
-                .entry("sketch-relation-kind".into())
-                .or_insert("distance".into());
-            egui::ComboBox::from_id_salt("sketch-relation-kind")
-                .selected_text(cad_core::sketch_actions::label(kind))
-                .show_ui(ui, |ui| {
-                    for name in [
-                        "fix_x",
-                        "fix_y",
-                        "distance",
-                        "distance_x",
-                        "distance_y",
-                        "horizontal",
-                        "vertical",
-                        "coincident",
-                        "parallel",
-                        "perpendicular",
-                        "equal",
-                        "angle",
-                    ] {
-                        ui.selectable_value(
-                            kind,
-                            name.into(),
-                            cad_core::sketch_actions::label(name),
-                        );
-                    }
-                });
-            let kind = kind.clone();
-            let value = if cad_core::sketch_actions::is_dimension(&kind) {
-                let (key, label, initial) = if kind == "angle" {
-                    ("sketch-relation-angle", "Angle", "90 deg")
-                } else {
-                    ("sketch-relation-value", "Distance", "10 mm")
-                };
-                let value = w.fields.entry(key.into()).or_insert_with(|| initial.into());
-                ui.label(label);
-                ui.text_edit_singleline(value);
-                value.clone()
-            } else {
-                "0".to_owned()
-            };
-            let mut first = w
-                .fields
-                .get("sketch-relation-first")
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(1);
-            let mut second = w
-                .fields
-                .get("sketch-relation-second")
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(2);
-            ui.add(
-                egui::DragValue::new(&mut first)
-                    .range(1..=s.keys.len().max(1))
-                    .prefix("First point "),
-            );
-            let single_point = kind.starts_with("fix_");
-            if !single_point {
-                ui.add(
-                    egui::DragValue::new(&mut second)
-                        .range(1..=s.keys.len().max(1))
-                        .prefix("Second point "),
-                );
-            }
-            w.fields
-                .insert("sketch-relation-first".into(), first.to_string());
-            w.fields
-                .insert("sketch-relation-second".into(), second.to_string());
-            let four = matches!(
-                kind.as_str(),
-                "parallel" | "perpendicular" | "equal" | "angle"
-            );
-            let mut third = w
-                .fields
-                .get("sketch-relation-third")
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(3)
-                .clamp(1, s.keys.len().max(1));
-            let mut fourth = w
-                .fields
-                .get("sketch-relation-fourth")
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(4)
-                .clamp(1, s.keys.len().max(1));
-            if four {
-                ui.small("Segment 1: points 1 and 2. Segment 2: points 3 and 4.");
-                ui.add(
-                    egui::DragValue::new(&mut third)
-                        .range(1..=s.keys.len().max(1))
-                        .prefix("Third point "),
-                );
-                ui.add(
-                    egui::DragValue::new(&mut fourth)
-                        .range(1..=s.keys.len().max(1))
-                        .prefix("Fourth point "),
-                );
-                w.fields
-                    .insert("sketch-relation-third".into(), third.to_string());
-                w.fields
-                    .insert("sketch-relation-fourth".into(), fourth.to_string());
-            }
-            first = first.clamp(1, s.keys.len().max(1));
-            second = second.clamp(1, s.keys.len().max(1));
-            let picks_ready = !s.keys.is_empty()
-                && (single_point || first != second)
-                && (!four || third != fourth);
-            if ui
-                .add_enabled(picks_ready, egui::Button::new("Add Relation"))
-                .on_disabled_hover_text("Choose distinct endpoints for each segment.")
-                .clicked()
-            {
-                s.history.push(sketch_definition(s));
-                s.constraints.push(SketchConstraint {
-                    driven: false,
-                    distance_side: None,
-                    contact: None,
-                    id: id(),
-                    kind: kind.clone(),
-                    entities: if single_point {
-                        vec![s.keys[first - 1].clone()]
-                    } else if four {
-                        vec![
-                            s.keys[first - 1].clone(),
-                            s.keys[second - 1].clone(),
-                            s.keys[third - 1].clone(),
-                            s.keys[fourth - 1].clone(),
-                        ]
+        crate::presentation_controls::collapsing(
+            ui,
+            &format!("{}::numbered-relations", s.sketch_id),
+            "sketch-secondary-section",
+            "Constrain by point number",
+            false,
+            |ui| {
+                let kind = w
+                    .fields
+                    .entry("sketch-relation-kind".into())
+                    .or_insert("distance".into());
+                egui::ComboBox::from_id_salt("sketch-relation-kind")
+                    .selected_text(cad_core::sketch_actions::label(kind))
+                    .show_ui(ui, |ui| {
+                        for name in [
+                            "fix_x",
+                            "fix_y",
+                            "distance",
+                            "distance_x",
+                            "distance_y",
+                            "horizontal",
+                            "vertical",
+                            "coincident",
+                            "parallel",
+                            "perpendicular",
+                            "equal",
+                            "angle",
+                        ] {
+                            ui.selectable_value(
+                                kind,
+                                name.into(),
+                                cad_core::sketch_actions::label(name),
+                            );
+                        }
+                    });
+                let kind = kind.clone();
+                let value = if cad_core::sketch_actions::is_dimension(&kind) {
+                    let (key, label, initial) = if kind == "angle" {
+                        ("sketch-relation-angle", "Angle", "90 deg")
                     } else {
-                        vec![s.keys[first - 1].clone(), s.keys[second - 1].clone()]
-                    },
-                    value: Expr(value),
-                });
-                changed = true;
-            }
-            let mut remove = None;
-            for (i, c) in s.constraints.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.small(cad_core::sketch_actions::label(&c.kind));
-                    if ui.small_button("Remove").clicked() {
-                        remove = Some(i);
-                    }
-                });
-            }
-            if let Some(i) = remove {
-                s.history.push(sketch_definition(s));
-                s.constraints.remove(i);
-                changed = true;
-            }
-        });
-        egui::CollapsingHeader::new("Sketch Plane").show(ui, |ui| {
-            if s.reference.is_some() {
-                ui.small("This sketch follows its reference plane or face.");
-            } else {
-                for (label, value) in ["Offset X", "Offset Y", "Offset Z"]
-                    .into_iter()
-                    .zip(&mut s.plane.origin)
-                {
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(value)
-                                .speed(0.1)
-                                .prefix(format!("{label} "))
-                                .suffix(" mm"),
-                        )
-                        .changed();
-                }
-            }
-        });
-
-        egui::CollapsingHeader::new("Advanced Source").show(ui, |ui| {
-            let source = sketch_definition(s);
-            let key = format!("sketch-source:{}", s.sketch_id);
-            let baseline = format!("sketch-source-baseline:{}", s.sketch_id);
-            synchronize_source_buffer(&mut w.fields, &source, true);
-            let mut accepted = false;
-            let Some(text) = w.fields.get_mut(&key) else {
-                ui.colored_label(
-                    Color32::from_rgb(180, 45, 30),
-                    "Current sketch source could not be serialized",
+                        ("sketch-relation-value", "Distance", "10 mm")
+                    };
+                    let value = w.fields.entry(key.into()).or_insert_with(|| initial.into());
+                    ui.label(label);
+                    ui.text_edit_singleline(value);
+                    value.clone()
+                } else {
+                    "0".to_owned()
+                };
+                let mut first = w
+                    .fields
+                    .get("sketch-relation-first")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(1);
+                let mut second = w
+                    .fields
+                    .get("sketch-relation-second")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(2);
+                ui.add(
+                    egui::DragValue::new(&mut first)
+                        .range(1..=s.keys.len().max(1))
+                        .prefix("First point "),
                 );
-                return;
-            };
-            ui.add(
-                egui::TextEdit::multiline(&mut *text)
-                    .code_editor()
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(8),
-            );
-            if ui.button("Refresh Source").clicked() {
-                *text = serde_json::to_string_pretty(&source).unwrap_or_default();
-                accepted = true;
-            }
-            if ui.button("Load Sketch Source").clicked() {
-                match serde_json::from_str::<Sketch>(text) {
-                    Ok(source)
-                        if source.id == s.sketch_id
-                            && source.profile_order.is_empty()
-                            && source.circles.is_empty()
-                            && source.segments.is_empty() =>
-                    {
-                        s.history.push(sketch_definition(s));
-                        s.name = source.name.clone();
-                        restore(s, source);
-                        changed = true;
-                        accepted = true;
-                    }
-                    Ok(_) => {
-                        s.error = Some(
-                            "Keep this sketch identity and use the members representation".into(),
-                        )
-                    }
-                    Err(error) => s.error = Some(error.to_string()),
+                let single_point = kind.starts_with("fix_");
+                if !single_point {
+                    ui.add(
+                        egui::DragValue::new(&mut second)
+                            .range(1..=s.keys.len().max(1))
+                            .prefix("Second point "),
+                    );
                 }
-            }
-            if accepted {
-                let current = text.clone();
-                w.fields.insert(baseline, current);
-            }
-        });
-        if let Some(error) = &s.error {
-            ui.colored_label(Color32::from_rgb(180, 45, 30), error);
-        }
-        ui.separator();
-        if ui
-            .add_enabled(
-                !s.history.is_empty(),
-                egui::Button::new("Undo Sketch Change"),
-            )
-            .clicked()
-        {
-            undo = true;
-        }
-    }
-    crate::presentation_controls::inspector_section(
-        ui,
-        crate::presentation_controls::InspectorSection {
-            id: &format!("sketch:{section_id}:precision"),
-            role: "sketch-inspector-group",
-            classes: &["precision"],
-            label: "Snapping and selection filters",
-            state: "draft",
-            collapse: Some(false),
-            open: None,
-        },
-        |ui| crate::sketch_overlay::snap_controls(ui, w),
-    );
-    crate::sketch_issues_ui::controls(ui, w);
-    crate::sketch_ui::secondary_controls(ui, w);
-    if let Some((point, axis)) = coordinate_action {
-        crate::sketch_ui::constrain_coordinate(w, &point, axis);
+                w.fields
+                    .insert("sketch-relation-first".into(), first.to_string());
+                w.fields
+                    .insert("sketch-relation-second".into(), second.to_string());
+                let four = matches!(
+                    kind.as_str(),
+                    "parallel" | "perpendicular" | "equal" | "angle"
+                );
+                let mut third = w
+                    .fields
+                    .get("sketch-relation-third")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(3)
+                    .clamp(1, s.keys.len().max(1));
+                let mut fourth = w
+                    .fields
+                    .get("sketch-relation-fourth")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(4)
+                    .clamp(1, s.keys.len().max(1));
+                if four {
+                    ui.small("Choose the two endpoints of each segment.");
+                    ui.add(
+                        egui::DragValue::new(&mut third)
+                            .range(1..=s.keys.len().max(1))
+                            .prefix("Third point "),
+                    );
+                    ui.add(
+                        egui::DragValue::new(&mut fourth)
+                            .range(1..=s.keys.len().max(1))
+                            .prefix("Fourth point "),
+                    );
+                    w.fields
+                        .insert("sketch-relation-third".into(), third.to_string());
+                    w.fields
+                        .insert("sketch-relation-fourth".into(), fourth.to_string());
+                }
+                first = first.clamp(1, s.keys.len().max(1));
+                second = second.clamp(1, s.keys.len().max(1));
+                let picks_ready = !s.keys.is_empty()
+                    && (single_point || first != second)
+                    && (!four || third != fourth);
+                if ui
+                    .add_enabled(picks_ready, egui::Button::new("Add Relation"))
+                    .on_disabled_hover_text("Choose distinct endpoints for each segment.")
+                    .clicked()
+                {
+                    s.history.push(sketch_definition(s));
+                    s.constraints.push(SketchConstraint {
+                        driven: false,
+                        distance_side: None,
+                        contact: None,
+                        id: id(),
+                        kind: kind.clone(),
+                        entities: if single_point {
+                            vec![s.keys[first - 1].clone()]
+                        } else if four {
+                            vec![
+                                s.keys[first - 1].clone(),
+                                s.keys[second - 1].clone(),
+                                s.keys[third - 1].clone(),
+                                s.keys[fourth - 1].clone(),
+                            ]
+                        } else {
+                            vec![s.keys[first - 1].clone(), s.keys[second - 1].clone()]
+                        },
+                        value: Expr(value),
+                    });
+                    changed = true;
+                }
+                let mut remove = None;
+                for (i, c) in s.constraints.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.small(cad_core::sketch_actions::label(&c.kind));
+                        if ui.small_button("Remove").clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                }
+                if let Some(i) = remove {
+                    s.history.push(sketch_definition(s));
+                    s.constraints.remove(i);
+                    changed = true;
+                }
+            },
+        );
+        crate::presentation_controls::collapsing(
+            ui,
+            &format!("{}::plane-options", s.sketch_id),
+            "sketch-secondary-section",
+            "Sketch plane",
+            false,
+            |ui| {
+                if s.reference.is_some() {
+                    ui.small("This sketch follows its reference plane or face.");
+                } else {
+                    for (label, value) in ["Offset X", "Offset Y", "Offset Z"]
+                        .into_iter()
+                        .zip(&mut s.plane.origin)
+                    {
+                        changed |= crate::sketch_ui::coordinate(ui, label, value, &settings);
+                    }
+                }
+            },
+        );
+
+        crate::presentation_controls::collapsing(
+            ui,
+            &format!("{}::advanced-source", s.sketch_id),
+            "sketch-secondary-section",
+            "Advanced source",
+            false,
+            |ui| {
+                let source = sketch_definition(s);
+                let key = format!("sketch-source:{}", s.sketch_id);
+                let baseline = format!("sketch-source-baseline:{}", s.sketch_id);
+                synchronize_source_buffer(&mut w.fields, &source, true);
+                let mut accepted = false;
+                let Some(text) = w.fields.get_mut(&key) else {
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        "Current sketch source could not be serialized",
+                    );
+                    return;
+                };
+                ui.add(
+                    egui::TextEdit::multiline(&mut *text)
+                        .code_editor()
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(8),
+                );
+                if ui.button("Refresh Source").clicked() {
+                    *text = serde_json::to_string_pretty(&source).unwrap_or_default();
+                    accepted = true;
+                }
+                if ui.button("Load Sketch Source").clicked() {
+                    match serde_json::from_str::<Sketch>(text) {
+                        Ok(source)
+                            if source.id == s.sketch_id
+                                && source.profile_order.is_empty()
+                                && source.circles.is_empty()
+                                && source.segments.is_empty() =>
+                        {
+                            s.history.push(sketch_definition(s));
+                            s.name = source.name.clone();
+                            restore(s, source);
+                            changed = true;
+                            accepted = true;
+                        }
+                        Ok(_) => {
+                            s.error = Some(
+                                "Keep this sketch identity and use the members representation"
+                                    .into(),
+                            )
+                        }
+                        Err(error) => s.error = Some(error.to_string()),
+                    }
+                }
+                if accepted {
+                    let current = text.clone();
+                    w.fields.insert(baseline, current);
+                }
+            },
+        );
+        crate::presentation_controls::collapsing(
+            ui,
+            &format!("{}::tool-help", s.sketch_id),
+            "sketch-secondary-section",
+            "Tool help",
+            false,
+            |ui| {
+                ui.small(match s.tool {
+                            Tool::Select => "Drag a handle to reshape geometry. Hold Shift while clicking to select more.",
+                            Tool::Nurbs => "Edit the control weights and knots after placing the spline.",
+                            Tool::EllipseArc => "Edit the start and sweep angles after placing the ellipse.",
+                            _ => "Press Esc to stop the tool. Hold Alt while placing a point to skip snapping.",
+                        });
+                ui.small("Closed contours can form solids. Open curves can serve as paths. Construction geometry provides references.");
+            },
+        );
     }
     if let Some(entity) = clicked_entity {
-        let continue_dimension = w.fields.contains_key("smart-dimension-mode")
-            && w.sketch.as_ref().is_some_and(|s| s.selection.len() == 1);
         crate::sketch_ui::select(
             w,
             Some(entity),
-            continue_dimension
-                || ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl),
+            ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl),
         );
         if w.fields.contains_key("smart-dimension-mode") {
             crate::sketch_ui::selection_changed(w);
         }
-        if let Some(command) = coordinate_relation {
-            crate::sketch_ui::action(w, &command);
-        }
-    }
-    if delete_selected {
-        crate::sketch_ui::action(w, "sketch.delete-selection");
     }
     if changed {
         solve(w);
-    }
-    if finish_curve {
-        finish_spline(w);
-    }
-    if undo {
-        undo_point(w);
     }
 }
 fn draw_polyline(

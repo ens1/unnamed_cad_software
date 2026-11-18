@@ -58,6 +58,7 @@ pub fn evaluated_member_values(w: &Workspace) -> std::collections::BTreeMap<(Id,
     source
         .members
         .iter()
+        .filter(|(key, _)| s.selected_member.as_ref() == Some(*key))
         .flat_map(|(key, member)| {
             let fields: Vec<(&str, &Expr, Dimension)> = match &member.curve {
                 SketchCurve::Circle { radius, .. } => vec![("radius", radius, Dimension::Length)],
@@ -152,6 +153,17 @@ pub fn semantic_action(w: &mut Workspace, element: &presentation::SemanticElemen
         == w.sketch.as_ref().map(|s| s.sketch_id.as_str())
     {
         action(w, command);
+        return;
+    }
+    if element.role == "sketch-reference-action" && command == "sketch.select-entity" {
+        if let Some(reference) = w.sketch.as_ref().and_then(|s| {
+            (element.data["sketch"] == s.sketch_id)
+                .then(|| entity_for(&sketch::sketch_definition(s), element))
+                .flatten()
+        }) {
+            select(w, Some(reference), true);
+            selection_changed(w);
+        }
         return;
     }
     let active = w.sketch.as_ref().and_then(|s| {
@@ -831,7 +843,11 @@ pub fn next_pick(w: &Workspace) -> Option<&'static str> {
             return Some("Start with Line, Rectangle, or Circle on the Sketch toolbar.");
         }
         Select if s.selection.is_empty() => {
-            return Some("Pick geometry to edit. Shift-click to select more.");
+            return Some(if cfg!(target_os = "macos") {
+                "Pick geometry to edit. Cmd-click to select more."
+            } else {
+                "Pick geometry to edit. Ctrl-click to select more."
+            });
         }
         Select => return None,
         Point => &["Click to place a point."],
@@ -941,6 +957,10 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
         ("tool-help", "Tool help"),
         ("member-list", "Sketch members"),
         ("point-browser", "All sketch points"),
+        ("details", "Sketch details"),
+        ("numbered-relations", "Constrain by point number"),
+        ("plane-options", "Sketch plane"),
+        ("advanced-source", "Advanced source"),
     ].into_iter().map(|(suffix, label)| presentation::SemanticElement {
         id: format!("{}::{suffix}", s.sketch_id),
         role: if suffix == "member-list" { "sketch-member-list" } else { "sketch-secondary-section" }.into(),
@@ -1024,6 +1044,36 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
                 data: serde_json::json!({"sketch":s.sketch_id,"selection_count":s.selection.len(),"description":a::relation_description(kind),"disabled_reason":reason,"classes":["modeling-action","compact"],"accessibility_label":label}),
             });
         }
+    }
+    for (suffix, label, role) in [
+        (
+            "reference-menu",
+            if s.selection.is_empty() {
+                "Select reference"
+            } else {
+                "Add reference"
+            },
+            "sketch-reference-action",
+        ),
+        ("relation-menu", "Add relation", "sketch-relation-action"),
+    ] {
+        let items = elements
+            .iter()
+            .filter(|element| {
+                element.role == role && element.id.starts_with(&format!("{}::", s.sketch_id))
+            })
+            .map(|element| element.id.clone())
+            .collect::<Vec<_>>();
+        elements.push(presentation::SemanticElement {
+            id: format!("{}::{suffix}", s.sketch_id),
+            role: "menu".into(),
+            label: label.into(),
+            state: "ready".into(),
+            value: None,
+            commands: vec![],
+            relationships: vec![s.sketch_id.clone()],
+            data: serde_json::json!({"sketch": s.sketch_id, "items": items}),
+        });
     }
     if let Some(member) = &s.selected_member {
         for ((key, field), value) in evaluated_member_values(w)
@@ -1837,6 +1887,78 @@ pub fn action(w: &mut Workspace, command: &str) {
         _ => crate::ui::action(w, command),
     }
 }
+pub(crate) fn member_label(index: usize, curve: &SketchCurve) -> String {
+    let name = match curve {
+        SketchCurve::Line { .. } => "Line",
+        SketchCurve::Arc { .. } => "Arc",
+        SketchCurve::Bezier { .. } => "Bézier spline",
+        SketchCurve::Nurbs { .. } => "NURBS curve",
+        SketchCurve::Circle { .. } => "Circle",
+        SketchCurve::Ellipse { .. } => "Ellipse",
+    };
+    format!("{name} {}", index + 1)
+}
+
+pub(crate) fn selection_label(s: &sketch::EditingSketch) -> Option<String> {
+    Some(match s.selection.as_slice() {
+        [] => return None,
+        [SketchEntity::Point { point }] => {
+            format!("Point {}", s.keys.iter().position(|key| key == point)? + 1)
+        }
+        [SketchEntity::Member { member }] => {
+            let (index, (_, value)) = s
+                .members
+                .iter()
+                .enumerate()
+                .find(|(_, (key, _))| *key == member)?;
+            member_label(index, &value.curve)
+        }
+        [SketchEntity::Constraint { constraint }] => {
+            let relation = s.constraints.iter().find(|c| &c.id == constraint)?;
+            a::label(&relation.kind).into()
+        }
+        [SketchEntity::Origin] => "Origin".into(),
+        [SketchEntity::XAxis] => "X axis".into(),
+        [SketchEntity::YAxis] => "Y axis".into(),
+        selection => format!("{} selected", selection.len()),
+    })
+}
+
+pub(crate) fn reference_menu(ui: &mut egui::Ui, s: &sketch::EditingSketch) -> Option<SketchEntity> {
+    let mut picked = None;
+    controls::menu_button(
+        ui,
+        &format!("{}::reference-menu", s.sketch_id),
+        if s.selection.is_empty() {
+            "Select reference"
+        } else {
+            "Add reference"
+        },
+        |ui| {
+            for (label, entity) in [
+                ("Origin", SketchEntity::Origin),
+                ("X axis", SketchEntity::XAxis),
+                ("Y axis", SketchEntity::YAxis),
+            ] {
+                if controls::button(
+                    ui,
+                    &format!("{}::reference-action.{}", s.sketch_id, entity.key()),
+                    "sketch-reference-action",
+                    &["modeling-action", "compact"],
+                    label,
+                    true,
+                    s.selection.contains(&entity),
+                )
+                .clicked()
+                {
+                    picked = Some(entity);
+                    ui.close();
+                }
+            }
+        },
+    );
+    picked
+}
 pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     let mut promote = None;
     let mut changed = false;
@@ -1846,48 +1968,35 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     let mut cancel_dimension_requested = false;
     let mut finish_dimension_requested = false;
     let dimension_mode = w.fields.contains_key("smart-dimension-mode");
-    let measurements =
-        w.sketch
-            .as_ref()
-            .map(|s| {
-                let source = s
-                    .last_valid
-                    .clone()
-                    .unwrap_or_else(|| sketch::sketch_definition(s));
-                source
-                    .constraints
-                    .iter()
-                    .filter(|c| c.driven)
-                    .map(|c| {
-                        (
-                            c.id.clone(),
-                            a::measured_dimension(w.session.visible(), &s.definition, &source, c)
-                                .map(|value| {
-                                    if a::dimension_unit(&c.kind) == Dimension::Angle {
-                                        w.session.visible().settings.format_angle_radians(value)
-                                    } else {
-                                        w.session.visible().settings.format_length(value)
-                                    }
-                                }),
-                        )
-                    })
-                    .collect::<std::collections::BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
+    let measurement = w.sketch.as_ref().and_then(|s| {
+        let editor = s.dimension.as_ref()?;
+        let c = s
+            .constraints
+            .iter()
+            .find(|c| c.id == editor.constraint && c.driven)?;
+        let draft;
+        let source = if let Some(valid) = &s.last_valid {
+            valid
+        } else {
+            draft = sketch::sketch_definition(s);
+            &draft
+        };
+        let doc = w.session.visible();
+        Some(
+            a::measured_dimension(doc, &s.definition, source, c)
+                .map(|value| {
+                    if a::dimension_unit(&c.kind) == Dimension::Angle {
+                        doc.settings.format_angle_radians(value)
+                    } else {
+                        doc.settings.format_length(value)
+                    }
+                })
+                .unwrap_or_else(|error| error.to_string()),
+        )
+    });
     if let Some(s) = &mut w.sketch {
         let before = sketch::sketch_definition(s);
         let mut text_edit_started = false;
-        ui.horizontal(|ui| {
-            ui.strong(if dimension_mode || s.dimension.is_some() {
-                "Smart Dimension"
-            } else {
-                "Selection"
-            });
-            ui.small(format!(
-                "{} selected",
-                s.selection.len() + usize::from(s.dimension_model.is_some())
-            ));
-        });
         if let Some(editor) = &mut s.dimension {
             let previous = editor.choice;
             egui::ComboBox::from_id_salt("smart-dimension-kind")
@@ -1904,15 +2013,12 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 ));
             }
             if let Some(c) = s.constraints.iter_mut().find(|c| c.id == editor.constraint) {
-                ui.label(a::label(&c.kind));
+                ui.label(if c.driven { "Measured value" } else { "Value" });
                 if c.driven {
                     ui.label(
-                        measurements
-                            .get(&c.id)
-                            .map(|value| {
-                                value.as_ref().cloned().unwrap_or_else(ToString::to_string)
-                            })
-                            .unwrap_or_else(|| "Awaiting current measurement".into()),
+                        measurement
+                            .as_deref()
+                            .unwrap_or("Awaiting current measurement"),
                     );
                 } else {
                     let response = controls::expression_edit(
@@ -1962,7 +2068,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     }
                 });
                 if editor.extend_pick {
-                    ui.small("Pick a second reference for distance / angle, or finish this size.");
+                    ui.small("Pick a second reference to measure distance or angle.");
                 }
                 controls::collapsing(
                     ui,
@@ -1992,51 +2098,88 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                 );
             }
         }
-        if dimension_mode || !s.selection.is_empty() || s.tool == sketch::Tool::Select {
-            ui.horizontal_wrapped(|ui| {
-                for (label, entity) in [
-                    ("Origin", SketchEntity::Origin),
-                    ("X Axis", SketchEntity::XAxis),
-                    ("Y Axis", SketchEntity::YAxis),
-                ] {
-                    let response = controls::button(
-                        ui,
-                        &format!("{}::reference-action.{}", s.sketch_id, entity.key()),
-                        "sketch-reference-action",
-                        &["modeling-action", "compact"],
-                        label,
-                        true,
-                        s.selection.contains(&entity),
-                    );
-                    if response.clicked() {
-                        clicked_reference = Some(entity);
-                    }
+        if s.dimension.is_none() && !dimension_mode && !s.selection.is_empty() {
+            let editable_dimension = match s.selection.as_slice() {
+                [SketchEntity::Constraint { constraint }] => s
+                    .constraints
+                    .iter()
+                    .any(|c| &c.id == constraint && a::is_dimension(&c.kind)),
+                selected => {
+                    selected.len() <= 2
+                        && selected.iter().any(|e| {
+                            matches!(e, SketchEntity::Member { .. } | SketchEntity::Point { .. })
+                        })
                 }
-            });
-        }
-        ui.horizontal_wrapped(|ui| {
-            for (kind, label) in a::RELATIONS {
-                let availability = a::relation(&before, &s.selection, kind);
-                if availability.is_ok() || *kind == "tangent" {
-                    let reason = availability.as_ref().err().map(ToString::to_string);
-                    if controls::button(
+            };
+            ui.horizontal_wrapped(|ui| {
+                if editable_dimension
+                    && controls::button(
                         ui,
-                        &format!("{}::relation-action.{kind}", s.sketch_id),
-                        "sketch-relation-action",
-                        &["modeling-action", "compact"],
-                        label,
-                        availability.is_ok(),
+                        "sketch.smart-dimension",
+                        "sketch-dimension-action",
+                        &["compact"],
+                        "Smart Dimension",
+                        true,
                         false,
                     )
-                    .on_hover_text(a::relation_description(kind))
-                    .on_disabled_hover_text(reason.as_deref().unwrap_or_default())
                     .clicked()
-                    {
-                        relation_command = Some(format!("sketch.relation.{kind}"));
-                    }
+                {
+                    relation_command = Some("sketch.smart-dimension".into());
                 }
-            }
-        });
+                controls::menu_button(
+                    ui,
+                    &format!("{}::relation-menu", s.sketch_id),
+                    "Add relation",
+                    |ui| {
+                        for (kind, label) in a::RELATIONS {
+                            let availability = a::relation(&before, &s.selection, kind);
+                            if availability.is_ok() || *kind == "tangent" {
+                                let reason = availability.as_ref().err().map(ToString::to_string);
+                                if controls::button(
+                                    ui,
+                                    &format!("{}::relation-action.{kind}", s.sketch_id),
+                                    "sketch-relation-action",
+                                    &["modeling-action", "compact"],
+                                    label,
+                                    availability.is_ok(),
+                                    false,
+                                )
+                                .on_hover_text(a::relation_description(kind))
+                                .on_disabled_hover_text(reason.as_deref().unwrap_or_default())
+                                .clicked()
+                                {
+                                    relation_command = Some(format!("sketch.relation.{kind}"));
+                                    ui.close();
+                                }
+                            }
+                        }
+                    },
+                );
+                clicked_reference = reference_menu(ui, s);
+                if s.selection.iter().any(|entity| {
+                    matches!(
+                        entity,
+                        SketchEntity::Member { .. }
+                            | SketchEntity::Point { .. }
+                            | SketchEntity::Constraint { .. }
+                    )
+                }) && controls::button(
+                    ui,
+                    "sketch.delete-selection",
+                    "sketch-edit-action",
+                    &["compact"],
+                    "Delete selection",
+                    true,
+                    false,
+                )
+                .clicked()
+                {
+                    relation_command = Some("sketch.delete-selection".into());
+                }
+            });
+        } else if dimension_mode && s.dimension.as_ref().is_none_or(|editor| editor.extend_pick) {
+            clicked_reference = reference_menu(ui, s);
+        }
         if text_edit_started {
             s.history.push(before);
         }
@@ -2073,11 +2216,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         action(w, &command);
     }
     if let Some(entity) = clicked_reference {
-        select(
-            w,
-            Some(entity),
-            ui.input(|i| i.modifiers.shift || i.modifiers.command || i.modifiers.ctrl),
-        );
+        select(w, Some(entity), true);
         if w.fields.contains_key("smart-dimension-mode") {
             selection_changed(w);
         }
@@ -2114,20 +2253,38 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
 
 /// Less frequent editors sit below active tool and selected-member inputs.
 /// Custom layouts retain all of the underlying relation and parameter actions.
-pub fn secondary_controls(ui: &mut egui::Ui, w: &mut Workspace) {
+pub fn relation_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     let Some(s) = &w.sketch else { return };
     let id = format!("{}::relations-section", s.sketch_id);
     let attention = s.error.is_some() || !s.feedback.unsatisfied.is_empty();
-    controls::collapsing(
+    if s.keys.is_empty() && s.members.is_empty() && s.constraints.is_empty() && !attention {
+        return;
+    }
+    let label = match s.degrees_of_freedom {
+        Some(0) if !attention => "Relations · fully constrained".into(),
+        Some(1) if !attention => "Relations · 1 degree of freedom".into(),
+        Some(count) if !attention => format!("Relations · {count} degrees of freedom"),
+        _ => "Dimensions and relations".into(),
+    };
+    let reveal = selected_inspector_open(ui, &id, attention.then_some("attention"));
+    controls::inspector_section(
         ui,
-        &id,
-        "sketch-secondary-section",
-        "Dimensions & Relations",
-        attention,
+        controls::InspectorSection {
+            id: &id,
+            role: "sketch-secondary-section",
+            classes: &["relations"],
+            label: &label,
+            state: if attention { "error" } else { "ready" },
+            collapse: Some(attention),
+            open: reveal,
+        },
         |ui| {
             crate::sketch_relations_ui::panel(ui, w);
         },
     );
+}
+
+pub fn secondary_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::sketch_edit_ui::modifiers(ui, w);
     let open_parameters = w.fields.remove("graph-parameters").is_some();
     controls::inspector_section(

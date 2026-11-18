@@ -550,7 +550,9 @@ struct DimensionEdit {
 struct Placement {
     checkpoint: Session,
     fields: std::collections::BTreeMap<String, String>,
-    history_len: usize,
+    source: Definition,
+    plane_origin: [f64; 3],
+    history: Vec<Definition>,
     redo: Vec<Definition>,
 }
 pub struct State {
@@ -948,7 +950,7 @@ pub fn history_available(w: &Workspace, redo: bool) -> bool {
         if redo {
             !state.redo.is_empty()
         } else {
-            !state.history.is_empty()
+            state.placement.is_some() || !state.history.is_empty()
         }
     })
 }
@@ -1008,6 +1010,13 @@ pub fn ready_to_confirm(w: &mut Workspace) -> bool {
         .is_some_and(|state| state.dimension.is_some())
     {
         finish_dimension(w);
+    }
+    if w.sketch3d
+        .as_ref()
+        .is_some_and(|state| state.tool == Tool::Line && state.placement.is_some())
+    {
+        w.status = "Place the second endpoint, or press Esc to cancel this line.".into();
+        return false;
     }
     if w.session.draft.is_none()
         && current_source_is_valid(w)
@@ -1454,8 +1463,12 @@ fn cancel_placement(w: &mut Workspace) -> bool {
     w.rendered_key.clear();
     w.confirm_requested = false;
     if let Some(state) = &mut w.sketch3d {
-        state.history.truncate(placement.history_len);
+        state.history = placement.history;
         state.redo = placement.redo;
+        state.plane_origin = placement.plane_origin;
+        state.error = None;
+        state.hover = None;
+        state.snap_target = None;
         state.clicks.clear();
         state.tool = Tool::Select;
         state.popup = None;
@@ -1900,6 +1913,7 @@ pub fn current_value(w: &Workspace, element: &SemanticElement) -> Option<Value> 
         "fine" => json!(state.fine),
         "auto-axis" => json!(state.auto_axis),
         "construction" => json!(state.construction),
+        "radius-by-value" => json!(state.numeric_radius),
         "grid" => json!(state.grid),
         "radius" => json!(state.radius),
         "degree" => json!(state.degree),
@@ -2078,7 +2092,7 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
             }
             return Ok(());
         }
-        "snap" | "fine" | "auto-axis" | "construction" => {
+        "snap" | "fine" | "auto-axis" | "construction" | "radius-by-value" => {
             let boolean = value
                 .as_bool()
                 .ok_or_else(|| invalid("Expected a toggle"))?;
@@ -2087,6 +2101,7 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
                     "snap" => state.snap = boolean,
                     "fine" => state.fine = boolean,
                     "auto-axis" => state.auto_axis = boolean,
+                    "radius-by-value" => state.numeric_radius = boolean,
                     _ => state.construction = boolean,
                 }
             }
@@ -2375,18 +2390,26 @@ fn place(
     if matches!(tool, Tool::Select | Tool::Dimension) {
         return Err(invalid("Choose a drawing tool first"));
     }
-    if previous.is_empty() && tool != Tool::Point {
-        let placement = Placement {
+    if previous.is_empty()
+        && tool != Tool::Point
+        && let Some(state) = &mut w.sketch3d
+        && state.placement.is_none()
+    {
+        state.placement = Some(Placement {
             checkpoint: w.session.clone(),
             fields: w.fields.clone(),
-            history_len: state.history.len(),
-            redo: state.redo.clone(),
-        };
-        if let Some(state) = &mut w.sketch3d {
-            state.placement = Some(placement);
-        }
+            source: definition.clone(),
+            plane_origin: state.plane_origin,
+            history: std::mem::take(&mut state.history),
+            redo: std::mem::take(&mut state.redo),
+        });
     }
-    history(w);
+    if w.sketch3d
+        .as_ref()
+        .is_some_and(|state| state.placement.is_none())
+    {
+        history(w);
+    }
     if tool == Tool::Circle && !previous.is_empty() {
         let center = previous[0].clone();
         let center_point = *definition
@@ -2412,7 +2435,7 @@ fn place(
         publish(w, definition)?;
         if let Some(state) = &mut w.sketch3d {
             state.clicks.clear();
-            state.placement = None;
+            complete_placement(state);
         }
         return Ok(());
     }
@@ -2489,15 +2512,26 @@ fn place(
     if let Some(state) = &mut w.sketch3d {
         state.clicks = clicks;
         if completed {
-            state.placement = None;
+            complete_placement(state);
         }
         state.plane_origin = position;
         state.hover = None;
-        state.placement = None;
         state.snap_target = None;
         state.error = None;
     }
     Ok(())
+}
+// Put one finished member on the undo stack, regardless of how many points
+// were placed. Cancel restores the entire stack, including items at its limit.
+fn complete_placement(state: &mut State) {
+    if let Some(mut placement) = state.placement.take() {
+        if placement.history.len() >= HISTORY_LIMIT {
+            placement.history.remove(0);
+        }
+        placement.history.push(placement.source);
+        state.history = placement.history;
+        state.redo.clear();
+    }
 }
 fn finish_curve(w: &mut Workspace) -> Result<()> {
     let mut definition = source(w).ok_or_else(|| invalid("The sketch is missing"))?;
@@ -2505,6 +2539,10 @@ fn finish_curve(w: &mut Workspace) -> Result<()> {
         .sketch3d
         .as_ref()
         .ok_or_else(|| invalid("The editor has closed"))?;
+    if state.tool == Tool::Line && state.placement.is_some() {
+        cancel_placement(w);
+        return Ok(());
+    }
     let points = state.clicks.clone();
     let construction = state.construction;
     let curve = match state.tool {
@@ -2552,6 +2590,11 @@ fn finish_curve(w: &mut Workspace) -> Result<()> {
                 parameterization: state.parameterization,
             })
         }
+        Tool::Circle if points.len() == 1 && !state.numeric_radius => {
+            return Err(invalid(
+                "Click the rim, or enable Enter radius to finish this circle.",
+            ));
+        }
         Tool::Circle if points.len() == 1 => Some(Curve::Circle {
             center: points[0].clone(),
             plane: state.plane.frame(state.plane_origin),
@@ -2563,7 +2606,9 @@ fn finish_curve(w: &mut Workspace) -> Result<()> {
         _ => None,
     };
     if let Some(curve) = curve {
-        history(w);
+        if state.placement.is_none() {
+            history(w);
+        }
         definition.members.insert(
             cad_core::id(),
             Member {
@@ -2574,6 +2619,7 @@ fn finish_curve(w: &mut Workspace) -> Result<()> {
         publish(w, definition)?;
     }
     if let Some(state) = &mut w.sketch3d {
+        complete_placement(state);
         state.clicks.clear();
         state.tool = Tool::Select;
         state.hover = None;
@@ -3196,6 +3242,47 @@ fn relation_label(definition: &Definition, relation: &Relation) -> &'static str 
         Relation::Tangent { .. } => "Tangent",
     }
 }
+fn drawing_prompt(state: &State) -> Option<String> {
+    if state.dimension.is_some() || state.drag.is_some() {
+        return None;
+    }
+    let count = state.clicks.len();
+    let text = match state.tool {
+        Tool::Select if !state.selection.is_empty() => return None,
+        Tool::Select => "Choose a drawing tool or select geometry to edit.",
+        Tool::Point => "Click to place a point on the drawing plane.",
+        Tool::Line if count == 0 => "Click the start of the line.",
+        Tool::Line => "Click the next endpoint. Press Esc to end the chain.",
+        Tool::Arc if count == 0 => "Click the start of the arc.",
+        Tool::Arc if count == 1 => "Click a point on the arc.",
+        Tool::Arc => "Click the end of the arc.",
+        Tool::Circle if count == 0 => "Click the center on the drawing plane.",
+        Tool::Circle if state.numeric_radius => "Choose Finish circle to use the entered radius.",
+        Tool::Circle => "Click the rim to set the radius.",
+        Tool::Dimension if state.selection.is_empty() => {
+            "Select a member for its size, or two references for a dimension."
+        }
+        Tool::Dimension => "Select the second reference.",
+        Tool::Bezier | Tool::Nurbs | Tool::InterpolatingSpline => {
+            let min = if state.tool == Tool::Bezier {
+                2
+            } else {
+                state.degree + 1
+            };
+            if count < min {
+                let remaining = min - count;
+                return Some(if remaining == 1 {
+                    "Place one more point to finish the spline.".into()
+                } else {
+                    format!("Place {remaining} more points to finish the spline.")
+                });
+            }
+            "Place another point or choose Finish spline."
+        }
+    };
+    Some(text.into())
+}
+
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let Some(definition) = source(w) else {
         return vec![];
@@ -3203,7 +3290,10 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let Some(state) = w.sketch3d.as_ref() else {
         return vec![];
     };
-    let mut out = vec![group(w, "tools", "3D Sketch")];
+    let mut out = vec![group(w, "tools", "Drawing tool")];
+    if let Some(prompt) = drawing_prompt(state) {
+        out.push(note(w, "next-pick", &prompt, "ready"));
+    }
     for (id, member) in &definition.members {
         if let Curve::Line { start, end } = &member.curve {
             let visible = w.view.visibility.sketch_midpoints
@@ -3211,14 +3301,6 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             out.push(SemanticElement { id: format!("sketch3d:{}/midpoint/{id}", state.feature), role: "sketch-midpoint".into(), label: "Line midpoint".into(), value: None, state: if visible { "ready" } else { "hidden" }.into(), commands: vec![], relationships: vec![state.feature.clone(), id.clone()], data: json!({"contract":"tcad.viewport-visibility","version":1,"visible":visible,"anchor":{"kind":"member_midpoint","member":id,"endpoints":[start,end]},"selectable":false,"classes":["viewport-overlay"]}) });
         }
     }
-    out.push(field(
-        w,
-        "name",
-        "Name",
-        json!(definition.name),
-        vec![],
-        None,
-    ));
     out.push(field(
         w,
         "tool",
@@ -3248,12 +3330,74 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         vec![],
         None,
     ));
-    out.push(action_element(
-        w,
-        "finish-member",
-        "Finish member",
-        !state.clicks.is_empty(),
-    ));
+    if matches!(state.tool, Tool::Nurbs | Tool::InterpolatingSpline) {
+        out.push(field(
+            w,
+            "degree",
+            "Degree",
+            json!(state.degree),
+            vec![],
+            None,
+        ));
+    }
+    if state.tool == Tool::InterpolatingSpline {
+        out.push(field(
+            w,
+            "parameterization",
+            "Spline parameterization",
+            json!(state.parameterization),
+            vec![
+                choice(
+                    "Uniform",
+                    cad_core::sketch_spline::Parameterization::Uniform,
+                ),
+                choice(
+                    "Chord length",
+                    cad_core::sketch_spline::Parameterization::Chord,
+                ),
+                choice(
+                    "Centripetal",
+                    cad_core::sketch_spline::Parameterization::Centripetal,
+                ),
+            ],
+            None,
+        ));
+    }
+    if state.tool == Tool::Circle {
+        out.push(field(
+            w,
+            "radius-by-value",
+            "Enter radius",
+            json!(state.numeric_radius),
+            vec![],
+            None,
+        ));
+        out.push(field(
+            w,
+            "radius",
+            "Circle radius",
+            json!(state.radius),
+            vec![],
+            Some("mm"),
+        ));
+    }
+    let (finish_label, can_finish) = match state.tool {
+        Tool::Line => (
+            "End line chain",
+            state.clicks.len() == 1 && state.placement.is_none(),
+        ),
+        Tool::Circle => (
+            "Finish circle",
+            state.clicks.len() == 1 && state.numeric_radius,
+        ),
+        Tool::Bezier => ("Finish spline", (2..=16).contains(&state.clicks.len())),
+        Tool::Nurbs | Tool::InterpolatingSpline => (
+            "Finish spline",
+            state.clicks.len() > state.degree && state.clicks.len() <= 64,
+        ),
+        _ => ("Finish member", false),
+    };
+    out.push(action_element(w, "finish-member", finish_label, can_finish));
     out.push(action_element(
         w,
         "smart-dimension",
@@ -3358,49 +3502,6 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         None,
     ));
     out.push(note(w,"frame-help","The reference frame controls downstream orientation. Drawing-plane and Tab changes leave it unchanged.","ready"));
-    if matches!(state.tool, Tool::Nurbs | Tool::InterpolatingSpline) {
-        out.push(field(
-            w,
-            "degree",
-            "Degree",
-            json!(state.degree),
-            vec![],
-            None,
-        ));
-    }
-    if state.tool == Tool::InterpolatingSpline {
-        out.push(field(
-            w,
-            "parameterization",
-            "Spline parameterization",
-            json!(state.parameterization),
-            vec![
-                choice(
-                    "Uniform",
-                    cad_core::sketch_spline::Parameterization::Uniform,
-                ),
-                choice(
-                    "Chord length",
-                    cad_core::sketch_spline::Parameterization::Chord,
-                ),
-                choice(
-                    "Centripetal",
-                    cad_core::sketch_spline::Parameterization::Centripetal,
-                ),
-            ],
-            None,
-        ));
-    }
-    if state.tool == Tool::Circle {
-        out.push(field(
-            w,
-            "radius",
-            "Circle radius",
-            json!(state.radius),
-            vec![],
-            Some("mm"),
-        ));
-    }
     out.push(group(w, "xyz", "Place point by XYZ"));
     for index in 0..3 {
         out.push(field(
@@ -3433,7 +3534,11 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         out.push(note(
             w,
             "selection-hint",
-            "Cmd-click adds or removes geometry · Equality and direction relations use the first selected reference; equal circle groups retain their size reference",
+            if cfg!(target_os = "macos") {
+                "Cmd-click to add or remove geometry."
+            } else {
+                "Ctrl-click to add or remove geometry."
+            },
             "ready",
         ));
         let displayed = displayed(w).unwrap_or_else(|| definition.clone());
@@ -3575,6 +3680,18 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             }
             out.push(element);
         }
+    }
+    if !state.selection.is_empty() {
+        let mut menu = element(w, "group/selection/relations", "menu", "Add relation", None);
+        menu.data["items"] = json!(
+            out.iter()
+                .filter(|entry| entry.data["action"]
+                    .as_str()
+                    .is_some_and(|action| action.starts_with("relation/")))
+                .map(|entry| &entry.id)
+                .collect::<Vec<_>>()
+        );
+        out.push(menu);
     }
     if let Some(dimension) = &state.dimension {
         out.push(group(w, "dimension", "Smart Dimension"));
@@ -3726,7 +3843,16 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "pending"
         },
     ));
-    out.push(group(w, "entities", "Sketch entities"));
+    out.push(group(w, "entities", "Sketch details"));
+    out.push(field(
+        w,
+        "name",
+        "Name",
+        json!(definition.name),
+        vec![],
+        None,
+    ));
+
     let solved = displayed(w).unwrap_or_else(|| definition.clone());
     for (index, entity) in definition
         .points
@@ -5019,6 +5145,9 @@ pub(crate) fn render_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
         };
         if response.clicked() {
             action(w, ACTION, Some(&element.data));
+            if egui::containers::menu::is_in_menu(ui) {
+                ui.close();
+            }
         }
     } else {
         controls::label(
@@ -5036,7 +5165,25 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
         return false;
     }
     let mut groups: Vec<(SemanticElement, Vec<SemanticElement>)> = vec![];
+    let state = w.sketch3d.as_ref().expect("active spatial editor");
+    let drawing = !matches!(state.tool, Tool::Select | Tool::Dimension);
+    let dimensioning = state.tool == Tool::Dimension;
+    let selected = !state.selection.is_empty();
+    let numeric_radius = state.numeric_radius;
     for element in semantics(w) {
+        if element.id.ends_with("/note/status") && element.state == "error" {
+            render_control(ui, w, &element);
+            continue;
+        }
+        // Themes can bind each element directly. The dock shows controls for the
+        // current task and keeps the full set of selection relations in a menu.
+        if element.id.ends_with("/field/radius") && !numeric_radius
+            || element.id.ends_with("/field/construction") && !drawing
+            || element.id.ends_with("/action/finish-member") && element.state == "disabled"
+            || element.id.ends_with("/action/smart-dimension") && (!selected || dimensioning)
+        {
+            continue;
+        }
         if !matches!(
             element.role.as_str(),
             "sketch3d-group" | "sketch3d-field" | "sketch3d-action" | "sketch3d-note"
@@ -5049,7 +5196,19 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
             children.push(element);
         }
     }
+    groups.sort_by_key(|(group, _)| {
+        if group.id.ends_with("/dimension") {
+            0
+        } else if group.id.ends_with("/selection") && !drawing {
+            1
+        } else {
+            2
+        }
+    });
     for (group, children) in groups {
+        if group.id.ends_with("/xyz") && !drawing || children.is_empty() {
+            continue;
+        }
         let classes = group
             .data
             .get("classes")
@@ -5073,6 +5232,24 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                 open: None,
             },
             |ui| {
+                let (relations, children): (Vec<_>, Vec<_>) =
+                    children.into_iter().partition(|child| {
+                        child.data["action"]
+                            .as_str()
+                            .is_some_and(|action| action.starts_with("relation/"))
+                    });
+                if !relations.is_empty() {
+                    controls::menu_button(
+                        ui,
+                        &format!("{}/relations", group.id),
+                        "Add relation",
+                        |ui| {
+                            for relation in &relations {
+                                render_control(ui, w, relation);
+                            }
+                        },
+                    );
+                }
                 let mut children = children.into_iter().peekable();
                 while let Some(element) = children.next() {
                     if element.role.ends_with("-action") {
