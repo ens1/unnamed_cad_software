@@ -102,6 +102,7 @@ pub(super) fn click(
                 p
             };
             let cut = Box::new(Definition {
+                model_plane: None,
                 id: sheet
                     .section
                     .as_ref()

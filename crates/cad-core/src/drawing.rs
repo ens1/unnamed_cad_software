@@ -1186,7 +1186,10 @@ pub fn set_views(sheet: &mut Drawing, views: Vec<String>) -> Result<()> {
         }
     }
     if let Some(section) = &sheet.section {
-        if views.iter().any(|key| key == "section-z") && !views.contains(&section.parent) {
+        if section.model_plane.is_none()
+            && views.iter().any(|key| key == "section-z")
+            && !views.contains(&section.parent)
+        {
             return Err(invalid(
                 "Keep the cutting line’s parent view or remove its section first",
             ));
@@ -5111,6 +5114,7 @@ fn build_sheet_mode(
         if let Some(cut) = section {
             if let Some(frame) = cut.frame
                 && name == &cut.source.parent
+                && frame.edge_on(name)
             {
                 cutting_line(out, &view, frame)?;
             } else if name == "section-z" {
@@ -5631,8 +5635,8 @@ fn cutting_line(
     cut: crate::drawing_sections::Frame,
 ) -> Result<()> {
     let center = view.screen(cut.origin)?;
-    let d = view.project(cut.u)?;
     let n = view.project(cut.normal)?;
+    let d = [-n[1], n[0]];
     let reach = (center[0] - view.at[0]).abs()
         + (center[1] - view.at[1]).abs()
         + view.size[0]

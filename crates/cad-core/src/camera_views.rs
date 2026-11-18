@@ -124,6 +124,8 @@ pub struct Definition {
     pub id: Id,
     pub name: String,
     pub pose: Pose,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<crate::drawing_sections::Frame>,
 }
 impl Definition {
     pub fn new(name: String, pose: Pose) -> Self {
@@ -132,6 +134,7 @@ impl Definition {
             id: crate::id(),
             name,
             pose,
+            section: None,
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -142,6 +145,9 @@ impl Definition {
             || self.name.chars().any(char::is_control)
         {
             return Err(CadError::Invalid("Named camera views require version 1, a portable stable identity and a nonempty name up to 128 bytes".into()));
+        }
+        if let Some(section) = self.section {
+            section.validate()?;
         }
         self.pose.validate()
     }

@@ -17,10 +17,13 @@ pub struct Definition {
     pub at: [f64; 2],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub through: Option<PointReference>,
+    /// A section transferred from a model view is fixed in the sheet model's coordinates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_plane: Option<Box<Frame>>,
     pub direction: [f64; 2],
     pub reversed: bool,
 }
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Frame {
     pub origin: Point,
     pub u: Point,
@@ -60,13 +63,22 @@ fn invalid(s: &str) -> CadError {
 }
 impl Definition {
     pub fn validate(&self, sheet: &Drawing) -> Result<()> {
+        if let Some(&frame) = self.model_plane.as_deref() {
+            frame.validate()?;
+            if self.through.is_some() {
+                return Err(invalid(
+                    "A model section already specifies its cutting plane",
+                ));
+            }
+        }
         let length = self.direction[0].hypot(self.direction[1]);
         if self.id.trim().is_empty()
             || self.id.len() > 256
             || self.id.chars().any(char::is_control)
             || !length.is_finite()
-            || drawing::orthographic_axes(&self.parent).is_none()
-            || !sheet.views.contains(&self.parent)
+            || self.model_plane.is_none()
+                && (drawing::orthographic_axes(&self.parent).is_none()
+                    || !sheet.views.contains(&self.parent))
             || !sheet.views.iter().any(|s| s == KEY)
             || self
                 .direction
@@ -84,6 +96,13 @@ impl Definition {
     }
     pub fn frame(&self, doc: &Document, e: &Evaluation, sheet: &Drawing) -> Result<Frame> {
         self.validate(sheet)?;
+        if let Some(&frame) = self.model_plane.as_deref() {
+            return Ok(if self.reversed {
+                frame.flipped()
+            } else {
+                frame
+            });
+        }
         let [a, b] = drawing::orthographic_axes(&self.parent)
             .ok_or_else(|| invalid("Choose an orthographic parent for the section"))?;
         let sign = if self.reversed { -1. } else { 1. };
@@ -107,6 +126,37 @@ impl Definition {
     }
 }
 impl Frame {
+    pub fn validate(&self) -> Result<()> {
+        let axes = [self.u, self.v, self.normal];
+        if self
+            .origin
+            .iter()
+            .chain(axes.iter().flatten())
+            .any(|x| !x.is_finite())
+            || axes.iter().any(|a| (dot(*a, *a) - 1.).abs() > 1e-8)
+            || dot(self.u, self.v).abs() > 1e-8
+            || cross(self.u, self.v)
+                .iter()
+                .zip(self.normal)
+                .any(|(a, b)| (a - b).abs() > 1e-8)
+        {
+            return Err(invalid(
+                "The section plane needs a finite origin and perpendicular unit axes",
+            ));
+        }
+        Ok(())
+    }
+    pub fn flipped(self) -> Self {
+        Self {
+            u: self.u.map(|x| -x),
+            normal: self.normal.map(|x| -x),
+            ..self
+        }
+    }
+    pub fn edge_on(&self, parent: &str) -> bool {
+        drawing::orthographic_axes(parent)
+            .is_some_and(|[a, b]| dot(self.normal, cross(a, b)).abs() <= 1e-8)
+    }
     pub fn project(&self, p: Point) -> [f64; 2] {
         [dot(self.u, p), dot(self.v, p)]
     }
