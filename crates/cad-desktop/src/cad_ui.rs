@@ -279,6 +279,7 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
         "View" => vec![
             "menu/Themes",
             "viewport.visibility-menu",
+            "viewport.live-section",
             ORIENTATION_MENU.0,
             "viewport.fit",
             "viewport.normal-sketch",
@@ -1354,6 +1355,9 @@ pub fn confirmation_available(w: &Workspace) -> bool {
 /// One availability policy for menus, command search and user-composed controls.
 /// These are prerequisites only; each operation still validates its actual input.
 pub fn command_disabled_reason(w: &Workspace, command: &str) -> Option<&'static str> {
+    if command == "viewport.live-section" && !crate::live_section::available(w) {
+        return Some("Finish the current edit and return to the model to use Live Section");
+    }
     if command == "feature.match-holes"
         && let Some(reason) = crate::matching_holes_ui::start_reason(w)
     {
@@ -3742,6 +3746,18 @@ pub fn measure(w: &mut Workspace) {
     }
 }
 pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
+    if menu_action(
+        ui,
+        w,
+        "viewport.live-section",
+        "Live Section…",
+        crate::live_section::available(w),
+    )
+    .clicked()
+    {
+        ui::action(w, "viewport.live-section");
+        ui.close();
+    }
     crate::sketch_overlay::visibility_controls(ui, w);
     crate::display_states_ui::view_controls(ui, w);
     crate::exploded_views_ui::view_controls(ui, w);

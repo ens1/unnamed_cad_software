@@ -184,6 +184,13 @@ pub fn cancel(w: &mut Workspace) {
     {
         set_current(w, pose);
     }
+    if let Some(section) = w
+        .fields
+        .get("camera-view-section-before")
+        .and_then(|s| serde_json::from_str(s).ok())
+    {
+        crate::live_section::restore(w, section);
+    }
     w.fields.retain(|key, _| !key.starts_with("camera-view-"));
 }
 
@@ -213,11 +220,16 @@ fn begin(w: &mut Workspace, view: Definition, new: bool) -> Result<()> {
     }
     if !active(w) {
         let pose = current(w);
+        let section = crate::live_section::plane(w);
         let exploded = w.view.exploded_view.clone();
         let display = w.view.display_state.clone();
         w.start_tool();
         w.view.exploded_view = exploded;
         w.view.display_state = display;
+        w.fields.insert(
+            "camera-view-section-before".into(),
+            serde_json::to_string(&section)?,
+        );
         w.fields
             .insert(BEFORE.into(), serde_json::to_string(&pose)?);
     }
@@ -272,7 +284,9 @@ pub fn handle_command(w: &mut Workspace, command: &str, args: Option<&Value>) ->
                         .any(|v| v.name.eq_ignore_ascii_case(name))
                 })
                 .unwrap();
-            return begin(w, Definition::new(name, current(w)), true);
+            let mut view = Definition::new(name, current(w));
+            view.section = crate::live_section::plane(w);
+            return begin(w, view, true);
         }
         if matches!(
             command,
@@ -325,6 +339,7 @@ pub fn handle_command(w: &mut Workspace, command: &str, args: Option<&Value>) ->
                 }
                 crate::navigation::stop(w);
                 set_current(w, view.pose);
+                crate::live_section::restore(w, view.section);
                 if !active(w) {
                     w.fields.insert(SELECTED.into(), id);
                 }
@@ -335,6 +350,7 @@ pub fn handle_command(w: &mut Workspace, command: &str, args: Option<&Value>) ->
                 begin(w, view.clone(), false)?;
                 let mut view = view;
                 view.pose = current(w);
+                view.section = crate::live_section::plane(w);
                 submit(w, view)?;
             }
             "camera-view.delete" => {

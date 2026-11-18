@@ -482,6 +482,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     elements.extend(crate::command_palette::semantics(w));
     elements.extend(crate::inspection_ui::semantics(w));
     elements.extend(crate::camera_views_ui::elements(w));
+    elements.extend(crate::live_section::elements(w));
     elements.extend(crate::standard_parts_ui::semantics(w));
     elements.extend(crate::tolerance_stacks_ui::semantics(w));
     elements.extend(crate::properties_ui::semantics(w));
@@ -946,6 +947,11 @@ fn build_value_adapters() -> ValueAdapters {
         "standard-parts",
         crate::standard_parts_ui::set_value,
         crate::standard_parts_ui::value,
+    );
+    adapters.register(
+        "live-section",
+        crate::live_section::set_value,
+        crate::live_section::value,
     );
     adapters.register(
         "camera-view",

@@ -68,6 +68,7 @@ pub const SUPPORTED_STYLE_PROPERTIES: &[&str] = &[
     "centerline-extension",
     "centerline-mark-size",
     "comparison-color",
+    "section-fill-color",
     "selection-opacity",
     "ghost-opacity",
     "stroke-width",
@@ -820,6 +821,7 @@ fn validate_property(name: &str, value: &str) -> Result<()> {
             | "part-edge-color"
             | "centerline-color"
             | "comparison-color"
+            | "section-fill-color"
             | "reference-curve-color"
             | "explode-line-color"
             | "inspection-first-color"

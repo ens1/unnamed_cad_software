@@ -1473,6 +1473,7 @@ fn descriptors(
     if w.sketch.is_none() && w.view.history_cursor.is_none() {
         actions.extend(set_descriptors(w, target));
         actions.extend(crate::model_dimensions_ui::selection_actions(w, target));
+        actions.extend(crate::live_section::selection_action(w, target));
     }
     if let Some(sketch) = &w.sketch
         && let SelectionTarget::Geometry {
@@ -2167,6 +2168,10 @@ pub fn execute(w: &mut Workspace, target: &SelectionTarget, command: &str) {
     // topology command to the geometry that is selected now.
     if matches!(target, SelectionTarget::Geometry { .. }) && current(w).as_ref() != Some(target) {
         w.status = "Selection changed. Select the geometry again to show its actions".into();
+        return;
+    }
+    if command == "selection.live-section" {
+        crate::live_section::action(w, "viewport.live-section");
         return;
     }
     if command == "selection.model-dimensions" {

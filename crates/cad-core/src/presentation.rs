@@ -1120,6 +1120,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("assembly.edit", "Assembly and mates"),
     ("inspection.sensors", "Design Monitors"),
     ("camera-views", "Named Views"),
+    ("viewport.live-section", "Live Section"),
     ("camera-view.save", "Save Current View"),
     ("camera-view.edit", "Edit Named View"),
     ("camera-view.rename", "Rename Named View"),

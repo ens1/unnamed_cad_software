@@ -263,6 +263,15 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
             ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             return;
         }
+        if w.dialog.is_none()
+            && w.settings.is_none()
+            && w.tool_checkpoint.is_none()
+            && !w.view.drawing_workspace
+            && crate::live_section::escape(w)
+        {
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            return;
+        }
         if crate::edit_review::mate::evaluation(w).is_some() {
             ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             crate::edit_review::mate::stop(w);
@@ -2169,7 +2178,9 @@ fn model_view(
         return;
     }
     crate::operation_preview::viewport_status(ui, w, r);
-    let motion_owned = crate::model_dimensions_ui::viewport(w, ui, r, &[toolbar, cube])
+    let section_owned = crate::live_section::overlay(w, ui, r, &response, &[toolbar, cube]);
+    let motion_owned = section_owned
+        || crate::model_dimensions_ui::viewport(w, ui, r, &[toolbar, cube])
         || crate::feature_handles::viewport(w, ui, r, &[toolbar, cube])
         || crate::assembly_motion_ui::viewport(w, ui, r, &response, &[toolbar, cube]);
     if !motion_owned
@@ -2253,7 +2264,13 @@ fn model_view(
     if response.hovered() {
         w.hover_viewport_seen = true;
         let mut hover_cache = std::mem::take(&mut w.hover_cache);
-        if let Some(guide) = crate::viewport_guides::overlay(w, ui, r, blocked, &mut hover_cache) {
+        if let Some(guide) = crate::viewport_guides::overlay(
+            w,
+            ui,
+            r,
+            blocked || crate::live_section::plane(w).is_some(),
+            &mut hover_cache,
+        ) {
             w.hover_guide = Some(guide);
         }
         w.hover_cache = hover_cache;
@@ -2492,6 +2509,9 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
     }
     if w.settings.is_some() {
         w.status = "Apply or cancel Settings before using another command".into();
+        return;
+    }
+    if crate::live_section::action(w, cmd) {
         return;
     }
     if crate::edit_review::action(w, cmd, None) {

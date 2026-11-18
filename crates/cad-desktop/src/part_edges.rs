@@ -195,6 +195,16 @@ pub fn sync(
             continue;
         }
         for mesh in viewport::display_meshes(&w, evaluation, instance) {
+            use crate::live_section::mesh::Coverage;
+            let cut = match crate::live_section::mesh::coverage(
+                crate::live_section::plane(&w),
+                mesh,
+                instance,
+            ) {
+                Coverage::Removed => continue,
+                Coverage::Kept => None,
+                Coverage::Cut(f) => Some(f),
+            };
             // Reusable reference curves have their own colored overlay.
             if mesh.indices.is_empty() {
                 continue;
@@ -239,6 +249,22 @@ pub fn sync(
                 }
                 let line_color = Color::srgba(color[0], color[1], color[2], color[3]);
                 let asset = groups.entry(edge_width.to_bits()).or_default();
+                if let Some(cut) = cut {
+                    for pair in edge.points.windows(2) {
+                        if let Some([a, b]) = crate::live_section::mesh::segment(
+                            Some(cut),
+                            viewport::placed(pair[0], instance),
+                            viewport::placed(pair[1], instance),
+                        ) {
+                            asset.line(
+                                viewport::render_point(a),
+                                viewport::render_point(b),
+                                line_color,
+                            );
+                        }
+                    }
+                    continue;
+                }
                 asset.linestrip(
                     edge.points
                         .iter()

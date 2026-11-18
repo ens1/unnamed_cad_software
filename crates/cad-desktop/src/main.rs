@@ -51,6 +51,7 @@ mod graph_ui;
 mod history;
 mod holes_ui;
 mod inspection_ui;
+mod live_section;
 mod matching_holes_ui;
 mod mate_ui;
 mod materials_ui;
@@ -155,6 +156,7 @@ fn initial_part_context(document: &Document) -> Option<cad_core::Id> {
 pub struct Workspace {
     pub session: Session,
     pub view: PresentationState,
+    pub(crate) live_section: live_section::State,
     pub visibility_diagnostic: Option<String>,
     pub project: Option<PathBuf>,
     recovered_resources: Option<PathBuf>,
@@ -336,6 +338,7 @@ impl Workspace {
         let mut workspace = Self {
             session: Session::new(doc, BACKEND),
             view,
+            live_section: Default::default(),
             visibility_diagnostic,
             project,
             recovered_resources: None,
@@ -941,6 +944,7 @@ impl Workspace {
         self.recovered_resources = recovered_resources;
         git_ui::reset(self);
         let navigation = self.view.navigation.clone();
+        self.live_section = Default::default();
         self.view = PresentationState {
             navigation,
             ui_scale: self.application_preferences.ui_scale,

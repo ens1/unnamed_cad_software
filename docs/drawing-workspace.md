@@ -104,3 +104,19 @@ without duplicating their state.
 
 Implementation verification is compilation, formatting and linting only; no code
 tests or interactive acceptance were run.
+
+## Take a model section to paper
+
+Select a flat face and choose **Section Here**, or open **View → Live Section**
+and choose a face or base plane. Drag the arrow or enter an offset in model
+display units. **Flip** shows the material on the other side. Orbit and zoom
+work while the section is open. **Measure gap** takes two parallel flat faces
+and displays their perpendicular spacing. Save Current View remembers the
+section plane with the camera.
+
+**To drawing** starts a new sheet at that plane. An edge-on standard view shows
+the cutting line when one is available. Apply keeps the sheet and Cancel
+discards it. If isolation hides or ghosts other components, an assembly sheet saves
+that visibility with the drawing. The sheet stores the plane in model coordinates and regenerates its
+section from the solid when the design changes. Moving the live section later
+leaves the saved sheet at its chosen offset.

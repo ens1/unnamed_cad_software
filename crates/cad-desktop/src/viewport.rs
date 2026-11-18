@@ -749,7 +749,7 @@ fn finish_batches<'a>(
         })
         .collect()
 }
-fn normal_matrix(instance: &PlacedPart) -> bevy::math::DMat3 {
+pub(crate) fn normal_matrix(instance: &PlacedPart) -> bevy::math::DMat3 {
     bevy::math::DMat3::from_cols(
         DVec3::new(
             instance.matrix[0][0],
@@ -770,7 +770,19 @@ fn normal_matrix(instance: &PlacedPart) -> bevy::math::DMat3 {
     .inverse()
     .transpose()
 }
-fn render_mesh(source: &MeshData, instance: &PlacedPart) -> Mesh {
+fn render_mesh(
+    source: &MeshData,
+    instance: &PlacedPart,
+    cut: Option<cad_core::drawing_sections::Frame>,
+) -> Mesh {
+    if let Some(frame) = cut {
+        return crate::live_section::mesh::clipped(
+            source,
+            0..source.indices.len(),
+            instance,
+            frame,
+        );
+    }
     let positions = source
         .positions
         .iter()
@@ -1343,7 +1355,7 @@ pub(crate) fn selection_meshes<'a>(
 fn selected_instance(selection: &Selection, instance: &PlacedPart) -> bool {
     selection.path == instance.path && selection.definition == instance.definition
 }
-fn selected_topology(
+pub(crate) fn selected_topology(
     selection: &Selection,
     reference: &TopologyRef,
     body: &Option<cad_core::NodeRef>,
@@ -1363,17 +1375,32 @@ pub(crate) fn first_edge(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Opti
     pick_geometry(w, rect, p, true).into_iter().next()
 }
 
+pub(crate) fn pick_section_faces(w: &Workspace, rect: egui::Rect, p: egui::Pos2) -> Vec<Selection> {
+    let mut hits = pick_geometry_inner(w, rect, p, false, true);
+    hits.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+    hits
+}
 fn pick_geometry(
     w: &Workspace,
     rect: egui::Rect,
     p: egui::Pos2,
     edges_only: bool,
 ) -> Vec<Selection> {
+    pick_geometry_inner(w, rect, p, edges_only, false)
+}
+fn pick_geometry_inner(
+    w: &Workspace,
+    rect: egui::Rect,
+    p: egui::Pos2,
+    edges_only: bool,
+    section_faces: bool,
+) -> Vec<Selection> {
     let Some(e) = selection_evaluation(w) else {
         return vec![];
     };
     let repairing_mate = w.edit_repair.is_some() && e.failed_mate_reference.is_some();
     let target_pick = !repairing_mate && crate::contours_ui::picking_target(w);
+    let cut = crate::live_section::plane(w);
     let (o, d) = ray(w, rect, p);
     let project = projector(w, rect);
     let mut hits = vec![];
@@ -1410,7 +1437,11 @@ fn pick_geometry(
                 {
                     let [a, b, c] = [tri[0], tri[1], tri[2]]
                         .map(|v| placed(mesh.positions[v as usize], instance));
-                    if let Some(t) = triangle(o, d, a, b, c) {
+                    if let Some(t) = triangle(o, d, a, b, c)
+                        && cut.is_none_or(|f| {
+                            f.distance(std::array::from_fn(|i| o[i] + d[i] * t)) <= 1e-9
+                        })
+                    {
                         distance = distance.min(t);
                     }
                 }
@@ -1428,7 +1459,7 @@ fn pick_geometry(
                     });
                 }
             }
-            if target_pick {
+            if target_pick || section_faces {
                 continue;
             }
             // Edges are projected with a forgiving hit target and remain cycleable through occlusion.
@@ -1439,14 +1470,27 @@ fn pick_geometry(
                     continue;
                 }
                 let mut best = f32::INFINITY;
+                let mut clipped_hit = None;
                 for line in edge.points.windows(2) {
-                    if let (Some(a), Some(b)) = (
-                        project(placed(line[0], instance)),
-                        project(placed(line[1], instance)),
-                    ) {
+                    let Some([start, end]) = crate::live_section::mesh::segment(
+                        cut,
+                        placed(line[0], instance),
+                        placed(line[1], instance),
+                    ) else {
+                        continue;
+                    };
+                    if let (Some(a), Some(b)) = (project(start), project(end)) {
                         let ab = b - a;
                         let t = ((p - a).dot(ab) / ab.length_sq().max(1e-9)).clamp(0., 1.);
-                        best = best.min((a + ab * t - p).length());
+                        let pixels = (a + ab * t - p).length();
+                        if pixels < best {
+                            best = pixels;
+                            if cut.is_some() {
+                                clipped_hit = Some(std::array::from_fn(|i| {
+                                    start[i] + (end[i] - start[i]) * f64::from(t)
+                                }));
+                            }
+                        }
                     }
                 }
                 if best < 7. {
@@ -1457,7 +1501,7 @@ fn pick_geometry(
                         .map(|s| s.center)
                         .or_else(|| edge.points.first().copied());
                     let Some(center) = center else { continue };
-                    let point = placed(center, instance);
+                    let point = clipped_hit.unwrap_or_else(|| placed(center, instance));
                     let distance = DVec3::from_array(point).distance(DVec3::from_array(o));
                     hits.push(Selection {
                         instance: key.clone(),
@@ -1472,6 +1516,14 @@ fn pick_geometry(
                 }
             }
         }
+    }
+    if cut.is_some()
+        && let Some(t) = crate::live_section::cap_hit(w, rect, p)
+    {
+        hits.retain(|hit| hit.distance <= t + 1e-8);
+    }
+    if section_faces {
+        return hits;
     }
     if !edges_only {
         hits.extend(crate::reference_ui::picks(w, rect, p, e));
@@ -2263,8 +2315,9 @@ pub fn sync_scene(
             ))
             .collect::<Vec<_>>()
     );
+    let cut = crate::live_section::plane(&w);
     let key = format!(
-        "{key}:{:?}:{:?}",
+        "{key}:{:?}:{:?}:{cut:?}",
         w.assembly_scope.highlight(),
         w.view.editing_occurrence
     );
@@ -2272,6 +2325,7 @@ pub fn sync_scene(
         return;
     }
     w.rendered_key = key;
+    let mut cap_outlines = Vec::new();
     for (entity, body) in existing.iter() {
         commands.entity(entity).despawn();
         meshes.remove(&body.mesh);
@@ -2338,6 +2392,44 @@ pub fn sync_scene(
                 .map(|part| cad_core::appearance::resolve_face_finishes(part, &sources))
                 .unwrap_or_default();
             for source in sources {
+                use crate::live_section::mesh::Coverage;
+                let cut = match crate::live_section::mesh::coverage(cut, source, instance) {
+                    Coverage::Removed => continue,
+                    Coverage::Kept => None,
+                    Coverage::Cut(f) => Some(f),
+                };
+                if let Some(frame) = cut
+                    && let Some((cap, outlines)) =
+                        crate::live_section::mesh::cap(source, instance, frame)
+                {
+                    let mesh = meshes.add(cap);
+                    let ghost = history || ghost_neighbor(&w, instance);
+                    if !ghost {
+                        cap_outlines.extend(outlines);
+                    }
+                    let fill =
+                        style_color(&props, "section-fill-color", Color::srgb(0.83, 0.59, 0.35));
+                    let material = materials.add(StandardMaterial {
+                        base_color: if ghost { fill.with_alpha(0.15) } else { fill },
+                        alpha_mode: if ghost {
+                            AlphaMode::Blend
+                        } else {
+                            AlphaMode::Opaque
+                        },
+                        cull_mode: None,
+                        ..default()
+                    });
+                    commands.spawn((
+                        Mesh3d(mesh.clone()),
+                        MeshMaterial3d(material.clone()),
+                        RenderLayers::layer(1),
+                        CadBody {
+                            mesh,
+                            material: CadMaterial::Standard(material),
+                        },
+                        bevy::light::NotShadowCaster,
+                    ));
+                }
                 for (batch, assigned_finish) in finish_batches(source, part, &face_finishes) {
                     let m = batch.as_ref();
                     if m.positions.is_empty() || m.indices.is_empty() {
@@ -2345,7 +2437,7 @@ pub fn sync_scene(
                     }
                     let ghost_neighbor = !shared_highlight && ghost_neighbor(&w, instance);
                     let ghost = history || ghost_neighbor;
-                    let mesh = meshes.add(render_mesh(m, instance));
+                    let mesh = meshes.add(render_mesh(m, instance, cut));
                     let finish = assigned_finish
                         .as_ref()
                         .or(display_effect.finish.as_ref())
@@ -2416,7 +2508,7 @@ pub fn sync_scene(
         let Some(Some(overlay)) = preview_styles.get(&preview_style_key(&w, &preview)) else {
             continue;
         };
-        let mesh = meshes.add(render_mesh(preview.mesh, preview.instance));
+        let mesh = meshes.add(render_mesh(preview.mesh, preview.instance, cut));
         // Added boundaries share the result's exterior and removed boundaries
         // share its cut interface. A depth-biased, untextured overlay gives that
         // localized context without competing opaque bodies or finish maps.
@@ -2482,32 +2574,42 @@ pub fn sync_scene(
                 .collect::<Vec<_>>();
             if let [(source, face)] = faces.as_slice() {
                 let indices = &source.indices[face.start..face.start + face.count];
-                let positions = indices
-                    .iter()
-                    .map(|index| {
-                        render_point(placed(source.positions[*index as usize], instance)).to_array()
-                    })
-                    .collect::<Vec<_>>();
-                let normal_matrix = normal_matrix(instance);
-                let normals = indices
-                    .iter()
-                    .map(|index| {
-                        render_point(
-                            (normal_matrix * DVec3::from_array(source.normals[*index as usize]))
+                let highlighted = if let Some(frame) = cut {
+                    crate::live_section::mesh::clipped(
+                        source,
+                        face.start..face.start + face.count,
+                        instance,
+                        frame,
+                    )
+                } else {
+                    let positions = indices
+                        .iter()
+                        .map(|index| {
+                            render_point(placed(source.positions[*index as usize], instance))
+                                .to_array()
+                        })
+                        .collect::<Vec<_>>();
+                    let normal_matrix = normal_matrix(instance);
+                    let normals = indices
+                        .iter()
+                        .map(|index| {
+                            render_point(
+                                (normal_matrix
+                                    * DVec3::from_array(source.normals[*index as usize]))
                                 .to_array(),
-                        )
-                        .normalize_or_zero()
-                        .to_array()
-                    })
-                    .collect::<Vec<_>>();
-                let mesh = meshes.add(
+                            )
+                            .normalize_or_zero()
+                            .to_array()
+                        })
+                        .collect::<Vec<_>>();
                     Mesh::new(
                         PrimitiveTopology::TriangleList,
                         RenderAssetUsages::default(),
                     )
                     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-                    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals),
-                );
+                    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+                };
+                let mesh = meshes.add(highlighted);
                 let [r, g, b, alpha] = selection_color(&w).to_srgba_unmultiplied();
                 let opacity = props
                     .get("selection-opacity")
@@ -2545,6 +2647,7 @@ pub fn sync_scene(
             }
         }
     }
+    w.live_section.visible_caps = cut.map(|f| (f, cap_outlines));
 }
 fn weld_guides(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
     let painter = ui.painter().with_clip_rect(rect);
@@ -3082,12 +3185,19 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                             .unwrap_or(if active { accent } else { curve_color }),
                     );
                     for pair in edge.points.windows(2) {
+                        let Some(endpoints) = crate::live_section::mesh::segment(
+                            crate::live_section::plane(w),
+                            placed(pair[0], i),
+                            placed(pair[1], i),
+                        ) else {
+                            continue;
+                        };
                         if let Some(properties) = &spatial_style {
                             crate::sketch_overlay::line(
                                 w,
                                 ui,
                                 rect,
-                                [placed(pair[0], i), placed(pair[1], i)],
+                                endpoints,
                                 stroke,
                                 crate::sketch_overlay::xray(w, true, properties),
                                 &mut spatial_depth_work,
@@ -3095,8 +3205,8 @@ pub fn overlay(w: &Workspace, ui: &egui::Ui, rect: egui::Rect) {
                             continue;
                         }
                         if let (Some(a), Some(b)) = (
-                            project(w, rect, placed(pair[0], i)),
-                            project(w, rect, placed(pair[1], i)),
+                            project(w, rect, endpoints[0]),
+                            project(w, rect, endpoints[1]),
                         ) {
                             painter.line_segment([a, b], stroke);
                         }

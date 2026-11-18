@@ -1030,7 +1030,10 @@ fn view_fields(f: &mut Fields<'_>) {
         } else if let Some(cut) = &f.sheet.section {
             f.note(
                 "section-parent",
-                &format!("A–A cuts the {} view", cut.parent),
+                &cut.model_plane.as_ref().map_or_else(
+                    || format!("A–A cuts the {} view", cut.parent),
+                    |_| "A–A uses the model section plane".into(),
+                ),
                 "ready",
             );
             f.emit(
@@ -1044,8 +1047,11 @@ fn view_fields(f: &mut Fields<'_>) {
                 "section/redefine",
                 "Redraw cutting line",
                 json!({"kind":"section-place"}),
-                true,
-                "",
+                f.sheet
+                    .views
+                    .iter()
+                    .any(|key| cad_core::drawing::orthographic_axes(key).is_some()),
+                "Add a Front, Top or Right view to place a new cutting line",
             );
         } else {
             f.action(

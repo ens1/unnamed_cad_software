@@ -2251,6 +2251,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "spade",
  "winit",
 ]
 
