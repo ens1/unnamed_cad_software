@@ -1060,9 +1060,18 @@ pub(crate) fn construct(
     history: &mut ShellHistory,
 ) -> Result<Option<Solid>> {
     use cad_core::edge_features::RecoveryKind;
-    let error = match construct_selection(solid, selected, spec, treatment, history) {
-        Ok(Some(output)) => return Ok(Some(output)),
-        Ok(None) => unsupported("The adjoining faces do not support this edge transition"),
+    let mut complete_history = history.clone();
+    let error = match construct_selection(solid, selected, spec, treatment, &mut complete_history) {
+        Ok(Some(output)) => match crate::validation::solid(&output) {
+            Ok(()) => {
+                *history = complete_history;
+                return Ok(Some(output));
+            }
+            Err(error) => error,
+        },
+        Ok(None) => {
+            CadError::Unsupported("The adjoining faces do not support this edge transition".into())
+        }
         Err(error) => error,
     };
     // Only diagnose small failed selections. Every trial uses the original input
@@ -1155,11 +1164,18 @@ fn construct_selection(
             .face_iter()
             .find(|face| face.id() == first)
             .ok_or_else(|| invalid("Distance 1 face no longer belongs to the body"))?;
-        if !selected
+        let missing = selected
             .iter()
-            .all(|id| face.edge_iter().any(|edge| edge.id() == *id))
-        {
-            return Err(invalid("Distance 1 face must adjoin every selected edge"));
+            .copied()
+            .filter(|id| !face.edge_iter().any(|edge| edge.id() == *id))
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(diagnosis(
+                history,
+                &missing,
+                cad_core::edge_features::RecoveryKind::FailedSelection,
+                invalid("Distance 1 face must adjoin every selected edge"),
+            ));
         }
     }
     let mut ordered = selected

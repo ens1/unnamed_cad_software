@@ -11,6 +11,9 @@ pub(crate) fn required_action(w: &Workspace) -> Option<&'static str> {
     if let Some(picker) = &w.mate_picker {
         return Some(picker.prompt());
     }
+    if crate::operation_editor_ui::recovery::replacement_index(w).is_some() {
+        return Some("Pick the replacement edge on the model");
+    }
     if w.dialog.as_deref() != Some("feature") {
         return None;
     }

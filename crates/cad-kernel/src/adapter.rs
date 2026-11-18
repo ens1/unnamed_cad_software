@@ -2946,22 +2946,25 @@ impl MonstertruckAdapter {
         };
         cad_core::edge_features::validate_selection(references)?;
         let source = bodies(inputs, body)?;
-        let selected = self.selected_boundary_edges(body, references, inputs)?;
-        let selected_ids = selected
-            .iter()
-            .map(Edge::id)
-            .collect::<std::collections::HashSet<_>>();
-        // A repeated source object in two outputs cannot provide unambiguous
-        // body ownership. Do not modify both merely because its IDs coincide.
-        for id in &selected_ids {
+        let selected =
+            resolve_shape_edges(&inputs[body], references, self.histories.borrow().get(body))?;
+        // Preserve authored order for diagnostic trials. One input edge shared
+        // by multiple output bodies does not identify which body to change.
+        for (id, reference) in selected.iter().zip(references) {
             let owners = source
                 .iter()
                 .filter(|solid| solid.edge_iter().any(|edge| edge.id() == *id))
                 .count();
             if owners != 1 {
-                return Err(CadError::Unsupported(format!(
-                    "{name}: A selected edge has {owners} input-body owners; choose an unambiguous body output"
-                )));
+                return Err(CadError::EdgeTreatment {
+                    message: format!(
+                        "{name}: This edge belongs to {owners} input bodies. Select a unique body edge."
+                    ),
+                    recovery: Box::new(cad_core::edge_features::Recovery {
+                        edges: vec![reference.clone()],
+                        kind: cad_core::edge_features::RecoveryKind::UnresolvedReference,
+                    }),
+                });
             }
         }
         let size = positive(expression::value(
@@ -3013,11 +3016,15 @@ impl MonstertruckAdapter {
         let mut material = crate::constructor_delta::Native::default();
         let mut material_complete = true;
         for solid in source {
-            let mut seen = std::collections::HashSet::new();
-            let local = solid
+            let ids = solid
                 .edge_iter()
-                .filter(|edge| selected_ids.contains(&edge.id()) && seen.insert(edge.id()))
-                .map(|edge| edge.id())
+                .map(|e| e.id())
+                .collect::<std::collections::HashSet<_>>();
+            let mut seen = std::collections::HashSet::new();
+            let local = selected
+                .iter()
+                .copied()
+                .filter(|id| ids.contains(id) && seen.insert(*id))
                 .collect::<Vec<_>>();
             if local.is_empty() {
                 result.push(solid.clone());
@@ -3046,7 +3053,6 @@ impl MonstertruckAdapter {
                 };
                 CadError::Unsupported(format!("{name}: {detail}"))
             })?;
-            crate::validation::solid(&output)?;
             let native = history.material().or_else(|| {
                 specification.as_ref().and_then(|_| {
                     crate::constructor_delta::capture(|| {

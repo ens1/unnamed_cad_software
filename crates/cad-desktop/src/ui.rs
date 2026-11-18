@@ -3139,6 +3139,7 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
         w.edge_selection_path = edge_path;
     }
     w.fields.remove("edge-recovery-omissions");
+    w.fields.remove("edge-recovery-replace");
     w.fields.insert("feature-editor-id".into(), f.id.clone());
     w.fields
         .insert("feature-editor-generation".into(), cad_core::id());
@@ -4131,6 +4132,9 @@ fn capture_feature_selection(w: &mut Workspace, cycle: bool, toggle: bool) {
             "Select edges on this feature's input body and component."
         }
         .into();
+        return;
+    }
+    if crate::operation_editor_ui::recovery::capture(w, &feature, &selected) {
         return;
     }
     let is_edge_feature = matches!(

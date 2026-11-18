@@ -1614,7 +1614,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         "evaluation":w.session.evaluation.as_ref().map(|e|&e.identity),
         "draft_evaluation":w.session.draft.as_ref().and_then(|d|d.preview_evaluation()).map(|e|&e.identity),
         "failed_evaluation":w.session.draft.as_ref().and_then(|d|d.evaluation.as_ref()).filter(|e|!e.valid).map(|e|&e.identity),
-        "omissions":w.fields.get("edge-recovery-omissions"),
+        "omissions":w.fields.get("edge-recovery-omissions"),"replacing_edge":recovery::replacement_index(w),
         "checkpoint_evaluation":w.tool_checkpoint.as_ref().and_then(|s|s.evaluation.as_ref()).map(|e|&e.identity),
         "checkpoint_draft_evaluation":w.tool_checkpoint.as_ref().and_then(|s|s.draft.as_ref()).and_then(|d|d.preview_evaluation()).map(|e|&e.identity),
         "settings":w.settings.is_some(),"original":w.view.original,"history":w.view.history_cursor,
@@ -2071,7 +2071,13 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
             .ok_or_else(|| invalid("This modeling action has no mutation"))?;
         if matches!(
             mutation["kind"].as_str(),
-            Some("omit_failed" | "restore_omitted" | "focus_failed")
+            Some(
+                "omit_failed"
+                    | "restore_omitted"
+                    | "focus_failed"
+                    | "replace_failed"
+                    | "stop_replace"
+            )
         ) {
             return recovery::edit(w, &feature.clone(), mutation);
         }

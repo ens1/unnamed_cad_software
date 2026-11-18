@@ -7,6 +7,46 @@ use cad_core::{
     edge_features::{Recovery, RecoveryKind},
 };
 
+const REPLACE: &str = "edge-recovery-replace";
+pub(crate) fn replacement_index(w: &Workspace) -> Option<usize> {
+    let (epoch, index) = w.fields.get(REPLACE)?.rsplit_once('/')?;
+    (epoch == w.session.source_epoch() && w.dialog.as_deref() == Some("feature"))
+        .then(|| index.parse().ok())
+        .flatten()
+}
+
+pub(crate) fn capture(w: &mut Workspace, feature: &Feature, pick: &viewport::Selection) -> bool {
+    let Some(index) = replacement_index(w) else {
+        return false;
+    };
+    let mut changed = feature.clone();
+    let edges = match &mut changed.operation {
+        Operation::Fillet { body, edges, .. } | Operation::Chamfer { body, edges, .. }
+            if selection_ui::accepts_edge(w, body, pick) =>
+        {
+            edges
+        }
+        _ => return false,
+    };
+    if index >= edges.len()
+        || edges
+            .iter()
+            .any(|edge| selection_ui::same_edge(edge, &pick.reference))
+    {
+        w.status = "Pick a different edge on the input body".into();
+        return true;
+    }
+    edges[index] = pick.reference.clone();
+    match publish(w, changed) {
+        Ok(()) => {
+            w.fields.remove(REPLACE);
+            selection_ui::clear_edge_pick(w);
+        }
+        Err(error) => w.status = error.to_string(),
+    }
+    true
+}
+
 const SAVED: &str = "edge-recovery-omissions";
 #[derive(serde::Deserialize, serde::Serialize)]
 struct Omissions {
@@ -69,7 +109,7 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
         };
         let text = match failure.kind {
             RecoveryKind::UnresolvedReference => {
-                format!("Select a replacement for {label} on the input body.")
+                format!("The input body no longer identifies {label} uniquely.")
             }
             RecoveryKind::ValidRemainder => format!("The input body rebuilt with {label} omitted."),
             RecoveryKind::FailedSelection if picks.len() == 1 => {
@@ -86,8 +126,31 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                 json!({"body":body,"indices":picks,"references":failure.edges,"kind":failure.kind});
         }
         if let [index] = picks.as_slice()
-            && failure.kind != RecoveryKind::UnresolvedReference
+            && failure.kind == RecoveryKind::UnresolvedReference
         {
+            if replacement_index(fields.w) == Some(*index) {
+                fields.summary(
+                    "replacement-prompt",
+                    "Pick the replacement edge on the model.",
+                    "required",
+                );
+                fields.action(
+                    "stop-replace",
+                    "Stop picking",
+                    json!({"kind":"stop_replace"}),
+                    true,
+                    "",
+                );
+            } else {
+                fields.action(
+                    "replace",
+                    &format!("Replace edge {}…", index + 1),
+                    json!({"kind":"replace_failed","index":index}),
+                    true,
+                    "",
+                );
+            }
+        } else if let [index] = picks.as_slice() {
             fields.action(
                 "focus",
                 &format!("Show edge {}", index + 1),
@@ -135,7 +198,11 @@ pub(super) fn edit(w: &mut Workspace, feature: &Feature, mutation: &Value) -> Re
         }
         _ => return Err(invalid("This feature has no edge selection")),
     };
-    if mutation["kind"] == "focus_failed" {
+    if mutation["kind"] == "stop_replace" {
+        w.fields.remove(REPLACE);
+        return Ok(());
+    }
+    if mutation["kind"] == "focus_failed" || mutation["kind"] == "replace_failed" {
         let index = mutation["index"]
             .as_u64()
             .and_then(|i| usize::try_from(i).ok())
@@ -143,6 +210,14 @@ pub(super) fn edit(w: &mut Workspace, feature: &Feature, mutation: &Value) -> Re
         let edge = edges
             .get(index)
             .ok_or_else(|| invalid("The edge selection has changed"))?;
+        if mutation["kind"] == "replace_failed" {
+            w.fields.insert(
+                REPLACE.into(),
+                format!("{}/{index}", w.session.source_epoch()),
+            );
+            w.confirm_requested = false;
+            return Ok(());
+        }
         return selection_ui::focus_edge(w, body, edge);
     }
     let mut saved = omissions(w, body).unwrap_or_else(|| Omissions {
