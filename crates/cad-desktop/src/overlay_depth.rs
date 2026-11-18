@@ -563,6 +563,80 @@ pub fn visible(w: &Workspace, rect: Rect, world: [f64; 3], work: &mut usize) -> 
         t.covers(p) && t.depth(p) > p.z + depth_epsilon(p.z.abs(), p.z > 0., cache.bias_mm)
     })
 }
+/// On a click, a single ray can confirm visibility without constructing the
+/// optional full-screen overlay index. The ray stays in world millimeters
+/// after mapping into each occurrence's local coordinates.
+pub(crate) fn click_visible(
+    w: &Workspace,
+    e: &cad_core::protocol::Evaluation,
+    rect: Rect,
+    world: [f64; 3],
+) -> bool {
+    let Some(pixel) = viewport::project(w, rect, world) else {
+        return false;
+    };
+    let (origin, direction) = viewport::ray(w, rect, pixel);
+    let origin = DVec3::from_array(origin);
+    let direction = DVec3::from_array(direction);
+    let pose = crate::camera_views_ui::current(w);
+    let near = (pose.distance_mm * 0.0001).max(0.001)
+        / direction.dot(DVec3::from_array(pose.frame().forward));
+    let bias = (w.session.visible().settings.display_tolerance_mm * 0.5).clamp(1e-6, 0.05);
+    let far = (DVec3::from_array(world) - origin).dot(direction) - bias;
+    if !near.is_finite() || !far.is_finite() {
+        return false;
+    }
+    for i in viewport::display_instances(w, e) {
+        if !viewport::visible(w, i) || viewport::ghost_neighbor(w, i) {
+            continue;
+        }
+        let inverse = bevy::math::DMat4::from_cols_array_2d(&i.matrix)
+            .transpose()
+            .inverse();
+        if !inverse.is_finite() {
+            return false;
+        }
+        let o = inverse.transform_point3(origin).to_array();
+        let d = inverse.transform_vector3(direction).to_array();
+        for mesh in viewport::selection_meshes(w, e, i) {
+            if !ray_overlaps_bounds(o, d, near, far, mesh.bounds) {
+                continue;
+            }
+            if mesh.indices.as_chunks::<3>().0.iter().any(|indices| {
+                let [a, b, c] = indices.map(|index| mesh.positions[index as usize]);
+                viewport::triangle(o, d, a, b, c).is_some_and(|t| t >= near && t < far)
+            }) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn ray_overlaps_bounds(
+    o: [f64; 3],
+    d: [f64; 3],
+    mut near: f64,
+    mut far: f64,
+    bounds: [[f64; 3]; 2],
+) -> bool {
+    for axis in 0..3 {
+        if d[axis] == 0. {
+            if o[axis] < bounds[0][axis] || o[axis] > bounds[1][axis] {
+                return false;
+            }
+        } else {
+            let [a, b] = bounds.map(|corner| (corner[axis] - o[axis]) / d[axis]);
+            near = near.max(a.min(b));
+            far = far.min(a.max(b));
+            if far < near {
+                return false;
+            }
+        }
+    }
+    far >= near
+}
+
 pub fn segments(
     w: &Workspace,
     rect: Rect,

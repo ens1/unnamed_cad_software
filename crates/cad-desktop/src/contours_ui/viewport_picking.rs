@@ -188,14 +188,22 @@ enum Target {
 
 fn target_at(
     w: &Workspace,
-    f: &Feature,
     e: &Evaluation,
     i: &PlacedPart,
     rect: Rect,
     p: Pos2,
     vertex: bool,
+    click: bool,
 ) -> Option<Target> {
+    let f = input_feature(w)?;
     let mut work = crate::sketch_overlay::DEPTH_WORK;
+    let mut visible = |world| {
+        if click {
+            overlay_depth::click_visible(w, e, rect, world)
+        } else {
+            model::visible_at(w, rect, world, &mut work)
+        }
+    };
     let preceding = |id: &str| {
         w.session.visible().parts[&i.definition]
             .features
@@ -204,7 +212,9 @@ fn target_at(
             .any(|prior| prior.id == id)
     };
     if !vertex {
-        return model::pick(w, rect, p)
+        let mut faces = model::pick(w, rect, p);
+        faces.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+        return faces
             .into_iter()
             .filter(|s| {
                 s.path == i.path
@@ -212,8 +222,7 @@ fn target_at(
                     && preceding(&s.reference.producer.node)
                     && s.body.as_ref().is_none_or(|body| preceding(&body.node))
             })
-            .filter(|s| model::visible_at(w, rect, s.point, &mut work))
-            .min_by(|a, b| a.distance.total_cmp(&b.distance))
+            .find(|s| visible(s.point))
             .map(Target::Face);
     }
     let eye = DVec3::from_array(model::ray(w, rect, p).0);
@@ -282,8 +291,9 @@ fn target_at(
         }
     }
     near.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let mut examined = std::collections::BTreeSet::new();
     near.into_iter()
-        .find(|(_, _, _, world)| model::visible_at(w, rect, *world, &mut work))
+        .find(|(_, _, _, world)| examined.insert(world.map(f64::to_bits)) && visible(*world))
         .map(|(_, _, source, world)| Target::Vertex(source, world))
 }
 
@@ -598,7 +608,16 @@ pub(crate) fn viewport(
         if !exhausted {
             ui.ctx().request_repaint();
         }
-        return target.is_some() && click;
+        if !click {
+            if exhausted && pointer.is_some() {
+                response.clone().on_hover_text(if target.is_some() {
+                    "Click the end reference on the model."
+                } else {
+                    "Click inside a region or choose it under Contours."
+                });
+            }
+            return false;
+        }
     }
     if let Some((second, vertex)) = target {
         let Some(p) = pointer else {
@@ -623,10 +642,12 @@ pub(crate) fn viewport(
                 Option<Target>,
             )>(key)
         });
-        let aim = if let Some((_, target)) = saved.filter(|(s, _)| s == &stamp) {
+        let aim = if click {
+            target_at(w, e, i, rect, p, vertex, true)
+        } else if let Some((_, target)) = saved.filter(|(s, _)| s == &stamp) {
             target
         } else {
-            let target = target_at(w, f, e, i, rect, p, vertex);
+            let target = target_at(w, e, i, rect, p, vertex, false);
             ui.ctx()
                 .data_mut(|d| d.insert_temp(key, (stamp, target.clone())));
             target
@@ -681,6 +702,7 @@ pub(crate) fn viewport(
     let mut work = crate::sketch_overlay::DEPTH_WORK;
     let stamp = (
         epoch,
+        complete,
         w.session.source_epoch().to_owned(),
         profile.clone(),
         i.path.clone(),
@@ -692,7 +714,7 @@ pub(crate) fn viewport(
     ));
     let saved = ui.ctx().data(|d| {
         d.get_temp::<(
-            (u64, String, NodeRef, Vec<String>),
+            (u64, bool, String, NodeRef, Vec<String>),
             std::sync::Arc<RegionScene>,
         )>(key)
     });
@@ -701,8 +723,10 @@ pub(crate) fn viewport(
     } else {
         let mut regions = regions(w, geometry, i, rect, profile, &options.contours);
         let mut depth_work = crate::sketch_overlay::DEPTH_WORK;
-        let issues = broken_endpoints(geometry)
+        let issues = complete
+            .then(|| broken_endpoints(geometry))
             .into_iter()
+            .flatten()
             .filter_map(|uv| {
                 let world = sketch::world(&geometry.plane, &i.matrix, uv);
                 model::visible_at(w, rect, world, &mut depth_work)
@@ -710,8 +734,10 @@ pub(crate) fn viewport(
                     .flatten()
             })
             .collect();
-        for region in &mut regions {
-            clip_region(w, rect, region, &world, &mut depth_work);
+        if complete {
+            for region in &mut regions {
+                clip_region(w, rect, region, &world, &mut depth_work);
+            }
         }
         let scene = std::sync::Arc::new(RegionScene { regions, issues });
         ui.ctx()
@@ -742,7 +768,13 @@ pub(crate) fn viewport(
                 && region_style(w, region, false).is_some()
                 && region_style(w, region, true).is_some()
         })?;
-        model::visible_at(w, rect, world(p)?, &mut work).then_some(index)
+        let world = world(p)?;
+        let visible = if click {
+            overlay_depth::click_visible(w, e, rect, world)
+        } else {
+            model::visible_at(w, rect, world, &mut work)
+        };
+        visible.then_some(index)
     });
     for (index, region) in regions.iter().enumerate() {
         draw_region(w, ui, rect, region, Some(index) == hit);
