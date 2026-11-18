@@ -72,7 +72,11 @@ pub fn cancel(w: &mut Workspace) {
         .retain(|key, _| !key.starts_with("component-fork-") && !key.starts_with(ERRORS));
 }
 pub fn finish(w: &mut Workspace) {
-    w.component_fork = None;
+    if let Some(state) = w.component_fork.take()
+        && let Some(plan) = &state.result
+    {
+        crate::assembly_scope_ui::remember_fork(w, &state.intent, plan);
+    }
     w.fields
         .retain(|key, _| !key.starts_with("component-fork-") && !key.starts_with(ERRORS));
 }

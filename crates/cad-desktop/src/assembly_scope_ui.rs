@@ -17,6 +17,9 @@ const CLASSES: &[&str] = &["semantic-control", "viewport-control", "instance-sco
 pub struct State {
     overview: Option<(Id, Option<Pose>)>,
     counts: Mutex<Option<CountCache>>,
+    // Only the two edit anchors of each accepted occurrence fork. This view state
+    // lasts as long as the project’s in-memory undo history.
+    forks: Vec<(Anchor, Anchor)>,
 }
 
 struct CountCache {
@@ -320,15 +323,46 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&Value>) -> bool {
 
 // Forking a nested instance also copies its enclosing assemblies and renames their local IDs.
 // Follow those explicit correspondences in either direction through Undo and Redo.
-pub struct HistoryRoute(Vec<(Id, Id, Option<Id>)>);
+#[derive(PartialEq, Eq)]
+struct Anchor {
+    definition: Id,
+    path: Vec<Id>,
+}
+
+pub fn remember_fork(
+    w: &mut Workspace,
+    intent: &component_fork::Intent,
+    plan: &component_fork::Plan,
+) {
+    if let (component_fork::Target::Occurrence { path: from }, Some(to)) =
+        (&intent.target, &plan.occurrence_path)
+    {
+        w.assembly_scope.forks.push((
+            Anchor {
+                definition: intent.definition.clone(),
+                path: from.clone(),
+            },
+            Anchor {
+                definition: plan.definition.clone(),
+                path: to.clone(),
+            },
+        ));
+    }
+}
+
+pub struct HistoryRoute {
+    steps: Vec<(Id, Id, Option<Id>)>,
+    anchor: Anchor,
+}
 pub fn history_route(w: &Workspace) -> Option<HistoryRoute> {
     if !crate::workspace_controls::in_place(w) {
         return None;
     }
     let doc = w.session.visible();
+    let current_path = w.view.editing_occurrence.as_ref()?;
     let mut owner = &doc.root;
     let mut route = vec![];
-    for id in w.view.editing_occurrence.as_ref()? {
+    for id in current_path {
         let child = doc.assemblies.get(owner)?.instances.get(id)?;
         let original = doc
             .component_forks
@@ -343,14 +377,43 @@ pub fn history_route(w: &Workspace) -> Option<HistoryRoute> {
         route.push((owner.clone(), id.clone(), original));
         owner = &child.definition;
     }
-    (w.view.active_part.as_ref() == Some(owner)).then_some(HistoryRoute(route))
+    (w.view.active_part.as_ref() == Some(owner)).then(|| HistoryRoute {
+        steps: route,
+        anchor: Anchor {
+            definition: owner.clone(),
+            path: current_path.clone(),
+        },
+    })
 }
 
 pub fn restore_route(w: &mut Workspace, route: HistoryRoute) {
     let doc = w.session.visible();
+    if crate::assembly_tree_ui::lookup(doc, &route.anchor.path)
+        .is_some_and(|(_, i)| i.definition == route.anchor.definition)
+    {
+        return;
+    }
+    // Linked forks retain upstream ancestry, whose IDs differ from the pinned
+    // host copy. The accepted planner already identified the exact before/after
+    // paths. Verify the destination against the current history entry.
+    if let Some(alternative) = w.assembly_scope.forks.iter().rev().find_map(|(from, to)| {
+        let candidate = if from == &route.anchor {
+            to
+        } else if to == &route.anchor {
+            from
+        } else {
+            return None;
+        };
+        crate::assembly_tree_ui::lookup(doc, &candidate.path)
+            .is_some_and(|(_, i)| i.definition == candidate.definition)
+            .then_some(candidate)
+    }) {
+        restore_anchor(w, alternative.definition.clone(), alternative.path.clone());
+        return;
+    }
     let mut owner = &doc.root;
     let mut path = vec![];
-    for (previous, id, original) in route.0 {
+    for (previous, id, original) in route.steps {
         let Some(assembly) = doc.assemblies.get(owner) else {
             w.leave_part_context();
             return;
@@ -375,7 +438,11 @@ pub fn restore_route(w: &mut Workspace, route: HistoryRoute) {
         w.leave_part_context();
         return;
     }
-    if w.view.active_part.as_ref() != Some(owner)
+    restore_anchor(w, owner.clone(), path);
+}
+
+fn restore_anchor(w: &mut Workspace, owner: Id, path: Vec<Id>) {
+    if w.view.active_part.as_ref() != Some(&owner)
         || w.view.editing_occurrence.as_ref() != Some(&path)
     {
         w.view.active_node = None;
@@ -384,7 +451,7 @@ pub fn restore_route(w: &mut Workspace, route: HistoryRoute) {
         w.context_selection = None;
         w.selected_feature_path = None;
         w.selected_component = Some(path.clone());
-        w.view.active_part = Some(owner.clone());
+        w.view.active_part = Some(owner);
         w.view.active_instance = path.last().cloned();
         w.edge_selection_path = Some(path.clone());
         w.view.editing_occurrence = Some(path);
