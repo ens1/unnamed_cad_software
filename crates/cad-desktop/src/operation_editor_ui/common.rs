@@ -71,11 +71,11 @@ fn optional(fields: &mut Fields<'_>, path: &str, label: &str, default: Value) ->
     enabled
 }
 
-fn plane(fields: &mut Fields<'_>) {
+fn plane(fields: &mut Fields<'_>, label: &str) {
     let path = "/operation/plane_reference";
     let mut choices = plane_choices(fields.w, fields.owner, &fields.feature.id);
     choices.insert(0, choice("Explicit plane frame", Value::Null));
-    fields.choice(path, "Neutral / mirror plane", choices);
+    fields.choice(path, label, choices);
     if fields.source.pointer(path).is_none_or(Value::is_null) {
         for (key, label, unit) in [
             ("origin", "Origin", "mm"),
@@ -136,8 +136,8 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                     }
                 }
                 if options.method != cad_core::edge_features::ChamferMethod::EqualDistance {
-                    fields.toggle("/operation/options/flip", "Flip distance 1 side");
-                    let mut choices = vec![choice("Adjacent face in normal order", Value::Null)];
+                    fields.toggle("/operation/options/flip", "Swap chamfer sides");
+                    let mut choices = vec![choice("Automatic", Value::Null)];
                     if let Some(pick) = picked_face(fields, body) {
                         choices.push(choice("Selected face", pick));
                     }
@@ -161,9 +161,9 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
             fields.group("selection", "Opening faces");
             fields.topology_array("/operation/removed_faces", body, "face");
             if removed_faces.is_empty() {
-                fields.note(
+                fields.summary(
                     "closed-shell",
-                    "No opening faces: create an enclosed cavity.",
+                    "Pick a face for an opening, or leave this empty for a closed shell.",
                     "ready",
                 );
             }
@@ -195,7 +195,7 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
             fields.group("extent", "Draft");
             fields.quantity("/operation/angle", "Angle", "deg");
             fields.group("placement", "Neutral plane");
-            plane(fields);
+            plane(fields, "Neutral plane");
         }
         Operation::Transform { .. } => {
             fields.group("placement", "Move / rotate body");
@@ -204,7 +204,7 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
         }
         Operation::Scale { options, .. } => {
             fields.group("extent", "Scale");
-            fields.toggle("/operation/options/uniform", "Uniform factors");
+            fields.toggle("/operation/options/uniform", "Uniform scale");
             if options.uniform {
                 fields.quantity("/operation/options/factors/0", "Scale factor", "");
             } else {
@@ -233,7 +233,7 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
         }
         Operation::Mirror { .. } => {
             fields.group("placement", "Mirror plane");
-            plane(fields);
+            plane(fields, "Mirror plane");
             fields.toggle("/operation/keep_original", "Keep original body");
         }
         Operation::Pattern { count, options, .. } => {
@@ -303,7 +303,7 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                 // A skip coordinate is the identity; moving/removing another row
                 // cannot redirect a bound action to a different skipped instance.
                 let key = format!("skip/{}/{}", pair[0], pair[1]);
-                fields.note(
+                fields.summary(
                     &key,
                     &format!(
                         "Instance {}, {}",

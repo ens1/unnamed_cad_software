@@ -40,6 +40,7 @@ mod fabrication_sources_ui;
 mod fabrication_ui;
 mod feature_order_ui;
 mod feature_transfer_ui;
+mod file_switch_ui;
 mod finish_library_ui;
 mod git_connections_ui;
 mod git_ui;
@@ -150,11 +151,13 @@ pub struct Workspace {
     pub view: PresentationState,
     pub visibility_diagnostic: Option<String>,
     pub project: Option<PathBuf>,
+    recovered_resources: Option<PathBuf>,
     pub layout: LayoutDocument,
     pub theme: Theme,
     pub presentation_resources: crate::presentation_resources::State,
     pub application_preferences: settings_preferences::Preferences,
     pub settings: Option<settings::State>,
+    file_switch: Option<file_switch_ui::Pending>,
     pub reference_repair: Option<reference_repair_ui::State>,
     pub assembly_motion: Option<assembly_motion_ui::State>,
     pub assembly_copy: Option<assembly_copy_ui::State>,
@@ -322,11 +325,13 @@ impl Workspace {
             view,
             visibility_diagnostic,
             project,
+            recovered_resources: None,
             layout,
             theme,
             presentation_resources: crate::presentation_resources::State::default(),
             application_preferences,
             settings: None,
+            file_switch: None,
             reference_repair: None,
             assembly_motion: None,
             assembly_copy: None,
@@ -424,6 +429,7 @@ impl Workspace {
         self.project
             .as_ref()
             .map(|p| cad_core::persistence::project_root(p))
+            .or_else(|| self.recovered_resources.clone())
             .unwrap_or_else(|| {
                 recovery_directory()
                     .join("unsaved")
@@ -822,20 +828,31 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn replace(&mut self, d: Document, path: Option<PathBuf>) {
+        self.replace_session(Session::new(d, BACKEND), path, None);
+    }
+
+    fn replace_session(
+        &mut self,
+        session: Session,
+        path: Option<PathBuf>,
+        recovered_resources: Option<PathBuf>,
+    ) -> bool {
         if publish_ui::busy(self) {
             self.status =
                 "Wait for Publish to finish or cancel it before opening another project".into();
-            return;
+            return false;
         }
         if git_ui::busy(self) {
             self.status = "Wait for Git to finish before opening another project".into();
-            return;
+            return false;
         }
         settings::cancel(self);
+        self.file_switch = None;
         self.cancel();
-        self.session = Session::new(d, BACKEND);
+        self.session = session;
         self.source_cache = Default::default();
         self.project = path;
+        self.recovered_resources = recovered_resources;
         git_ui::reset(self);
         let navigation = self.view.navigation.clone();
         self.view = PresentationState {
@@ -871,9 +888,15 @@ impl Workspace {
             recovery_directory().join(format!("{}.json", self.session.committed.id));
         self.last_recovery.clear();
         self.last_recovery_write = Instant::now();
-        if let Some(diagnostic) = &self.visibility_diagnostic {
-            self.status = diagnostic.clone();
-        }
+        self.status = self.visibility_diagnostic.clone().unwrap_or_else(|| {
+            let name = &self.session.committed.name;
+            if self.project.is_some() {
+                format!("Opened {name}")
+            } else {
+                format!("{name} is ready")
+            }
+        });
+        true
     }
     pub fn isolate(&mut self) {
         navigation::stop(self);

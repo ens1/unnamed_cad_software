@@ -210,17 +210,24 @@ impl<'a> Fields<'a> {
     }
     fn action(&mut self, key: &str, label: &str, mutation: Value, enabled: bool, reason: &str) {
         let id = self.identity(&format!("action/{key}"));
-        let available = self.enabled() && enabled;
+        let disabled_reason = if self.w.settings.is_some() {
+            Some("Close Settings to edit this feature")
+        } else if self.w.fields.contains_key("feature-source-invalid") {
+            Some("Correct the error in Advanced Source to edit this feature")
+        } else {
+            (!enabled).then_some(reason)
+        };
+        let available = disabled_reason.is_none();
         let mut data = self.metadata();
         data["element"] = json!(id);
         data["mutation"] = mutation;
-        data["actions"] = json!([{"command":ACTION,"label":label,"enabled":available,"disabled_reason":(!available).then_some(reason),"arguments":data.clone()}]);
+        data["actions"] = json!([{"command":ACTION,"label":label,"enabled":available,"disabled_reason":disabled_reason,"arguments":data.clone()}]);
         data["classes"] = json!(["modeling-action", self.group]);
         self.out.push(SemanticElement {
             id,
             role: "operation-editor-action".into(),
             label: label.into(),
-            value: (!available).then(|| reason.into()),
+            value: disabled_reason.map(str::to_owned),
             state: if available { "ready" } else { "disabled" }.into(),
             commands: vec![ACTION.into()],
             relationships: vec![self.feature.id.clone()],
@@ -228,6 +235,14 @@ impl<'a> Fields<'a> {
         });
     }
     fn note(&mut self, key: &str, label: &str, state: &str) {
+        self.message(key, label, state, "instructions");
+    }
+    fn summary(&mut self, key: &str, label: &str, state: &str) {
+        self.message(key, label, state, "summary");
+    }
+    fn message(&mut self, key: &str, label: &str, state: &str, purpose: &str) {
+        let mut data = self.metadata();
+        data["purpose"] = json!(purpose);
         self.out.push(SemanticElement {
             id: self.identity(&format!("note/{key}")),
             role: "operation-editor-help".into(),
@@ -236,7 +251,7 @@ impl<'a> Fields<'a> {
             state: state.into(),
             commands: vec![],
             relationships: vec![self.feature.id.clone()],
-            data: self.metadata(),
+            data,
         });
     }
     fn optional_expression(&mut self, path: &str, label: &str, default: &str, unit: &str) {
@@ -410,7 +425,7 @@ impl<'a> Fields<'a> {
             .unwrap_or_default();
         for (index, value) in entries.iter().enumerate() {
             let key = format!("{path}/{}", item_identity(value, index));
-            self.note(
+            self.summary(
                 &key,
                 &format!(
                     "{} {}",
@@ -1438,7 +1453,7 @@ fn member_selection(fields: &mut Fields<'_>, path: &str, choices: Vec<Value>, al
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    fields.note(
+    fields.summary(
         &format!("{path}/summary"),
         if all {
             "All members"
@@ -1454,7 +1469,9 @@ fn member_selection(fields: &mut Fields<'_>, path: &str, choices: Vec<Value>, al
         let selected = all || entries.contains(value);
         let key = item_identity(value, 0);
         fields.action(&format!("{path}/{key}/toggle"),candidate.get("label").and_then(Value::as_str).unwrap_or("Member"),json!({"kind":"member_toggle","pointer":path,"value":value,"choices":choices.iter().filter_map(|c|c.get("value")).collect::<Vec<_>>() }),true,"Finish the source edit first");
-        if let Some(element) = fields.out.last_mut() {
+        if let Some(element) = fields.out.last_mut()
+            && element.state != "disabled"
+        {
             element.state = if selected { "selected" } else { "ready" }.into();
         }
     }
@@ -1481,7 +1498,7 @@ fn mold_fields(fields: &mut Fields<'_>, operation: &cad_core::mold::MoldOperatio
             if let Some(report) =
                 crate::mold_ui::report_for_feature(fields.w, fields.owner, &fields.feature.id)
             {
-                fields.note(
+                fields.summary(
                     "assessment",
                     if report.complete {
                         "Every face has an exact draft classification"
@@ -1508,13 +1525,13 @@ fn mold_fields(fields: &mut Fields<'_>, operation: &cad_core::mold::MoldOperatio
                         "ready",
                     );
                 }
-                fields.note(
+                fields.summary(
                     "parting-count",
                     &format!("{} exact planar parting edges", report.parting_edges.len()),
                     "ready",
                 );
             } else {
-                fields.note(
+                fields.summary(
                     "assessment",
                     "Waiting for current source and pull-direction evaluation",
                     "pending",
@@ -1810,6 +1827,11 @@ fn set_field(w: &mut Workspace, element: &SemanticElement, value: Value) -> Resu
             .filter(|v| *v > 0)
             .ok_or_else(|| invalid("Enter a positive integer instance position"))?;
         w.fields.insert(transient_key(&element), value.to_string());
+        // A skip target changes command availability and arguments without
+        // editing the source feature or advancing its draft revision.
+        if let Ok(mut cache) = w.operation_values.lock() {
+            cache.semantic_key = None;
+        }
         w.confirm_requested = false;
         return Ok(());
     }
@@ -2224,10 +2246,7 @@ pub(crate) fn render_elements(
                             index += 1;
                             continue;
                         }
-                        if matches!(
-                            element.role.as_str(),
-                            "operation-editor-help" | "structural-member-note"
-                        ) {
+                        if supplementary_help(element) {
                             index += 1;
                             continue;
                         }
@@ -2311,12 +2330,7 @@ pub(crate) fn render_elements(
                 }
                 let notes = children
                     .iter()
-                    .filter(|element| {
-                        matches!(
-                            element.role.as_str(),
-                            "operation-editor-help" | "structural-member-note"
-                        )
-                    })
+                    .filter(|element| supplementary_help(element))
                     .collect::<Vec<_>>();
                 if !notes.is_empty()
                     && crate::workspace_controls::disclosure(
@@ -2340,6 +2354,19 @@ pub(crate) fn render_elements(
             },
         );
     }
+}
+
+// Instructions may be tucked away. Keep selection labels beside their actions,
+// and keep warnings and preview summaries visible in their own group.
+fn supplementary_help(element: &SemanticElement) -> bool {
+    matches!(
+        element.role.as_str(),
+        "operation-editor-help" | "structural-member-note"
+    ) && element.data["purpose"] != "summary"
+        && !matches!(
+            element.state.as_str(),
+            "warning" | "error" | "invalid" | "pending" | "required"
+        )
 }
 
 fn reference_item(element: &SemanticElement) -> bool {

@@ -29,6 +29,7 @@ pub fn before_open(w: &mut Workspace) {
             .insert(RETURN.into(), w.dialog.clone().unwrap_or_default());
         w.fields.insert(TREE.into(), w.manager_tree.to_string());
         w.fields.remove(INDEX);
+        w.fields.remove(QUERY);
         w.fields
             .insert("focus-request:command-palette:query".into(), "true".into());
     }
@@ -227,6 +228,37 @@ fn candidates(w: &Workspace) -> Vec<Candidate> {
             );
         }
     }
+    // Include desktop commands such as Undo, standard views and drawing DXF.
+    // Sketch toolbar aliases already have named entries in the core catalog.
+    for source in &chrome {
+        let Some(command) = source
+            .id
+            .strip_prefix("command-toolbar/")
+            .or_else(|| source.id.strip_prefix("command-menu/"))
+        else {
+            continue;
+        };
+        if out.contains_key(command) || command.starts_with("sketch.tool.") {
+            continue;
+        }
+        if let Some(action) = source
+            .action_descriptors()
+            .into_iter()
+            .find(|action| action.command == command)
+        {
+            out.insert(
+                command.to_owned(),
+                Candidate {
+                    id: format!("command-palette-result:{command}"),
+                    label: source.label.clone(),
+                    category: group(command),
+                    source: source.clone(),
+                    action,
+                    context: false,
+                },
+            );
+        }
+    }
     let mut dynamic: BTreeMap<String, BTreeMap<String, Candidate>> = BTreeMap::new();
     for source in crate::materials_ui::semantics(w)
         .into_iter()
@@ -330,34 +362,103 @@ fn candidates(w: &Workspace) -> Vec<Candidate> {
     }
     result
 }
+fn search_aliases(command: &str) -> &'static str {
+    match command {
+        "feature.extrude" => "pad boss extrusion add material",
+        "feature.cut" => "pocket subtract remove material",
+        "feature.fillet" => "round edge radius",
+        "feature.chamfer" => "bevel edge",
+        "sketch.fillet" => "round sketch corner",
+        "sketch.chamfer" => "bevel sketch corner",
+        "sketch.smart-dimension" => "distance diameter radius angle",
+        "viewport.fit" => "zoom extents fit all",
+        "settings.model" => "model units inches millimeters precision",
+        "appearances" => "color finish texture paint",
+        _ => "",
+    }
+}
+
+fn suggested_commands(w: &Workspace) -> &[&str] {
+    if w.sketch.is_some() || crate::sketch3d_ui::active(w) {
+        &["sketch.line", "sketch.circle", "sketch.smart-dimension"]
+    } else if crate::drawing_ui::is_workspace(w) {
+        &["drawings", "viewport.fit", "file.export-drawing-dxf"]
+    } else if w.view.active_part.is_some() {
+        &[
+            "sketch.new",
+            "feature.extrude",
+            "feature.cut",
+            "feature.fillet",
+            "viewport.fit",
+        ]
+    } else {
+        &[
+            "assembly.insert-existing",
+            "assembly.mate-new",
+            "part.new",
+            "viewport.fit",
+        ]
+    }
+}
+
+fn match_summary(count: usize, only_available: bool) -> String {
+    match count {
+        0 if only_available => {
+            "No matches. Clear the availability filter or try another name.".into()
+        }
+        0 => "No matching commands. Try a tool name such as Extrude or Fillet.".into(),
+        1 => "1 matching command".into(),
+        n if n > MAX_RESULTS => format!("Showing {MAX_RESULTS} of {n} matches"),
+        n => format!("{n} matching commands"),
+    }
+}
+
 fn filtered(w: &Workspace) -> (Vec<Candidate>, usize) {
     let query = w
         .fields
         .get(QUERY)
         .map(String::as_str)
         .unwrap_or("")
+        .trim()
         .to_lowercase();
     let terms = query.split_whitespace().collect::<Vec<_>>();
     let only = w.fields.get(ONLY).is_some_and(|value| value == "true");
+    let suggestions = suggested_commands(w);
     let mut values = candidates(w)
         .into_iter()
         .filter(|candidate| {
             let haystack = format!(
-                "{} {} {}",
-                candidate.label, candidate.category, candidate.action.command
+                "{} {} {} {}",
+                candidate.label,
+                candidate.category,
+                candidate.action.command,
+                search_aliases(&candidate.action.command)
             )
             .to_lowercase();
             (!only || candidate.action.enabled) && terms.iter().all(|term| haystack.contains(term))
         })
         .collect::<Vec<_>>();
-    values.sort_by_key(|candidate| {
+    values.sort_by_cached_key(|candidate| {
+        let label = candidate.label.to_lowercase();
+        let command = candidate.action.command.as_str();
+        let suggested_rank = if query.is_empty() {
+            suggestions
+                .iter()
+                .position(|suggestion| *suggestion == command)
+                .unwrap_or(usize::MAX)
+        } else {
+            0
+        };
         (
+            !query.is_empty()
+                && query != label
+                && command.rsplit('.').next() != Some(query.as_str()),
             !candidate.action.enabled,
             !candidate.context,
-            !candidate.label.to_lowercase().starts_with(&query),
+            suggested_rank,
+            !label.starts_with(&query),
             candidate.category.clone(),
-            candidate.label.to_lowercase(),
-            candidate.id.clone(),
+            label,
         )
     });
     let count = values.len();
@@ -428,15 +529,21 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ),
     ];
     if open {
+        out.push(SemanticElement {
+            id: "command-palette:close".into(),
+            role: "command-palette-action".into(),
+            label: "Close".into(),
+            value: None,
+            state: "ready".into(),
+            commands: vec!["command-palette.close".into()],
+            relationships: vec!["workspace.commands".into()],
+            data: json!({"accessibility_label":"Close command search"}),
+        });
         let (values, count) = filtered(w);
         out.push(SemanticElement {
             id: "command-palette:status".into(),
             role: "command-palette-status".into(),
-            label: if count > MAX_RESULTS {
-                format!("{count} matches · first {MAX_RESULTS}; refine search")
-            } else {
-                format!("{count} matching commands")
-            },
+            label: match_summary(count, w.fields.get(ONLY).is_some_and(|v| v == "true")),
             value: None,
             state: "ready".into(),
             commands: vec![],
@@ -538,13 +645,55 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&Value>) -> bool {
     true
 }
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
+    let open = w.dialog.as_deref() == Some("commands");
+    let close = ui
+        .horizontal(|ui| {
+            controls::label(
+                ui,
+                "command-palette:title",
+                "inspector-title",
+                &[],
+                "Find a command",
+                "ready",
+            );
+            if !open {
+                return false;
+            }
+            controls::button(
+                ui,
+                "command-palette:close",
+                "command-palette-action",
+                &["semantic-control"],
+                "Close",
+                true,
+                false,
+            )
+            .on_hover_text("Close search (Esc)")
+            .clicked()
+        })
+        .inner;
+    if close {
+        escape(w);
+        return;
+    }
     let query = field(
         w,
         "query",
         "Search commands",
         json!(w.fields.get(QUERY).map(String::as_str).unwrap_or("")),
     );
-    crate::ui::semantic_field(ui, w, &query);
+    // A theme may dock search alongside other editors. Only use its navigation
+    // shortcuts while search is open or its text field has keyboard focus.
+    let focused = ui
+        .memory(|memory| memory.focused())
+        .and_then(|id| ui.ctx().read_response(id));
+    let query_row = ui
+        .scope(|ui| crate::ui::semantic_field(ui, w, &query))
+        .response;
+    let keyboard = open
+        || focused.is_some_and(|field| {
+            field.layer_id == query_row.layer_id && query_row.rect.contains(field.rect.center())
+        });
     let available = field(
         w,
         "available",
@@ -561,9 +710,9 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         .min(values.len().saturating_sub(1));
     let (up, down, enter) = ui.input_mut(|input| {
         (
-            input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-            input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-            input.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+            keyboard && input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+            keyboard && input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+            keyboard && input.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
         )
     });
     if up {
@@ -578,17 +727,14 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         "command-palette:status",
         "command-palette-status",
         &[],
-        &if count > MAX_RESULTS {
-            format!("{count} matches · first {MAX_RESULTS}; refine search")
-        } else {
-            format!("{count} matching commands")
-        },
+        &match_summary(count, w.fields.get(ONLY).is_some_and(|v| v == "true")),
         "ready",
     );
     let mut chosen = enter
         .then(|| {
             values
                 .get(index)
+                .filter(|candidate| candidate.action.enabled)
                 .map(|candidate| result_element(w, candidate))
         })
         .flatten();
@@ -596,11 +742,10 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         .id_salt("command-palette-results")
         .show(ui, |ui| {
             for (row, candidate) in values.iter().enumerate() {
-                let element = result_element(w, candidate);
                 let response = controls::button(
                     ui,
-                    &element.id,
-                    &element.role,
+                    &candidate.id,
+                    "command-palette-result",
                     &["semantic-control"],
                     &format!("{} · {}", candidate.label, candidate.category),
                     candidate.action.enabled,
@@ -613,11 +758,24 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                         .as_deref()
                         .unwrap_or("This action is unavailable in the current context"),
                 );
+                if row == index
+                    && !candidate.action.enabled
+                    && let Some(reason) = candidate.action.disabled_reason.as_deref()
+                {
+                    controls::label(
+                        ui,
+                        "command-palette:disabled-reason",
+                        "command-palette-status",
+                        &[],
+                        reason,
+                        "disabled",
+                    );
+                }
                 if row == index && (up || down) {
                     response.scroll_to_me(Some(egui::Align::Center));
                 }
                 if response.clicked() {
-                    chosen = Some(element);
+                    chosen = Some(result_element(w, candidate));
                 }
             }
         });
@@ -625,18 +783,5 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
         && let Err(error) = execute(w, &element)
     {
         w.status = error.to_string();
-    }
-    if controls::button(
-        ui,
-        "command-palette:close",
-        "command-palette-action",
-        &["semantic-control"],
-        "Close · Esc",
-        true,
-        false,
-    )
-    .clicked()
-    {
-        escape(w);
     }
 }

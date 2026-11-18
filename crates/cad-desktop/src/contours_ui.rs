@@ -326,7 +326,7 @@ fn select_all(sources: &[SourceChoices], thin: bool) -> Vec<Selection> {
             });
         }
         // Native sketches without an eligible contour must not silently become All.
-        if !source.contours.is_empty() || source.error.is_some() {
+        if source.native || !source.contours.is_empty() || source.error.is_some() {
             empty_profile(&mut selections, &source.profile);
         }
     }
@@ -469,6 +469,30 @@ fn contour_label(index: usize, contour: &Contour) -> String {
     format!("{kind} {} · {} members", index + 1, contour.members.len())
 }
 
+fn selection_hint(automatic: bool, thin: bool) -> &'static str {
+    match (automatic, thin) {
+        (true, true) => "Uses all closed contours and open chains in the sketch.",
+        (true, false) => "Uses all closed contours, including their holes.",
+        (false, true) => "Check the contours or chains to include.",
+        (false, false) => "Check the closed contours to include. Each contour keeps its holes.",
+    }
+}
+
+fn can_choose_contours(sources: &[SourceChoices]) -> bool {
+    ready(sources)
+        && sources
+            .iter()
+            .any(|source| source.native || !source.contours.is_empty())
+}
+
+fn contour_availability_hint(sources: &[SourceChoices]) -> &'static str {
+    if ready(sources) {
+        "This profile uses its full boundary."
+    } else {
+        "Waiting for the sketch preview."
+    }
+}
+
 pub(crate) fn fields(
     ui: &mut egui::Ui,
     w: &Workspace,
@@ -479,12 +503,14 @@ pub(crate) fn fields(
 ) -> bool {
     let before = selections.clone();
     let sources = choices(w, doc, profiles, thin);
+    let listed = !selections.is_empty();
+    let can_choose = can_choose_contours(&sources);
     controls::label(
         ui,
         "contours.heading",
         "field-label",
         &[],
-        "Selected Contours",
+        "Sketch contours",
         "ready",
     );
     ui.horizontal_wrapped(|ui| {
@@ -492,13 +518,10 @@ pub(crate) fn fields(
             ui,
             "contours.mode.all",
             "contour-mode",
-            if thin {
-                "All chains"
-            } else {
-                "All closed contours"
-            },
-            selections.is_empty(),
+            "Automatic",
+            !listed,
         )
+        .on_hover_text(selection_hint(true, thin))
         .clicked()
         {
             selections.clear();
@@ -508,26 +531,46 @@ pub(crate) fn fields(
             "contours.mode.selected",
             "contour-mode",
             &["selectable"],
-            "Selected",
-            ready(&sources),
-            !selections.is_empty(),
+            "Choose contours",
+            can_choose,
+            listed,
         )
+        .on_hover_text("Choose which contours this feature uses.")
+        .on_disabled_hover_text(contour_availability_hint(&sources))
         .clicked()
             && selections.is_empty()
         {
             *selections = select_all(&sources, thin);
         }
     });
+    if selections.is_empty() {
+        controls::label(
+            ui,
+            "contours.hint",
+            "context-hint",
+            &[],
+            selection_hint(true, thin),
+            "ready",
+        );
+        for source in &sources {
+            if let Some(error) = &source.error {
+                controls::label(ui, "contours.error", "diagnostic", &[], error, "error");
+            }
+        }
+        return *selections != before;
+    }
     ui.horizontal_wrapped(|ui| {
         if controls::button(
             ui,
             "contours.select-all",
             "contour-action",
             &[],
-            "Select All",
-            ready(&sources),
+            "Select all",
+            can_choose,
             false,
         )
+        .on_hover_text("Select all contours currently available.")
+        .on_disabled_hover_text(contour_availability_hint(&sources))
         .clicked()
         {
             *selections = select_all(&sources, thin);
@@ -537,7 +580,7 @@ pub(crate) fn fields(
             "contours.clear",
             "contour-action",
             &[],
-            "Clear",
+            "Clear selection",
             !profiles.is_empty(),
             false,
         )
@@ -568,7 +611,10 @@ pub(crate) fn fields(
                     toggle(&sources, selections, &source.profile, contour, thin);
                 }
             }
-            if source.contours.is_empty() && source.error.is_none() { ui.small("This profile uses its complete material boundary."); }
+            if source.contours.is_empty() && source.error.is_none() && (source.current || !source.native) {
+                let hint = if source.native { "No contours available. Edit the sketch to add geometry." } else { "This profile uses its full boundary." };
+                controls::label(ui, &format!("contours.empty.{}", source.profile.node), "context-hint", &[], hint, "ready");
+            }
         }
     });
     let mut change = None;
@@ -666,11 +712,7 @@ pub(crate) fn fields(
         "contours.hint",
         "context-hint",
         &[],
-        if thin {
-            "Choose closed contours or open chains. Construction geometry is excluded."
-        } else {
-            "Select one or more closed contours. Nested holes follow their region; unrelated open chains are ignored in All mode."
-        },
+        selection_hint(false, thin),
         "ready",
     );
     if profiles.len() > 1 {
@@ -848,27 +890,23 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     for (id, label, selected, change) in [
         (
             "contours.mode.all",
-            if thin {
-                "All chains"
-            } else {
-                "All closed contours"
-            },
+            "Automatic",
             selections.is_empty(),
             Change::All,
         ),
         (
             "contours.mode.selected",
-            "Selected",
+            "Choose contours",
             !selections.is_empty(),
             Change::Selected,
         ),
         (
             "contours.select-all",
-            "Select All",
+            "Select all",
             false,
             Change::SelectAll,
         ),
-        ("contours.clear", "Clear", false, Change::Clear),
+        ("contours.clear", "Clear selection", false, Change::Clear),
     ] {
         publish(
             id.into(),
@@ -879,7 +917,8 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             },
             label.into(),
             selected,
-            !matches!(change, Change::Selected | Change::SelectAll) || ready(&sources),
+            !matches!(change, Change::Selected | Change::SelectAll)
+                || can_choose_contours(&sources),
             change,
             serde_json::json!({"presentation_control":true,"feature":feature.id,"classes":["selectable"]}),
         );
@@ -958,5 +997,24 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         }
     }
     out.extend(selected_rows);
+    for (id, role, label) in [
+        ("contours.heading", "field-label", "Sketch contours"),
+        (
+            "contours.hint",
+            "context-hint",
+            selection_hint(selections.is_empty(), thin),
+        ),
+    ] {
+        out.push(SemanticElement {
+            id: id.into(),
+            role: role.into(),
+            label: label.into(),
+            value: None,
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec!["property-manager".into()],
+            data: serde_json::json!({"presentation_control":true,"feature":feature.id}),
+        });
+    }
     out
 }

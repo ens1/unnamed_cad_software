@@ -145,10 +145,29 @@ pub(crate) fn task_status(w: &Workspace) -> (String, String) {
     if !crate::quantity_display::source_fields_valid(w) {
         return ("invalid".into(), "Correct the highlighted value".into());
     }
+    if !crate::operation_editor_ui::current_source_is_valid(w) {
+        return (
+            "invalid".into(),
+            "Correct the highlighted feature setting".into(),
+        );
+    }
     if w.confirm_requested {
         return ("pending".into(), "Validating before confirmation…".into());
     }
     let (label, state) = validation_summary(w);
+    if w.dialog.as_deref() == Some("feature") && !crate::sketch3d_ui::active(w) && state == "valid"
+    {
+        if w.session.draft.is_none() {
+            return (
+                "ready".into(),
+                "Change a setting to preview this feature".into(),
+            );
+        }
+        if let Some(reason) = crate::cad_ui::confirmation_disabled_reason(w) {
+            return ("required".into(), reason.into());
+        }
+        return ("valid".into(), "Preview ready. Choose OK to apply.".into());
+    }
     (state.into(), label.into())
 }
 
@@ -224,11 +243,7 @@ pub(crate) fn task_status_control(ui: &mut egui::Ui, w: &Workspace) {
         &text,
         &state,
     )
-    .on_hover_text(if state == "invalid" {
-        "Adjust the selected geometry or parameters; expand Diagnostics for the full report."
-    } else {
-        text.as_str()
-    });
+    .on_hover_text(text);
 }
 
 pub(crate) fn diagnostics(ui: &mut egui::Ui, w: &mut Workspace) {
@@ -494,7 +509,7 @@ pub(crate) fn validation_summary(w: &Workspace) -> (&'static str, &'static str) 
         return (prompt, "required");
     }
     match w.session.draft.as_ref() {
-        Some(draft) if draft.pending => ("Evaluating proposed geometry", "pending"),
+        Some(draft) if draft.pending => ("Building preview…", "pending"),
         Some(draft) if draft.error.is_some() => ("Preview failed", "invalid"),
         Some(draft)
             if draft
@@ -502,22 +517,45 @@ pub(crate) fn validation_summary(w: &Workspace) -> (&'static str, &'static str) 
                 .as_ref()
                 .is_some_and(|e| e.valid && e.identity == w.session.identity()) =>
         {
-            ("Valid proposed geometry", "valid")
+            ("Preview ready", "valid")
         }
-        Some(_) => ("Waiting for current validation", "pending"),
+        Some(_) => ("Checking changes…", "pending"),
         None if !w
             .session
             .evaluation
             .as_ref()
             .is_some_and(|e| e.identity == w.session.identity()) =>
         {
-            ("Evaluating committed source", "pending")
+            ("Rebuilding model…", "pending")
         }
         None if w.session.evaluation.as_ref().is_some_and(|e| !e.valid) => {
-            ("Committed source has failed features", "invalid")
+            ("Some features failed to rebuild", "invalid")
         }
-        None => ("Committed model", "valid"),
+        None => ("Model up to date", "valid"),
     }
+}
+
+pub(crate) fn status_mode(w: &Workspace) -> &'static str {
+    if w.sketch.is_some() || crate::sketch3d_ui::active(w) {
+        "Editing sketch"
+    } else if w.view.history_cursor.is_some() {
+        "Viewing history"
+    } else if crate::drawing_ui::is_workspace(w) {
+        "Drawing"
+    } else if w.tool_checkpoint.is_some() {
+        "Editing"
+    } else if w.view.active_part.is_none() {
+        "Assembly"
+    } else {
+        "Part"
+    }
+}
+
+pub(crate) fn display_units(w: &Workspace) -> String {
+    format!(
+        "{} · deg",
+        w.session.visible().settings.display_length_unit.symbol()
+    )
 }
 
 pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
@@ -599,7 +637,7 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "viewport-start-hint",
             "Start a sketch",
             "viewport-start-hint",
-            w.sketch.is_none() && w.tool_checkpoint.is_none(),
+            can_offer_sketch_planes(w),
         ),
         (
             "viewport.view-cube",
@@ -706,6 +744,23 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     ] {
         out.push(SemanticElement {id:id.into(),role:role.into(),label:label.into(),value:Some(value.into()),state:state.into(),commands:vec![],relationships:vec!["workspace.draft.status".into()],data:serde_json::json!({"contract":"tcad.presentation.workspace-controls","version":1,"current_identity":w.session.identity()})});
     }
+    out.push(SemanticElement {
+        id: "workspace.status-mode".into(),
+        role: "status-mode".into(),
+        label: status_mode(w).into(),
+        value: None,
+        state: "ready".into(),
+        commands: vec![],
+        relationships: vec!["workspace".into()],
+        data: serde_json::json!({"classes":["status-control"]}),
+    });
+    let unit_reason = crate::cad_ui::command_disabled_reason(w, "settings.model");
+    out.push(SemanticElement {
+        id: "workspace.model-units".into(), role: "workspace-action".into(),
+        label: display_units(w), value: unit_reason.map(str::to_owned), state: if unit_reason.is_some() { "disabled" } else { "ready" }.into(),
+        commands: vec!["settings.model".into()], relationships: vec!["workspace".into()],
+        data: serde_json::json!({"accessibility_label":"Model units and precision","classes":["status-control"]}),
+    });
     let idle = w.sketch.is_none() && w.tool_checkpoint.is_none() && w.settings.is_none();
     for (command, label, enabled, selected, parent) in [
         (
@@ -893,14 +948,36 @@ pub(crate) fn toolbar(ui: &mut egui::Ui, w: &mut Workspace) {
     }
 }
 
+pub(crate) fn can_offer_sketch_planes(w: &Workspace) -> bool {
+    w.view.active_part.is_some()
+        && w.sketch.is_none()
+        && w.tool_checkpoint.is_none()
+        && w.dialog.is_none()
+        && w.settings.is_none()
+        && w.file_switch.is_none()
+}
+
 pub(crate) fn start_hint(ui: &mut egui::Ui, w: &mut Workspace) {
+    if !can_offer_sketch_planes(w) {
+        return;
+    }
+    let first = w
+        .view
+        .active_part
+        .as_ref()
+        .and_then(|part| w.session.visible().parts.get(part))
+        .is_some_and(|part| part.features.is_empty());
     ui.vertical_centered(|ui| {
         controls::label(
             ui,
             "workspace.sketch-start-title",
             "workspace-heading",
             &[],
-            "Start your first sketch",
+            if first {
+                "Start your first sketch"
+            } else {
+                "Start a sketch"
+            },
             "ready",
         );
         controls::label(

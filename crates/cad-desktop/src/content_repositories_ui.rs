@@ -338,6 +338,17 @@ pub fn refresh_for_themes(w: &mut Workspace) {
     }
 }
 
+/// Only advertise a download once a completed scan establishes that the
+/// official pack is missing. Installed and disabled packs use the manager.
+pub(crate) fn offer_theme_download(w: &Workspace) -> bool {
+    let state = &w.content_repositories;
+    state.initialized
+        && idle(w)
+        && state.theme_refresh_error.is_none()
+        && libraries::pack("themes")
+            .is_ok_and(|pack| libraries::matching_pack_repository(pack, &state.registry).is_none())
+}
+
 /// Theme inventory status uses the last completed library scan. Rendering a
 /// settings frame never reads repositories or starts another refresh.
 pub fn theme_inventory_semantics(w: &Workspace) -> Vec<SemanticElement> {

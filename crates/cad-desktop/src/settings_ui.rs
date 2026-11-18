@@ -731,7 +731,7 @@ pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Semantic
                         return changed;
                     }
                     ui.horizontal_wrapped(|ui| {
-                        controls::label(
+                        let caption = controls::label(
                             ui,
                             &format!("{}.label", element.id),
                             "settings-field-label",
@@ -745,28 +745,23 @@ pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Semantic
                             .and_then(Value::as_array)
                             .filter(|choices| !choices.is_empty())
                         {
-                            let label = choices
-                                .iter()
-                                .find(|choice| choice.get("value") == Some(&value))
-                                .and_then(|choice| choice.get("label"))
-                                .and_then(Value::as_str)
-                                .unwrap_or_else(|| value.as_str().unwrap_or("Choose…"));
-                            egui::ComboBox::from_id_salt(&element.id)
-                                .selected_text(label)
-                                .show_ui(ui, |ui| {
-                                    for choice in choices {
-                                        if let (Some(candidate), Some(label)) = (
-                                            choice.get("value"),
-                                            choice.get("label").and_then(Value::as_str),
-                                        ) {
-                                            ui.selectable_value(
-                                                &mut value,
-                                                candidate.clone(),
-                                                label,
-                                            );
-                                        }
-                                    }
-                                });
+                            let width = controls::length(
+                                &properties,
+                                "width",
+                                ui.available_width(),
+                                ui.spacing().combo_width,
+                            )
+                            .min(ui.available_width())
+                            .max(0.);
+                            crate::ui::field_choices(
+                                ui,
+                                &element.id,
+                                &mut value,
+                                choices,
+                                width,
+                                240.,
+                            )
+                            .labelled_by(caption.id);
                             return value != current;
                         }
                         if let Some(mut candidate) = value.as_f64() {
@@ -898,18 +893,47 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ("settings.theme-load", "Load theme…"),
         ("settings.theme-export", "Export theme…"),
         ("settings.theme-refresh", "Refresh installed themes"),
-        ("content-repositories", "Get libraries…"),
+        ("content-repositories", "Manage libraries…"),
         (
             "content-repositories.download-themes",
             "Download themes pack",
         ),
-        ("content-repositories.show-themes", "View theme pack…"),
+        (
+            "content-repositories.show-themes",
+            "Manage theme libraries…",
+        ),
     ] {
-        let available = w.settings.is_some() && (command == "settings.cancel" || !pending);
+        let download = command == "content-repositories.download-themes";
+        let available = w.settings.is_some()
+            && (command == "settings.cancel" || !pending)
+            && (!download || crate::content_repositories_ui::offer_theme_download(w));
         elements.push(SemanticElement {
             id:format!("command:{command}"), role:"settings-action".into(), label:label.into(), value:None,
             state:if available {"available"} else {"disabled"}.into(), commands:vec![command.into()], relationships:vec!["settings:dialog".into()],
-            data:json!({"actions":[{"command":command,"enabled":available,"disabled_reason":if available {None} else {Some("Open settings and wait for any current validation")}}],"accessibility_label":label}),
+            data:json!({"actions":[{"command":command,"enabled":available,"disabled_reason":if available {None} else if download {Some("Open Content Libraries to check the theme pack")} else {Some("Open Settings and wait for validation")}}],"accessibility_label":label}),
+        });
+    }
+    for (id, role, label) in [
+        (
+            "settings:theme-description",
+            "settings-description",
+            theme_description(w),
+        ),
+        (
+            "settings:theme-packs",
+            "settings-theme-tools",
+            "Import, export and edit".into(),
+        ),
+    ] {
+        elements.push(SemanticElement {
+            id: id.into(),
+            role: role.into(),
+            label,
+            value: None,
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec!["settings:category:application.themes".into()],
+            data: json!({"category":"application.themes","presentation_only":true}),
         });
     }
     elements.extend(fields(w));
@@ -919,41 +943,156 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
 
 fn category_description(category: &str) -> &'static str {
     match category {
-        "model.units" => {
-            "Saved with this model. Display units and precision do not resize geometry or change explicit unit expressions."
-        }
-        "model.geometry" => {
-            "Saved with this model. Boundary accuracy, Boolean search resolution, and display chord tolerance are independent. Default material and finish apply to newly created parts."
-        }
+        "model.units" => "Units and precision control how measurements appear in this model.",
+        "model.geometry" => "Set this model’s accuracy and the material and finish for new parts.",
         "model.lighting" => {
-            "Saved with this model. Lighting updates the viewport while you edit. Theme overrides may alter the displayed lighting."
+            "Preview lighting in the viewport. Theme lighting can override these settings."
         }
-        "application.interface" => {
-            "Saved for this user across projects. Layout and theme files give independent control over composition, density, and styling."
-        }
+        "application.interface" => "Set the size and behavior of controls across projects.",
         "application.viewport" => {
-            "Saved for this user across projects. Edges, circular centers, and straight-edge midpoint guides preview immediately. Apply saves them; Cancel restores the starting display. Theme styles can override display and guide styling."
+            "Choose the edges and guides you see across projects. Changes preview immediately."
         }
         "application.themes" => {
-            "Choose a complete layout and theme, or load a CSS / JSON style or presentation package. Changes preview immediately. Apply saves your default; Cancel restores the previous presentation."
+            "Choose a theme to preview it. Apply saves your choice for future sessions."
         }
         "application.navigation" => {
-            "Saved for this user across projects. Sensitivity and gesture directions preview immediately. Cancel restores the starting preferences."
+            "Preview gesture direction and sensitivity. Cancel restores your previous settings."
         }
         "application.recovery" => {
-            "Saved for this user across projects. Recovery checkpoints preserve unsaved committed definitions; they do not replace saving a project."
+            "Recovery checkpoints keep a local copy of unsaved model changes."
         }
-        "application.defaults" => {
-            "Applied only when creating a new model. Existing models keep their saved preferences."
-        }
+        "application.defaults" => "These defaults apply when you create a model.",
         "application.libraries" => {
-            "Optional profiles, textures, materials, standard parts and themes in your own Git repositories. Library actions save immediately; Settings Apply and Cancel do not undo them. Existing model definitions keep their saved copies."
+            "Manage the Git repositories that supply your CAD libraries. Library changes save immediately."
         }
         "application.git" => {
-            "Personal Git accounts, keys and server trust. Connection actions save immediately; Settings Apply and Cancel affect model and interface preferences only."
+            "Manage your Git accounts, keys and trusted servers. Connection changes save immediately."
         }
-        _ => "Preferences use separate model and application scopes.",
+        _ => "",
     }
+}
+
+fn theme_description(w: &Workspace) -> String {
+    let selected = crate::theme_library::selected(w);
+    crate::theme_library::choices(w)
+        .into_iter()
+        .find(|choice| choice.id == selected)
+        .map(|choice| choice.description)
+        .unwrap_or_default()
+}
+
+fn theme_options(ui: &mut egui::Ui, w: &mut Workspace, pending: bool) {
+    controls::label(
+        ui,
+        "settings:theme-description",
+        "settings-description",
+        &[],
+        &theme_description(w),
+        "ready",
+    );
+    if let Some(notice) = crate::theme_library::fallback_notice(w) {
+        controls::label(
+            ui,
+            &notice.id,
+            &notice.role,
+            &[],
+            &notice.label,
+            &notice.state,
+        );
+    }
+    // Ready notices repeat the source shown beside the picker. Keep all
+    // inventory descriptors available to custom layouts and surface problems here.
+    for notice in crate::theme_library::inventory_semantics(w)
+        .into_iter()
+        .filter(|notice| notice.state != "ready")
+    {
+        controls::label(
+            ui,
+            &notice.id,
+            &notice.role,
+            &[],
+            &notice.label,
+            &notice.state,
+        );
+    }
+
+    ui.horizontal_wrapped(|ui| {
+        if crate::content_repositories_ui::offer_theme_download(w)
+            && controls::button(
+                ui,
+                "command:content-repositories.download-themes",
+                "settings-action",
+                &[],
+                "Download themes pack",
+                !pending,
+                false,
+            )
+            .clicked()
+        {
+            crate::content_repositories_ui::action(w, "content-repositories.download-themes", None);
+        }
+        if controls::button(
+            ui,
+            "command:content-repositories.show-themes",
+            "settings-action",
+            &[],
+            "Manage theme libraries…",
+            !pending,
+            false,
+        )
+        .clicked()
+        {
+            crate::content_repositories_ui::action(w, "content-repositories.show-themes", None);
+        }
+        if controls::button(
+            ui,
+            "command:settings.theme-refresh",
+            "settings-action",
+            &[],
+            "Refresh installed themes",
+            !pending,
+            false,
+        )
+        .clicked()
+        {
+            settings::action(w, "settings.theme-refresh");
+        }
+    });
+    controls::inspector_section(
+        ui,
+        controls::InspectorSection {
+            id: "settings:theme-packs",
+            role: "settings-theme-tools",
+            classes: &["inspector-section"],
+            label: "Import, export and edit",
+            state: "ready",
+            collapse: Some(false),
+            open: None,
+        },
+        |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (command, label) in [
+                    ("settings.theme-load", "Load theme…"),
+                    ("settings.theme-export", "Export theme…"),
+                    ("settings.presentation", "Edit layout and style…"),
+                ] {
+                    if controls::button(
+                        ui,
+                        &format!("command:{command}"),
+                        "settings-action",
+                        &[],
+                        label,
+                        !pending,
+                        false,
+                    )
+                    .clicked()
+                    {
+                        settings::action(w, command);
+                    }
+                }
+            });
+        },
+    );
 }
 
 fn styled_length(
@@ -1106,7 +1245,7 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                             let selected = CATEGORIES.iter().find(|(id,_,_)| *id == category)
                                 .map(|(_,label,scope)| format!("{scope} · {label}"))
                                 .unwrap_or_else(|| "Choose preferences".into());
-                            egui::ComboBox::from_id_salt("settings:category-picker")
+                            ui.add_enabled_ui(!pending, |ui| egui::ComboBox::from_id_salt("settings:category-picker")
                                 .width(ui.available_width()).wrap_mode(egui::TextWrapMode::Truncate)
                                 .selected_text(&selected).show_ui(ui, |ui| {
                                     for scope in ["Model", "Application"] {
@@ -1119,7 +1258,7 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                             }
                                         }
                                     }
-                                }).response.on_hover_text(selected);
+                                }).response.on_hover_text(selected));
                         });
                     }
                     let content_height = ui.available_height().max(0.);
@@ -1176,6 +1315,7 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                     }
                                     if *id == "application.git" && (category == *id && search.is_empty() || !search.is_empty() && "git credentials ssh keys connections accounts".contains(&search)) {
                                         controls::label(ui,"settings:heading:application.git","settings-heading",&[],"Application · Git connections","ready");
+                                        controls::label(ui,"settings:description:application.git","settings-description",&[],category_description(id),"ready");
                                         crate::git_connections_ui::show(ui,w);
                                         shown += 1;
                                         continue;
@@ -1197,25 +1337,7 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
                                         settings::action(w,"settings.presentation");
                                     }
                                     if *id == "application.themes" {
-                                        for notice in crate::theme_library::inventory_semantics(w) {
-                                            controls::label(ui,&notice.id,&notice.role,&[],&notice.label,&notice.state);
-                                        }
-                                        if let Some(notice) = crate::theme_library::fallback_notice(w) {
-                                            controls::label(ui,&notice.id,&notice.role,&[],&notice.label,&notice.state);
-                                        }
-                                        controls::label(ui,"settings:theme-packs","settings-description",&[],"Classic works offline. Download extra themes, load your own, or keep the current theme.","ready");
-                                        for (command,label) in [("content-repositories.download-themes","Download themes pack"),("content-repositories.show-themes","View theme pack…")] {
-                                            if controls::button(ui,&format!("command:{command}"),"settings-action",&[],label,!pending,false).clicked() {crate::content_repositories_ui::action(w,command,None);}
-                                        }
-                                        let selected = crate::theme_library::selected(w);
-                                        if let Some(choice) = crate::theme_library::choices(w).into_iter().find(|choice|choice.id == selected) {
-                                            controls::label(ui,"settings:theme-description","settings-description",&[],&choice.description,"ready");
-                                        }
-                                        ui.horizontal_wrapped(|ui| {
-                                            for (command,label) in [("settings.theme-load","Load theme…"),("settings.theme-refresh","Refresh installed themes"),("settings.theme-export","Export theme…"),("settings.presentation","Edit layout and style…")] {
-                                                if controls::button(ui,&format!("command:{command}"),"settings-action",&[],label,!pending,false).clicked() {settings::action(w,command);}
-                                            }
-                                        });
+                                        theme_options(ui, w, pending);
                                     }
                                     ui.add_space(8.);
                                 }

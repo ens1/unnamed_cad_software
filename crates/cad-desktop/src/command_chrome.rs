@@ -469,6 +469,7 @@ pub fn ribbon(ui: &mut egui::Ui, w: &mut Workspace, context: &RenderContext<'_>)
                                             &menu,
                                             &format!("{group_id}:menu"),
                                             "ribbon-group-menu",
+                                            context.semantics,
                                         );
                                     } else {
                                         controls::label(

@@ -1,152 +1,31 @@
 //! Familiar CAD workspace widgets over the same document commands and user layout.
 use crate::{Workspace, presentation_controls as controls, sketch, ui, viewport};
-use bevy_egui::egui::{self, Color32, RichText, Stroke};
+use bevy_egui::egui::{self, RichText, Stroke};
 use cad_core::{Feature, Operation, Part};
 
-#[derive(Clone, Copy)]
-enum Icon {
-    Sketch,
-    Extrude,
-    Cut,
-    Revolve,
-    Fillet,
-    Chamfer,
-    Pattern,
-    Shell,
-    Line,
-    Rectangle,
-    Circle,
-    Select,
-}
-
-fn icon(p: &egui::Painter, center: egui::Pos2, kind: Icon, size: f32, color: Color32) {
-    let scale = size / 32.;
-    let at = |x, y| center + egui::vec2(x, y) * scale;
-    let stroke = Stroke::new(1.6 * scale, color);
-    let line = |a, b| {
-        p.line_segment([a, b], stroke);
-    };
-    match kind {
-        Icon::Rectangle => {
-            p.rect_stroke(
-                egui::Rect::from_center_size(center, egui::vec2(25., 18.) * scale),
-                0.,
-                stroke,
-                egui::StrokeKind::Inside,
-            );
-        }
-        Icon::Circle => {
-            p.circle_stroke(center, 11. * scale, stroke);
-            line(at(-3., 0.), at(3., 0.));
-            line(at(0., -3.), at(0., 3.));
-        }
-        Icon::Line | Icon::Sketch => {
-            line(at(-11., 9.), at(9., -10.));
-            line(at(9., -10.), at(12., -7.));
-            line(at(12., -7.), at(-8., 12.));
-            line(at(-11., 9.), at(-12., 13.));
-            if matches!(kind, Icon::Sketch) {
-                line(at(-14., 15.), at(13., 15.));
-            }
-        }
-        Icon::Select => {
-            p.add(egui::Shape::closed_line(
-                vec![
-                    at(-7., -13.),
-                    at(-7., 9.),
-                    at(-1., 4.),
-                    at(4., 12.),
-                    at(8., 10.),
-                    at(3., 2.),
-                    at(12., 1.),
-                ],
-                stroke,
-            ));
-        }
-        Icon::Revolve => {
-            line(at(-11., -10.), at(-11., 11.));
-            let points = (0..=24)
-                .map(|i| {
-                    let a = i as f32 / 24. * 5.5;
-                    at(a.cos() * 11., a.sin() * 8.)
-                })
-                .collect::<Vec<_>>();
-            p.add(egui::Shape::line(points, stroke));
-            line(at(8., -7.), at(12., -5.));
-            line(at(12., -5.), at(11., -10.));
-        }
-        Icon::Pattern => {
-            for x in [-8., 7.] {
-                for y in [-7., 8.] {
-                    p.rect_stroke(
-                        egui::Rect::from_center_size(at(x, y), egui::vec2(9., 9.) * scale),
-                        0.,
-                        stroke,
-                        egui::StrokeKind::Inside,
-                    );
-                }
-            }
-        }
-        _ => {
-            let corners = [
-                at(-12., -5.),
-                at(2., -12.),
-                at(13., -5.),
-                at(-1., 2.),
-                at(-12., 9.),
-                at(-1., 16.),
-                at(13., 9.),
-            ];
-            for (a, b) in [
-                (0, 1),
-                (1, 2),
-                (2, 3),
-                (3, 0),
-                (0, 4),
-                (4, 5),
-                (5, 6),
-                (6, 2),
-                (3, 5),
-            ] {
-                line(corners[a], corners[b]);
-            }
-            if matches!(kind, Icon::Cut | Icon::Shell) {
-                p.circle_stroke(at(1., -5.), 4. * scale, Stroke::new(1.8 * scale, color));
-            }
-            if matches!(kind, Icon::Fillet) {
-                p.add(egui::Shape::line(
-                    vec![at(-12., 1.), at(-11., -2.), at(-8., -5.), at(-5., -5.)],
-                    Stroke::new(3. * scale, color),
-                ));
-            }
-            if matches!(kind, Icon::Chamfer) {
-                p.line_segment([at(-12., 1.), at(-6., -5.)], Stroke::new(3. * scale, color));
-            }
-        }
-    }
-}
 fn tool_button(
     ui: &mut egui::Ui,
-    id: &str,
+    command: &str,
     label: &str,
-    kind: Icon,
-    enabled: bool,
+    reason: Option<&str>,
     active: bool,
     hint: &str,
 ) -> bool {
-    let draw = |p: &egui::Painter, center, size, color| icon(p, center, kind, size, color);
+    let draw = |p: &egui::Painter, center, size, color| {
+        crate::command_icons::paint(p, center, size, color, command)
+    };
     controls::icon_button(
         ui,
-        id,
+        &format!("command-toolbar/{command}"),
         "command-action",
         &["toolbar-control"],
         label,
-        enabled,
+        reason.is_none(),
         active,
         Some(&draw),
     )
     .on_hover_text(hint)
-    .on_disabled_hover_text(hint)
+    .on_disabled_hover_text(reason.unwrap_or(hint))
     .clicked()
 }
 
@@ -231,6 +110,104 @@ fn feature_groups() -> Vec<&'static str> {
     groups
 }
 
+// The native menu and theme-authored menu placements share these groups.
+const TOOL_GROUPS: &[(&str, &str, &[&str])] = &[
+    (
+        "menu/tools-model",
+        "Model",
+        &[
+            "properties",
+            "configurations",
+            "equations",
+            "reference.repair",
+        ],
+    ),
+    (
+        "menu/tools-assembly",
+        "Assembly",
+        &[
+            "assembly.edit",
+            "assembly.move",
+            "assembly.rotate",
+            "assembly.pattern",
+            "assembly.group-new",
+            "assembly.copy-with-mates",
+            "assembly.exploded-new",
+        ],
+    ),
+    (
+        "menu/tools-inspect",
+        "Inspect",
+        &[
+            "assembly.inspection-new",
+            "inspection.sensors",
+            "inspection.tolerance-stacks",
+        ],
+    ),
+    (
+        "menu/tools-appearance",
+        "Materials and appearance",
+        &["materials", "appearances", "lighting"],
+    ),
+    (
+        "menu/tools-production",
+        "Drawings and manufacturing",
+        &["drawings", "bom", "manufacturing"],
+    ),
+    (
+        "menu/tools-libraries",
+        "Libraries and reuse",
+        &[
+            "libraries",
+            "standard-parts",
+            "sketch-block-library",
+            "component.fork",
+            "feature-transfer",
+        ],
+    ),
+];
+
+const EXPORT_MENU: (&str, &str, &[&str]) = (
+    "menu/file-exports",
+    "Export",
+    &[
+        "file.export",
+        "file.export-drawing-dxf",
+        "file.export-flat-pattern",
+        "file.export-bom",
+        "file.export-cutlist",
+    ],
+);
+const ORIENTATION_MENU: (&str, &str, &[&str]) = (
+    "menu/standard-views",
+    "Standard views",
+    &[
+        "viewport.orientation.front",
+        "viewport.orientation.back",
+        "viewport.orientation.top",
+        "viewport.orientation.bottom",
+        "viewport.orientation.right",
+        "viewport.orientation.left",
+        "viewport.orientation.isometric",
+    ],
+);
+
+fn shortcut_label(ctx: &egui::Context, command: &str, label: &str) -> String {
+    use egui::{Key, Modifiers};
+    let (modifiers, key) = match command {
+        "file.new-part" => (Modifiers::COMMAND, Key::N),
+        "file.open" => (Modifiers::COMMAND, Key::O),
+        "file.save" => (Modifiers::COMMAND, Key::S),
+        "document.undo" => (Modifiers::COMMAND, Key::Z),
+        "document.redo" => (Modifiers::COMMAND | Modifiers::SHIFT, Key::Z),
+        "settings" => (Modifiers::COMMAND, Key::Comma),
+        "commands" => (Modifiers::COMMAND, Key::K),
+        _ => return label.into(),
+    };
+    let shortcut = ctx.format_shortcut(&egui::KeyboardShortcut::new(modifiers, key));
+    format!("{label}  {shortcut}")
+}
+
 fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
     let commands: Vec<&str> = match name {
         "File" => vec![
@@ -244,12 +221,8 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "publish.settings",
             "document.rename",
             "file.import",
-            "file.export",
+            EXPORT_MENU.0,
             "file.recover",
-            "file.export-drawing-dxf",
-            "file.export-flat-pattern",
-            "file.export-cutlist",
-            "file.export-bom",
         ],
         "Edit" => vec![
             "document.undo",
@@ -258,7 +231,10 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "settings",
         ],
         "Insert" => {
-            let mut items = vec!["sketch.new".into(), "sketch.new-3d".into()];
+            let mut items = vec![
+                "command-menu/sketch.new".into(),
+                "command-menu/sketch.new-3d".into(),
+            ];
             items.extend(
                 feature_groups()
                     .into_iter()
@@ -269,13 +245,7 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
         "View" => vec![
             "menu/Themes",
             "viewport.visibility-menu",
-            "viewport.orientation.front",
-            "viewport.orientation.back",
-            "viewport.orientation.top",
-            "viewport.orientation.bottom",
-            "viewport.orientation.right",
-            "viewport.orientation.left",
-            "viewport.orientation.isometric",
+            ORIENTATION_MENU.0,
             "viewport.fit",
             "viewport.normal-sketch",
             "viewport.fit-sketch",
@@ -295,35 +265,13 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             "camera-view.perspective",
             "camera-view.orthographic",
         ],
-        "Tools" => vec![
-            "settings",
-            "reference.repair",
-            "assembly.edit",
-            "assembly.move",
-            "assembly.rotate",
-            "assembly.pattern",
-            "assembly.group-new",
-            "assembly.copy-with-mates",
-            "assembly.exploded-new",
-            "assembly.inspection-new",
-            "configurations",
-            "equations",
-            "materials",
-            "properties",
-            "inspection.sensors",
-            "inspection.tolerance-stacks",
-            "standard-parts",
-            "sketch-block-library",
-            "appearances",
-            "lighting",
-            "manufacturing",
-            "drawings",
-            "libraries",
-            "component.fork",
-            "feature-transfer",
-            "bom",
-            "controls",
-        ],
+        "Tools" => {
+            return ["command-menu/settings", "command-menu/controls"]
+                .into_iter()
+                .chain(TOOL_GROUPS.iter().map(|(id, _, _)| *id))
+                .map(str::to_owned)
+                .collect();
+        }
         "Workspace" => vec![
             "menu/Themes",
             "presentation",
@@ -423,76 +371,82 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
 
 /// A menu is also an ordinary semantic component, so user layouts can move or
 /// duplicate individual headings without embedding a second command route.
-pub fn semantic_menu(
-    ui: &mut egui::Ui,
-    w: &mut Workspace,
-    element: &cad_core::presentation::SemanticElement,
-) {
-    semantic_menu_as(ui, w, element, &element.id, "menu");
-}
-
 pub fn semantic_menu_as(
     ui: &mut egui::Ui,
     w: &mut Workspace,
     element: &cad_core::presentation::SemanticElement,
     id: &str,
     role: &str,
+    snapshot: &[cad_core::presentation::SemanticElement],
 ) {
-    let mut snapshot = semantics(w);
-    snapshot.extend(crate::sketch_overlay::semantics(w));
     controls::menu_button_as(ui, id, role, &element.label, |ui| {
-        for item in element
-            .data
-            .get("items")
-            .or_else(|| element.data.get("children"))
-            .and_then(serde_json::Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(serde_json::Value::as_str)
-        {
-            let Some(descriptor) = snapshot.iter().find(|descriptor| descriptor.id == item) else {
-                ui.add_enabled(false, egui::Button::new(format!("Unavailable: {item}")))
-                    .on_disabled_hover_text(
-                        "This theme references a menu entry that is not available in this version",
-                    );
-                continue;
-            };
-            if descriptor.role == "menu" {
-                semantic_menu(ui, w, descriptor);
-                continue;
-            }
-            let action = descriptor.action_descriptors().into_iter().next();
-            let reason = action.as_ref().and_then(|action| {
-                action
-                    .disabled_reason
-                    .as_deref()
-                    .or_else(|| command_disabled_reason(w, &action.command))
-            });
-            let enabled = action.as_ref().is_some_and(|action| action.enabled) && reason.is_none();
-            let response = controls::button(
-                ui,
-                &descriptor.id,
-                "menu-action",
-                &["menu-item"],
-                &descriptor.label,
-                enabled,
-                descriptor.state == "selected",
-            )
-            .on_disabled_hover_text(
-                reason
-                    .or(descriptor.value.as_deref())
-                    .unwrap_or("This menu item has no available action"),
-            );
-            if response.clicked()
-                && let Some(action) = action
-            {
-                let mut target = descriptor.clone();
-                target.data = action.arguments;
-                ui::semantic_action(w, &target, &action.command);
-                ui.close();
-            }
-        }
+        menu_contents(ui, w, element, snapshot);
     });
+}
+
+fn menu_contents(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    element: &cad_core::presentation::SemanticElement,
+    snapshot: &[cad_core::presentation::SemanticElement],
+) {
+    for item in element
+        .data
+        .get("items")
+        .or_else(|| element.data.get("children"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+    {
+        let Some(descriptor) = snapshot.iter().find(|descriptor| descriptor.id == item) else {
+            ui.add_enabled(false, egui::Button::new(format!("Unavailable: {item}")))
+                .on_disabled_hover_text(
+                    "This theme references a menu entry that is not available in this version",
+                );
+            continue;
+        };
+        if descriptor.role == "menu" {
+            controls::menu_button(ui, &descriptor.id, &descriptor.label, |ui| {
+                menu_contents(ui, w, descriptor, snapshot);
+            });
+            continue;
+        }
+        let action = descriptor.action_descriptors().into_iter().next();
+        let reason = action.as_ref().and_then(|action| {
+            action
+                .disabled_reason
+                .as_deref()
+                .or_else(|| command_disabled_reason(w, &action.command))
+        });
+        let enabled = action.as_ref().is_some_and(|action| action.enabled) && reason.is_none();
+        let label = action
+            .as_ref()
+            .map(|a| shortcut_label(ui.ctx(), &a.command, &descriptor.label))
+            .unwrap_or_else(|| descriptor.label.clone());
+        let response = controls::button(
+            ui,
+            &descriptor.id,
+            "menu-action",
+            &["menu-item"],
+            &label,
+            enabled,
+            descriptor.state == "selected",
+        )
+        .on_disabled_hover_text(
+            reason
+                .or(descriptor.value.as_deref())
+                .unwrap_or("This menu item has no available action"),
+        );
+        if response.clicked()
+            && let Some(action) = action
+        {
+            let mut target = descriptor.clone();
+            target.data = action.arguments;
+            ui::semantic_action(w, &target, &action.command);
+            ui.close();
+        }
+    }
 }
 
 const SKETCH_DRAWING_TOOLS: &[(&str, &str, sketch::Tool)] = &[
@@ -1053,6 +1007,26 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             element.value = confirmation_disabled_reason(w).map(str::to_owned);
         }
     }
+    for ((id, label, commands), parent) in TOOL_GROUPS
+        .iter()
+        .copied()
+        .map(|group| (group, "menu/tools"))
+        .chain([(EXPORT_MENU, "menu/file"), (ORIENTATION_MENU, "menu/view")])
+    {
+        out.push(cad_core::presentation::SemanticElement {
+            id: id.into(),
+            role: "menu".into(),
+            label: label.into(),
+            value: None,
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec![parent.into()],
+            data: serde_json::json!({
+                "presentation_control": true, "classes": ["menu-heading"], "parent": parent,
+                "items": commands.iter().map(|command| format!("command-menu/{command}")).collect::<Vec<_>>()
+            }),
+        });
+    }
     if let Some(reason) = confirmation_disabled_reason(w) {
         for element in &mut out {
             if element
@@ -1429,7 +1403,11 @@ fn publish_available(w: &Workspace) -> bool {
             && w.sketch.is_none())
 }
 
-pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
+pub fn menu(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    snapshot: &[cad_core::presentation::SemanticElement],
+) {
     let viewport_width = ui.available_width();
     egui::ScrollArea::horizontal()
         .id_salt("cad-main-menu-overflow")
@@ -1437,88 +1415,11 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
         .show(ui, |ui| { ui.horizontal(|ui| {
         let row_start = ui.cursor().min.x;
         ui.label(RichText::new("TCAD").strong());
-        menu_button(ui, "File", |ui| {
-            for (label, command) in [
-                ("New Part  ⌘N", "file.new-part"),
-                ("New Assembly", "file.new"),
-                ("Open…  ⌘O", "file.open"),
-                ("Open Git Repository…", "repositories.open"),
-                ("Save  ⌘S", "file.save"),
-                ("Save As…", "file.save-as"),
-                ("Publish", "file.publish"),
-                ("Publish Settings…", "publish.settings"),
-                ("Rename Document…", "document.rename"),
-                ("Import STEP…", "file.import"),
-                ("Export…", "file.export"),
-                ("Recover Local Work…", "file.recover"),
-            ] {
-                let enabled = command != "file.publish" || publish_available(w);
-                if menu_action(ui, w, command, label, enabled).clicked() {
-                    ui::action(w, command);
-                    ui.close();
-                }
+        for id in ["menu/file", "menu/edit"] {
+            if let Some(menu) = snapshot.iter().find(|entry| entry.id == id) {
+                semantic_menu_as(ui, w, menu, id, "menu", snapshot);
             }
-            ui.separator();
-            if menu_action(ui, w, "file.export-drawing-dxf", "Export Drawing DXF…", true).clicked() {
-                ui::export_format(w, "drawing-dxf", "drawing.dxf");
-                ui.close();
-            }
-            if menu_action(
-                ui,
-                w,
-                "file.export-flat-pattern",
-                "Export Flat Pattern DXF…",
-                true,
-            )
-            .clicked()
-            {
-                ui::action(w, "file.export-flat-pattern");
-                ui.close();
-            }
-            if menu_action(ui, w, "file.export-bom", "Export BOM CSV…", true).clicked() {
-                ui::action(w, "file.export-bom");
-                ui.close();
-            }
-            if menu_action(ui, w, "file.export-cutlist", "Export Cut List CSV…", true).clicked() {
-                ui::action(w, "file.export-cutlist");
-                ui.close();
-            }
-        });
-        menu_button(ui, "Edit", |ui| {
-            if menu_action(
-                ui,
-                w,
-                "document.undo",
-                "Undo  ⌘Z",
-                command_disabled_reason(w, "document.undo").is_none(),
-            )
-            .clicked()
-            {
-                ui::history_command(w, false);
-                ui.close();
-            }
-            if menu_action(
-                ui,
-                w,
-                "document.redo",
-                "Redo  ⇧⌘Z",
-                command_disabled_reason(w, "document.redo").is_none(),
-            )
-            .clicked()
-            {
-                ui::history_command(w, true);
-                ui.close();
-            }
-            if menu_action(ui, w, "parameter.new", "Parameters…", true).clicked() {
-                ui::action(w, "parameter.new");
-                ui.close();
-            }
-            ui.separator();
-            if menu_action(ui, w, "settings", "Settings…  ⌘,", true).clicked() {
-                ui::action(w, "settings");
-                ui.close();
-            }
-        });
+        }
         menu_button(ui, "Insert", |ui| {
             for (command, label) in [
                 ("sketch.new", "Planar Sketch…"),
@@ -1551,42 +1452,9 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
             crate::camera_views_ui::view_controls(ui, w);
             crate::sketch_overlay::view_controls(ui, w);
         });
-        menu_button(ui, "Tools", |ui| {
-            for (label, command) in [
-                ("Settings…  ⌘,", "settings"),
-                ("Repair References…", "reference.repair"),
-                ("Assembly and Mates…", "assembly.edit"),
-                ("Move Component", "assembly.move"),
-                ("Rotate Component", "assembly.rotate"),
-                ("Component Pattern…", "assembly.pattern"),
-                ("Rigid Group…", "assembly.group-new"),
-                ("Copy With Mates…", "assembly.copy-with-mates"),
-                ("Exploded View…", "assembly.exploded-new"),
-                ("Interference / Clearance…", "assembly.inspection-new"),
-                ("Configurations…", "configurations"),
-                ("Equations…", "equations"),
-                ("Engineering Materials…", "materials"),
-                ("Model Properties…", "properties"),
-                ("Design Monitors…", "inspection.sensors"),
-                ("Tolerance Stacks…", "inspection.tolerance-stacks"),
-                ("Standard Hardware…", "standard-parts"),
-                ("Sketch Block Library…", "sketch-block-library"),
-                ("Appearance · Colors and Textures…", "appearances"),
-                ("Studio Lighting…", "lighting"),
-                ("Manufacturing…", "manufacturing"),
-                ("Drawings…", "drawings"),
-                ("Component Libraries…", "libraries"),
-                ("Fork Part or Assembly…", "component.fork"),
-                ("Transfer Selected Features…", "feature-transfer"),
-                ("Bill of Materials…", "bom"),
-                ("Navigation Settings…", "controls"),
-            ] {
-                if menu_action(ui, w, command, label, true).clicked() {
-                    ui::action(w, command);
-                    ui.close();
-                }
-            }
-        });
+        if let Some(tools) = snapshot.iter().find(|entry| entry.id == "menu/tools") {
+            semantic_menu_as(ui, w, tools, &tools.id, "menu", snapshot);
+        }
         menu_button(ui, "Workspace", |ui| {
             crate::theme_library::menu(ui, w, "workspace.themes");
             ui.separator();
@@ -1609,9 +1477,7 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         });
         ui.separator();
-        let dirty = w.session.draft.is_some()
-            || w.sketch.is_some()
-            || crate::source_cache::identity(w).source != w.saved_source;
+        let dirty = crate::document_identity_ui::has_unsaved_changes(w);
         let title_width = (viewport_width * 0.25).clamp(80., 240.);
         ui.add_sized(egui::vec2(title_width, ui.spacing().interact_size.y), egui::Label::new(
             RichText::new(format!(
@@ -1627,7 +1493,8 @@ pub fn menu(ui: &mut egui::Ui, w: &mut Workspace) {
         let actions_width = ui.data(|data| data.get_temp::<f32>(actions_id)).unwrap_or(260.);
         ui.add_space((viewport_width - (ui.cursor().min.x - row_start) - actions_width).max(0.));
         let actions = ui.horizontal(|ui| {
-            if command_button(ui, w, "commands", "Find a command  ⌘K", true).clicked() {
+            let search_label = shortcut_label(ui.ctx(), "commands", "Find a command");
+            if command_button(ui, w, "commands", &search_label, true).clicked() {
                 w.open_editor("commands");
             }
             if command_button(
@@ -1730,10 +1597,9 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                     if !sketching
                         && tool_button(
                             ui,
-                            "command-toolbar/sketch.new-3d",
+                            "sketch.new-3d",
                             "3D Sketch",
-                            Icon::Sketch,
-                            !blocked,
+                            command_disabled_reason(w, "sketch.new-3d"),
                             false,
                             "Draw spatial sketch geometry in the model",
                         )
@@ -1742,13 +1608,12 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                     }
                     if tool_button(
                         ui,
-                        "command-toolbar/sketch.new",
-                        if sketching { "Finish" } else { "Sketch" },
-                        Icon::Sketch,
+                        "sketch.new",
+                        if sketching { "Finish sketch" } else { "Sketch" },
                         if sketching {
-                            confirmation_available(w)
+                            confirmation_disabled_reason(w)
                         } else {
-                            !blocked
+                            command_disabled_reason(w, "sketch.new")
                         },
                         sketching,
                         "Finish the sketch or select a plane to begin",
@@ -1759,18 +1624,17 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                             ui::action(w, "sketch.new");
                         }
                     }
-                    for (label, kind, tool) in [
-                        ("Line", Icon::Line, sketch::Tool::Polyline),
-                        ("Rectangle", Icon::Rectangle, sketch::Tool::Rectangle),
-                        ("Circle", Icon::Circle, sketch::Tool::Circle),
-                        ("Select", Icon::Select, sketch::Tool::Select),
+                    for (label, tool) in [
+                        ("Line", sketch::Tool::Polyline),
+                        ("Rectangle", sketch::Tool::Rectangle),
+                        ("Circle", sketch::Tool::Circle),
+                        ("Select", sketch::Tool::Select),
                     ] {
                         if tool_button(
                             ui,
-                            &format!("command-toolbar/{}", sketch_tool_command(tool)),
+                            &sketch_tool_command(tool),
                             label,
-                            kind,
-                            !blocked,
+                            blocked.then_some("Finish or cancel the active operation first"),
                             w.sketch.as_ref().is_some_and(|s| s.tool == tool),
                             "Draw on the active sketch plane",
                         ) {
@@ -1997,54 +1861,43 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                     }
                 }
                 _ => {
-                    if tool_button(
-                        ui,
-                        "command-toolbar/sketch.new",
-                        "Sketch",
-                        Icon::Sketch,
-                        !blocked,
-                        false,
-                        "Create a sketch on an origin plane or model face",
-                    ) {
-                        ui::action(w, "sketch.new");
+                    for (command, label, hint) in [
+                        (
+                            "sketch.new",
+                            "Sketch",
+                            "Start a sketch on a plane or flat face",
+                        ),
+                        (
+                            "feature.extrude",
+                            "Extrude",
+                            "Add material from a sketch profile",
+                        ),
+                        (
+                            "feature.cut",
+                            "Cut",
+                            "Remove material with a sketch profile",
+                        ),
+                        ("feature.fillet", "Fillet", "Round selected edges"),
+                    ] {
+                        if tool_button(
+                            ui,
+                            command,
+                            label,
+                            command_disabled_reason(w, command),
+                            false,
+                            hint,
+                        ) {
+                            ui::action(w, command);
+                        }
                     }
+                    ui.separator();
                     for group in feature_groups() {
                         menu_button(ui, group, |ui| {
                             for tool in cad_core::modeling_tools::TOOLS
                                 .iter()
-                                .filter(|t| t.group == group)
+                                .filter(|tool| tool.group == group)
                             {
-                                let has_body = w
-                                    .view
-                                    .active_part
-                                    .as_ref()
-                                    .and_then(|id| w.session.visible().parts.get(id))
-                                    .is_some_and(|p| {
-                                        cad_core::configuration::has_solid_output(
-                                            w.session.visible(),
-                                            &p.id,
-                                        )
-                                    });
-                                let enabled = !blocked && (!tool.requires_body || has_body);
-                                let kind = match tool.preset {
-                                    "Extrude" => Icon::Extrude,
-                                    "Cut" => Icon::Cut,
-                                    "Revolve" => Icon::Revolve,
-                                    "Fillet" => Icon::Fillet,
-                                    "Chamfer" => Icon::Chamfer,
-                                    "Pattern" => Icon::Pattern,
-                                    "Shell" => Icon::Shell,
-                                    _ => Icon::Sketch,
-                                };
-                                if tool_button(
-                                    ui,
-                                    &format!("command-toolbar/{}", tool.command),
-                                    tool.label,
-                                    kind,
-                                    enabled,
-                                    false,
-                                    tool.label,
-                                ) {
+                                if menu_action(ui, w, tool.command, tool.label, true).clicked() {
                                     ui::action(w, tool.command);
                                     ui.close();
                                 }
@@ -4422,30 +4275,17 @@ pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::sketch_overlay::visibility_controls(ui, w);
     crate::display_states_ui::view_controls(ui, w);
     crate::exploded_views_ui::view_controls(ui, w);
-    for (label, orbit) in [
-        ("Front", [0., 0.]),
-        ("Back", [std::f32::consts::PI, 0.]),
-        ("Top", [0., std::f32::consts::FRAC_PI_2]),
-        ("Bottom", [0., -std::f32::consts::FRAC_PI_2]),
-        ("Right", [std::f32::consts::FRAC_PI_2, 0.]),
-        ("Left", [-std::f32::consts::FRAC_PI_2, 0.]),
-        ("Isometric", [0.65, 0.4]),
-    ] {
-        if menu_action(
-            ui,
-            w,
-            &format!("viewport.orientation.{}", label.to_lowercase()),
-            label,
-            true,
-        )
-        .clicked()
-        {
-            w.view.orbit = orbit;
-            w.view.roll = 0.;
-            crate::navigation::stop(w);
-            ui.close();
+    controls::menu_button(ui, ORIENTATION_MENU.0, ORIENTATION_MENU.1, |ui| {
+        for &command in ORIENTATION_MENU.2 {
+            let name = command.trim_start_matches("viewport.orientation.");
+            let mut label = name.to_string();
+            label[..1].make_ascii_uppercase();
+            if menu_action(ui, w, command, &label, true).clicked() {
+                presentation_action(w, command);
+                ui.close();
+            }
         }
-    }
+    });
     ui.separator();
     if menu_action(ui, w, "viewport.fit", "Zoom to Fit  F", true).clicked() {
         viewport::fit(w, false);
@@ -4457,85 +4297,91 @@ pub fn view_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     }
 }
 pub fn status(ui: &mut egui::Ui, w: &mut Workspace) {
-    ui.horizontal(|ui| {
-        crate::document_identity_ui::location_control(ui, w);
-        ui.separator();
-        if w.session.draft.as_ref().is_some_and(|d| d.pending) {
-            ui.spinner();
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let units = crate::workspace_controls::display_units(w);
+        let reason = command_disabled_reason(w, "settings.model");
+        if controls::button(
+            ui,
+            "workspace.model-units",
+            "workspace-action",
+            &["status-control"],
+            &units,
+            reason.is_none(),
+            false,
+        )
+        .on_hover_text("Model units and precision")
+        .on_disabled_hover_text(reason.unwrap_or_default())
+        .clicked()
+        {
+            ui::action(w, "settings.model");
         }
-        if w.tool_checkpoint.is_some() {
-            let label = "Editing operation";
-            controls::label(
-                ui,
-                "workspace.status-message",
-                "status-message",
-                &[],
-                label,
-                "ready",
-            );
-        } else {
-            controls::label(
+        controls::label(
+            ui,
+            "workspace.status-mode",
+            "status-mode",
+            &["status-control"],
+            crate::workspace_controls::status_mode(w),
+            "ready",
+        );
+        ui.separator();
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            crate::document_identity_ui::location_control(ui, w);
+            ui.separator();
+            if w.session.draft.as_ref().is_some_and(|d| d.pending) {
+                ui.spinner();
+            }
+            if w.tool_checkpoint.is_none()
+                && let Some((state, label)) = crate::operation_preview::summary(w)
+            {
+                ui.separator();
+                controls::label(
+                    ui,
+                    "workspace.operation-preview",
+                    "operation-preview-status",
+                    &[],
+                    &label,
+                    &state,
+                )
+                .on_hover_text(crate::operation_preview::tooltip(w));
+            }
+            if w.session.draft.is_some() && w.tool_checkpoint.is_none() {
+                if controls::button(
+                    ui,
+                    "draft.apply",
+                    "apply-action",
+                    &["status-control"],
+                    "Confirm Changes",
+                    confirmation_available(w),
+                    false,
+                )
+                .clicked()
+                {
+                    w.confirm_tool();
+                }
+                if controls::button(
+                    ui,
+                    "draft.cancel",
+                    "cancel-action",
+                    &["status-control"],
+                    "Cancel",
+                    true,
+                    false,
+                )
+                .clicked()
+                {
+                    w.cancel();
+                }
+            }
+            controls::bounded_label(
                 ui,
                 "workspace.status-message",
                 "status-message",
                 &[],
                 &w.status,
                 "ready",
+                ui.available_width(),
             )
             .on_hover_text(&w.status);
-        }
-        if w.tool_checkpoint.is_none()
-            && let Some((state, label)) = crate::operation_preview::summary(w)
-        {
-            ui.separator();
-            controls::label(
-                ui,
-                "workspace.operation-preview",
-                "operation-preview-status",
-                &[],
-                &label,
-                &state,
-            )
-            .on_hover_text(crate::operation_preview::tooltip(w));
-        }
-        if w.session.draft.is_some() && w.tool_checkpoint.is_none() {
-            if controls::button(
-                ui,
-                "draft.apply",
-                "apply-action",
-                &["status-control"],
-                "Confirm Changes",
-                confirmation_available(w),
-                false,
-            )
-            .clicked()
-            {
-                w.confirm_tool();
-            }
-            if controls::button(
-                ui,
-                "draft.cancel",
-                "cancel-action",
-                &["status-control"],
-                "Cancel",
-                true,
-                false,
-            )
-            .clicked()
-            {
-                w.cancel();
-            }
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label("mm · deg");
-            ui.separator();
-            ui.label(if w.sketch.is_some() {
-                "Editing Sketch"
-            } else if w.view.history_cursor.is_some() {
-                "History inspection"
-            } else {
-                "Model"
-            });
         });
     });
 }

@@ -156,11 +156,18 @@ pub fn refresh(w: &mut Workspace) {
             ));
             break;
         }
-        entries.push(Entry { choice: Choice {
-            id: format!("repository:{}:{}", repository.repository_id, repository.entry.id),
-            name: repository.entry.name.clone(),
-            description: format!("From {}. Edit its layout and CSS files in the checkout; valid saves reload when presentation watching is enabled.", repository.repository_name),
-        }, manifest: repository.path.clone(), repository: Some(repository) });
+        entries.push(Entry {
+            choice: Choice {
+                id: format!(
+                    "repository:{}:{}",
+                    repository.repository_id, repository.entry.id
+                ),
+                name: repository.entry.name.clone(),
+                description: format!("Theme from {}.", repository.repository_name),
+            },
+            manifest: repository.path.clone(),
+            repository: Some(repository),
+        });
     }
     entries.sort_by(|left, right| {
         left.choice
@@ -196,9 +203,11 @@ pub fn inventory_semantics(w: &Workspace) -> Vec<cad_core::presentation::Semanti
 }
 
 pub fn choices(w: &Workspace) -> Vec<Choice> {
-    let mut choices = vec![
-        Choice { id: "classic".into(), name: "Classic · Orange".into(), description: "Compact warm CAD workspace with a left feature tree, small rectangular controls and an orange accent.".into() },
-    ];
+    let mut choices = vec![Choice {
+        id: "classic".into(),
+        name: "Classic · Orange".into(),
+        description: "Compact controls, a left feature tree, and orange highlights.".into(),
+    }];
     choices.extend(
         w.presentation_resources
             .library
@@ -211,8 +220,18 @@ pub fn choices(w: &Workspace) -> Vec<Choice> {
         let missing_pack = selected.starts_with("repository:") || selected == "nocturne";
         choices.push(Choice {
             id: selected,
-            name: if missing_pack { "Saved theme · pack unavailable" } else { "Current / custom presentation" }.into(),
-            description: if missing_pack { "Your saved theme remains usable without its optional repository. Reconnect the library to edit or update its source." } else { "The active project or custom layout and styling. Load a portable presentation package to add it to the library." }.into(),
+            name: if missing_pack {
+                "Saved theme · pack unavailable"
+            } else {
+                "Custom layout and theme"
+            }
+            .into(),
+            description: if missing_pack {
+                "Using the locally saved theme."
+            } else {
+                "Layout and colors from the current project or a local file."
+            }
+            .into(),
         });
     }
     choices

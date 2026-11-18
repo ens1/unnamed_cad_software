@@ -27,7 +27,9 @@ pub fn workspace_ui(
     let logical_size = ctx.content_rect().size();
     w.presentation_resources.logical_size = [logical_size.x, logical_size.y];
     crate::navigation::begin_ui(&mut w, ctx);
-    shortcuts(ctx, &mut w);
+    if w.file_switch.is_none() {
+        shortcuts(ctx, &mut w);
+    }
     crate::presentation_resources::poll(&mut w);
     if !w.layout.layouts.contains_key(&w.view.active_layout) {
         w.view.active_layout = if w.layout.layouts.contains_key("instrument-rail") {
@@ -171,6 +173,7 @@ pub fn workspace_ui(
 
     crate::selection_ui::show(ctx, &mut w);
     crate::settings_ui::show(ctx, &mut w);
+    crate::file_switch_ui::show(ctx, &mut w);
     crate::navigation::finish_ui(&mut w);
     // UI edits happen after worker polling. Wake once at the validation deadline
     // instead of rendering the entire workspace continuously while it is idle.
@@ -362,9 +365,6 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
         }
     }
     w.peek = shortcuts.7;
-}
-fn context(ui: &mut egui::Ui, w: &mut Workspace) {
-    crate::cad_ui::menu(ui, w);
 }
 fn navigation(ui: &mut egui::Ui, w: &mut Workspace) {
     crate::cad_ui::navigation(ui, w);
@@ -657,7 +657,9 @@ fn preview_status(ui: &mut egui::Ui, w: &Workspace) {
 }
 fn presentation_registry() -> crate::presentation_composition::Registry {
     let mut registry = crate::presentation_composition::Registry::default();
-    registry.register("document-context", |ui, w, _| context(ui, w));
+    registry.register("document-context", |ui, w, context| {
+        crate::cad_ui::menu(ui, w, context.semantics)
+    });
     registry.register("command-manager", |ui, w, _| crate::cad_ui::commands(ui, w));
     registry.register("command-ribbon", crate::command_chrome::ribbon);
     registry.register("feature-timeline", crate::command_chrome::timeline);
@@ -921,7 +923,7 @@ pub(crate) fn semantic_command(
 pub(crate) fn semantic_element(
     ui: &mut egui::Ui,
     w: &mut Workspace,
-    _region: &Region,
+    snapshot: &[SemanticElement],
     binding: &cad_core::presentation::BindingDescriptor,
     element: &SemanticElement,
 ) {
@@ -944,7 +946,7 @@ pub(crate) fn semantic_element(
         return;
     }
     if matches!(element.role.as_str(), "menu" | "ribbon-group-menu") {
-        crate::cad_ui::semantic_menu_as(ui, w, element, &element.id, &element.role);
+        crate::cad_ui::semantic_menu_as(ui, w, element, &element.id, &element.role, snapshot);
         return;
     }
     if widget == "label" || widget == "value" {
@@ -1090,6 +1092,10 @@ pub(crate) fn semantic_element(
     }
 }
 pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
+    if w.file_switch.is_some() {
+        crate::file_switch_ui::action(w, command);
+        return;
+    }
     if command.starts_with("sketch.")
         && let Some(reason) = crate::cad_ui::command_disabled_reason(w, command)
     {
@@ -1398,6 +1404,101 @@ pub(crate) fn history_command(w: &mut Workspace, redo: bool) {
     w.requested = None;
     w.changed = Instant::now();
 }
+/// Native settings and document fields use the same choice behavior. Filter
+/// text belongs to this open popup, so duplicate field placements are independent.
+pub(crate) fn field_choices(
+    ui: &mut egui::Ui,
+    id: impl egui::AsIdSalt,
+    value: &mut Value,
+    choices: &[Value],
+    width: f32,
+    max_height: f32,
+) -> egui::Response {
+    fn label(choice: &Value) -> std::borrow::Cow<'_, str> {
+        let candidate = choice.get("value").unwrap_or(choice);
+        choice
+            .get("label")
+            .and_then(Value::as_str)
+            .or_else(|| candidate.as_str())
+            .map(std::borrow::Cow::Borrowed)
+            .unwrap_or_else(|| std::borrow::Cow::Owned(candidate.to_string()))
+    }
+    let button_id = ui.make_persistent_id(egui::IdSalt::new(&id));
+    let filter_id = button_id.with("filter");
+    let was_open = egui::ComboBox::is_open(ui.ctx(), button_id);
+    let searchable = choices.len() > 10;
+    let selected = choices
+        .iter()
+        .find(|choice| choice.get("value").unwrap_or(choice) == value)
+        .map(label)
+        .unwrap_or_else(|| label(value))
+        .into_owned();
+    let mut query = ui
+        .data_mut(|data| data.remove_temp::<String>(filter_id))
+        .unwrap_or_default();
+    let enabled = ui.is_enabled();
+    let popup = egui::ComboBox::from_id_salt(id)
+        .selected_text(&selected)
+        .width(width)
+        .height(max_height)
+        .wrap_mode(egui::TextWrapMode::Truncate)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show_ui(ui, |ui| {
+            if !enabled {
+                ui.close();
+                return;
+            }
+            if searchable {
+                if !was_open {
+                    query.clear();
+                }
+                let search_box = ui.add(
+                    egui::TextEdit::singleline(&mut query)
+                        .hint_text("Find an option…")
+                        .desired_width(ui.available_width()),
+                );
+                if !was_open {
+                    search_box.request_focus();
+                }
+            } else {
+                query.clear();
+            }
+            let search = query.trim().to_lowercase();
+            let matching = (!search.is_empty()).then(|| {
+                choices
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, choice)| label(choice).to_lowercase().contains(&search))
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>()
+            });
+            let count = matching.as_ref().map_or(choices.len(), Vec::len);
+            if count == 0 {
+                ui.weak("No matching options");
+            }
+            egui::ScrollArea::vertical()
+                .max_height(max_height)
+                .show_rows(ui, ui.spacing().interact_size.y, count, |ui, rows| {
+                    for row in rows {
+                        let choice =
+                            &choices[matching.as_ref().map_or(row, |indices| indices[row])];
+                        let candidate = choice.get("value").unwrap_or(choice);
+                        if ui
+                            .selectable_label(candidate == value, label(choice).as_ref())
+                            .clicked()
+                        {
+                            *value = candidate.clone();
+                            query.clear();
+                            ui.close();
+                        }
+                    }
+                });
+        });
+    if searchable && popup.inner.is_some() && !query.is_empty() {
+        ui.data_mut(|data| data.insert_temp(filter_id, query));
+    }
+    popup.response.on_hover_text(selected)
+}
 pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement) {
     let descriptor = element.value_descriptor();
     let value = crate::presentation_composition::current_value(w, element);
@@ -1584,7 +1685,7 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 let width = ui.available_width().max(0.);
                 let unit_width = unit_width.min(width);
                 let label_width = label_width.min((width - unit_width - caption_gap).max(0.));
-                if label_width > 0. {
+                let label = (label_width > 0.).then(|| {
                     crate::presentation_controls::bounded_label(
                         ui,
                         &label_id,
@@ -1594,8 +1695,8 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                         &field_state,
                         label_width,
                     )
-                    .on_hover_text(&descriptor.accessibility_label);
-                }
+                    .on_hover_text(&descriptor.accessibility_label)
+                });
                 if let Some(unit) = unit.filter(|_| unit_width > 0.) {
                     crate::presentation_controls::bounded_label(
                         ui,
@@ -1607,126 +1708,84 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                         unit_width,
                     );
                 }
+                label
             };
-            let mut control = |ui: &mut egui::Ui| {
+            if descriptor.choices.is_empty()
+                && let Some(mut checked) = value.as_bool()
+            {
+                let size = crate::presentation_controls::field_size(ui, &props);
+                return ui
+                    .add_enabled_ui(editable, |ui| {
+                        // Give the check mark and its themed caption a single keyboard
+                        // target. Clicking either changes the same semantic value.
+                        let layout = if props.get("flex-direction").is_some_and(|v| v == "column") {
+                            egui::Layout::top_down(egui::Align::Min)
+                        } else {
+                            egui::Layout::left_to_right(egui::Align::Center)
+                        };
+                        ui.allocate_ui_with_layout(size, layout, |ui| {
+                            let response = ui.add(egui::Checkbox::without_text(&mut checked));
+                            let box_changed = response.changed();
+                            let mut caption_clicked = false;
+                            if let Some(label) = caption(ui) {
+                                let response = response.labelled_by(label.id);
+                                if label_props.get("visibility").is_none_or(|v| v != "hidden")
+                                    && label.interact(egui::Sense::CLICK).clicked()
+                                {
+                                    response.request_focus();
+                                    caption_clicked = true;
+                                }
+                            } else {
+                                response.widget_info(|| {
+                                    egui::WidgetInfo::selected(
+                                        egui::WidgetType::Checkbox,
+                                        ui.is_enabled(),
+                                        checked,
+                                        &descriptor.accessibility_label,
+                                    )
+                                });
+                                response.on_hover_text(&descriptor.accessibility_label);
+                            }
+                            if caption_clicked {
+                                checked = !checked;
+                            }
+                            (box_changed || caption_clicked).then_some(Value::Bool(checked))
+                        })
+                        .inner
+                    })
+                    .inner;
+            }
+            let mut control = |ui: &mut egui::Ui, label_node: Option<egui::Id>| {
                 let control_size = crate::presentation_controls::field_size(ui, &props);
                 ui.spacing_mut().interact_size.y = control_size.y;
                 if !descriptor.choices.is_empty() {
                     let mut next = value.clone();
-                    let selected_label = descriptor
-                        .choices
-                        .iter()
-                        .find(|choice| choice.get("value").unwrap_or(choice) == &value)
-                        .and_then(|choice| choice.get("label"))
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| {
-                            value
-                                .as_str()
-                                .map(str::to_owned)
-                                .unwrap_or_else(|| value.to_string())
-                        });
-                    egui::ComboBox::from_id_salt((&element.id, editor_generation))
-                        .selected_text(selected_label)
-                        .width(control_size.x)
-                        .wrap_mode(egui::TextWrapMode::Truncate)
-                        .show_ui(ui, |ui| {
-                            ui.add_enabled_ui(editable, |ui| {
-                                let filter_key = format!(
-                                    "presentation-choice-filter:{}:{editor_generation}",
-                                    element.id
-                                );
-                                let query = w.fields.entry(filter_key).or_default();
-                                ui.add(
-                                    egui::TextEdit::singleline(query)
-                                        .hint_text("Filter choices…")
-                                        .desired_width(ui.available_width()),
-                                );
-                                let search = query.to_lowercase();
-                                let indices = if search.is_empty() {
-                                    None
-                                } else {
-                                    Some(
-                                        descriptor
-                                            .choices
-                                            .iter()
-                                            .enumerate()
-                                            .filter_map(|(index, choice)| {
-                                                let label = choice
-                                                    .get("label")
-                                                    .and_then(Value::as_str)
-                                                    .or_else(|| {
-                                                        choice
-                                                            .get("value")
-                                                            .unwrap_or(choice)
-                                                            .as_str()
-                                                    })
-                                                    .map(str::to_owned)
-                                                    .unwrap_or_else(|| choice.to_string());
-                                                label
-                                                    .to_lowercase()
-                                                    .contains(&search)
-                                                    .then_some(index)
-                                            })
-                                            .collect::<Vec<_>>(),
-                                    )
-                                };
-                                let count =
-                                    indices.as_ref().map_or(descriptor.choices.len(), Vec::len);
-                                let menu_props = crate::presentation_controls::properties(
-                                    &format!("{}:choices", element.id),
-                                    "field-choices",
-                                    &field_classes,
-                                    &field_state,
-                                );
-                                egui::ScrollArea::vertical()
-                                    .max_height(crate::presentation_controls::number(
-                                        &menu_props,
-                                        "max-height",
-                                        240.,
-                                    ))
-                                    .show_rows(
-                                        ui,
-                                        ui.spacing().interact_size.y,
-                                        count,
-                                        |ui, rows| {
-                                            for row in rows {
-                                                let index = indices
-                                                    .as_ref()
-                                                    .map_or(row, |indices| indices[row]);
-                                                let choice = &descriptor.choices[index];
-                                                let candidate =
-                                                    choice.get("value").unwrap_or(choice);
-                                                let label = choice
-                                                    .get("label")
-                                                    .and_then(Value::as_str)
-                                                    .or_else(|| candidate.as_str())
-                                                    .map(str::to_string)
-                                                    .unwrap_or_else(|| candidate.to_string());
-                                                ui.selectable_value(
-                                                    &mut next,
-                                                    candidate.clone(),
-                                                    label,
-                                                );
-                                            }
-                                        },
-                                    );
-                                if count == 0 {
-                                    ui.weak("No matching choices");
-                                }
-                            });
-                        });
-                    return (next != value).then_some(next);
-                }
-                if let Some(mut checked) = value.as_bool() {
-                    return ui
+                    let menu_props = crate::presentation_controls::properties(
+                        &format!("{}:choices", element.id),
+                        "field-choices",
+                        &field_classes,
+                        &field_state,
+                    );
+                    let response = ui
                         .add_enabled_ui(editable, |ui| {
-                            ui.add_sized(control_size, egui::Checkbox::new(&mut checked, ""))
+                            field_choices(
+                                ui,
+                                (&element.id, editor_generation),
+                                &mut next,
+                                &descriptor.choices,
+                                control_size.x,
+                                crate::presentation_controls::number(
+                                    &menu_props,
+                                    "max-height",
+                                    240.,
+                                ),
+                            )
                         })
-                        .inner
-                        .on_hover_text(&descriptor.accessibility_label)
-                        .changed()
-                        .then_some(Value::Bool(checked));
+                        .inner;
+                    if let Some(label) = label_node {
+                        response.labelled_by(label);
+                    }
+                    return (next != value).then_some(next);
                 }
                 let current = value
                     .as_str()
@@ -1792,11 +1851,20 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                             ui.add_sized(control_size, editor)
                         }
                     })
-                    .inner
-                    .on_hover_text(format!(
-                        "{}\nSource: {current}",
+                    .inner;
+                let response = if let Some(label) = label_node {
+                    response.labelled_by(label)
+                } else {
+                    response
+                };
+                let response = if display != current {
+                    response.on_hover_text(format!(
+                        "{}\nExact value: {current}",
                         descriptor.accessibility_label
-                    ));
+                    ))
+                } else {
+                    response.on_hover_text(&descriptor.accessibility_label)
+                };
                 if request_focus {
                     response.request_focus();
                 }
@@ -1841,27 +1909,32 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
             };
             if row {
                 ui.horizontal(|ui| {
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(caption_width, ui.spacing().interact_size.y),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.set_min_width(caption_width);
-                            caption(ui);
-                        },
-                    );
-                    control(ui)
+                    let label = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(caption_width, ui.spacing().interact_size.y),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_width(caption_width);
+                                caption(ui)
+                            },
+                        )
+                        .inner;
+                    control(ui, label.map(|response| response.id))
                 })
                 .inner
             } else {
                 ui.vertical(|ui| {
-                    if caption_width > 0. {
+                    let label = if caption_width > 0. {
                         ui.allocate_ui_with_layout(
                             egui::vec2(available, ui.spacing().interact_size.y),
                             egui::Layout::left_to_right(egui::Align::Center),
                             caption,
-                        );
-                    }
-                    control(ui)
+                        )
+                        .inner
+                    } else {
+                        None
+                    };
+                    control(ui, label.map(|response| response.id))
                 })
                 .inner
             }
@@ -2045,14 +2118,15 @@ fn model_view(
     {
         w.selection_popup = None;
     }
-    let empty = w.sketch.is_none()
-        && w.view
-            .active_part
-            .as_ref()
-            .and_then(|id| w.session.visible().parts.get(id))
-            .is_some_and(|p| p.features.is_empty());
+    let empty = w
+        .view
+        .active_part
+        .as_ref()
+        .and_then(|id| w.session.visible().parts.get(id))
+        .is_some_and(|p| p.features.is_empty());
     if empty
         && w.active_plane.is_none()
+        && crate::workspace_controls::can_offer_sketch_planes(w)
         && let Some(hint_rect) = crate::presentation_controls::overlay_rect(
             "viewport.start-hint",
             "viewport-start-hint",
@@ -2303,6 +2377,10 @@ fn reference_repair_blocks(w: &mut Workspace, command: &str) -> bool {
 }
 
 pub(crate) fn action(w: &mut Workspace, cmd: &str) {
+    if w.file_switch.is_some() {
+        crate::file_switch_ui::action(w, cmd);
+        return;
+    }
     if cmd.starts_with("sketch.")
         && let Some(reason) = crate::cad_ui::command_disabled_reason(w, cmd)
     {
@@ -2570,10 +2648,12 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         "equations" => crate::configuration_ui::begin(w, "equations"),
         "parameter.new" => w.open_editor("parameter"),
         "libraries" => w.open_editor("libraries"),
-        "file.new-part" | "file.new" => match crate::settings::new_document(w, cmd == "file.new") {
-            Ok(document) => w.replace(document, None),
-            Err(error) => w.status = format!("New document defaults could not be applied: {error}"),
-        },
+        "file.new-part" => {
+            crate::file_switch_ui::request(w, crate::file_switch_ui::Destination::NewPart)
+        }
+        "file.new" => {
+            crate::file_switch_ui::request(w, crate::file_switch_ui::Destination::NewAssembly)
+        }
         "feature.extrude" => feature_preset(w, "Extrude"),
         "feature.cut" => feature_preset(w, "Cut"),
         "feature.revolve" => feature_preset(w, "Revolve"),
@@ -2589,10 +2669,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
                 .set_file_name("project.json")
                 .pick_file()
             {
-                match FileStore.load(&path) {
-                    Ok(d) => w.replace(d, Some(path)),
-                    Err(e) => w.status = e.to_string(),
-                }
+                crate::file_switch_ui::request(w, crate::file_switch_ui::Destination::Open(path));
             }
         }
         "file.recover" => {
@@ -2601,57 +2678,10 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
                 .add_filter("Recovery", &["json"])
                 .pick_file()
             {
-                let result = (|| -> cad_core::Result<(Document, Option<Document>)> {
-                    let v: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
-                    let document: Document = serde_json::from_value(
-                        v.get("committed")
-                            .cloned()
-                            .ok_or_else(|| CadError::Invalid("Invalid recovery file".into()))?,
-                    )?;
-                    let draft: Option<Document> = v
-                        .get("draft")
-                        .filter(|v| !v.is_null())
-                        .cloned()
-                        .map(serde_json::from_value)
-                        .transpose()?;
-                    document.validate()?;
-                    if let Some(draft) = &draft {
-                        draft.validate()?;
-                        if draft.id != document.id {
-                            return Err(CadError::Invalid(
-                                "Recovery draft belongs to a different document".into(),
-                            ));
-                        }
-                    }
-                    let destination = crate::recovery_directory()
-                        .join("unsaved")
-                        .join(&document.id);
-                    let mut sources = vec![destination.clone()];
-                    if let Some(root) = v.get("resource_root").and_then(Value::as_str) {
-                        sources.insert(0, PathBuf::from(root));
-                    }
-                    if document.id == w.session.committed.id {
-                        sources.push(w.root());
-                    }
-                    if let Some(parent) = path.parent() {
-                        sources.push(parent.to_path_buf());
-                    }
-                    cad_core::persistence::copy_resources(&document, &sources, &destination)?;
-                    if let Some(draft) = &draft {
-                        cad_core::persistence::copy_resources(draft, &sources, &destination)?;
-                    }
-                    Ok((document, draft))
-                })();
-                match result {
-                    Ok((d, draft)) => {
-                        w.replace(d, None);
-                        if let Some(document) = draft {
-                            w.dispatch(Command::ReplaceDocument { document });
-                        }
-                        w.status = "Recovered local work. Choose Save as to preserve it.".into();
-                    }
-                    Err(e) => w.status = e.to_string(),
-                }
+                crate::file_switch_ui::request(
+                    w,
+                    crate::file_switch_ui::Destination::Recover(path),
+                );
             }
         }
         "file.save" => {
@@ -3696,6 +3726,10 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         return;
     }
     let dialog = w.dialog.clone().unwrap_or_default();
+    if dialog == "commands" {
+        crate::command_palette::show(ui, w);
+        return;
+    }
     if dialog == "properties" {
         crate::cad_ui::properties(ui, w);
         return;

@@ -109,30 +109,31 @@ fn destination(value: &str) -> Result<std::path::PathBuf> {
     Ok(path)
 }
 
-pub fn location_control(ui: &mut egui::Ui, w: &Workspace) {
-    let state = if w.project.is_some() {
-        "saved"
+pub(crate) fn has_unsaved_changes(w: &Workspace) -> bool {
+    w.session.draft.is_some()
+        || w.sketch.is_some()
+        || crate::source_cache::identity(w).source != w.saved_source
+}
+
+fn save_state(w: &Workspace) -> (&'static str, &'static str) {
+    if w.project.is_none() {
+        ("unsaved", "Unsaved project")
+    } else if has_unsaved_changes(w) {
+        ("modified", "Unsaved changes")
     } else {
-        "unsaved"
-    };
+        ("saved", "Saved")
+    }
+}
+
+pub fn location_control(ui: &mut egui::Ui, w: &Workspace) {
+    let (state, label) = save_state(w);
     let path = w.project.as_ref().map(|path| path.display().to_string());
-    let label = path.as_ref().map_or_else(
-        || "Unsaved project".into(),
-        |_| {
-            w.project
-                .as_ref()
-                .and_then(|path| path.parent())
-                .and_then(|folder| folder.file_name())
-                .map(|name| format!("Saved: {}", name.to_string_lossy()))
-                .unwrap_or_else(|| "Saved project".into())
-        },
-    );
     controls::label(
         ui,
         "workspace.project-location",
         "project-location",
         &["status-control"],
-        &label,
+        label,
         state,
     )
     .on_hover_text(format!(
@@ -444,13 +445,14 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "save_as_destination":w.fields.get("document-identity-save-as-path"),
             "saved_document_name":w.session.committed.name,"undo":"one-confirmed-operation"}),
     }];
+    let (state, save_label) = save_state(w);
     elements.push(SemanticElement {
         id:"workspace.project-location".into(),role:"project-location".into(),
         label:w.session.committed.name.clone(),
         value:Some(w.project.as_ref().map(|path|path.display().to_string()).unwrap_or_else(||"Unsaved project".into())),
-        state:if w.project.is_some(){"saved"}else{"unsaved"}.into(),
+        state:state.into(),
         commands:vec!["file.save-as".into(),"document.rename".into()],relationships:vec![w.session.visible().id.clone()],
-        data:json!({"contract":"tcad.project-location","version":1,"document":w.session.visible().id,
+        data:json!({"contract":"tcad.project-location","version":1,"save_label":save_label,"document":w.session.visible().id,
             "project_path":w.project.as_ref().map(|path|path.display().to_string()),"name":w.session.committed.name,
             "draft_name":(w.session.visible().name!=w.session.committed.name).then_some(&w.session.visible().name),
             "actions":[{"command":"file.save-as","label":"Save As…","enabled":true},

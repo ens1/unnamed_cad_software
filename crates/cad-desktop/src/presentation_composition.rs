@@ -375,9 +375,9 @@ impl Registry {
                     if let Some(label) = &binding.label {
                         let mut presented = element.clone();
                         presented.label.clone_from(label);
-                        ui::semantic_element(ui, w, context.region, binding, &presented);
+                        ui::semantic_element(ui, w, context.semantics, binding, &presented);
                     } else {
-                        ui::semantic_element(ui, w, context.region, binding, element);
+                        ui::semantic_element(ui, w, context.semantics, binding, element);
                     }
                     return;
                 }
@@ -401,6 +401,7 @@ impl Registry {
 /// One snapshot supplies the native workspace, binding catalog and user templates.
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut elements = crate::source_cache::project(w);
+    elements.extend(crate::file_switch_ui::semantics(w));
     elements.extend(crate::readme_preview_ui::semantics(w));
     elements.extend(crate::component_fork_ui::semantics(w));
     elements.extend(crate::feature_transfer_ui::semantics(w));
