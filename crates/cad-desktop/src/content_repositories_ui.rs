@@ -61,9 +61,10 @@ enum Outcome {
     Update(libraries::UpdateCandidate),
     Publish(libraries::PublishRequest, Option<ConnectionProfile>),
 }
-const SECTIONS: [(&str, &str); 7] = [
+const SECTIONS: [(&str, &str); 8] = [
     ("packs", "Optional packs"),
     ("installed", "Installed libraries"),
+    ("downloads", "Download settings"),
     ("add", "Other repositories"),
     ("create", "Create or fork a library"),
     ("update", "Review updates"),
@@ -570,11 +571,9 @@ pub fn poll(w: &mut Workspace) {
                         status(
                             w,
                             if warning_count == 0 {
-                                "Libraries refreshed. Saved models and the active theme keep their current data.".to_owned()
+                                "Library list refreshed".to_owned()
                             } else {
-                                format!(
-                                    "Libraries refreshed with {warning_count} warning(s). Review the library notices below."
-                                )
+                                format!("{warning_count} library notices in Installed libraries.")
                             },
                         );
                         if theme_refresh {
@@ -1239,8 +1238,18 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data: json!({"group":group}),
         });
     }
-    out.push(info("packs", "help", "Packs are optional. Classic, plain finishes, and your saved model definitions work without downloads. Install only what you need; no pack changes an active model or theme."));
-    out.push(info("packs", "status", &w.content_repositories.status));
+    let mut pack_help = info(
+        "packs",
+        "help",
+        "Select a pack to see its source and local folder.",
+    );
+    pack_help.data["hint"] = json!(true);
+    out.push(pack_help);
+    if !w.content_repositories.status.is_empty()
+        && w.content_repositories.outcome_notice.as_ref() != Some(&w.content_repositories.status)
+    {
+        out.push(info("packs", "status", &w.content_repositories.status));
+    }
     if let Some(notice) = &w.content_repositories.outcome_notice {
         out.push(info("packs", "last-result", notice));
     }
@@ -1256,42 +1265,65 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     }
     out.push(field(
         w,
-        "packs",
+        "downloads",
         "library-directory",
         "Library folder",
         None,
     ));
-    out.push(info("packs", "saved-folder", format!("Downloads use: {}. Changing this folder affects future downloads only; existing libraries stay where they are.", w.content_repositories.library_directory.as_ref().map(|path|path.display().to_string()).unwrap_or_else(|| "Choose and save a folder".into()))));
+    let saved = w.content_repositories.library_directory.as_deref();
+    let mut folder = info(
+        "packs",
+        "saved-folder",
+        saved
+            .map(|p| format!("Current folder: {}", p.display()))
+            .unwrap_or_else(|| "Choose a folder for downloads.".into()),
+    );
+    folder.data["group"] = json!("downloads");
+    folder.data["hint"] =
+        json!(saved.is_some_and(|p| p == std::path::Path::new(&text(w, "library-directory"))));
+    out.push(folder);
     for (command, label) in [
         ("library-folder", "Choose folder…"),
         ("save-library-folder", "Save library folder"),
         ("open-library-folder", "Show library folder…"),
     ] {
-        out.push(button(
+        let mut control = button(
             "packs",
             command,
             &format!("content-repositories.{command}"),
             label,
             json!({}),
-            available,
-        ));
+            available
+                && (command != "open-library-folder"
+                    || w.content_repositories.library_directory.is_some()),
+        );
+        control.data["group"] = json!("downloads");
+        out.push(control);
     }
     out.push(field(
         w,
-        "packs",
+        "downloads",
         "connection",
         "Download connection",
         Some(crate::git_connections_ui::choices(w)),
     ));
-    out.push(button(
+    let mut connections = button(
         "packs",
         "connection",
         "git-connections",
         "Manage connections…",
         json!({}),
         available,
-    ));
-    out.push(info("packs", "access", "The TCAD pack repositories are private. Use an account with access, or add your own repository below. If a download fails, you can keep working and retry later."));
+    );
+    connections.data["group"] = json!("downloads");
+    out.push(connections);
+    let mut access = info(
+        "packs",
+        "access",
+        "Private repositories require a connection with read access.",
+    );
+    access.data["group"] = json!("downloads");
+    out.push(access);
     // Focus highlights a stable row; downloads never move the pack under the pointer.
     for pack in libraries::packs() {
         let installed = libraries::matching_pack_repository(pack, &w.content_repositories.registry);
@@ -1320,6 +1352,21 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                     .as_ref()
                     .map(|path| path.join(pack.directory_name))
             });
+        let focused = w.content_repositories.focused_pack.as_deref() == Some(pack.id);
+        let mut pick = button(
+            "packs",
+            &format!("show-{}", pack.id),
+            &format!("content-repositories.show-{}", pack.id),
+            pack.name,
+            json!({"pack":pack.id}),
+            true,
+        );
+        pick.data["pack"] = json!(pack.id);
+        pick.data["pack_control"] = json!("select");
+        pick.data["selected"] = json!(focused);
+        pick.data["description"] = json!(pack.description);
+        pick.state = if focused { "selected" } else { "ready" }.into();
+        out.push(pick);
         let mut description = info(
             "packs",
             &format!("pack-{}", pack.id),
@@ -1340,9 +1387,12 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         description.data["repository_url"] = json!(pack.clone_url);
         description.data["directory"] = json!(destination);
         description.data["available"] = json!(ready);
+        description.data["pack_control"] = json!("description");
+        description.data["summary"] = json!(pack.description);
+        description.data["install_state"] = json!(state);
         out.push(description);
         let label = if ready {
-            "Manage installed library…".to_owned()
+            format!("Manage {}…", pack.name)
         } else if installed.is_some_and(|repository| !repository.enabled) {
             format!("Download or enable {} pack", pack.name)
         } else {
@@ -1358,50 +1408,78 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         } else {
             json!({"pack":pack.id})
         };
-        out.push(button(
+        let mut primary = button(
             "packs",
             &format!("download-{}", pack.id),
             &command,
             &label,
             arguments,
-            available && (ready || w.content_repositories.library_directory.is_some()),
-        ));
+            available
+                && (installed.is_some() || w.content_repositories.library_directory.is_some()),
+        );
+        primary.data["pack"] = json!(pack.id);
+        primary.data["pack_control"] = json!("primary");
+        primary.data["compact_label"] = json!(if ready {
+            "Manage…"
+        } else if installed.is_some_and(|r| !r.enabled) {
+            "Enable"
+        } else if installed.is_some() {
+            "Repair"
+        } else {
+            "Download"
+        });
+        if !available {
+            primary.data["disabled_reason"] = json!("Wait for the current library operation");
+        } else if installed.is_none() && w.content_repositories.library_directory.is_none() {
+            primary.data["disabled_reason"] = json!("Choose a folder in Download settings");
+        }
+        out.push(primary);
         for (command, label) in [
             ("pack-repository", "Open repository…"),
             ("pack-copy-url", "Copy Git URL"),
         ] {
-            out.push(button(
+            let mut control = button(
                 "packs",
                 &format!("{command}-{}", pack.id),
                 &format!("content-repositories.{command}"),
                 label,
                 json!({"pack":pack.id}),
                 available,
-            ));
+            );
+            control.data["pack"] = json!(pack.id);
+            control.data["pack_control"] = json!("source");
+            out.push(control);
         }
     }
-    out.push(info("installed","help","Libraries are personal. Changes save immediately; Settings Cancel does not undo them. Models keep copied definitions and textures."));
+    let mut library_help = info(
+        "installed",
+        "help",
+        "Library changes save immediately. Models keep their saved definitions.",
+    );
+    library_help.data["hint"] = json!(true);
+    out.push(library_help);
     if w.content_repositories.registry.repositories.is_empty() {
-        out.push(info("installed","empty","No libraries installed. TCAD includes only the default theme and a plain aluminum appearance."));
+        out.push(info("installed", "empty", "No installed libraries."));
     }
     for r in &w.content_repositories.registry.repositories {
-        out.push(button(
+        let mut library = button(
             "installed",
             &r.id,
             "content-repositories.select",
             &format!(
-                "{} · {}{}",
+                "{}{}",
                 r.manifest.name,
-                if r.enabled { "enabled" } else { "disabled" },
-                if r.id == w.content_repositories.selected {
-                    " · selected"
-                } else {
-                    ""
-                }
+                if r.enabled { "" } else { " · Disabled" }
             ),
             json!({"id":r.id}),
             available,
-        ));
+        );
+        let selected = r.id == w.content_repositories.selected;
+        library.data["selected"] = json!(selected);
+        if selected && available {
+            library.state = "selected".into();
+        }
+        out.push(library);
     }
     out.push(button(
         "installed",
@@ -1737,6 +1815,112 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, incoming: Value) 
     set(w, key, incoming);
     Ok(())
 }
+fn draw_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement, compact: bool) {
+    let caption = if compact {
+        element.data["compact_label"].as_str()
+    } else {
+        None
+    }
+    .unwrap_or(&element.label);
+    let enabled = element.state != "disabled";
+    let selected = element.data["selected"].as_bool().unwrap_or(false);
+    let response = controls::button(
+        ui,
+        &element.id,
+        &element.role,
+        &["semantic-control", "modeling-action"],
+        caption,
+        enabled,
+        selected,
+    );
+    if compact {
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &element.label)
+        });
+    }
+    let enabled_hint = element.data["description"]
+        .as_str()
+        .unwrap_or(&element.label);
+    let response = response.on_hover_text(enabled_hint);
+    let response = if let Some(reason) = element.data["disabled_reason"].as_str() {
+        response.on_disabled_hover_text(reason)
+    } else {
+        response
+    };
+    if response.clicked() {
+        if element.commands[0] == "git-connections" {
+            crate::ui::action(w, "git-connections");
+        } else {
+            action(
+                w,
+                &element.commands[0],
+                Some(&element.data["actions"][0]["arguments"]),
+            );
+        }
+    }
+}
+
+fn pack_rows(ui: &mut egui::Ui, w: &mut Workspace, snapshot: &[SemanticElement], reveal: bool) {
+    for pack in libraries::packs() {
+        let items = snapshot.iter().filter(|e| e.data["pack"] == pack.id);
+        let Some(description) = items
+            .clone()
+            .find(|e| e.data["pack_control"] == "description")
+        else {
+            continue;
+        };
+        ui.push_id(pack.id, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for element in items.clone().filter(|e| {
+                    matches!(e.data["pack_control"].as_str(), Some("select" | "primary"))
+                }) {
+                    draw_action(ui, w, element, true);
+                }
+                // Download is sufficient to identify an available pack. Existing copies have a distinct status.
+                if let Some(state) = description.data["install_state"]
+                    .as_str()
+                    .filter(|state| *state != "Not installed")
+                {
+                    controls::label(
+                        ui,
+                        &format!("{}:state", description.id),
+                        "content-library-state",
+                        &["repository-detail"],
+                        state,
+                        &description.state,
+                    );
+                }
+            });
+            if w.content_repositories.focused_pack.as_deref() == Some(pack.id) {
+                let details = format!(
+                    "{}\n{}\n{}",
+                    description.data["summary"].as_str().unwrap_or(""),
+                    pack.clone_url,
+                    description.data["directory"]
+                        .as_str()
+                        .unwrap_or("Choose a folder in Download settings")
+                );
+                let details = controls::label(
+                    ui,
+                    &description.id,
+                    &description.role,
+                    &["repository-detail"],
+                    &details,
+                    &description.state,
+                );
+                if reveal {
+                    details.scroll_to_me(None);
+                }
+                ui.horizontal_wrapped(|ui| {
+                    for element in items.filter(|e| e.data["pack_control"] == "source") {
+                        draw_action(ui, w, element, false);
+                    }
+                });
+            }
+        });
+    }
+}
+
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     let focus = w.content_repositories.focus_section.take();
     let snapshot = semantics(w);
@@ -1749,43 +1933,29 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                 classes: &["repository-section"],
                 label,
                 state: "ready",
-                collapse: Some(matches!(group, "packs")),
+                collapse: Some(
+                    group == "packs"
+                        || (group == "downloads"
+                            && w.content_repositories.initialized
+                            && idle(w)
+                            && w.content_repositories.library_directory.is_none()),
+                ),
                 open: focus
                     .as_deref()
                     .filter(|focused| *focused == group)
                     .map(|_| true),
             },
             |ui| {
-                for element in snapshot.iter().filter(|e| e.data["group"] == group) {
+                for element in snapshot.iter().filter(|e| {
+                    e.data["group"] == group
+                        && e.data["pack_control"].is_null()
+                        && e.data["hint"] != true
+                }) {
                     match element.role.as_str() {
-                        "content-library-field" => {
-                            crate::ui::semantic_field(ui, w, element);
-                        }
-                        "content-library-action" => {
-                            if controls::button(
-                                ui,
-                                &element.id,
-                                &element.role,
-                                &["semantic-control", "modeling-action"],
-                                &element.label,
-                                element.state != "disabled",
-                                false,
-                            )
-                            .clicked()
-                            {
-                                if element.commands[0] == "git-connections" {
-                                    crate::ui::action(w, "git-connections");
-                                } else {
-                                    action(
-                                        w,
-                                        &element.commands[0],
-                                        Some(&element.data["actions"][0]["arguments"]),
-                                    );
-                                }
-                            }
-                        }
+                        "content-library-field" => crate::ui::semantic_field(ui, w, element),
+                        "content-library-action" => draw_action(ui, w, element, false),
                         "content-library-information" => {
-                            controls::label(
+                            let response = controls::label(
                                 ui,
                                 &element.id,
                                 &element.role,
@@ -1793,9 +1963,17 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                                 &element.label,
                                 &element.state,
                             );
+                            if focus.as_deref() == Some("installed")
+                                && element.id == "content-repositories/installed/selection"
+                            {
+                                response.scroll_to_me(None);
+                            }
                         }
                         _ => {}
                     }
+                }
+                if group == "packs" {
+                    pack_rows(ui, w, &snapshot, focus.as_deref() == Some("packs"));
                 }
             },
         );

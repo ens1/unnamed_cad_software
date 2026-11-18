@@ -24,6 +24,48 @@ const CATEGORIES: &[(&str, &str, &str)] = &[
     ("application.libraries", "Content libraries", "Application"),
 ];
 
+// Everyday choices stay in the open. A matching search result is always visible.
+const FIELD_GROUPS: &[(&str, &str, &str)] = &[
+    ("application.navigation", "directions", "Reverse directions"),
+    (
+        "application.navigation",
+        "speeds",
+        "Sensitivity and precision",
+    ),
+    ("model.geometry", "accuracy", "Geometry tolerances"),
+    (
+        "application.defaults",
+        "precision",
+        "Precision and tolerances",
+    ),
+];
+
+fn field_group(category: &str, pointer: &str) -> Option<&'static str> {
+    let pointer = pointer.strip_prefix("/default_model").unwrap_or(pointer);
+    match category {
+        "application.navigation" if pointer.starts_with("/navigation/invert_") => {
+            Some("directions")
+        }
+        "application.navigation"
+            if pointer.ends_with("_sensitivity")
+                || pointer.starts_with("/navigation/precision_") =>
+        {
+            Some("speeds")
+        }
+        "model.geometry" | "application.defaults"
+            if pointer.starts_with("/modeling/") || pointer == "/display_tolerance_mm" =>
+        {
+            Some(if category == "model.geometry" {
+                "accuracy"
+            } else {
+                "precision"
+            })
+        }
+        "application.defaults" if pointer.ends_with("_decimal_places") => Some("precision"),
+        _ => None,
+    }
+}
+
 fn source(w: &Workspace, scope: &str) -> Result<Value> {
     match scope {
         "model" => {
@@ -97,6 +139,11 @@ fn field(w: &Workspace, spec: FieldSpec<'_>) -> SemanticElement {
     let pending = w.settings.as_ref().is_some_and(|state| state.pending);
     let editable =
         !pending && (matches!(spec.scope, "application" | "presentation") || model_editable(w));
+    let mut relationships = vec![format!("settings:category:{}", spec.category)];
+    let group = field_group(spec.category, spec.pointer);
+    if let Some(group) = group {
+        relationships.push(format!("settings:group:{}:{group}", spec.category));
+    }
     SemanticElement {
         id: format!(
             "settings:field:{}:{}",
@@ -120,10 +167,10 @@ fn field(w: &Workspace, spec: FieldSpec<'_>) -> SemanticElement {
         }
         .into(),
         commands: vec![format!("settings.open.{}", spec.category)],
-        relationships: vec![format!("settings:category:{}", spec.category)],
+        relationships,
         data: json!({
             "setter":"settings", "scope":spec.scope, "pointer":spec.pointer,
-            "category":spec.category, "json":value, "editable":editable,
+            "category":spec.category, "group":group, "json":value, "editable":editable,
             "range":spec.range, "choices":spec.choices, "unit":spec.unit,
             "minimum":spec.range.map(|range|range[0]), "maximum":spec.range.map(|range|range[1]),
             "step":if spec.pointer.ends_with("/modeling/linear_mm") { Some(1e-7) } else if spec.pointer.ends_with("/modeling/boolean_search_mm") || spec.pointer.ends_with("/display_tolerance_mm") { Some(0.001) } else { None },
@@ -703,6 +750,9 @@ pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Semantic
     if properties
         .get("display")
         .is_some_and(|value| value == "none")
+        || properties
+            .get("visibility")
+            .is_some_and(|value| value == "hidden")
     {
         return;
     }
@@ -730,6 +780,7 @@ pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Semantic
                         value = json!(candidate);
                         return changed;
                     }
+                    let row_width = ui.available_width().max(0.);
                     ui.horizontal_wrapped(|ui| {
                         let caption = controls::label(
                             ui,
@@ -739,20 +790,44 @@ pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Semantic
                             &element.label,
                             "ready",
                         );
+                        if let Some(description) = element.data["description"].as_str() {
+                            caption.clone().on_hover_text(description);
+                        }
                         if let Some(choices) = element
                             .data
                             .get("choices")
                             .and_then(Value::as_array)
                             .filter(|choices| !choices.is_empty())
                         {
-                            let width = controls::length(
-                                &properties,
-                                "width",
-                                ui.available_width(),
-                                ui.spacing().combo_width,
-                            )
-                            .min(ui.available_width())
-                            .max(0.);
+                            let selected = choices
+                                .iter()
+                                .find(|option| option["value"] == value)
+                                .and_then(|option| option["label"].as_str())
+                                .unwrap_or_default();
+                            let text_width = ui
+                                .painter()
+                                .layout_no_wrap(
+                                    selected.into(),
+                                    egui::TextStyle::Button.resolve(ui.style()),
+                                    ui.visuals().text_color(),
+                                )
+                                .size()
+                                .x;
+                            let natural = (text_width
+                                + ui.spacing().icon_width
+                                + ui.spacing().icon_spacing
+                                + ui.spacing().button_padding.x * 2.)
+                                .max(ui.spacing().combo_width);
+                            let min = controls::length(&properties, "min-width", row_width, 0.)
+                                .clamp(0., row_width);
+                            let max =
+                                controls::length(&properties, "max-width", row_width, row_width)
+                                    .clamp(min, row_width);
+                            let width = controls::length(&properties, "width", row_width, natural)
+                                .clamp(min, max);
+                            if width > ui.available_size_before_wrap().x {
+                                ui.end_row();
+                            }
                             crate::ui::field_choices(
                                 ui,
                                 &element.id,
@@ -801,7 +876,11 @@ pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Semantic
                             if let Some(unit) = element.data.get("unit").and_then(Value::as_str) {
                                 widget = widget.suffix(format!(" {unit}"));
                             }
-                            let changed = ui.add(widget).changed();
+                            let response = ui.add(widget).labelled_by(caption.id);
+                            let changed = response.changed();
+                            if let Some(description) = element.data["description"].as_str() {
+                                response.on_hover_text(description);
+                            }
                             value = if value.is_u64() {
                                 json!(candidate.round().max(0.) as u64)
                             } else if value.is_i64() {
@@ -827,11 +906,7 @@ pub fn semantic_control(ui: &mut egui::Ui, w: &mut Workspace, element: &Semantic
         draw(ui)
     };
     if changed && let Err(error) = set_field(w, element, value) {
-        let message = format!("{}: {error}", element.label);
-        w.status = message.clone();
-        if let Some(state) = &mut w.settings {
-            state.diagnostic = Some(message);
-        }
+        settings::fail(w, format!("{}: {error}", element.label));
     }
 }
 
@@ -855,7 +930,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "settings.cancel".into(),
         ],
         relationships: vec![],
-        data: json!({"contract":"tcad.settings-presentation","version":1,"modal":true,"model_editable":model_editable(w),"pending":pending,"category":w.settings.as_ref().map(|state|&state.category),"search":w.settings.as_ref().map(|state|&state.search),"diagnostic":w.settings.as_ref().and_then(|state|state.diagnostic.as_ref()),"scopes":["model","application","presentation"]}),
+        data: json!({"contract":"tcad.settings-presentation","version":1,"modal":true,"model_editable":model_editable(w),"pending":pending,"category":w.settings.as_ref().map(|state|&state.category),"search":w.settings.as_ref().map(|state|&state.search),"diagnostic":w.settings.as_ref().and_then(|state|state.diagnostic.as_ref()),"status":w.settings.as_ref().and_then(|state|state.notice),"scopes":["model","application","presentation"]}),
     }];
     let search = w
         .settings
@@ -870,7 +945,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     for (id, label, scope) in CATEGORIES {
         elements.push(SemanticElement {
             id:format!("settings:category:{id}"), role:"settings-category".into(), label:(*label).into(), value:Some((*scope).into()),
-            state:if w.settings.as_ref().is_some_and(|state|state.category == *id) {"selected"} else {"ready"}.into(),
+            state:if w.settings.as_ref().is_some_and(|state|state.category == *id && state.search.trim().is_empty()) {"selected"} else {"ready"}.into(),
             commands:vec![format!("settings.open.{id}")], relationships:vec!["settings:dialog".into()],
             data:json!({"category":id,"scope":scope.to_lowercase(),"accessibility_label":format!("{scope}: {label}")}),
         });
@@ -885,11 +960,23 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data: json!({"category":id,"scope":scope.to_lowercase(),"model_mutation":false}),
         });
     }
+    for (category, group, label) in FIELD_GROUPS {
+        elements.push(SemanticElement {
+            id: format!("settings:group:{category}:{group}"),
+            role: "settings-field-group".into(),
+            label: (*label).into(),
+            value: None,
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec![format!("settings:category:{category}")],
+            data: json!({"category":category,"group":group,"default_open":false}),
+        });
+    }
     for (command, label) in [
         ("settings.apply", "Apply"),
         ("settings.ok", "OK"),
         ("settings.cancel", "Cancel"),
-        ("settings.presentation", "Layout and theme…"),
+        ("settings.presentation", edit_theme_label(w)),
         ("settings.theme-load", "Load theme…"),
         ("settings.theme-export", "Export theme…"),
         ("settings.theme-refresh", "Refresh installed themes"),
@@ -906,11 +993,12 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         let download = command == "content-repositories.download-themes";
         let available = w.settings.is_some()
             && (command == "settings.cancel" || !pending)
+            && (command != "settings.apply" || settings::has_changes(w))
             && (!download || crate::content_repositories_ui::offer_theme_download(w));
         elements.push(SemanticElement {
             id:format!("command:{command}"), role:"settings-action".into(), label:label.into(), value:None,
             state:if available {"available"} else {"disabled"}.into(), commands:vec![command.into()], relationships:vec!["settings:dialog".into()],
-            data:json!({"actions":[{"command":command,"enabled":available,"disabled_reason":if available {None} else if download {Some("Open Content Libraries to check the theme pack")} else {Some("Open Settings and wait for validation")}}],"accessibility_label":label}),
+            data:json!({"actions":[{"command":command,"enabled":available,"disabled_reason":if available {None} else if download {Some("Open Content Libraries to check the theme pack")} else if command == "settings.apply" && !pending && w.settings.is_some() {Some("No unapplied changes")} else {Some("Open Settings and wait for validation")}}],"accessibility_label":label}),
         });
     }
     for (id, role, label) in [
@@ -962,12 +1050,8 @@ fn category_description(category: &str) -> &'static str {
             "Recovery checkpoints keep a local copy of unsaved model changes."
         }
         "application.defaults" => "These defaults apply when you create a model.",
-        "application.libraries" => {
-            "Manage the Git repositories that supply your CAD libraries. Library changes save immediately."
-        }
-        "application.git" => {
-            "Manage your Git accounts, keys and trusted servers. Connection changes save immediately."
-        }
+        "application.libraries" => "Library changes save immediately.",
+        "application.git" => "Connection changes save immediately.",
         _ => "",
     }
 }
@@ -979,6 +1063,14 @@ fn theme_description(w: &Workspace) -> String {
         .find(|choice| choice.id == selected)
         .map(|choice| choice.description)
         .unwrap_or_default()
+}
+
+fn edit_theme_label(w: &Workspace) -> &'static str {
+    if settings::has_changes(w) {
+        "Apply and edit layout…"
+    } else {
+        "Edit layout and style…"
+    }
 }
 
 fn theme_options(ui: &mut egui::Ui, w: &mut Workspace, pending: bool) {
@@ -1074,7 +1166,7 @@ fn theme_options(ui: &mut egui::Ui, w: &mut Workspace, pending: bool) {
                 for (command, label) in [
                     ("settings.theme-load", "Load theme…"),
                     ("settings.theme-export", "Export theme…"),
-                    ("settings.presentation", "Edit layout and style…"),
+                    ("settings.presentation", edit_theme_label(w)),
                 ] {
                     if controls::button(
                         ui,
@@ -1095,6 +1187,242 @@ fn theme_options(ui: &mut egui::Ui, w: &mut Workspace, pending: bool) {
     );
 }
 
+fn search_matches(query: &str, terms: &str) -> bool {
+    let terms = terms.to_lowercase();
+    query.split_whitespace().all(|word| terms.contains(word))
+}
+
+fn show_status(ui: &mut egui::Ui, state: &settings::State) {
+    let previous = ui.make_persistent_id("settings:shown-status");
+    let status = if let Some(error) = &state.diagnostic {
+        Some((
+            "settings:diagnostic",
+            "settings-diagnostic",
+            "invalid",
+            error.as_str(),
+        ))
+    } else if state.pending {
+        Some((
+            "settings:pending",
+            "settings-status",
+            "pending",
+            "Validating model settings…",
+        ))
+    } else {
+        state
+            .notice
+            .map(|notice| ("settings:notice", "settings-status", "ready", notice))
+    };
+    let Some((id, role, level, message)) = status else {
+        ui.data_mut(|data| data.remove::<String>(previous));
+        return;
+    };
+    let response = controls::label(ui, id, role, &[], message, level);
+    let changed = ui.data_mut(|data| {
+        if data.get_temp::<String>(previous).as_deref() == Some(message) {
+            return false;
+        }
+        data.insert_temp(previous, message.to_owned());
+        true
+    });
+    if changed && level != "ready" {
+        response.scroll_to_me(Some(egui::Align::Min));
+    }
+}
+
+fn show_preferences(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    category: &str,
+    search: &str,
+    pending: bool,
+) {
+    let all_fields = fields(w);
+    let mut shown = false;
+    for &(id, label, scope) in CATEGORIES {
+        if search.is_empty() && category != id {
+            continue;
+        }
+        let keywords = match id {
+            "application.libraries" => Some(
+                "content libraries repositories packs profiles materials hardware standard parts textures finishes themes download",
+            ),
+            "application.git" => {
+                Some("git credentials ssh keys connections accounts passwords author")
+            }
+            _ => None,
+        };
+        if let Some(keywords) = keywords
+            && !search.is_empty()
+        {
+            if search_matches(search, &format!("{scope} {label} {keywords}")) {
+                if controls::button(
+                    ui,
+                    &format!("settings:category:{id}"),
+                    "settings-category",
+                    &["search-result"],
+                    label,
+                    !pending,
+                    false,
+                )
+                .on_hover_text(category_description(id))
+                .clicked()
+                {
+                    settings::open(w, Some(id));
+                }
+                shown = true;
+            }
+            continue;
+        }
+        let selected = all_fields
+            .iter()
+            .filter(|element| {
+                if element.data["category"] != id {
+                    return false;
+                }
+                if search.is_empty() {
+                    return true;
+                }
+                let group = FIELD_GROUPS
+                    .iter()
+                    .find(|(cat, group, _)| *cat == id && element.data["group"] == *group);
+                let choices = element.data["choices"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|option| option["label"].as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                search_matches(
+                    search,
+                    &format!(
+                        "{scope} {label} {} {} {choices}",
+                        element.label,
+                        group.map(|(_, _, label)| *label).unwrap_or("")
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        if selected.is_empty() && keywords.is_none() {
+            continue;
+        }
+        shown = true;
+        let heading = if search.is_empty() {
+            label.into()
+        } else {
+            format!("{scope} · {label}")
+        };
+        controls::label(
+            ui,
+            &format!("settings:heading:{id}"),
+            "settings-heading",
+            &[],
+            &heading,
+            "ready",
+        )
+        .on_hover_text(category_description(id));
+        // Keep important scope exceptions visible. Other explanations live on the heading.
+        if matches!(
+            id,
+            "application.libraries" | "application.defaults" | "model.lighting"
+        ) {
+            controls::label(
+                ui,
+                &format!("settings:description:{id}"),
+                "settings-description",
+                &[],
+                category_description(id),
+                "ready",
+            );
+        }
+        if scope == "Model" && !model_editable(w) {
+            controls::label(
+                ui,
+                "settings:model-readonly",
+                "settings-diagnostic",
+                &[],
+                "Finish the current edit to change model settings.",
+                "readonly",
+            );
+        }
+        match id {
+            "application.libraries" => crate::content_repositories_ui::show(ui, w),
+            "application.git" => crate::git_connections_ui::show(ui, w),
+            _ => {
+                for &element in &selected {
+                    if !search.is_empty() || element.data["group"].is_null() {
+                        semantic_control(ui, w, element);
+                    }
+                }
+                if search.is_empty() {
+                    for &(cat, group, title) in FIELD_GROUPS.iter().filter(|(cat, _, _)| *cat == id)
+                    {
+                        controls::collapsing(
+                            ui,
+                            &format!("settings:group:{cat}:{group}"),
+                            "settings-field-group",
+                            title,
+                            false,
+                            |ui| {
+                                for &element in &selected {
+                                    if element.data["group"] == group {
+                                        semantic_control(ui, w, element);
+                                    }
+                                }
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        match id {
+            "model.units" => {
+                let model = &w.session.visible().settings;
+                controls::label(
+                    ui,
+                    "settings:units-example",
+                    "settings-description",
+                    &[],
+                    &format!(
+                        "Preview  {} · {}",
+                        model.format_length(25.4),
+                        model.format_angle_radians(std::f64::consts::FRAC_PI_4)
+                    ),
+                    "ready",
+                );
+            }
+            "application.interface" if search.is_empty() => {
+                if controls::button(
+                    ui,
+                    "command:settings.themes",
+                    "settings-action",
+                    &[],
+                    "Themes…",
+                    !pending,
+                    false,
+                )
+                .clicked()
+                {
+                    settings::action(w, "settings.themes");
+                }
+            }
+            "application.themes" => theme_options(ui, w, pending),
+            _ => {}
+        }
+        ui.add_space(ui.spacing().item_spacing.y);
+    }
+    if !shown {
+        controls::label(
+            ui,
+            "settings:empty-search",
+            "settings-description",
+            &[],
+            "No matching preferences.",
+            "ready",
+        );
+    }
+}
+
 fn styled_length(
     properties: &BTreeMap<String, String>,
     key: &str,
@@ -1108,6 +1436,251 @@ fn styled_length(
         .filter(|value| value.is_finite())
         .map(|value| extent * value / 100.)
         .unwrap_or_else(|| controls::number(properties, key, fallback))
+}
+
+fn category_options(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    category: &str,
+    search: &str,
+    pending: bool,
+    popup: bool,
+) {
+    for scope in ["Model", "Application"] {
+        controls::label(
+            ui,
+            &format!("settings:scope:{scope}"),
+            "settings-scope",
+            &[],
+            scope,
+            "ready",
+        );
+        for &(id, label, _) in CATEGORIES.iter().filter(|(_, _, group)| *group == scope) {
+            if controls::button(
+                ui,
+                &format!("settings:category:{id}"),
+                "settings-category",
+                &[],
+                label,
+                !pending,
+                category == id && search.is_empty(),
+            )
+            .on_hover_text(category_description(id))
+            .clicked()
+            {
+                settings::open(w, Some(id));
+                ui.ctx().request_repaint();
+                if popup {
+                    ui.close();
+                }
+            }
+        }
+        ui.add_space(ui.spacing().item_spacing.y);
+    }
+}
+
+fn dialog_contents(
+    ui: &mut egui::Ui,
+    w: &mut Workspace,
+    properties: &BTreeMap<String, String>,
+) -> Option<&'static str> {
+    let mut footer_action = None;
+    let state = w.settings.as_ref()?;
+    let pending = state.pending;
+    let can_apply = !pending && settings::has_changes(w);
+    // Measure the styled actions first so the scrollable body cannot consume
+    // their space. A fixed footer allowance fails with larger user buttons.
+    egui::Panel::bottom(ui.make_persistent_id(("settings:footer", &properties)))
+        .resizable(false)
+        .min_size(0.)
+        .frame(egui::Frame::NONE)
+        .show(ui, |ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), ui.spacing().interact_size.y),
+                egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true),
+                |ui| {
+                    if controls::button(
+                        ui,
+                        "command:settings.ok",
+                        "settings-action",
+                        &["primary"],
+                        "OK",
+                        !pending,
+                        false,
+                    )
+                    .clicked()
+                    {
+                        footer_action = Some("settings.ok");
+                    }
+                    if controls::button(
+                        ui,
+                        "command:settings.cancel",
+                        "settings-action",
+                        &[],
+                        "Cancel",
+                        true,
+                        false,
+                    )
+                    .clicked()
+                    {
+                        footer_action = Some("settings.cancel");
+                    }
+                    if controls::button(
+                        ui,
+                        "command:settings.apply",
+                        "settings-action",
+                        &[],
+                        "Apply",
+                        can_apply,
+                        false,
+                    )
+                    .on_disabled_hover_text(if pending {
+                        "Validating model settings…"
+                    } else {
+                        "No unapplied changes"
+                    })
+                    .clicked()
+                    {
+                        footer_action = Some("settings.apply");
+                    }
+                },
+            );
+        });
+
+    ui.horizontal(|ui| {
+        controls::label(
+            ui,
+            "settings:title",
+            "settings-title",
+            &[],
+            "Settings",
+            "ready",
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let close = controls::button(
+                ui,
+                "settings:close",
+                "settings-action",
+                &[],
+                "×",
+                true,
+                false,
+            );
+            close.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cancel settings")
+            });
+            if close.on_hover_text("Cancel settings").clicked() {
+                settings::cancel(w);
+            }
+        });
+    });
+    let state = w.settings.as_mut()?;
+    let search_properties =
+        controls::properties("settings:search", "settings-search", &[], "ready");
+    ui.scope(|ui| {
+        controls::apply_properties(ui, &search_properties);
+        ui.add(
+            egui::TextEdit::singleline(&mut state.search)
+                .id_salt("settings:search")
+                .hint_text("Find a preference…")
+                .char_limit(256)
+                .desired_width(f32::INFINITY),
+        );
+    });
+    let category = state.category.clone();
+    let search = state.search.trim().to_lowercase();
+    let pending = state.pending;
+    let sidebar_properties =
+        controls::properties("settings:categories", "settings-categories", &[], "ready");
+    let sidebar_width = styled_length(&sidebar_properties, "width", ui.available_width(), 175.)
+        .clamp(90., (ui.available_width() * 0.45).max(90.));
+    // Collapse category navigation before it consumes the space
+    // needed for preference fields on a narrow themed surface.
+    let compact_categories = ui.available_width() < sidebar_width + 320.;
+    if compact_categories {
+        let properties = controls::properties(
+            "settings:categories",
+            "settings-categories",
+            &["compact"],
+            "ready",
+        );
+        ui.scope(|ui| {
+            controls::apply_properties(ui, &properties);
+            let selected = CATEGORIES
+                .iter()
+                .find(|(id, _, _)| *id == category)
+                .map(|(_, label, scope)| format!("{scope} · {label}"))
+                .unwrap_or_else(|| "Choose preferences".into());
+            ui.add_enabled_ui(!pending, |ui| {
+                egui::ComboBox::from_id_salt("settings:category-picker")
+                    .width(ui.available_width())
+                    .wrap_mode(egui::TextWrapMode::Truncate)
+                    .selected_text(&selected)
+                    .show_ui(ui, |ui| {
+                        category_options(ui, w, &category, &search, pending, true);
+                    })
+                    .response
+                    .on_hover_text(selected)
+            });
+        });
+    }
+    let content_height = ui.available_height().max(0.);
+    // Bound the whole row: an unconstrained horizontal separator otherwise
+    // consumes the footer area and makes Resize grow again on every frame.
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), content_height),
+        egui::Layout::left_to_right(egui::Align::Min),
+        |ui| {
+            if !compact_categories {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(sidebar_width, content_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        controls::apply_properties(ui, &sidebar_properties);
+                        egui::ScrollArea::vertical()
+                            .id_salt("settings:category-scroll")
+                            .min_scrolled_height(0.)
+                            .max_height(content_height)
+                            .show(ui, |ui| {
+                                category_options(ui, w, &category, &search, pending, false);
+                            });
+                    },
+                );
+                ui.separator();
+            }
+            let panel_properties =
+                controls::properties("settings:content", "settings-content", &[], "ready");
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), content_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    controls::apply_properties(ui, &panel_properties);
+                    let content_width = ui.available_width();
+                    egui::ScrollArea::both()
+                        .id_salt((
+                            "settings:field-scroll",
+                            if search.is_empty() {
+                                category.as_str()
+                            } else {
+                                "search-results"
+                            },
+                        ))
+                        .min_scrolled_width(0.)
+                        .min_scrolled_height(0.)
+                        .max_height(content_height)
+                        .show(ui, |ui| {
+                            ui.set_max_width(content_width);
+                            if let Some(state) = &w.settings {
+                                show_status(ui, state);
+                            }
+                            show_preferences(ui, w, &category, &search, pending);
+                        });
+                },
+            );
+        },
+    );
+
+    footer_action
 }
 
 pub fn show(ctx: &egui::Context, w: &mut Workspace) {
@@ -1181,176 +1754,62 @@ pub fn show(ctx: &egui::Context, w: &mut Workspace) {
         egui::Modal::default_area(id)
     }
     .constrain_to(bounds.shrink(16.));
-    let response = egui::Modal::new(id).area(area).frame(egui::Frame::NONE).show(ctx, |ui| {
-        controls::with_target(target, ui, |ui| {
-            let properties = controls::properties("settings:dialog", "settings-dialog", &["settings-surface"], "open");
-            let mut frame = controls::frame_from_properties(ui, &properties);
-            if !properties.contains_key("background") { frame.fill = ui.visuals().window_fill; }
-            if !properties.contains_key("border") && !properties.contains_key("border-color") { frame.stroke = ui.visuals().window_stroke; }
-            let margin = frame.total_margin().sum();
-            frame.show(ui, |ui| {
-                controls::apply_properties(ui, &properties);
-                let available = ctx.content_rect().size();
-                let maximum = (available - egui::vec2(32.,32.) - margin).max(egui::Vec2::splat(1.));
-                let minimum = maximum.min(egui::Vec2::splat(240.));
-                let width = styled_length(&properties, "width",available.x,700.).clamp(minimum.x, maximum.x);
-                let height = styled_length(&properties, "height",available.y,460.).clamp(minimum.y, maximum.y);
-                let override_width = properties.contains_key("width");
-                let override_height = properties.contains_key("height");
-                let mut footer_action = None;
-                // Keep manual sizes within their authored theme geometry, rather than carrying
-                // a previous theme's remembered content size into the newly styled dialog.
-                egui::Resize::default().id_salt(("settings:resize",&properties)).default_size(egui::vec2(width,height))
-                    .min_size(egui::vec2(if override_width {width} else {minimum.x},if override_height {height} else {minimum.y}))
-                    .max_size(egui::vec2(if override_width {width} else {maximum.x},if override_height {height} else {maximum.y}))
-                    .resizable([!override_width,!override_height]).show(ui, |ui| {
-                    let Some(state) = &w.settings else { return; };
-                    let pending = state.pending;
-                    // Measure the styled actions first so the scrollable body cannot consume
-                    // their space. A fixed footer allowance fails with larger user buttons.
-                    egui::Panel::bottom(ui.make_persistent_id(("settings:footer",&properties)))
-                        .resizable(false).min_size(0.).frame(egui::Frame::NONE).show(ui, |ui| {
-                            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),ui.spacing().interact_size.y),egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true), |ui| {
-                                if controls::button(ui,"command:settings.ok","settings-action",&["primary"],"OK",!pending,false).clicked() {footer_action = Some("settings.ok");}
-                                if controls::button(ui,"command:settings.cancel","settings-action",&[],"Cancel",true,false).clicked() {footer_action = Some("settings.cancel");}
-                                if controls::button(ui,"command:settings.apply","settings-action",&[],"Apply",!pending,false).clicked() {footer_action = Some("settings.apply");}
-                            });
+    let response = egui::Modal::new(id)
+        .area(area)
+        .frame(egui::Frame::NONE)
+        .show(ctx, |ui| {
+            controls::with_target(target, ui, |ui| {
+                let properties = controls::properties(
+                    "settings:dialog",
+                    "settings-dialog",
+                    &["settings-surface"],
+                    "open",
+                );
+                let mut frame = controls::frame_from_properties(ui, &properties);
+                if !properties.contains_key("background") {
+                    frame.fill = ui.visuals().window_fill;
+                }
+                if !properties.contains_key("border") && !properties.contains_key("border-color") {
+                    frame.stroke = ui.visuals().window_stroke;
+                }
+                let margin = frame.total_margin().sum();
+                frame.show(ui, |ui| {
+                    controls::apply_properties(ui, &properties);
+                    let available = ctx.content_rect().size();
+                    let maximum =
+                        (available - egui::vec2(32., 32.) - margin).max(egui::Vec2::splat(1.));
+                    let minimum = maximum.min(egui::Vec2::splat(240.));
+                    let width = styled_length(&properties, "width", available.x, 700.)
+                        .clamp(minimum.x, maximum.x);
+                    let height = styled_length(&properties, "height", available.y, 460.)
+                        .clamp(minimum.y, maximum.y);
+                    let override_width = properties.contains_key("width");
+                    let override_height = properties.contains_key("height");
+                    let mut footer_action = None;
+                    // Keep manual sizes within their authored theme geometry, rather than carrying
+                    // a previous theme's remembered content size into the newly styled dialog.
+                    egui::Resize::default()
+                        .id_salt(("settings:resize", &properties))
+                        .default_size(egui::vec2(width, height))
+                        .min_size(egui::vec2(
+                            if override_width { width } else { minimum.x },
+                            if override_height { height } else { minimum.y },
+                        ))
+                        .max_size(egui::vec2(
+                            if override_width { width } else { maximum.x },
+                            if override_height { height } else { maximum.y },
+                        ))
+                        .resizable([!override_width, !override_height])
+                        .show(ui, |ui| {
+                            footer_action = dialog_contents(ui, w, &properties);
                         });
-                    if w.settings.is_none() { return; }
-                    ui.horizontal(|ui| {
-                        controls::label(ui,"settings:title","settings-title",&[],"Settings","ready");
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if controls::button(ui,"settings:close","settings-action",&[],"×",true,false).on_hover_text("Cancel settings").clicked() {settings::cancel(w);}
-                        });
-                    });
-                    let Some(state) = &mut w.settings else { return; };
-                    let search_properties = controls::properties("settings:search", "settings-search", &[], "ready");
-                    ui.scope(|ui| {
-                        controls::apply_properties(ui,&search_properties);
-                        ui.add(egui::TextEdit::singleline(&mut state.search).id_salt("settings:search").hint_text("Find a preference…").char_limit(256).desired_width(f32::INFINITY));
-                    });
-                    let category = state.category.clone();
-                    let search = state.search.to_lowercase();
-                    let pending = state.pending;
-                    let diagnostic = state.diagnostic.clone();
-                    let sidebar_properties = controls::properties("settings:categories", "settings-categories", &[], "ready");
-                    let sidebar_width = styled_length(&sidebar_properties,"width",ui.available_width(),175.).clamp(90.,(ui.available_width()*0.45).max(90.));
-                    // Collapse category navigation before it consumes the space
-                    // needed for preference fields on a narrow themed surface.
-                    let compact_categories = ui.available_width() < sidebar_width + 320.;
-                    if compact_categories {
-                        let properties = controls::properties("settings:categories", "settings-categories", &["compact"], "ready");
-                        ui.scope(|ui| {
-                            controls::apply_properties(ui, &properties);
-                            let selected = CATEGORIES.iter().find(|(id,_,_)| *id == category)
-                                .map(|(_,label,scope)| format!("{scope} · {label}"))
-                                .unwrap_or_else(|| "Choose preferences".into());
-                            ui.add_enabled_ui(!pending, |ui| egui::ComboBox::from_id_salt("settings:category-picker")
-                                .width(ui.available_width()).wrap_mode(egui::TextWrapMode::Truncate)
-                                .selected_text(&selected).show_ui(ui, |ui| {
-                                    for scope in ["Model", "Application"] {
-                                        controls::label(ui,&format!("settings:scope:{scope}"),"settings-scope",&[],scope,"ready");
-                                        for (id,label,_) in CATEGORIES.iter().filter(|(_,_,group)| *group == scope) {
-                                            if controls::button(ui,&format!("settings:category:{id}"),"settings-category",&[],label,!pending,category == *id && search.is_empty()).clicked() {
-                                                settings::open(w, Some(id));
-                                                ui.ctx().request_repaint();
-                                                ui.close();
-                                            }
-                                        }
-                                    }
-                                }).response.on_hover_text(selected));
-                        });
+                    // Handle confirmation after fields have consumed this frame's input.
+                    if let Some(command) = footer_action {
+                        settings::action(w, command);
                     }
-                    let content_height = ui.available_height().max(0.);
-                    // Bound the whole row: an unconstrained horizontal separator otherwise
-                    // consumes the footer area and makes Resize grow again on every frame.
-                    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),content_height),egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                        if !compact_categories {
-                        ui.allocate_ui_with_layout(egui::vec2(sidebar_width,content_height),egui::Layout::top_down(egui::Align::Min), |ui| {
-                            controls::apply_properties(ui,&sidebar_properties);
-                            egui::ScrollArea::vertical().id_salt("settings:category-scroll").min_scrolled_height(0.).max_height(content_height).show(ui, |ui| {
-                                for scope in ["Model", "Application"] {
-                                    controls::label(ui,&format!("settings:scope:{scope}"),"settings-scope",&[],scope,"ready");
-                                    for (id,label,group) in CATEGORIES.iter().filter(|(_,_,group)|*group == scope) {
-                                        if controls::button(ui,&format!("settings:category:{id}"),"settings-category",&[],label,!pending,category == *id && search.is_empty()).on_hover_text(format!("{group}: {label}")).clicked() {
-                                            settings::open(w, Some(id));
-                                            ui.ctx().request_repaint();
-                                        }
-                                    }
-                                    ui.add_space(8.);
-                                }
-                            });
-                        });
-                        ui.separator();
-                        }
-                        let panel_properties = controls::properties("settings:content", "settings-content", &[], "ready");
-                        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(),content_height),egui::Layout::top_down(egui::Align::Min), |ui| {
-                            controls::apply_properties(ui,&panel_properties);
-                            let content_width = ui.available_width();
-                            egui::ScrollArea::both().id_salt("settings:field-scroll").min_scrolled_width(0.).min_scrolled_height(0.).max_height(content_height).show(ui, |ui| {
-                                ui.set_max_width(content_width);
-                                let status = diagnostic.as_deref().or(pending.then_some("Validating model preferences…"));
-                                let status_id = ui.make_persistent_id("settings:shown-status");
-                                let status_changed = ui.data_mut(|data| {
-                                    let previous = data.get_temp::<String>(status_id);
-                                    if let Some(status) = status {data.insert_temp(status_id,status.to_owned());}
-                                    else {data.remove::<String>(status_id);}
-                                    previous.as_deref() != status
-                                });
-                                let status_response = if let Some(diagnostic) = diagnostic {
-                                    Some(controls::label(ui,"settings:diagnostic","settings-diagnostic",&[],&diagnostic,"invalid"))
-                                } else if pending {
-                                    Some(controls::label(ui,"settings:pending","settings-status",&[],"Validating model preferences…","pending"))
-                                } else {None};
-                                if status_changed && let Some(response) = status_response {response.scroll_to_me(Some(egui::Align::Min));}
-                                let all_fields = fields(w);
-                                let mut shown = 0;
-                                for (id,label,scope) in CATEGORIES {
-                                    if *id == "application.libraries" && (category == *id && search.is_empty() || !search.is_empty() && "content libraries repositories profiles materials hardware standard parts textures finishes themes".contains(&search)) {
-                                        controls::label(ui,"settings:heading:application.libraries","settings-heading",&[],"Application · Content libraries","ready");
-                                        controls::label(ui,"settings:description:application.libraries","settings-description",&[],category_description(id),"ready");
-                                        crate::content_repositories_ui::show(ui,w);
-                                        shown += 1;
-                                        continue;
-                                    }
-                                    if *id == "application.git" && (category == *id && search.is_empty() || !search.is_empty() && "git credentials ssh keys connections accounts".contains(&search)) {
-                                        controls::label(ui,"settings:heading:application.git","settings-heading",&[],"Application · Git connections","ready");
-                                        controls::label(ui,"settings:description:application.git","settings-description",&[],category_description(id),"ready");
-                                        crate::git_connections_ui::show(ui,w);
-                                        shown += 1;
-                                        continue;
-                                    }
-                                    let selected_fields = all_fields.iter().filter(|element|element.data.get("category").and_then(Value::as_str) == Some(*id))
-                                        .filter(|element| if search.is_empty() {*id == category} else {format!("{scope} {label} {}",element.label).to_lowercase().contains(&search)}).collect::<Vec<_>>();
-                                    if selected_fields.is_empty() {continue;}
-                                    controls::label(ui,&format!("settings:heading:{id}"),"settings-heading",&[],&format!("{scope} · {label}"),"ready");
-                                    controls::label(ui,&format!("settings:description:{id}"),"settings-description",&[],category_description(id),"ready");
-                                    if scope == &"Model" && !model_editable(w) {
-                                        controls::label(ui,"settings:model-readonly","settings-diagnostic",&[],"Apply or cancel the active modeling operation to edit model preferences.","readonly");
-                                    }
-                                    for element in selected_fields {semantic_control(ui,w,element);shown += 1;}
-                                    if *id == "model.units" {
-                                        let model = &w.session.visible().settings;
-                                        controls::label(ui,"settings:units-example","settings-description",&[],&format!("Example: {} · {}",model.format_length(25.4),model.format_angle_radians(std::f64::consts::FRAC_PI_4)),"ready");
-                                    }
-                                    if *id == "application.interface" && controls::button(ui,"command:settings.presentation","settings-action",&[],"Layout and theme…",!pending,false).clicked() {
-                                        settings::action(w,"settings.presentation");
-                                    }
-                                    if *id == "application.themes" {
-                                        theme_options(ui, w, pending);
-                                    }
-                                    ui.add_space(8.);
-                                }
-                                if shown == 0 {controls::label(ui,"settings:empty-search","settings-description",&[],"No matching preferences.","ready");}
-                            });
-                        });
-                    });
                 });
-                // Handle confirmation after fields have consumed this frame's input.
-                if let Some(command) = footer_action {settings::action(w,command);}
             });
         });
-    });
     if response.should_close() && w.settings.is_some() {
         settings::cancel(w);
     }

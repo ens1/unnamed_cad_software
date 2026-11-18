@@ -9,6 +9,7 @@ pub struct State {
     pub model_editable: bool,
     pub pending: bool,
     pub diagnostic: Option<String>,
+    pub notice: Option<&'static str>,
     checkpoint: Option<Session>,
     applied_application: settings_preferences::Preferences,
     close_after_apply: bool,
@@ -56,6 +57,7 @@ pub fn open(w: &mut Workspace, category: Option<&str>) {
         model_editable,
         pending: false,
         diagnostic: None,
+        notice: None,
         checkpoint: model_editable.then(|| w.session.clone()),
         close_after_apply: false,
         open_presentation_after_apply: false,
@@ -101,6 +103,7 @@ fn model_changed(w: &mut Workspace) {
     if let Some(state) = &mut w.settings {
         state.pending = false;
         state.diagnostic = None;
+        state.notice = None;
     }
     w.changed = std::time::Instant::now();
     w.status = "Settings changed — evaluating model preview".into();
@@ -118,6 +121,7 @@ pub fn set_application(
     state.application = preferences.clone();
     state.pending = false;
     state.diagnostic = None;
+    state.notice = None;
     preview_application(w, &preferences);
     Ok(())
 }
@@ -166,10 +170,8 @@ pub fn recover_presentation(w: &mut Workspace) {
 fn mark_theme_changed(w: &mut Workspace) {
     if let Some(state) = &mut w.settings {
         state.theme_changed = true;
-        state.diagnostic = Some(
-            "Theme preview active. Apply remembers it; Cancel restores the previous presentation."
-                .into(),
-        );
+        state.diagnostic = None;
+        state.notice = Some("Theme preview");
         // Loading a presentation never takes ownership of the personal reload preference.
         w.presentation_resources.watch = state.application.watch_presentation_files;
     }
@@ -189,10 +191,34 @@ pub fn load_theme(w: &mut Workspace, path: std::path::PathBuf) -> Result<()> {
     Ok(())
 }
 
+pub fn has_changes(w: &Workspace) -> bool {
+    w.settings.as_ref().is_some_and(|state| {
+        state.theme_changed
+            || state.application != state.applied_application
+            || (state.model_editable && w.session.draft.is_some())
+    })
+}
+
+fn close_applied(w: &mut Workspace) {
+    let edit_layout = w
+        .settings
+        .take()
+        .is_some_and(|state| state.open_presentation_after_apply);
+    if edit_layout {
+        crate::ui::action(w, "presentation");
+    }
+}
+
 pub fn apply(w: &mut Workspace, close: bool) {
     let Some(state) = w.settings.as_ref() else {
         return;
     };
+    if !has_changes(w) {
+        if close {
+            close_applied(w);
+        }
+        return;
+    }
     let preferences = state.application.clone();
     if let Err(error) = preferences
         .validate()
@@ -216,7 +242,8 @@ pub fn apply(w: &mut Workspace, close: bool) {
             let state = w.settings.as_mut().unwrap();
             state.pending = true;
             state.close_after_apply = close;
-            state.diagnostic = Some("Waiting for the current model preview to validate…".into());
+            state.diagnostic = None;
+            state.notice = None;
             return;
         }
     }
@@ -294,9 +321,12 @@ pub fn apply(w: &mut Workspace, close: bool) {
         state.checkpoint = Some(w.session.clone());
     }
     state.pending = false;
-    state.diagnostic = Some(
-        "Settings applied. Model preferences are saved with the model when you save it.".into(),
-    );
+    state.diagnostic = None;
+    state.notice = Some(if model_changed {
+        "Model settings applied. Save the model to keep them."
+    } else {
+        "Preferences saved"
+    });
     w.status = if model_changed {
         "Settings applied as one undoable model change"
     } else {
@@ -304,19 +334,17 @@ pub fn apply(w: &mut Workspace, close: bool) {
     }
     .into();
     if close {
-        let presentation = state.open_presentation_after_apply;
-        w.settings = None;
-        if presentation {
-            crate::ui::action(w, "presentation");
-        }
+        close_applied(w);
     }
 }
 
-fn fail(w: &mut Workspace, message: String) {
+pub(super) fn fail(w: &mut Workspace, message: String) {
     w.status = message.clone();
     if let Some(state) = &mut w.settings {
         state.pending = false;
         state.diagnostic = Some(message);
+        state.notice = None;
+        state.open_presentation_after_apply = false;
     }
 }
 
@@ -337,6 +365,7 @@ pub fn poll(w: &mut Workspace) {
 }
 
 pub fn cancel(w: &mut Workspace) {
+    let changed = has_changes(w);
     if let Some(state) = w.settings.take() {
         if state.theme_changed {
             crate::theme_library::restore(w, state.theme_checkpoint);
@@ -351,7 +380,9 @@ pub fn cancel(w: &mut Workspace) {
             w.rendered_key.clear();
             w.changed = std::time::Instant::now();
         }
-        w.status = "Unapplied settings discarded".into();
+        if changed {
+            w.status = "Settings changes discarded".into();
+        }
     }
 }
 
