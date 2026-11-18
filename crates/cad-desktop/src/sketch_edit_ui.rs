@@ -1,5 +1,5 @@
 //! Docked sketch editing operations over shared source intent and preview transactions.
-use crate::{Workspace, sketch, viewport};
+use crate::{Workspace, presentation_controls as controls, sketch, viewport};
 use bevy_egui::egui;
 use cad_core::sketch_transform as transform;
 use cad_core::{sketch_actions::SketchEntity, sketch_edit as edit, *};
@@ -1411,29 +1411,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
         && let Some(e) = &mut s.edit
     {
         ui.strong(e.kind.label());
-        ui.small(match e.kind {
-            Kind::DimensionGroup=>"Dimension equations share a saved datum, axis and target order. Accept requires the current valid sketch preview.",
-            Kind::Block=>"Local block source updates every instance. Move its insertion anchor or edit source controls while the preview remains pending.",
-            Kind::Text=>"Local font outlines become exact sketch contours. Height is the font em-height. The first baseline uses the draggable anchor plus the saved X/Y offsets.",
-            Kind::Equation=>"Save length-valued polynomial coefficients and dimensionless parameter limits. Exact Bézier geometry follows the source anchor and current dimensions/relations.",
-            Kind::Conic => "Drag source handles in the viewport or edit the parameters below. Accept requires the current valid preview.",
-            Kind::Spline => "Drag fit points or controls in the viewport. Degree, weights, and knots update the current preview; Cancel restores the starting curve.",
-            Kind::Convert => "Click model edges or a face boundary. Shift-click adds another source.",
-            Kind::Offset => "Select a line/arc chain, circle, exact straight/circular spline, or degree-one spline polyline. General ellipse/spline parallel curves are unsupported. Closed contours offset outward; Reverse offsets inward.",
-            Kind::Fillet => "Select two joined lines/arcs or their corner. Exact adjacent curves are trimmed to a tangent circular fillet. One fillet per source arc is supported.",
-            Kind::Chamfer => "Select two joined lines or their corner. Distances are measured along the adjacent members.",
-            Kind::Mirror => "Select members to mirror, then choose an axis. Copies keep a parametric source relation.",
-            Kind::LinearPattern => "Select members. Count includes the source; X/Y spacing is measured between successive instances.",
-            Kind::CircularPattern => "Select members and a center. Equal spacing uses the total angle; 360° avoids a duplicate final instance.",
-            Kind::Trim => "Click the portion to remove between its nearest intersections or ends. An unbounded selection removes the entire member.",
-            Kind::Extend => "Click near the end to extend. The boundary is another bounded sketch member; an explicit length is also available.",
-            Kind::Split => "Click an interior point to split. Closed curves split at the picked and opposite parameter; existing spline seams remain explicit.",
-            Kind::Repair=>"Close unambiguous gaps with explicit coincidence relations. Select members to limit the search, or leave selection empty for the whole sketch. Curves and source identities are retained.",
-            Kind::Stretch=>"Move only the chosen source controls. Unselected controls and all dimensions/relations remain active; generated controls must be edited through their source.",
-            Kind::Replace=>"Use an existing exact curve as the replacement. The target member ID and compatible control references are retained. Incompatible relations are removed only when explicitly enabled.",
-            Kind::DynamicMirror=>"Choose an axis and accept to mirror new entities as they are drawn. Existing mirrored entities keep their stable association when dynamic authoring is turned off.",
-            _ => "Select members to transform. Existing constraints stay active; Copy makes associative geometry.",
-        });
+        let section_id = format!("sketch:{}:operation:{}", s.sketch_id, e.kind.label());
         if let Some(editor) = &mut e.dimension_group
             && let Some(source) = &block_source
         {
@@ -1444,13 +1422,11 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                 &dimensions_selection,
                 &block_doc.settings,
             );
-        }
-        if let Some(block) = &mut e.block
+        } else if let Some(block) = &mut e.block
             && let (Some(source), Some(owner)) = (&block_source, &block_owner)
         {
             changed |= crate::sketch_blocks_ui::controls(ui, block, source, &block_doc, owner);
-        }
-        if e.kind == Kind::Equation {
+        } else if e.kind == Kind::Equation {
             if let (Some(equation), Some(source)) = (&mut e.equation, &block_source) {
                 changed |= crate::sketch_equation_ui::fields(ui, equation, source);
             }
@@ -1458,8 +1434,8 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
             ui.label(
                 e.text_font
                     .as_ref()
-                    .map(|font| format!("{} · face {}", font.name, font.face_index))
-                    .unwrap_or_else(|| "Choose a local outline font".into()),
+                    .map(|font| font.name.clone())
+                    .unwrap_or_else(|| "No font selected".into()),
             );
             if ui.button("Choose font…").clicked() {
                 font_import = rfd::FileDialog::new()
@@ -1468,63 +1444,86 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
             }
             changed |= ui
                 .add(
-                    egui::DragValue::new(&mut e.text_face)
-                        .range(0..=255)
-                        .prefix("Font face "),
-                )
-                .changed();
-            changed |= ui
-                .add(
                     egui::TextEdit::multiline(&mut e.text_content)
                         .desired_rows(3)
                         .hint_text("Sketch text"),
                 )
                 .changed();
-            changed |= field(ui, "Em-height", &mut e.value, "10 mm or a parameter");
-            changed |= field(ui, "Offset X", &mut e.x, "0 mm");
-            changed |= field(ui, "Offset Y", &mut e.y, "0 mm");
-            changed |= field(ui, "Rotation", &mut e.angle, "0 deg");
-            changed |= field(ui, "Character spacing", &mut e.second, "0 mm");
-            changed |= field(ui, "Line spacing / em", &mut e.scale, "1.2");
-            egui::ComboBox::from_id_salt("sketch-text-alignment")
-                .selected_text(format!("{:?}", e.text_alignment))
-                .show_ui(ui, |ui| {
-                    for alignment in [
-                        cad_core::sketch_text::Alignment::Left,
-                        cad_core::sketch_text::Alignment::Center,
-                        cad_core::sketch_text::Alignment::Right,
-                    ] {
-                        changed |= ui
-                            .selectable_value(
-                                &mut e.text_alignment,
-                                alignment,
-                                format!("{alignment:?}"),
-                            )
-                            .changed();
+            changed |= field(
+                ui,
+                "Text height",
+                &mut e.value,
+                "Font em-height, e.g. 10 mm",
+            );
+            controls::collapsing(
+                ui,
+                &format!("{section_id}:text-placement"),
+                "sketch-secondary-section",
+                "Placement and spacing",
+                false,
+                |ui| {
+                    changed |= field(ui, "Offset X", &mut e.x, "0 mm");
+                    changed |= field(ui, "Offset Y", &mut e.y, "0 mm");
+                    changed |= field(ui, "Rotation", &mut e.angle, "0 deg");
+                    changed |= field(ui, "Character spacing", &mut e.second, "0 mm");
+                    changed |= field(ui, "Line spacing / em", &mut e.scale, "1.2");
+                    egui::ComboBox::from_id_salt("sketch-text-alignment")
+                        .selected_text(format!("{:?}", e.text_alignment))
+                        .show_ui(ui, |ui| {
+                            for alignment in [
+                                cad_core::sketch_text::Alignment::Left,
+                                cad_core::sketch_text::Alignment::Center,
+                                cad_core::sketch_text::Alignment::Right,
+                            ] {
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut e.text_alignment,
+                                        alignment,
+                                        format!("{alignment:?}"),
+                                    )
+                                    .changed();
+                            }
+                        });
+                    if let Some(point) = e.spline_points.get_mut(&e.text_anchor) {
+                        ui.horizontal(|ui| {
+                            ui.label("Anchor point");
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut point[0])
+                                        .speed(0.1)
+                                        .prefix("X ")
+                                        .suffix(" mm"),
+                                )
+                                .changed();
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut point[1])
+                                        .speed(0.1)
+                                        .prefix("Y ")
+                                        .suffix(" mm"),
+                                )
+                                .changed();
+                        });
                     }
-                });
-            if let Some(point) = e.spline_points.get_mut(&e.text_anchor) {
-                ui.horizontal(|ui| {
-                    ui.label("Anchor point");
+                },
+            );
+            controls::collapsing(
+                ui,
+                &format!("{section_id}:text-font"),
+                "sketch-secondary-section",
+                "Font options",
+                false,
+                |ui| {
                     changed |= ui
                         .add(
-                            egui::DragValue::new(&mut point[0])
-                                .speed(0.1)
-                                .prefix("X ")
-                                .suffix(" mm"),
+                            egui::DragValue::new(&mut e.text_face)
+                                .range(0..=255)
+                                .prefix("Font face "),
                         )
                         .changed();
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(&mut point[1])
-                                .speed(0.1)
-                                .prefix("Y ")
-                                .suffix(" mm"),
-                        )
-                        .changed();
-                });
-            }
-            ui.small("Unshaped left-to-right glyphs; no kerning, bidi, variable fonts or text-on-path. Font bytes are pinned into the project.");
+                    ui.weak("For font collections, choose the face index to import.");
+                },
+            );
         } else if e.kind == Kind::Repair {
             changed |= field(ui, "Endpoint gap tolerance", &mut e.value, "0.01 mm");
             changed |= ui
@@ -1657,7 +1656,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                     &mut changed,
                 );
             } else {
-                ui.label("Select a conic, partial ellipse, parabola, or arc slot, then Use selected members.");
+                ui.label("Select a conic or arc slot.");
             }
         } else if e.kind == Kind::Spline {
             if let Some(definition) = &mut e.spline_definition {
@@ -1711,7 +1710,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                     }
                 });
             } else {
-                ui.label("Select a spline, then Use selected members.");
+                ui.label("Select a spline.");
             }
         } else if e.kind.curve_edit_kind().is_some() {
             let target_name = e
@@ -1726,7 +1725,11 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                     SketchCurve::Bezier { .. } => "Bézier spline",
                     SketchCurve::Nurbs { .. } => "Rational spline",
                 })
-                .unwrap_or("Click a member in the viewport");
+                .unwrap_or(match e.kind {
+                    Kind::Trim => "Pick the segment to remove.",
+                    Kind::Extend => "Pick the end to extend.",
+                    _ => "Pick the point to split on the curve.",
+                });
             ui.label(target_name);
             if e.curve_target.is_some() {
                 ui.horizontal(|ui| {
@@ -1774,7 +1777,9 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                 }
             }
         } else if e.kind == Kind::Convert {
-            ui.label(format!("{} model selections", e.sources.len()));
+            if !e.sources.is_empty() {
+                ui.label(format!("Selected sources · {}", e.sources.len()));
+            }
             changed |= ui.checkbox(&mut e.linked, "Keep source relation").changed();
         } else if e.kind.transform_command().is_some() {
             if matches!(e.kind, Kind::Mirror | Kind::DynamicMirror) {
@@ -1820,7 +1825,8 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
             }
             if matches!(e.kind, Kind::LinearPattern | Kind::CircularPattern) {
                 ui.horizontal(|ui| {
-                    ui.label("Instances (including source)");
+                    ui.label("Total instances")
+                        .on_hover_text("Includes the original member.");
                     changed |= ui
                         .add(egui::DragValue::new(&mut e.count).range(2..=256))
                         .changed();
@@ -1915,104 +1921,113 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                     .changed();
             }
             if !e.instance_controls.is_empty() {
-                ui.separator();
-                ui.strong("Individual instances");
-                egui::ComboBox::from_id_salt("sketch-pattern-instance")
-                    .selected_text(format!(
-                        "Instance {}",
-                        e.instance_focus.min(e.instance_controls.len() - 1) + 2
-                    ))
-                    .show_ui(ui, |ui| {
-                        for index in 0..e.instance_controls.len() {
-                            ui.selectable_value(
-                                &mut e.instance_focus,
-                                index,
-                                format!("Instance {}", index + 2),
-                            );
+                controls::collapsing(
+                    ui,
+                    &format!("{section_id}:instances"),
+                    "sketch-secondary-section",
+                    "Individual instances",
+                    false,
+                    |ui| {
+                        egui::ComboBox::from_id_salt("sketch-pattern-instance")
+                            .selected_text(format!(
+                                "Instance {}",
+                                e.instance_focus.min(e.instance_controls.len() - 1) + 2
+                            ))
+                            .show_ui(ui, |ui| {
+                                for index in 0..e.instance_controls.len() {
+                                    ui.selectable_value(
+                                        &mut e.instance_focus,
+                                        index,
+                                        format!("Instance {}", index + 2),
+                                    );
+                                }
+                            });
+                        e.instance_focus = e.instance_focus.min(e.instance_controls.len() - 1);
+                        let instance = &mut e.instance_controls[e.instance_focus];
+                        changed |= ui
+                            .checkbox(&mut instance.suppressed, "Suppress this instance")
+                            .changed();
+                        let mut custom = instance.placement.is_some();
+                        if ui
+                            .checkbox(&mut custom, "Additional placement for this instance")
+                            .changed()
+                        {
+                            instance.placement = custom.then(transform::Placement::default);
+                            changed = true;
                         }
-                    });
-                e.instance_focus = e.instance_focus.min(e.instance_controls.len() - 1);
-                let instance = &mut e.instance_controls[e.instance_focus];
-                changed |= ui
-                    .checkbox(&mut instance.suppressed, "Suppress this instance")
-                    .changed();
-                let mut custom = instance.placement.is_some();
-                if ui
-                    .checkbox(&mut custom, "Additional placement for this instance")
-                    .changed()
-                {
-                    instance.placement = custom.then(transform::Placement::default);
-                    changed = true;
-                }
-                if let Some(placement) = &mut instance.placement {
-                    changed |= field(ui, "Instance X", &mut placement.translation[0], "0 mm");
-                    changed |= field(ui, "Instance Y", &mut placement.translation[1], "0 mm");
-                    changed |= field(ui, "Instance angle", &mut placement.angle, "0 deg");
-                    changed |= field(ui, "Instance scale", &mut placement.scale, "1");
-                    let label = match &placement.center {
-                        transform::Center::Origin => "Origin",
-                        transform::Center::Point { .. } => "Source point",
-                        transform::Center::Coordinates { .. } => "Coordinates",
-                    };
-                    let driven = edit::driven_points(&e.before);
-                    egui::ComboBox::from_id_salt("sketch-instance-pivot")
-                        .selected_text(label)
-                        .show_ui(ui, |ui| {
-                            changed |= ui
-                                .selectable_value(
-                                    &mut placement.center,
-                                    transform::Center::Origin,
-                                    "Origin",
-                                )
-                                .changed();
-                            if ui
-                                .selectable_label(
-                                    matches!(
-                                        placement.center,
-                                        transform::Center::Coordinates { .. }
-                                    ),
-                                    "Coordinates",
-                                )
-                                .clicked()
-                                && !matches!(
-                                    placement.center,
-                                    transform::Center::Coordinates { .. }
-                                )
-                            {
-                                placement.center = transform::Center::Coordinates {
-                                    x: "0 mm".into(),
-                                    y: "0 mm".into(),
-                                };
-                                changed = true;
+                        if let Some(placement) = &mut instance.placement {
+                            changed |=
+                                field(ui, "Instance X", &mut placement.translation[0], "0 mm");
+                            changed |=
+                                field(ui, "Instance Y", &mut placement.translation[1], "0 mm");
+                            changed |= field(ui, "Instance angle", &mut placement.angle, "0 deg");
+                            changed |= field(ui, "Instance scale", &mut placement.scale, "1");
+                            let label = match &placement.center {
+                                transform::Center::Origin => "Origin",
+                                transform::Center::Point { .. } => "Source point",
+                                transform::Center::Coordinates { .. } => "Coordinates",
+                            };
+                            let driven = edit::driven_points(&e.before);
+                            egui::ComboBox::from_id_salt("sketch-instance-pivot")
+                                .selected_text(label)
+                                .show_ui(ui, |ui| {
+                                    changed |= ui
+                                        .selectable_value(
+                                            &mut placement.center,
+                                            transform::Center::Origin,
+                                            "Origin",
+                                        )
+                                        .changed();
+                                    if ui
+                                        .selectable_label(
+                                            matches!(
+                                                placement.center,
+                                                transform::Center::Coordinates { .. }
+                                            ),
+                                            "Coordinates",
+                                        )
+                                        .clicked()
+                                        && !matches!(
+                                            placement.center,
+                                            transform::Center::Coordinates { .. }
+                                        )
+                                    {
+                                        placement.center = transform::Center::Coordinates {
+                                            x: "0 mm".into(),
+                                            y: "0 mm".into(),
+                                        };
+                                        changed = true;
+                                    }
+                                    for (index, (key, point)) in e
+                                        .before
+                                        .points
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, (key, _))| !driven.contains(*key))
+                                    {
+                                        changed |= ui
+                                            .selectable_value(
+                                                &mut placement.center,
+                                                transform::Center::Point { point: key.clone() },
+                                                format!(
+                                                    "Point {} · {:.3}, {:.3} mm",
+                                                    index + 1,
+                                                    point[0],
+                                                    point[1]
+                                                ),
+                                            )
+                                            .changed();
+                                    }
+                                });
+                            if let transform::Center::Coordinates { x, y } = &mut placement.center {
+                                changed |= field(ui, "Instance pivot X", x, "0 mm");
+                                changed |= field(ui, "Instance pivot Y", y, "0 mm");
                             }
-                            for (index, (key, point)) in e
-                                .before
-                                .points
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, (key, _))| !driven.contains(*key))
-                            {
-                                changed |= ui
-                                    .selectable_value(
-                                        &mut placement.center,
-                                        transform::Center::Point { point: key.clone() },
-                                        format!(
-                                            "Point {} · {:.3}, {:.3} mm",
-                                            index + 1,
-                                            point[0],
-                                            point[1]
-                                        ),
-                                    )
-                                    .changed();
-                            }
-                        });
-                    if let transform::Center::Coordinates { x, y } = &mut placement.center {
-                        changed |= field(ui, "Instance pivot X", x, "0 mm");
-                        changed |= field(ui, "Instance pivot Y", y, "0 mm");
-                    }
-                }
+                        }
+                    },
+                );
             }
-        } else {
+        } else if matches!(e.kind, Kind::Offset | Kind::Fillet | Kind::Chamfer) {
             if e.kind == Kind::Chamfer {
                 egui::ComboBox::from_id_salt("sketch-chamfer-mode")
                     .selected_text(
@@ -2086,7 +2101,6 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
         {
             reselect = true;
         }
-        ui.small("Live preview in the model viewport · pending until Apply Sketch");
         ui.horizontal(|ui| {
             accept = ui
                 .add_enabled(

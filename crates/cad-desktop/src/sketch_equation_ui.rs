@@ -96,7 +96,8 @@ fn point_name(source: &Sketch, key: &str) -> String {
 
 pub fn fields(ui: &mut egui::Ui, editor: &mut Editor, source: &Sketch) -> bool {
     let mut changed = false;
-    ui.small("X(t) = Σ Xᵢ tⁱ    Y(t) = Σ Yᵢ tⁱ. Coefficients are lengths; t is dimensionless.");
+    ui.label("X(t) = Σ Xᵢ tⁱ     Y(t) = Σ Yᵢ tⁱ")
+        .on_hover_text("Enter a length for each polynomial coefficient.");
     let mut degree = editor.request.x.len().saturating_sub(1);
     if ui
         .add(
@@ -104,13 +105,13 @@ pub fn fields(ui: &mut egui::Ui, editor: &mut Editor, source: &Sketch) -> bool {
                 .range(1..=equation::MAX_DEGREE)
                 .prefix("Degree "),
         )
+        .on_hover_text("Lowering the degree removes higher powers.")
         .changed()
     {
         editor.request.x.resize(degree + 1, Expr("0 mm".into()));
         editor.request.y.resize(degree + 1, Expr("0 mm".into()));
         changed = true;
     }
-    ui.small("Increasing degree appends zero coefficients and retains the curve. Lowering degree removes high powers; referenced retired controls must be repaired first.");
     egui::Grid::new(("equation-coefficients", &editor.id))
         .num_columns(3)
         .striped(true)
@@ -132,56 +133,63 @@ pub fn fields(ui: &mut egui::Ui, editor: &mut Editor, source: &Sketch) -> bool {
         });
     changed |= crate::cad_ui::expression(ui, "Parameter Start", &mut editor.request.range[0]);
     changed |= crate::cad_ui::expression(ui, "Parameter End", &mut editor.request.range[1]);
-    changed |= crate::cad_ui::expression(ui, "Rotation", &mut editor.request.angle);
-    changed |= ui
-        .checkbox(&mut editor.request.construction, "Construction Geometry")
-        .changed();
-    let before = editor.request.anchor.clone();
-    let driven = cad_core::sketch_edit::driven_points(source);
-    let own = source
-        .equations
-        .get(&editor.id)
-        .map(|definition| definition.controls.as_slice())
-        .unwrap_or_default();
-    egui::ComboBox::from_id_salt(("equation-anchor", &editor.id))
-        .selected_text(point_name(source, &editor.request.anchor))
-        .show_ui(ui, |ui| {
-            for point in source.points.keys().filter(|point| !own.contains(point)) {
-                changed |= ui
-                    .selectable_value(
-                        &mut editor.request.anchor,
-                        point.clone(),
-                        point_name(source, point),
-                    )
-                    .changed();
+    crate::presentation_controls::collapsing(
+        ui,
+        &format!("sketch-equation:{}:placement", editor.id),
+        "sketch-secondary-section",
+        "Curve placement",
+        false,
+        |ui| {
+            changed |= crate::cad_ui::expression(ui, "Rotation", &mut editor.request.angle);
+            changed |= ui
+                .checkbox(&mut editor.request.construction, "Construction Geometry")
+                .changed();
+            let before = editor.request.anchor.clone();
+            let driven = cad_core::sketch_edit::driven_points(source);
+            let own = source
+                .equations
+                .get(&editor.id)
+                .map(|definition| definition.controls.as_slice())
+                .unwrap_or_default();
+            egui::ComboBox::from_id_salt(("equation-anchor", &editor.id))
+                .selected_text(point_name(source, &editor.request.anchor))
+                .show_ui(ui, |ui| {
+                    for point in source.points.keys().filter(|point| !own.contains(point)) {
+                        changed |= ui
+                            .selectable_value(
+                                &mut editor.request.anchor,
+                                point.clone(),
+                                point_name(source, point),
+                            )
+                            .changed();
+                    }
+                });
+            if editor.request.anchor != before {
+                editor.anchor_position = source.points[&editor.request.anchor];
+                editor.create_anchor = false;
             }
-        });
-    if editor.request.anchor != before {
-        editor.anchor_position = source.points[&editor.request.anchor];
-        editor.create_anchor = false;
-    }
-    ui.add_enabled_ui(!driven.contains(&editor.request.anchor), |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Anchor");
-            changed |= ui
-                .add(
-                    egui::DragValue::new(&mut editor.anchor_position[0])
-                        .speed(0.1)
-                        .prefix("X ")
-                        .suffix(" mm"),
-                )
-                .changed();
-            changed |= ui
-                .add(
-                    egui::DragValue::new(&mut editor.anchor_position[1])
-                        .speed(0.1)
-                        .prefix("Y ")
-                        .suffix(" mm"),
-                )
-                .changed();
-        });
-    });
-    ui.small("Drag the source anchor on the sketch to translate the equation curve. Relations constrain that anchor; the derived controls follow the saved polynomial and are not independently movable.");
-    ui.small("Algebraic polynomial curves only. Trigonometric, piecewise, implicit and other nonpolynomial equations are unsupported.");
+            ui.add_enabled_ui(!driven.contains(&editor.request.anchor), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Anchor");
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut editor.anchor_position[0])
+                                .speed(0.1)
+                                .prefix("X ")
+                                .suffix(" mm"),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut editor.anchor_position[1])
+                                .speed(0.1)
+                                .prefix("Y ")
+                                .suffix(" mm"),
+                        )
+                        .changed();
+                });
+            });
+        },
+    );
     changed
 }

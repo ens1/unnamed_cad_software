@@ -141,7 +141,7 @@ pub fn controls(
 ) -> bool {
     let inactive = cad_core::sketch_transform::inactive_entities(source);
     let mut changed = false;
-    egui::ComboBox::from_id_salt("dimension-group-kind")
+    egui::ComboBox::from_label("Dimension type")
         .selected_text(editor.group.kind.label())
         .show_ui(ui, |ui| {
             for kind in [
@@ -154,7 +154,7 @@ pub fn controls(
                     .changed();
             }
         });
-    egui::ComboBox::from_id_salt("dimension-group-datum")
+    egui::ComboBox::from_label("Datum")
         .selected_text(point_name(source, &editor.group.datum))
         .show_ui(ui, |ui| {
             changed |= ui
@@ -186,25 +186,31 @@ pub fn controls(
             .selectable_value(&mut editor.group.axis, dimensions::Axis::Y, "Vertical Y")
             .changed();
     });
-    ui.horizontal(|ui| {
-        changed |= ui
-            .add(
-                egui::DragValue::new(&mut editor.group.offset)
-                    .speed(0.25)
-                    .prefix("Offset ")
-                    .suffix(" mm"),
-            )
-            .changed();
-        changed |= ui
-            .add(
-                egui::DragValue::new(&mut editor.group.spacing)
-                    .speed(0.25)
-                    .prefix("Spacing ")
-                    .suffix(" mm"),
-            )
-            .changed();
-    });
-    ui.small("Signed values follow the chosen direction. Baseline and ordinate share the datum; chain follows the saved entry order. Direction/datum/order edits keep your authored values and update their equations.");
+    crate::presentation_controls::collapsing(
+        ui,
+        &format!("sketch-dimensions:{}:layout", editor.id),
+        "sketch-secondary-section",
+        "Dimension layout",
+        false,
+        |ui| {
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut editor.group.offset)
+                        .speed(0.25)
+                        .prefix("Offset ")
+                        .suffix(" mm"),
+                )
+                .changed();
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut editor.group.spacing)
+                        .speed(0.25)
+                        .prefix("Spacing ")
+                        .suffix(" mm"),
+                )
+                .changed();
+        },
+    );
     ui.horizontal(|ui| {
         if ui.button("Make all driving").clicked() {
             for value in &mut editor.values {
@@ -271,8 +277,8 @@ pub fn controls(
                             measured
                                 .map(|value| format!("({})", settings.format_length(value)))
                                 .unwrap_or_else(|error| error.to_string()),
-                        );
-                        ui.small(format!("Saved driving expression: {}", value.value.0));
+                        )
+                        .on_hover_text(format!("Saved driving expression: {}", value.value.0));
                     } else {
                         changed |= ui.text_edit_singleline(&mut value.value.0).changed();
                     }

@@ -1852,15 +1852,34 @@ fn add_relations(w: &mut Workspace, kind: &str) -> Result<()> {
 fn error_key(element: &SemanticElement) -> String {
     format!("{INVALID}{}:{}", element.id, element.data["editor"])
 }
+#[derive(Serialize, Deserialize)]
+struct RejectedInput {
+    field: String,
+    label: String,
+    unit: Option<String>,
+    choices: Vec<Value>,
+    message: String,
+}
 pub fn field_is_invalid(w: &Workspace, element: &SemanticElement) -> bool {
     element.data["setter"] == "sketch3d" && w.fields.contains_key(&error_key(element))
 }
 pub fn field_error(w: &mut Workspace, element: &SemanticElement, error: Option<String>) {
-    if element.data["setter"] != "sketch3d" {
+    if element.data["setter"] != "sketch3d" || !matching_scope(w, element) {
         return;
     }
-    if let Some(error) = error {
-        w.fields.insert(error_key(element), error);
+    if let Some(message) = error {
+        let Some(key) = element.data["field"].as_str() else {
+            return;
+        };
+        let rejected = RejectedInput {
+            field: key.to_owned(),
+            label: element.label.clone(),
+            unit: element.data["unit"].as_str().map(str::to_owned),
+            choices: element.value_descriptor().choices,
+            message,
+        };
+        w.fields
+            .insert(error_key(element), json!(rejected).to_string());
         w.confirm_requested = false;
     } else {
         w.fields.remove(&error_key(element));
@@ -2936,6 +2955,18 @@ pub fn action(w: &mut Workspace, command: &str, payload: Option<&Value>) -> bool
                 }
                 publish(w, definition)
             }
+            _ if kind.starts_with("discard-input/") => {
+                let field = kind.trim_start_matches("discard-input/");
+                let id = format!("sketch3d:{}/field/{field}", state.feature);
+                let key = format!("{INVALID}{id}:{}", json!(state.token));
+                if w.fields.remove(&key).is_some() {
+                    let token = &state.token;
+                    w.fields.remove(&format!("presentation-field:{id}:{token}"));
+                    w.fields
+                        .remove(&format!("presentation-field-error:{id}:{token}"));
+                }
+                Ok(())
+            }
             "close-menu" => {
                 if let Some(state) = &mut w.sketch3d {
                     state.popup = None;
@@ -3034,8 +3065,16 @@ fn element(
         data,
     }
 }
-fn group(w: &Workspace, key: &str, label: &str) -> SemanticElement {
+fn group(
+    w: &Workspace,
+    key: &str,
+    label: &str,
+    default_expanded: bool,
+    summary: Option<&str>,
+) -> SemanticElement {
     let mut element = element(w, &format!("group/{key}"), "sketch3d-group", label, None);
+    element.data["default_expanded"] = json!(default_expanded);
+    element.data["summary"] = json!(summary);
     element.data["classes"] = json!([
         "spatial-sketch",
         "modeling-field",
@@ -3065,6 +3104,15 @@ fn field(
     );
     element.data["setter"] = json!("sketch3d");
     element.data["field"] = json!(key);
+    if key.contains("/weight/")
+        || (w
+            .sketch3d
+            .as_ref()
+            .is_some_and(|state| state.selection.len() > 1)
+            && (key.starts_with("member/") || key.starts_with("point/")))
+    {
+        element.data["section"] = json!("selection-properties");
+    }
     element.data["choices"] = json!(choices);
     element.data["editable"] =
         json!(!captured(w) && !w.fields.contains_key("feature-source-invalid"));
@@ -3099,6 +3147,13 @@ fn action_element(w: &Workspace, key: &str, label: &str, enabled: bool) -> Seman
 fn note(w: &Workspace, key: &str, label: &str, state: &str) -> SemanticElement {
     let mut element = element(w, &format!("note/{key}"), "sketch3d-note", label, None);
     element.state = state.into();
+    element.data["attention"] = json!(state == "error" || key == "next-pick");
+    element.data["purpose"] = json!(match key {
+        "next-pick" => "prompt",
+        "status" | "origin" => "summary",
+        "plane-help" | "snap-inference" | "frame-help" | "selection-hint" => "instructions",
+        _ => "label",
+    });
     element
 }
 fn coordinate_constraint<'a>(
@@ -3290,7 +3345,16 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let Some(state) = w.sketch3d.as_ref() else {
         return vec![];
     };
-    let mut out = vec![group(w, "tools", "Drawing tool")];
+    let choosing_tool =
+        state.dimension.is_none() && (state.tool != Tool::Select || state.selection.is_empty());
+    let editing_selection = state.dimension.is_none() && state.tool == Tool::Select;
+    let mut out = vec![group(
+        w,
+        "tools",
+        "Drawing tool",
+        choosing_tool,
+        Some(state.tool.label()),
+    )];
     if let Some(prompt) = drawing_prompt(state) {
         out.push(note(w, "next-pick", &prompt, "ready"));
     }
@@ -3398,13 +3462,21 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         _ => ("Finish member", false),
     };
     out.push(action_element(w, "finish-member", finish_label, can_finish));
-    out.push(action_element(
+    if state.selection.is_empty() {
+        out.push(action_element(
+            w,
+            "smart-dimension",
+            "Smart Dimension",
+            true,
+        ));
+    }
+    out.push(group(
         w,
-        "smart-dimension",
-        "Smart Dimension",
-        true,
+        "plane",
+        "Workplane and snapping",
+        false,
+        Some(state.plane.label()),
     ));
-    out.push(group(w, "plane", "Drawing plane and precision"));
     out.push(field(
         w,
         "plane",
@@ -3462,7 +3534,12 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         vec![],
         None,
     ));
-    out.push(note(w,"plane-help","Part XYZ coordinates · Tab cycles planes through the last point · Alt bypasses grid, joins and inferred axes","ready"));
+    out.push(note(
+        w,
+        "plane-help",
+        "Tab cycles workplanes through the last point.",
+        "ready",
+    ));
     out.push(field(
         w,
         "pick-filter",
@@ -3482,7 +3559,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let mut inference = note(
         w,
         "snap-inference",
-        "Origin snaps save a fixed part-origin point; entity snaps share a native point. Alt keeps placement independent.",
+        "Hold Alt to place a point without snapping.",
         "ready",
     );
     inference.data["snap_target"] = json!(state.snap_target);
@@ -3501,8 +3578,13 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         ],
         None,
     ));
-    out.push(note(w,"frame-help","The reference frame controls downstream orientation. Drawing-plane and Tab changes leave it unchanged.","ready"));
-    out.push(group(w, "xyz", "Place point by XYZ"));
+    out.push(note(
+        w,
+        "frame-help",
+        "Features that use this sketch follow its reference frame.",
+        "ready",
+    ));
+    out.push(group(w, "xyz", "Enter point coordinates", false, None));
     for index in 0..3 {
         out.push(field(
             w,
@@ -3523,14 +3605,17 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         out.push(group(
             w,
             "selection",
-            &format!("Selected geometry · {}", state.selection.len()),
+            "Selected geometry",
+            editing_selection,
+            Some(&state.selection.len().to_string()),
         ));
         out.push(action_element(
             w,
-            "fit-selection",
-            "Fit sketch selection",
+            "smart-dimension",
+            "Smart Dimension",
             true,
         ));
+        out.push(action_element(w, "fit-selection", "Fit selection", true));
         out.push(note(
             w,
             "selection-hint",
@@ -3694,7 +3779,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         out.push(menu);
     }
     if let Some(dimension) = &state.dimension {
-        out.push(group(w, "dimension", "Smart Dimension"));
+        out.push(group(w, "dimension", "Smart Dimension", true, None));
         let choices = dimension_choices(w);
         out.push(field(
             w,
@@ -3722,20 +3807,21 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 Some(unit),
             ));
         }
-        out.push(action_element(
-            w,
-            "finish-dimension",
-            "Done Dimension",
-            true,
-        ));
+        out.push(action_element(w, "finish-dimension", "Done", true));
         out.push(action_element(
             w,
             "cancel-dimension",
-            "Cancel Dimension",
+            "Cancel dimension",
             true,
         ));
     }
-    out.push(group(w, "constraints", "Dimensions and relations"));
+    out.push(group(
+        w,
+        "constraints",
+        "Dimensions and relations",
+        false,
+        Some(&definition.constraints.len().to_string()),
+    ));
     for (index, constraint) in definition.constraints.iter().enumerate() {
         out.push(note(
             w,
@@ -3828,9 +3914,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 evaluation.report.degrees_of_freedom, evaluation.report.residual
             )
         })
-        .unwrap_or_else(|| {
-            "Evaluating spatial sketch; current source handles remain editable".into()
-        });
+        .unwrap_or_else(|| "Updating sketch…".into());
     out.push(note(
         w,
         "status",
@@ -3843,7 +3927,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             "pending"
         },
     ));
-    out.push(group(w, "entities", "Sketch details"));
+    out.push(group(w, "entities", "Sketch details", false, None));
     out.push(field(
         w,
         "name",
@@ -3965,6 +4049,59 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         "Close selection menu",
         true,
     ));
+    // Keep an unaccepted input reachable when the user changes tool or selection.
+    // Reconstruct controls against the current source; deleted targets can only be discarded.
+    for input in w
+        .fields
+        .range(INVALID.to_owned()..)
+        .take_while(|(key, _)| key.starts_with(INVALID))
+        .filter_map(|(_, value)| serde_json::from_str::<RejectedInput>(value).ok())
+    {
+        let mut descriptor = element(
+            w,
+            &format!("field/{}", input.field),
+            "sketch3d-field",
+            &input.label,
+            None,
+        );
+        descriptor.data["field"] = json!(input.field);
+        let discard = action_element(
+            w,
+            &format!("discard-input/{}", input.field),
+            &format!("Discard {} edit", input.label),
+            !captured(w),
+        );
+        if let Some(index) = out.iter().position(|item| item.id == descriptor.id) {
+            out.insert(index + 1, discard);
+        } else {
+            if !out
+                .iter()
+                .any(|item| item.id.ends_with("/group/unfinished"))
+            {
+                out.push(group(w, "unfinished", "Check input", true, None));
+            }
+            if let Some(value) = current_value(w, &descriptor) {
+                let mut recovered = field(
+                    w,
+                    &input.field,
+                    &input.label,
+                    value,
+                    input.choices,
+                    input.unit.as_deref(),
+                );
+                recovered.data["section"] = Value::Null;
+                out.push(recovered);
+            } else {
+                out.push(note(
+                    w,
+                    &format!("rejected/{}", input.field),
+                    &format!("{} · {}", input.label, input.message),
+                    "error",
+                ));
+            }
+            out.push(discard);
+        }
+    }
     let overrides = configured_fields(w);
     let circle_owners = spatial::circle_size_owners(&definition).unwrap_or_default();
     for element in &mut out {
@@ -4047,9 +4184,13 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
                 }
             }
         }
-        if let Some(error) = w.fields.get(&error_key(element)) {
+        if let Some(input) = w
+            .fields
+            .get(&error_key(element))
+            .and_then(|raw| serde_json::from_str::<RejectedInput>(raw).ok())
+        {
             element.state = "error".into();
-            element.data["diagnostics"] = json!([error]);
+            element.data["diagnostics"] = json!([input.message]);
         }
         if let Some(reason) = element.data["readonly_reason"].as_str() {
             element.data["accessibility_label"] = json!(format!("{} · {reason}", element.label));
@@ -5171,14 +5312,14 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
     let selected = !state.selection.is_empty();
     let numeric_radius = state.numeric_radius;
     for element in semantics(w) {
-        if element.id.ends_with("/note/status") && element.state == "error" {
+        if element.data["attention"] == true {
             render_control(ui, w, &element);
             continue;
         }
         // Themes can bind each element directly. The dock shows controls for the
         // current task and keeps the full set of selection relations in a menu.
-        if element.id.ends_with("/field/radius") && !numeric_radius
-            || element.id.ends_with("/field/construction") && !drawing
+        if element.id.ends_with("/field/radius") && !numeric_radius && element.state != "error"
+            || element.id.ends_with("/field/construction") && !drawing && element.state != "error"
             || element.id.ends_with("/action/finish-member") && element.state == "disabled"
             || element.id.ends_with("/action/smart-dimension") && (!selected || dimensioning)
         {
@@ -5197,16 +5338,21 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
         }
     }
     groups.sort_by_key(|(group, _)| {
-        if group.id.ends_with("/dimension") {
+        if group.id.ends_with("/unfinished") {
             0
-        } else if group.id.ends_with("/selection") && !drawing {
+        } else if group.id.ends_with("/dimension") {
             1
-        } else {
+        } else if group.id.ends_with("/selection") && !drawing {
             2
+        } else {
+            3
         }
     });
     for (group, children) in groups {
-        if group.id.ends_with("/xyz") && !drawing || children.is_empty() {
+        let invalid = children
+            .iter()
+            .find(|child| child.role == "sketch3d-field" && child.state == "error");
+        if group.id.ends_with("/xyz") && !drawing && invalid.is_none() || children.is_empty() {
             continue;
         }
         let classes = group
@@ -5217,19 +5363,40 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
             .flatten()
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
-        let open = group.id.ends_with("/tools")
-            || group.id.ends_with("/selection")
-            || group.id.ends_with("/dimension");
+        let open = group.data["default_expanded"].as_bool().unwrap_or(false);
+        let label = if invalid.is_some() && !group.id.ends_with("/unfinished") {
+            Some(format!("{} · Check input", group.label))
+        } else {
+            group.data["summary"]
+                .as_str()
+                .map(|summary| format!("{} · {summary}", group.label))
+        };
+        let reveal = crate::operation_editor_ui::reveal_invalid_field(
+            ui,
+            &group.id,
+            invalid.map(|field| field.id.as_str()),
+        );
+        // Follow a change in task, then let the user fold or reopen the section.
+        let focus = ui.ctx().data_mut(|memory| {
+            let key = ui.id().with((&group.id, "task-focus"));
+            let previous = memory.get_temp::<bool>(key);
+            memory.insert_temp(key, open);
+            previous.filter(|&was_open| was_open != open).map(|_| open)
+        });
         controls::inspector_section(
             ui,
             controls::InspectorSection {
                 id: &group.id,
                 role: &group.role,
                 classes: &classes,
-                label: &group.label,
-                state: "draft",
+                label: label.as_deref().unwrap_or(&group.label),
+                state: if invalid.is_some() {
+                    "draft error"
+                } else {
+                    &group.state
+                },
                 collapse: Some(open),
-                open: None,
+                open: reveal.or(if invalid.is_some() { None } else { focus }),
             },
             |ui| {
                 let (relations, children): (Vec<_>, Vec<_>) =
@@ -5250,6 +5417,9 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                         },
                     );
                 }
+                let (properties, children): (Vec<_>, Vec<_>) = children
+                    .into_iter()
+                    .partition(|element| element.data["section"] == "selection-properties");
                 let mut children = children.into_iter().peekable();
                 while let Some(element) = children.next() {
                     if element.role.ends_with("-action") {
@@ -5270,6 +5440,40 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) -> bool {
                     } else {
                         render_control(ui, w, &element);
                     }
+                }
+                if !properties.is_empty() {
+                    let id = format!("{}/properties", group.id);
+                    let invalid = properties.iter().find(|element| element.state == "error");
+                    let reveal = crate::operation_editor_ui::reveal_invalid_field(
+                        ui,
+                        &id,
+                        invalid.map(|field| field.id.as_str()),
+                    );
+                    controls::inspector_section(
+                        ui,
+                        controls::InspectorSection {
+                            id: &id,
+                            role: "sketch3d-group",
+                            classes: &["secondary"],
+                            label: if invalid.is_some() {
+                                "Geometry properties · Check input"
+                            } else {
+                                "Geometry properties"
+                            },
+                            state: if invalid.is_some() {
+                                "draft error"
+                            } else {
+                                "ready"
+                            },
+                            collapse: Some(false),
+                            open: reveal,
+                        },
+                        |ui| {
+                            for element in properties {
+                                render_control(ui, w, &element);
+                            }
+                        },
+                    );
                 }
             },
         );

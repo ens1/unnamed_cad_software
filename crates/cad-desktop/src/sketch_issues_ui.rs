@@ -418,40 +418,45 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
     let Some(inspection) = inspect(w).filter(|inspection| !inspection.issues.is_empty()) else {
         return;
     };
-    controls::label(
+    let count = inspection.issues.len();
+    let label = if count == 1 {
+        format!("Contour check · {}", inspection.issues[0].label)
+    } else {
+        format!("Contour checks · {count}")
+    };
+    controls::inspector_section(
         ui,
-        &format!("{}/summary", prefix(&inspection.scope)),
-        "sketch-inspection-summary",
-        &["sketch-inspection"],
-        "Contour inspection",
-        "attention",
-    );
-    for finding in &inspection.issues {
-        let semantic = element(w, &inspection, finding);
-        if controls::button(
-            ui,
-            &semantic.id,
-            &semantic.role,
-            &["sketch-inspection", "contour-issue"],
-            &format!("Inspect {}", finding.label),
-            enabled(w),
-            semantic.state == "selected",
-        )
-        .on_hover_text(format!(
-            "{}\n{}{}",
-            finding.help,
-            finding.names.join(", "),
-            if enabled(w) {
-                ""
-            } else {
-                "\nFinish the current drawing, dimension or editing gesture before inspection."
+        controls::InspectorSection {
+            id: &format!("{}/summary", prefix(&inspection.scope)),
+            role: "sketch-inspection-summary",
+            classes: &["sketch-inspection"],
+            label: &label,
+            state: "attention",
+            collapse: Some(false),
+            open: None,
+        },
+        |ui| {
+            for finding in &inspection.issues {
+                let semantic = element(w, &inspection, finding);
+                let response = controls::button(
+                    ui,
+                    &semantic.id,
+                    &semantic.role,
+                    &["sketch-inspection", "contour-issue"],
+                    &format!("Inspect {}", finding.label),
+                    enabled(w),
+                    semantic.state == "selected",
+                )
+                .on_hover_text(format!("{}\n{}", finding.help, finding.names.join(", ")))
+                .on_disabled_hover_text(
+                    "Finish the current sketch gesture to inspect this contour.",
+                );
+                if response.clicked() {
+                    action(w, ACTION, &semantic.data);
+                }
             }
-        ))
-        .clicked()
-        {
-            action(w, ACTION, &semantic.data);
-        }
-    }
+        },
+    );
 }
 /// Select only disposable view state. No source, pending dimension checkpoint,
 /// draft evaluation, undo entry or worker request is changed by inspection.

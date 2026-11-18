@@ -1816,56 +1816,64 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
         && !dimension_mode
         && !matches!(s.tool, Tool::Select | Tool::Point | Tool::Centerline)
     {
-        let mut finish_curve = false;
+        if s.tool == Tool::Polygon {
+            ui.add(
+                egui::DragValue::new(&mut s.polygon_sides)
+                    .range(3..=32)
+                    .prefix("Sides "),
+            );
+        }
+        if matches!(s.tool, Tool::CenterArc | Tool::ArcSlot) {
+            ui.checkbox(&mut s.clockwise, "Clockwise arc");
+        }
+        if s.tool == Tool::Conic {
+            crate::presentation_controls::expression(
+                ui,
+                &format!("{}::conic-rho", s.sketch_id),
+                "Rho (0–1)",
+                &mut s.conic_rho,
+            );
+        }
+        let finish_curve = s.tool.is_spline()
+            && s.chain.len() >= 2
+            && crate::presentation_controls::button(
+                ui,
+                &format!("{section_id}::finish-spline"),
+                "sketch-edit-action",
+                &["compact"],
+                "Finish Spline",
+                true,
+                false,
+            )
+            .clicked();
         crate::presentation_controls::inspector_section(
             ui,
             crate::presentation_controls::InspectorSection {
                 id: &format!("sketch:{}:drawing", s.sketch_id),
                 role: "sketch-inspector-group",
                 classes: &["drawing-options"],
-                label: "Drawing options",
+                label: if s.construction {
+                    "Drawing options · construction"
+                } else {
+                    "Drawing options"
+                },
                 state: "draft",
-                collapse: Some(true),
+                collapse: Some(false),
                 open: None,
             },
             |ui| {
                 ui.checkbox(&mut s.construction, "Construction geometry")
                     .on_hover_text("Use new curves as references for other geometry.");
-                if s.tool == Tool::Polygon {
-                    ui.add(
-                        egui::DragValue::new(&mut s.polygon_sides)
-                            .range(3..=32)
-                            .prefix("Sides "),
-                    );
-                }
-                if matches!(s.tool, Tool::CenterArc | Tool::ArcSlot) {
-                    ui.checkbox(&mut s.clockwise, "Clockwise arc");
-                }
-                if s.tool == Tool::Conic {
-                    crate::presentation_controls::expression(
-                        ui,
-                        &format!("{}::conic-rho", s.sketch_id),
-                        "Rho (0–1; 0.5 is parabolic)",
-                        &mut s.conic_rho,
-                    );
-                }
                 if matches!(s.tool, Tool::InterpolatingSpline | Tool::Nurbs) {
                     ui.add(
                         egui::DragValue::new(&mut s.spline_degree)
                             .range(1..=cad_core::sketch_spline::MAX_DEGREE)
                             .prefix("Degree "),
-                    );
-                    ui.small("Degree is limited to one less than the number of placed points.");
+                    )
+                    .on_hover_text("The degree must be less than the number of points.");
                     if s.tool == Tool::InterpolatingSpline {
                         crate::sketch_edit_ui::parameterization(ui, &mut s.spline_parameterization);
                     }
-                }
-                if s.tool.is_spline()
-                    && ui
-                        .add_enabled(s.chain.len() >= 2, egui::Button::new("Finish Spline"))
-                        .clicked()
-                {
-                    finish_curve = true;
                 }
             },
         );

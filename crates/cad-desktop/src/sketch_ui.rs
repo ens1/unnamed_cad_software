@@ -736,7 +736,7 @@ fn open_dimension(w: &mut Workspace, driven: bool, extend_pick: bool, preferred:
             }
             w.manager_tree = false;
             w.status = if driven {
-                "Choose Done Dimension to keep this measurement."
+                "Choose Done to keep this measurement."
             } else {
                 "Enter the dimension value. Press Enter to keep it."
             }
@@ -860,7 +860,38 @@ pub fn next_pick(w: &Workspace) -> Option<&'static str> {
     if s.choosing_plane {
         return Some("Choose an origin plane or click a flat face on the model.");
     }
-    if s.edit.is_some() || s.dimension.is_some() || s.drag.is_some() {
+    if let Some(edit) = &s.edit {
+        use crate::sketch_edit_ui::Kind;
+        if edit.operation.is_some() || edit.previewed {
+            return None;
+        }
+        return match edit.kind {
+            Kind::Convert if edit.sources.is_empty() => {
+                Some("Pick a model edge or a face boundary.")
+            }
+            Kind::Fillet | Kind::Chamfer if s.selection.is_empty() => {
+                Some("Pick a corner or two adjoining members.")
+            }
+            Kind::Fillet | Kind::Chamfer
+                if matches!(s.selection.as_slice(), [SketchEntity::Member { .. }]) =>
+            {
+                Some("Pick the adjoining member.")
+            }
+            Kind::Offset if s.selection.is_empty() => Some("Pick a contour or chain to offset."),
+            Kind::Mirror
+            | Kind::MoveCopy
+            | Kind::Rotate
+            | Kind::Scale
+            | Kind::LinearPattern
+            | Kind::CircularPattern
+                if s.selection.is_empty() =>
+            {
+                Some("Select the sketch members to use.")
+            }
+            _ => None,
+        };
+    }
+    if s.dimension.is_some() || s.drag.is_some() {
         return None;
     }
     if w.fields.contains_key("smart-dimension-mode") {
@@ -1148,7 +1179,7 @@ pub fn dimension_semantics(w: &Workspace) -> Vec<presentation::SemanticElement> 
         relationships: std::iter::once(s.sketch_id.clone())
             .chain(s.selection.iter().map(|entity| entity.key().to_string()))
             .collect(),
-        data: serde_json::json!({"definition":s.definition,"sketch":s.sketch_id,"selection":s.selection,"pending_model_edge":s.dimension_model.as_ref().map(|selected|serde_json::json!({"body":selected.body,"reference":selected.reference,"path":selected.path})),"constraint":constraint,"mode":w.fields.get("smart-dimension-mode"),"unit":constraint.map(|c|a::dimension_unit(&c.kind)),"perpendicular_distance":constraint.is_some_and(|c|c.kind=="point_line_distance"),"current_error":s.error,"shared_draft":true,"requires_current_validation":true,"accepts_second_reference":s.dimension.as_ref().is_some_and(|editor|editor.extend_pick),"placement_behavior":"anchor_until_editor_closes","completion_label":"Done Dimension","completion_scope":"dimension","commit_command":"sketch.finish","actions":[{"command":"sketch.finish-dimension","label":"Done Dimension","enabled":constraint.is_some() && s.error.is_none(),"disabled_reason":"Enter a valid dimension before finishing"},{"command":"sketch.cancel-dimension","label":"Cancel Dimension","enabled":true}]}),
+        data: serde_json::json!({"definition":s.definition,"sketch":s.sketch_id,"selection":s.selection,"pending_model_edge":s.dimension_model.as_ref().map(|selected|serde_json::json!({"body":selected.body,"reference":selected.reference,"path":selected.path})),"constraint":constraint,"mode":w.fields.get("smart-dimension-mode"),"unit":constraint.map(|c|a::dimension_unit(&c.kind)),"perpendicular_distance":constraint.is_some_and(|c|c.kind=="point_line_distance"),"current_error":s.error,"shared_draft":true,"requires_current_validation":true,"accepts_second_reference":s.dimension.as_ref().is_some_and(|editor|editor.extend_pick),"placement_behavior":"anchor_until_editor_closes","completion_label":"Done","completion_scope":"dimension","commit_command":"sketch.finish","actions":[{"command":"sketch.finish-dimension","label":"Done","enabled":constraint.is_some() && s.error.is_none(),"disabled_reason":"Enter a valid dimension before finishing"},{"command":"sketch.cancel-dimension","label":"Cancel dimension","enabled":true}]}),
     });
     if let Some(constraint) = constraint {
         elements.push(dimension_value_element(w, s, constraint));
@@ -2077,7 +2108,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                         &format!("{}.done", c.id),
                         "sketch-dimension-action",
                         &["compact"],
-                        "Done Dimension",
+                        "Done",
                         s.error.is_none(),
                         false,
                     )
@@ -2090,7 +2121,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                         &format!("{}.cancel", c.id),
                         "sketch-dimension-action",
                         &["compact"],
-                        "Cancel Dimension",
+                        "Cancel dimension",
                         true,
                         false,
                     )
@@ -2100,7 +2131,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     }
                 });
                 if editor.extend_pick {
-                    ui.small("Pick a second reference to measure distance or angle.");
+                    ui.small("Pick a second reference for distance or angle.");
                 }
                 controls::collapsing(
                     ui,
@@ -2109,7 +2140,7 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                     "Dimension options",
                     false,
                     |ui| {
-                        let mode = ui.checkbox(&mut c.driven, "Reference measurement")
+                        let mode = ui.checkbox(&mut c.driven, "Reference dimension")
                         .on_hover_text("Reference measures geometry. Driving uses the saved dimension expression.");
                         changed |= mode.changed();
                         if mode.changed() {
@@ -2122,7 +2153,6 @@ pub fn controls(ui: &mut egui::Ui, w: &mut Workspace) {
                             promote =
                                 Some((c.id.clone(), c.value.clone(), a::dimension_unit(&c.kind)));
                         }
-                        ui.small("Finish Sketch applies your dimensions to the part.");
                         if c.kind == "point_line_distance" {
                             ui.small("Perpendicular distance to the oriented line. The saved side stays fixed through zero.");
                         }
