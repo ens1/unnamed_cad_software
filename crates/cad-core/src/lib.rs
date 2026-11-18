@@ -93,6 +93,11 @@ pub enum CadError {
     /// An exact source object that failed evaluation, for repair and change review.
     #[error("{message}")]
     EvaluationTarget { target: Id, message: String },
+    #[error("{message}")]
+    MateReference {
+        problem: Box<assembly_geometry::FailedReference>,
+        message: String,
+    },
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

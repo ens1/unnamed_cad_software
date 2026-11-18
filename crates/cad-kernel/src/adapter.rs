@@ -161,6 +161,7 @@ pub trait KernelAdapter {
     }
     fn mesh(&self, shape: &Shape, producer: &NodeRef, tolerance: f64) -> Result<MeshData>;
     fn measure_finished_faces(&self, _shape: &Shape, _faces: &mut [FaceRange]) {}
+    fn mark_mate_axes(&self, _shape: &Shape, _faces: &mut [FaceRange]) {}
     fn assembly_weld(
         &self,
         _doc: &Document,
@@ -2457,6 +2458,19 @@ impl KernelAdapter for MonstertruckAdapter {
         }
         Ok(result)
     }
+    fn mark_mate_axes(&self, shape: &Shape, faces: &mut [FaceRange]) {
+        let Some(shells) = shape.boundary_shells() else {
+            return;
+        };
+        if shells.iter().map(|s| s.len()).sum::<usize>() != faces.len() {
+            return;
+        }
+        for (face, range) in shells.into_iter().flat_map(|s| s.iter()).zip(faces) {
+            if range.plane.is_none() {
+                range.repair_axis = crate::axis_geometry::face_axis(face).ok();
+            }
+        }
+    }
     fn measure_finished_faces(&self, shape: &Shape, faces: &mut [FaceRange]) {
         crate::finished_measurement::measure(shape, faces);
     }
@@ -2754,6 +2768,7 @@ impl KernelAdapter for MonstertruckAdapter {
                     }
                 }
                 mesh.faces.push(FaceRange {
+                    repair_axis: None,
                     measurement: None,
                     native_geometry,
                     native_geometry_error,

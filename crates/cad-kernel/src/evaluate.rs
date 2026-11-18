@@ -20,6 +20,17 @@ impl std::io::Write for PreviewByteBudget {
         Ok(())
     }
 }
+#[derive(Clone, Copy)]
+enum FaceMetadata {
+    Display,
+    Measurements,
+    MateAxes,
+}
+struct FailedBuild {
+    document: Document,
+    diagnostics: Vec<Diagnostic>,
+    mate_reference: Option<Box<cad_core::assembly_geometry::FailedReference>>,
+}
 pub struct Evaluator<K: KernelAdapter = MonstertruckAdapter> {
     pub adapter: K,
     pub shapes: BTreeMap<NodeRef, Shape>,
@@ -30,7 +41,7 @@ pub struct Evaluator<K: KernelAdapter = MonstertruckAdapter> {
     history_cache: BTreeMap<String, (String, f64, cad_core::history::PartHistory)>,
     preview_focus: Option<NodeRef>,
     focused_previews: BTreeMap<String, OperationPreviewChange>,
-    failed_build: Option<(Document, Vec<Diagnostic>)>,
+    failed_build: Option<FailedBuild>,
 }
 impl Default for Evaluator {
     fn default() -> Self {
@@ -62,10 +73,16 @@ impl<K: KernelAdapter> Evaluator<K> {
         &mut self,
         identity: RequestIdentity,
         source: &Document,
+        root: &Path,
         display_tolerance_mm: f64,
         elapsed_ms: u64,
     ) -> Result<Option<Evaluation>> {
-        let Some((document, diagnostics)) = self.failed_build.take() else {
+        let Some(FailedBuild {
+            document,
+            diagnostics,
+            mate_reference,
+        }) = self.failed_build.take()
+        else {
             return Ok(None);
         };
         // All shapes in this cache came from the failing current-source build.
@@ -109,12 +126,21 @@ impl<K: KernelAdapter> Evaluator<K> {
                 .values()
                 .filter(|s| s.unavailable_reason.is_none())
                 .max_by_key(|s| s.index);
-            if let Some(station) = station {
-                let mut display_part = part.clone();
-                display_part.outputs = station.bodies.clone();
-                if let Ok((mesh, _, _)) = self.part_output(&display_part, display_tolerance_mm) {
-                    meshes.insert(key.clone(), mesh);
-                }
+            let mut display_part = part.clone();
+            if mate_reference.is_none() {
+                display_part.outputs = station.map(|s| s.bodies.clone()).unwrap_or_default();
+            }
+            let metadata = if mate_reference.as_ref().is_some_and(|p| {
+                p.reference.source.class() == cad_core::assembly_geometry::ReferenceClass::Axis
+            }) {
+                FaceMetadata::MateAxes
+            } else {
+                FaceMetadata::Display
+            };
+            if let Ok((mesh, _, _)) =
+                self.output_mesh(&display_part, display_tolerance_mm, metadata)
+            {
+                meshes.insert(key.clone(), mesh);
             }
             let mut usable = document.clone();
             usable
@@ -161,11 +187,63 @@ impl<K: KernelAdapter> Evaluator<K> {
                 }
             }
         }
+        let weld_joints = self.adapter.weld_joint_previews();
+        if let Some(problem) = &mate_reference {
+            // A shaft can have its own instance configuration. Rebuild its local
+            // outputs without invoking the mate which is currently unresolved.
+            let mut attempted = std::collections::BTreeSet::new();
+            for instance in &instances {
+                let key = cad_core::history::mesh_key(instance);
+                if available_keys.contains(key)
+                    || !problem.occurs_in(source, &instance.path)
+                    || !attempted.insert(key.to_owned())
+                {
+                    continue;
+                }
+                let Ok(scoped) = cad_core::configuration::variant(
+                    source,
+                    &instance.definition,
+                    instance.configuration.as_deref(),
+                ) else {
+                    continue;
+                };
+                let Ok(built) = crate::assemblies::build_shapes_report(
+                    &self.adapter,
+                    &scoped,
+                    root,
+                    scoped.settings.modeling.boolean_search_mm,
+                    true,
+                ) else {
+                    continue;
+                };
+                self.shapes = built.shapes;
+                let Some(part) = scoped.parts.get(&instance.definition) else {
+                    continue;
+                };
+                let metadata = if problem.reference.source.class()
+                    == cad_core::assembly_geometry::ReferenceClass::Axis
+                {
+                    FaceMetadata::MateAxes
+                } else {
+                    FaceMetadata::Display
+                };
+                let Ok((mesh, _, _)) = self.output_mesh(part, display_tolerance_mm, metadata)
+                else {
+                    continue;
+                };
+                meshes.insert(key.to_owned(), mesh);
+                available_keys.insert(key.to_owned());
+                for (id, geometry) in self.reference_output(&scoped, &instance.definition) {
+                    references.insert(format!("{key}::{id}"), geometry);
+                }
+            }
+        }
         instances.retain(|i| available_keys.contains(cad_core::history::mesh_key(i)));
         self.body_sets.clear();
         self.surface_sets.clear();
         self.history_cache.clear();
         Ok(Some(Evaluation {
+            failed_mate_reference: mate_reference,
             model_dimensions: BTreeMap::new(),
             drawing_review: BTreeMap::new(),
             drawing_page_counts: BTreeMap::new(),
@@ -194,7 +272,7 @@ impl<K: KernelAdapter> Evaluator<K> {
             sheets: BTreeMap::new(),
             weldments: BTreeMap::new(),
             weld_beads: BTreeMap::new(),
-            weld_joints: self.adapter.weld_joint_previews(),
+            weld_joints,
             assembly_welds: BTreeMap::new(),
             mold_analyses: BTreeMap::new(),
             configurations: cad_core::configuration::evaluated(&document).ok(),
@@ -686,7 +764,11 @@ impl<K: KernelAdapter> Evaluator<K> {
             self.shapes = report.shapes;
             self.assemblies.clear();
             self.history_cache.clear();
-            self.failed_build = Some((solved, diagnostics));
+            self.failed_build = Some(FailedBuild {
+                document: solved,
+                diagnostics,
+                mate_reference: None,
+            });
             return Err(CadError::Invalid(message));
         }
         let shapes = report.shapes;
@@ -699,20 +781,44 @@ impl<K: KernelAdapter> Evaluator<K> {
             search_resolution_mm,
         ) {
             Ok(assemblies) => assemblies,
-            Err(CadError::EvaluationTarget { target, message }) => {
+            Err(error) => {
+                let (target, message, mate_reference) = match &error {
+                    CadError::EvaluationTarget { target, message } => (target, message, None),
+                    CadError::MateReference { problem, message } => {
+                        (&problem.mate, message, Some(problem.clone()))
+                    }
+                    _ => return Err(error),
+                };
                 let diagnostic = Diagnostic {
                     severity: "error".into(),
                     target: Some(target.clone()),
                     edge_recovery: None,
                     message: message.clone(),
                 };
-                self.shapes = shapes;
+                // Frame resolution can temporarily evaluate different configurations.
+                // Restore source topology before exposing any current mesh for picking.
+                // A failed solve cannot establish placement-dependent geometry.
+                self.shapes = if mate_reference.is_some() {
+                    crate::assemblies::build_shapes_report(
+                        &self.adapter,
+                        &solved,
+                        root,
+                        search_resolution_mm,
+                        true,
+                    )?
+                    .shapes
+                } else {
+                    shapes
+                };
                 self.assemblies.clear();
                 self.history_cache.clear();
-                self.failed_build = Some((solved, vec![diagnostic]));
-                return Err(CadError::EvaluationTarget { target, message });
+                self.failed_build = Some(FailedBuild {
+                    document: solved,
+                    diagnostics: vec![diagnostic],
+                    mate_reference,
+                });
+                return Err(error);
             }
-            Err(error) => return Err(error),
         };
 
         self.adapter.set_assembly_placements(&assemblies);
@@ -753,7 +859,11 @@ impl<K: KernelAdapter> Evaluator<K> {
                 self.shapes = report.shapes;
                 self.assemblies.clear();
                 self.history_cache.clear();
-                self.failed_build = Some((solved, diagnostics));
+                self.failed_build = Some(FailedBuild {
+                    document: solved,
+                    diagnostics,
+                    mate_reference: None,
+                });
                 return Err(CadError::Invalid(message));
             }
             report.shapes
@@ -814,13 +924,13 @@ impl<K: KernelAdapter> Evaluator<K> {
         Vec<monstertruck::modeling::Solid>,
         Vec<monstertruck::modeling::Shell>,
     )> {
-        self.output_with_measurements(part, display_tolerance_mm, false)
+        self.output_mesh(part, display_tolerance_mm, FaceMetadata::Display)
     }
-    fn output_with_measurements(
+    fn output_mesh(
         &self,
         part: &cad_core::Part,
         display_tolerance_mm: f64,
-        measure: bool,
+        metadata: FaceMetadata,
     ) -> Result<(
         MeshData,
         Vec<monstertruck::modeling::Solid>,
@@ -855,8 +965,12 @@ impl<K: KernelAdapter> Evaluator<K> {
                 }
             }
             let mut m = self.adapter.mesh(shape, &r, display_tolerance_mm)?;
-            if measure {
-                self.adapter.measure_finished_faces(shape, &mut m.faces);
+            match metadata {
+                FaceMetadata::Display => {}
+                FaceMetadata::Measurements => {
+                    self.adapter.measure_finished_faces(shape, &mut m.faces)
+                }
+                FaceMetadata::MateAxes => self.adapter.mark_mate_axes(shape, &mut m.faces),
             }
             let has_geometry = !m.positions.is_empty();
             let offset = all.positions.len() as u32;
@@ -1279,6 +1393,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                 if let Some(evaluation) = self.failure_evaluation(
                     identity.clone(),
                     document,
+                    root,
                     display_tolerance_mm,
                     start.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
                 )? {
@@ -1389,6 +1504,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
                         if let Some(evaluation) = self.failure_evaluation(
                             identity.clone(),
                             document,
+                            root,
                             display_tolerance_mm,
                             start.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
                         )? {
@@ -1623,6 +1739,7 @@ impl<K: KernelAdapter> GeometryService for Evaluator<K> {
             &self.body_sets,
         )?;
         let mut evaluated = Evaluation {
+            failed_mate_reference: None,
             model_dimensions,
             drawing_review: BTreeMap::new(),
             drawing_page_counts: BTreeMap::new(),

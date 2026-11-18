@@ -11,6 +11,10 @@ use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Item {
+    #[serde(default)]
+    pub page: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<Target>,
     pub label: String,
     pub printed_text: String,
     pub digest: String,
@@ -171,6 +175,8 @@ pub fn collect(source: &Drawing, page: &Sheet, number: u32, items: &mut BTreeMap
         items.insert(
             format!("{number}/{}", group.target.identity()),
             Item {
+                page: number,
+                target: Some(group.target.clone()),
                 label,
                 printed_text,
                 digest: format!("{:x}", digest.finalize()),

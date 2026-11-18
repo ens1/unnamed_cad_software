@@ -1,5 +1,6 @@
 //! Downstream review for ordinary modeling edits, computed once per accepted
 //! worker reply against the exact checkpoint the editor will restore on Cancel.
+pub(crate) mod mate;
 use crate::{Workspace, presentation_controls as controls};
 use bevy_egui::egui;
 use cad_core::{
@@ -21,6 +22,7 @@ pub struct Cache {
 #[derive(Default)]
 struct Review {
     rows: Vec<Row>,
+    features: usize,
     components: usize,
     mates: usize,
     sheets: usize,
@@ -31,6 +33,29 @@ struct Row {
     effect: String,
     repair: bool,
     source: Id,
+    action: Option<RowAction>,
+}
+enum RowAction {
+    Mate(
+        Box<cad_core::assembly_geometry::FailedReference>,
+        BTreeSet<Vec<Id>>,
+    ),
+    Feature(cad_core::NodeRef),
+    Sheet {
+        id: Id,
+        page: u32,
+        item: Option<cad_core::drawing_interaction::Target>,
+    },
+}
+impl RowAction {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Mate(..) => "Replace reference",
+            Self::Feature(_) => "Repair inputs",
+            Self::Sheet { item: Some(_), .. } => "Show on sheet",
+            Self::Sheet { .. } => "Open sheet",
+        }
+    }
 }
 impl Review {
     fn add(
@@ -40,18 +65,21 @@ impl Review {
         effect: impl Into<String>,
         repair: bool,
         source: &str,
-    ) {
+    ) -> &mut Row {
         self.rows.push(Row {
             key,
             name,
             effect: effect.into(),
             repair,
             source: source.into(),
+            action: None,
         });
+        self.rows.last_mut().unwrap()
     }
     fn summary(&self) -> String {
         let mut counts = Vec::new();
         for (count, label) in [
+            (self.features, "feature"),
             (self.components, "component"),
             (self.mates, "mate"),
             (self.sheets, "sheet"),
@@ -146,6 +174,27 @@ fn compare(doc: &Document, baseline: &Document, old: &Evaluation, new: &Evaluati
         .filter(|d| d.severity == "error")
         .filter_map(|d| Some((d.target.as_deref()?, d.message.as_str())))
         .collect::<BTreeMap<_, _>>();
+    if !issues.is_empty() {
+        for failure in cad_core::reference_repair::failures(doc, Some(new)) {
+            if !changed.contains(&failure.owner.definition) {
+                continue;
+            }
+            let row = review.add(
+                format!(
+                    "feature/{}/{}",
+                    failure.owner.definition, failure.owner.node
+                ),
+                failure.label,
+                failure.messages.join(" · "),
+                true,
+                &failure.owner.node,
+            );
+            if !failure.inputs.is_empty() {
+                row.action = Some(RowAction::Feature(failure.owner));
+            }
+            review.features += 1;
+        }
+    }
     let linear = new.accuracy.modeling.linear_mm.max(1e-7);
     let assembly_model = doc.assemblies.values().any(|a| {
         a.instances.len() > 1
@@ -196,6 +245,16 @@ fn compare(doc: &Document, baseline: &Document, old: &Evaluation, new: &Evaluati
                 .map(|c| cad_core::configuration::key(&a.id, Some(&c.id)))
                 .filter(|k| new.assemblies.contains_key(k)),
         );
+        let failed_reference = new
+            .failed_mate_reference
+            .as_deref()
+            .filter(|f| f.assembly == a.id);
+        if let Some(f) = failed_reference {
+            configs.insert(cad_core::configuration::key(
+                &a.id,
+                f.configuration.as_deref(),
+            ));
+        }
         for key in configs {
             let solution = new.assemblies.get(&key);
             let previous = old.assemblies.get(&key);
@@ -206,7 +265,12 @@ fn compare(doc: &Document, baseline: &Document, old: &Evaluation, new: &Evaluati
                 .map(|c| format!(" · {}", c.name))
                 .unwrap_or_default();
             for m in &a.mates {
-                let failure = issues.contains_key(m.id.as_str());
+                let broken = failed_reference.filter(|f| {
+                    f.mate == m.id
+                        && cad_core::configuration::key(&a.id, f.configuration.as_deref()) == key
+                });
+                let failure = broken.is_some()
+                    || (new.failed_mate_reference.is_none() && issues.contains_key(m.id.as_str()));
                 let frames = solution.and_then(|s| s.frames.get(&m.id));
                 let old_frames = previous.and_then(|s| s.frames.get(&m.id));
                 let changed_frame = frames.zip(old_frames).is_some_and(|(frames, old)| {
@@ -238,24 +302,54 @@ fn compare(doc: &Document, baseline: &Document, old: &Evaluation, new: &Evaluati
                         .unwrap_or_else(|| "Component".into())
                 });
                 let label = format!("{} mate · {} / {}{config_name}", m.kind, names[0], names[1]);
-                let effect = if failure {
-                    "Needs a new reference"
+                let effect = if let Some(broken) = broken {
+                    let participant = a
+                        .instances
+                        .get(&broken.participant)
+                        .map(|i| cad_core::occurrence_names::instance(doc, &a.id, i))
+                        .unwrap_or_default();
+                    format!("Missing reference on {participant}")
+                } else if failure {
+                    issues[m.id.as_str()].to_owned()
                 } else if changed_frame {
-                    "Reference moved · solved"
+                    "Reference moved · solved".into()
                 } else if frames.is_some() {
-                    "References resolved"
+                    "References resolved".into()
                 } else {
-                    "Waiting for a valid assembly"
+                    "Waiting for a valid assembly".into()
                 };
-                review.add(
+                let row = review.add(
                     format!("mate/{key}/{}", m.id),
                     label,
                     effect,
                     failure,
                     &m.id,
                 );
+                if let Some(f) = broken {
+                    let paths = mate::paths(doc, new, f);
+                    if paths.is_empty() {
+                        row.effect
+                            .push_str(" · replacement unavailable in this model view");
+                    } else {
+                        row.action = Some(RowAction::Mate(Box::new(f.clone()), paths));
+                    }
+                }
                 review.mates += 1;
             }
+        }
+        if let Some(problem) = failed_reference.filter(|p| !a.mates.iter().any(|m| m.id == p.mate))
+        {
+            review.add(
+                format!("generated-mate/{}/{}", a.id, problem.mate),
+                format!("{} · generated mate", a.name),
+                issues
+                    .get(problem.mate.as_str())
+                    .copied()
+                    .unwrap_or("Review the component pattern that created this mate"),
+                true,
+                &problem.mate,
+            );
+            review.mates += 1;
         }
         if issues.contains_key(a.id.as_str()) {
             review.add(
@@ -305,13 +399,27 @@ fn compare(doc: &Document, baseline: &Document, old: &Evaluation, new: &Evaluati
         } else {
             "Waiting for valid geometry".into()
         };
-        review.add(
+        let row = review.add(
             format!("sheet/{}", sheet.id),
             sheet.name.clone(),
             effect,
             repair,
             &sheet.id,
         );
+        if new.geometry_valid {
+            let item = failing.map(|(id, _)| {
+                if sheet.dimensions.iter().any(|d| d.id == id) {
+                    cad_core::drawing_interaction::Target::Dimension { id: id.into() }
+                } else {
+                    cad_core::drawing_interaction::Target::Annotation { id: id.into() }
+                }
+            });
+            row.action = Some(RowAction::Sheet {
+                id: sheet.id.clone(),
+                page: 0,
+                item,
+            });
+        }
         if let Some((old, current)) = old_items.zip(new_items) {
             for (key, item) in current {
                 let Some(prior) = old.get(key) else {
@@ -330,13 +438,18 @@ fn compare(doc: &Document, baseline: &Document, old: &Evaluation, new: &Evaluati
                 } else {
                     "Position or geometry updated".into()
                 };
-                review.add(
+                let row = review.add(
                     format!("sheet/{}/{key}", sheet.id),
                     item.label.clone(),
                     effect,
                     false,
                     &sheet.id,
                 );
+                row.action = Some(RowAction::Sheet {
+                    id: sheet.id.clone(),
+                    page: item.page,
+                    item: item.target.clone(),
+                });
             }
         }
     }
@@ -357,9 +470,11 @@ fn report(w: &Workspace) -> Option<Arc<Review>> {
                 | "equations"
                 | "named-parameters"
                 | "feature-order"
+                | "model-dimensions"
                 | "reference-repair"
         )
-    ) || (doc.drawings.is_empty()
+    ) || (new.valid
+        && doc.drawings.is_empty()
         && doc
             .assemblies
             .values()
@@ -405,6 +520,109 @@ fn report(w: &Workspace) -> Option<Arc<Review>> {
     Some(review)
 }
 
+// Only leave a parent form when its displayed inputs already match the draft.
+fn can_open(w: &Workspace, action: &RowAction) -> bool {
+    if w.settings.is_some()
+        || crate::drawing_interaction_ui::active(w)
+        || crate::git_ui::busy(w)
+        || crate::publish_ui::busy(w)
+    {
+        return false;
+    }
+    if matches!(action, RowAction::Mate(..)) {
+        return crate::reference_repair_ui::current_source_is_valid(w);
+    }
+    if w.tool_checkpoint.is_none()
+        || w.sketch.is_some()
+        || crate::named_parameter_ui::active(w)
+        || (matches!(action, RowAction::Sheet { .. })
+            && !crate::reference_repair_ui::current_source_is_valid(w))
+        || !crate::quantity_display::source_fields_valid(w)
+        || !crate::operation_editor_ui::current_source_is_valid(w)
+        || w.fields.contains_key("feature-source-invalid")
+    {
+        return false;
+    }
+    if w.dialog.as_deref() == Some("feature") {
+        return serde_json::from_str::<cad_core::Feature>(&w.json).is_ok_and(|f| {
+            w.fields.get("feature-editor-id") == Some(&f.id)
+                && w.view
+                    .active_part
+                    .as_ref()
+                    .and_then(|id| w.session.visible().parts.get(id))
+                    .is_some_and(|p| p.features.iter().any(|v| v == &f))
+        });
+    }
+    true
+}
+fn open(w: &mut Workspace, action: &RowAction) {
+    if !can_open(w, action) {
+        w.status = "Finish the current field or gesture first".into();
+        return;
+    }
+    match action {
+        RowAction::Mate(problem, paths) => mate::begin(w, (**problem).clone(), paths.clone()),
+        RowAction::Feature(owner) => {
+            crate::reference_repair_ui::action(
+                w,
+                "reference.repair",
+                Some(&json!({"owner":owner})),
+            );
+        }
+        RowAction::Sheet { id, page, item } => {
+            crate::reference_repair_ui::reset(w);
+            w.open_editor("drawings");
+            w.command_tab = "Drawing".into();
+            crate::drawing_ui::select_sheet(w, id);
+            w.fields.insert("drawing-page".into(), page.to_string());
+            w.view.drawing_page = *page;
+            if let Some(item) = item {
+                // The paper may still be rebuilding. Its interaction state restores
+                // this selection as soon as the current sheet becomes available.
+                w.view.drawing_selection = Some(item.clone());
+                crate::drawing_interaction_ui::select_item(w, item.clone());
+                if w.view.drawing_selection.is_none() {
+                    w.view.drawing_selection = Some(item.clone());
+                }
+            }
+            w.status =
+                "Review the sheet. Apply saves the original edit and any repairs together.".into();
+        }
+    }
+}
+pub(crate) fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>) -> bool {
+    match command {
+        "edit-review.stop-picking" => {
+            mate::stop(w);
+            true
+        }
+        "edit-review.open" => {
+            if data
+                .and_then(|d| d.get("request"))
+                .and_then(|v| serde_json::from_value::<RequestIdentity>(v.clone()).ok())
+                .as_ref()
+                != Some(&crate::source_cache::identity(w))
+            {
+                w.status = "The model changed. Select the item in the current review.".into();
+                return true;
+            }
+            let key = data.and_then(|d| d.get("key")).and_then(|k| k.as_str());
+            if let Some(review) = report(w)
+                && let Some(action) = review
+                    .rows
+                    .iter()
+                    .find(|r| Some(r.key.as_str()) == key)
+                    .and_then(|r| r.action.as_ref())
+            {
+                open(w, action);
+            } else {
+                w.status = "This item has changed. Select it in the current review.".into();
+            }
+            true
+        }
+        _ => false,
+    }
+}
 pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let Some(review) = report(w).filter(|r| !r.rows.is_empty()) else {
         return vec![];
@@ -417,21 +635,34 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         state: "evaluated".into(),
         commands: vec![],
         relationships: vec![],
-        data: json!({"contract":"tcad.presentation.edit-review","version":1,"components":review.components,"mates":review.mates,"sheets":review.sheets}),
+        data: json!({"contract":"tcad.presentation.edit-review","version":2,"features":review.features,"components":review.components,"mates":review.mates,"sheets":review.sheets}),
     }];
+    if mate::evaluation(w).is_some() {
+        items.push(SemanticElement {
+            id: "edit-review/pick".into(),
+            role: "mate-reference-picker".into(),
+            label: mate::prompt(w),
+            value: None,
+            state: "picking".into(),
+            commands: vec!["edit-review.stop-picking".into()],
+            relationships: vec!["edit-review".into()],
+            data: json!({"contract":"tcad.presentation.edit-review","version":2}),
+        });
+    }
+    let request = crate::source_cache::identity(w);
     items.extend(review.rows.iter().map(|row| SemanticElement {
         id: format!("edit-review/{}", row.key),
         role: "edit-impact-item".into(),
         label: row.name.clone(),
         value: Some(row.effect.clone()),
         state: if row.repair { "error" } else { "evaluated" }.into(),
-        commands: vec![],
+        commands: row.action.as_ref().filter(|a|can_open(w,a)).map_or_else(Vec::new, |_| vec!["edit-review.open".into()]),
         relationships: vec![row.source.clone(), "edit-review".into()],
-        data: json!({"contract":"tcad.presentation.edit-review","version":1}),
+        data: json!({"contract":"tcad.presentation.edit-review","version":2,"key":row.key,"request":request,"action_label":row.action.as_ref().map(RowAction::label)}),
     }));
     items
 }
-pub(crate) fn show(ui: &mut egui::Ui, w: &Workspace) {
+pub(crate) fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     let Some(review) = report(w).filter(|r| !r.rows.is_empty()) else {
         return;
     };
@@ -445,18 +676,46 @@ pub(crate) fn show(ui: &mut egui::Ui, w: &Workspace) {
             classes: &["secondary-section"],
             label: &label,
             state: if any_error { "error" } else { "evaluated" },
-            collapse: Some(false),
+            collapse: Some(any_error),
             open: None,
         },
-        |ui| rows(ui, &review),
+        |ui| rows(ui, w, &review),
     );
 }
-fn rows(ui: &mut egui::Ui, review: &Review) {
+fn rows(ui: &mut egui::Ui, w: &mut Workspace, review: &Review) {
+    if mate::evaluation(w).is_some() {
+        controls::label(
+            ui,
+            "edit-review/pick",
+            "mate-reference-picker",
+            &[],
+            &mate::prompt(w),
+            "picking",
+        );
+        if controls::button(
+            ui,
+            "edit-review/stop-picking",
+            "tool-action",
+            &[],
+            "Back to edit",
+            true,
+            false,
+        )
+        .clicked()
+        {
+            mate::stop(w);
+        }
+    }
     egui::ScrollArea::vertical()
         .max_height(240.)
         .id_salt("edit-review-items")
         .show(ui, |ui| {
-            for r in &review.rows {
+            for r in review
+                .rows
+                .iter()
+                .filter(|r| r.repair)
+                .chain(review.rows.iter().filter(|r| !r.repair))
+            {
                 controls::label(
                     ui,
                     &format!("edit-review/{}", r.key),
@@ -465,13 +724,30 @@ fn rows(ui: &mut egui::Ui, review: &Review) {
                     &format!("{} · {}", r.name, r.effect),
                     if r.repair { "error" } else { "evaluated" },
                 );
+                if let Some(action) = &r.action {
+                    let response = controls::button(
+                        ui,
+                        &format!("edit-review/{}/open", r.key),
+                        "edit-impact-action",
+                        &[],
+                        action.label(),
+                        can_open(w, action),
+                        false,
+                    );
+                    if response
+                        .on_disabled_hover_text("Finish the current field or gesture first")
+                        .clicked()
+                    {
+                        open(w, action);
+                    }
+                }
             }
         });
 }
-pub(crate) fn status_menu(ui: &mut egui::Ui, w: &Workspace) {
+pub(crate) fn status_menu(ui: &mut egui::Ui, w: &mut Workspace) {
     if let Some(review) = report(w).filter(|r| !r.rows.is_empty()) {
         controls::menu_button(ui, "edit-review:menu", "Affected items", |ui| {
-            rows(ui, &review)
+            rows(ui, w, &review)
         });
     }
 }

@@ -299,6 +299,16 @@ fn preview(w: &mut Workspace) {
     w.geometry_selection.clear();
     w.rendered_key.clear();
 }
+// A downstream mate edit leaves the already previewed feature inputs intact.
+pub(crate) fn after_downstream_mate(w: &mut Workspace, previous: &RequestIdentity) {
+    if let Some(state) = w.reference_repair.as_mut()
+        && state.previewed.as_ref() == Some(previous)
+        && !state.unpreviewed
+        && state.candidate.is_none()
+    {
+        state.previewed = Some(w.session.identity());
+    }
+}
 pub(crate) fn current_source_is_valid(w: &Workspace) -> bool {
     w.reference_repair.as_ref().is_none_or(|s| {
         s.repairs > 0

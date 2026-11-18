@@ -461,6 +461,7 @@ fn mesh(
         return Ok(None);
     }
     mesh.faces.push(FaceRange {
+        repair_axis: None,
         measurement: None,
         start: 0,
         count: mesh.indices.len(),

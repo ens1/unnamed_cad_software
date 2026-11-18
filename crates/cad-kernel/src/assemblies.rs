@@ -333,10 +333,28 @@ impl<K: KernelAdapter> Resolver<'_, K> {
         context: &Document,
         assembly: &cad_core::Assembly,
         mates: &[cad_core::Mate],
+        configuration: Option<&str>,
     ) -> Result<ResolvedMateGeometry> {
         let mut frames = BTreeMap::new();
         let mut auxiliary = BTreeMap::new();
         for mate in mates {
+            let resolve = |instance: &cad_core::Instance, reference: &Reference, endpoint| {
+                self.frame(context, instance, reference)
+                    .map_err(|e| CadError::MateReference {
+                        problem: Box::new(assembly_geometry::FailedReference {
+                            assembly: assembly.id.clone(),
+                            configuration: configuration.map(str::to_owned),
+                            mate: mate.id.clone(),
+                            participant: instance.id.clone(),
+                            endpoint,
+                            reference: reference.clone(),
+                        }),
+                        message: format!(
+                            "{} / {} mate / {}: {e}",
+                            assembly.name, mate.kind, instance.name
+                        ),
+                    })
+            };
             (|| -> Result<()> {
                 let mut pair = Vec::new();
                 for (participant, reference, first) in [
@@ -347,12 +365,15 @@ impl<K: KernelAdapter> Resolver<'_, K> {
                         CadError::Invalid("Mate participant is suppressed or missing".into())
                     })?;
                     pair.push(if let Some(reference) = reference {
-                        self.frame(context, instance, reference).map_err(|e| {
-                            CadError::Invalid(format!(
-                                "{} / {} mate / {}: {e}",
-                                assembly.name, mate.kind, instance.name
-                            ))
-                        })?
+                        resolve(
+                            instance,
+                            reference,
+                            if first {
+                                assembly_geometry::EndpointRole::First
+                            } else {
+                                assembly_geometry::EndpointRole::Second
+                            },
+                        )?
                     } else {
                         Frame::legacy(mate, first)?
                     });
@@ -360,7 +381,7 @@ impl<K: KernelAdapter> Resolver<'_, K> {
                 frames.insert(mate.id.clone(), [pair.remove(0), pair.remove(0)]);
                 if let Some(relationship) = &mate.relationship {
                     let mut resolved = Vec::new();
-                    for endpoint in relationship.endpoints() {
+                    for (index, endpoint) in relationship.endpoints().into_iter().enumerate() {
                         let instance =
                             assembly.instances.get(&endpoint.instance).ok_or_else(|| {
                                 CadError::Invalid(
@@ -369,7 +390,11 @@ impl<K: KernelAdapter> Resolver<'_, K> {
                             })?;
                         resolved.push(assembly_geometry::ResolvedEndpoint {
                             instance: endpoint.instance.clone(),
-                            frame: self.frame(context, instance, &endpoint.reference)?,
+                            frame: resolve(
+                                instance,
+                                &endpoint.reference,
+                                assembly_geometry::EndpointRole::Additional(index),
+                            )?,
                         });
                     }
                     if !resolved.is_empty() {
@@ -378,9 +403,12 @@ impl<K: KernelAdapter> Resolver<'_, K> {
                 }
                 Ok(())
             })()
-            .map_err(|error| CadError::EvaluationTarget {
-                target: mate.id.clone(),
-                message: format!("{} / {} mate: {error}", assembly.name, mate.kind),
+            .map_err(|error| match error {
+                error @ CadError::MateReference { .. } => error,
+                error => CadError::EvaluationTarget {
+                    target: mate.id.clone(),
+                    message: format!("{} / {} mate: {error}", assembly.name, mate.kind),
+                },
             })?;
         }
         Ok((frames, auxiliary))
@@ -423,7 +451,7 @@ impl<K: KernelAdapter> Resolver<'_, K> {
         }
         let scoped = self.scope(&scoped, definition, configuration)?;
         let (mut frames, mut auxiliary_frames) =
-            self.mate_geometry(&scoped, &assembly, &assembly.mates)?;
+            self.mate_geometry(&scoped, &assembly, &assembly.mates, configuration)?;
         let solution = NativeSolver
             .solve_assembly_geometry(&scoped, &mut assembly, &frames, &auxiliary_frames)
             .map_err(|e| CadError::EvaluationTarget {
@@ -563,7 +591,7 @@ impl<K: KernelAdapter> Resolver<'_, K> {
                     .assemblies
                     .insert(definition.into(), assembly.clone());
                 let (copied_frames, copied_auxiliary) =
-                    self.mate_geometry(&current, &assembly, &copied)?;
+                    self.mate_geometry(&current, &assembly, &copied, configuration)?;
                 let mut fixed = assembly.clone();
                 fixed.mates = copied;
                 for instance in fixed.instances.values_mut() {

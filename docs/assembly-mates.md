@@ -128,3 +128,15 @@ undoable operation, and Cancel restores the starting checkpoint.
 Flexible per-occurrence subassembly solves, continuous multi-turn mechanical
 winding and collision-stopped drag remain gaps. Nested subassemblies move as
 rigid direct participants; these controls do not edit shared nested definitions.
+
+## Repair a mate during a part edit
+
+If a part edit removes a face used by a mate, open **Affected by this edit** in the property manager. The mate row names the component that lost its reference.
+
+1. Choose **Replace reference**. The viewport shows the edited part. **Previous reference** marks the old face or edge when its earlier shape is available.
+2. Hover over a replacement on the named component, then click. For a concentric mate, choose a rotational face, a straight or circular edge, or a datum axis. TCAD rebuilds the assembly with the new reference.
+3. Review the result. If another mate needs attention, repair it in the same way. Choose **Apply** or finish the original edit once validation succeeds. One Undo restores the original part and mates together.
+
+**Back to edit** or **Esc** stops picking and keeps the draft. **Cancel** on the original edit restores its starting state, including its mate references. A failed assembly solve keeps Apply unavailable. If the review identifies a generated mate, check the component pattern and its source mates.
+
+A failed feature with editable inputs offers **Repair inputs**. A drawing with current part geometry offers **Open sheet** or **Show on sheet**. Changes made there share the original draft.

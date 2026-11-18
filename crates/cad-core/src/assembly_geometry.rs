@@ -108,6 +108,65 @@ pub struct Reference {
     pub path: Vec<Id>,
     pub source: Source,
 }
+/// The authored endpoint whose frame could not be rebuilt in this configuration.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct FailedReference {
+    pub assembly: Id,
+    pub configuration: Option<Id>,
+    pub mate: Id,
+    pub participant: Id,
+    pub endpoint: EndpointRole,
+    pub reference: Reference,
+}
+impl FailedReference {
+    // Enter only occurrences of the assembly configuration that actually failed.
+    // Placements of another copy can have a different component configuration.
+    pub fn occurs_in(&self, doc: &Document, path: &[Id]) -> bool {
+        let Some(prefix) = path.strip_suffix(self.reference.path.as_slice()) else {
+            return false;
+        };
+        if prefix.last() != Some(&self.participant) {
+            return false;
+        }
+        let mut owner = doc.root.clone();
+        let mut config = doc.active_configurations.get(&owner).cloned();
+        let mut context = None;
+        for (index, item) in path.iter().enumerate() {
+            if owner == self.assembly {
+                return config == self.configuration
+                    && item == &self.participant
+                    && path[index + 1..] == self.reference.path;
+            }
+            let Ok(scoped) = crate::configuration::scope(
+                doc,
+                context.as_ref().unwrap_or(doc),
+                &owner,
+                config.as_deref(),
+            ) else {
+                return false;
+            };
+            let Some(next) = scoped
+                .assemblies
+                .get(&owner)
+                .and_then(|a| a.instances.get(item))
+            else {
+                return false;
+            };
+            owner = next.definition.clone();
+            config = crate::configuration::selected(&scoped, &owner, next.configuration.as_ref())
+                .cloned();
+            context = Some(scoped);
+        }
+        false
+    }
+}
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointRole {
+    First,
+    Second,
+    Additional(usize),
+}
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FrameKind {

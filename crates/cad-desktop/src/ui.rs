@@ -263,6 +263,11 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
             ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
             return;
         }
+        if crate::edit_review::mate::evaluation(w).is_some() {
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            crate::edit_review::mate::stop(w);
+            return;
+        }
         let editing_form = w.settings.is_some()
             || w.tool_checkpoint.is_some() && w.sketch.is_none() && !crate::sketch3d_ui::active(w);
         if editing_form
@@ -1158,6 +1163,9 @@ pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, comm
     }
     if w.settings.is_some() {
         w.status = "Apply or cancel Settings before using another command".into();
+        return;
+    }
+    if crate::edit_review::action(w, command, Some(&element.data)) {
         return;
     }
     if crate::command_chrome::action(w, command, &element.data) {
@@ -2156,6 +2164,9 @@ fn model_view(
         crate::workspace_controls::toolbar(&mut tools, w);
     }
     let cube = viewport::view_cube(w, ui, r);
+    if crate::edit_review::mate::viewport(w, ui, r, &response, &[toolbar, cube]) {
+        return;
+    }
     crate::operation_preview::viewport_status(ui, w, r);
     let motion_owned = crate::model_dimensions_ui::viewport(w, ui, r, &[toolbar, cube])
         || crate::feature_handles::viewport(w, ui, r, &[toolbar, cube])
@@ -2479,6 +2490,9 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
     }
     if w.settings.is_some() {
         w.status = "Apply or cancel Settings before using another command".into();
+        return;
+    }
+    if crate::edit_review::action(w, cmd, None) {
         return;
     }
     if crate::repositories_ui::action(w, cmd, None)
@@ -3946,6 +3960,9 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         ui.separator();
     }
     crate::edit_review::show(ui, w);
+    if w.dialog.as_deref() != Some(dialog.as_str()) {
+        return;
+    }
     if dialog == "publish" {
         crate::publish_ui::show_actions(ui, w);
         if w.dialog.as_deref() != Some("publish") {

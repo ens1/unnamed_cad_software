@@ -795,6 +795,9 @@ fn render_mesh(source: &MeshData, instance: &PlacedPart) -> Mesh {
     .with_inserted_indices(Indices::U32(source.indices.clone()))
 }
 pub(crate) fn display_evaluation(w: &Workspace) -> Option<&Evaluation> {
+    if let Some(current) = crate::edit_review::mate::evaluation(w) {
+        return Some(current);
+    }
     if crate::model_dimensions_ui::active(w)
         && let Some(current) = crate::model_dimensions_ui::current_geometry(w)
     {
@@ -820,6 +823,9 @@ pub(crate) fn display_evaluation(w: &Workspace) -> Option<&Evaluation> {
         .or(w.session.evaluation.as_ref())
 }
 pub(crate) fn display_instances<'a>(w: &Workspace, e: &'a Evaluation) -> Vec<&'a PlacedPart> {
+    if w.edit_repair.is_some() && e.failed_mate_reference.is_some() {
+        return e.instances.iter().collect();
+    }
     if let Some(stage) = cad_core::exploded_views::selected(e, w.view.exploded_view.as_ref()) {
         return stage
             .instances
@@ -847,6 +853,13 @@ pub(crate) fn display_meshes<'a>(
     e: &'a Evaluation,
     i: &PlacedPart,
 ) -> Vec<&'a MeshData> {
+    if w.edit_repair.is_some() && e.failed_mate_reference.is_some() {
+        return e
+            .meshes
+            .get(cad_core::history::mesh_key(i))
+            .into_iter()
+            .collect();
+    }
     if w.view.active_part.as_ref() == Some(&i.definition) && crate::contours_ui::picking_target(w) {
         return selection_evaluation(w)
             .map(|input| selection_meshes(w, input, i))
@@ -877,6 +890,9 @@ pub(crate) fn display_meshes<'a>(
     meshes
 }
 pub(crate) fn visible(w: &Workspace, i: &PlacedPart) -> bool {
+    if crate::edit_review::mate::eligible(w, &i.path) {
+        return true;
+    }
     if crate::display_states_ui::effect(w, &i.path).visibility
         == Some(cad_core::display_states::Visibility::Hidden)
     {
@@ -890,6 +906,9 @@ pub(crate) fn visible(w: &Workspace, i: &PlacedPart) -> bool {
         || w.view.ghost_others
 }
 pub(crate) fn ghost_neighbor(w: &Workspace, instance: &PlacedPart) -> bool {
+    if crate::edit_review::mate::eligible(w, &instance.path) {
+        return false;
+    }
     crate::display_states_ui::effect(w, &instance.path).visibility
         == Some(cad_core::display_states::Visibility::Ghost)
         || w.view.isolation
@@ -934,6 +953,9 @@ struct PreviewMesh<'a> {
     kind: PreviewKind,
 }
 fn preview_meshes(w: &Workspace) -> Vec<PreviewMesh<'_>> {
+    if w.edit_repair.is_some() {
+        return vec![];
+    }
     if crate::contours_ui::picking_target(w) || w.view.original || w.view.history_cursor.is_some() {
         return vec![];
     }
@@ -1164,6 +1186,9 @@ fn part_pattern_input(w: &Workspace) -> Option<cad_core::NodeRef> {
     }
 }
 pub(crate) fn selection_evaluation(w: &Workspace) -> Option<&Evaluation> {
+    if let Some(current) = crate::edit_review::mate::evaluation(w) {
+        return Some(current);
+    }
     if crate::model_dimensions_ui::active(w) {
         return crate::model_dimensions_ui::current_geometry(w);
     }
@@ -1216,6 +1241,13 @@ pub(crate) fn selection_meshes<'a>(
     e: &'a Evaluation,
     i: &PlacedPart,
 ) -> Vec<&'a MeshData> {
+    if w.edit_repair.is_some() && e.failed_mate_reference.is_some() {
+        return e
+            .meshes
+            .get(cad_core::history::mesh_key(i))
+            .into_iter()
+            .collect();
+    }
     if w.view.active_part.as_ref() == Some(&i.definition)
         && let Some(feature) = crate::contours_ui::input_feature(w)
     {
@@ -1338,7 +1370,8 @@ fn pick_geometry(
     let Some(e) = selection_evaluation(w) else {
         return vec![];
     };
-    let target_pick = crate::contours_ui::picking_target(w);
+    let repairing_mate = w.edit_repair.is_some() && e.failed_mate_reference.is_some();
+    let target_pick = !repairing_mate && crate::contours_ui::picking_target(w);
     let (o, d) = ray(w, rect, p);
     let project = projector(w, rect);
     let mut hits = vec![];
@@ -1346,7 +1379,11 @@ fn pick_geometry(
         if target_pick && w.view.active_part.as_ref() != Some(&instance.definition) {
             continue;
         }
-        let context_references = w.fields.contains_key("pick-context-references")
+        if repairing_mate && !crate::edit_review::mate::eligible(w, &instance.path) {
+            continue;
+        }
+        let context_references = repairing_mate
+            || w.fields.contains_key("pick-context-references")
             || crate::component_pattern_ui::picking_direction(w);
         if !visible(w, instance)
             || (!context_references
@@ -1438,7 +1475,8 @@ fn pick_geometry(
     }
     if let Some(picker) = &w.mate_picker {
         hits.retain(|s| picker.accepts_candidate(w.session.visible(), s));
-    } else if !crate::component_pattern_ui::picking_direction(w)
+    } else if !repairing_mate
+        && !crate::component_pattern_ui::picking_direction(w)
         && !crate::contours_ui::picking_target(w)
     {
         match pick_filter(w) {
@@ -2255,7 +2293,8 @@ pub fn sync_scene(
         };
         layers.push((evaluation, document, false));
     }
-    if w.view.history_cursor.is_none()
+    if w.edit_repair.is_none()
+        && w.view.history_cursor.is_none()
         && let (Some(e), Some(d)) = (&w.compare, &w.compare_document)
     {
         layers.push((e, d, true));

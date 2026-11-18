@@ -181,6 +181,7 @@ pub struct Workspace {
     pub operation_values: std::sync::Mutex<operation_editor_ui::ValueCache>,
     pub production_cache: std::sync::Mutex<production_ui::Cache>,
     pub drawing_editor_cache: std::sync::Mutex<drawing_editor_ui::Cache>,
+    pub edit_repair: Option<edit_review::mate::Picker>,
     pub edit_review: std::sync::Mutex<edit_review::Cache>,
     pub source_cache: std::sync::Mutex<source_cache::Cache>,
     pub jobs: background::Jobs,
@@ -361,6 +362,7 @@ impl Workspace {
             production_cache: Default::default(),
             drawing_editor_cache: Default::default(),
             source_cache: Default::default(),
+            edit_repair: None,
             edit_review: Default::default(),
             jobs: background::Jobs::new(),
             worker: worker::WorkerClient::new(),
@@ -573,6 +575,9 @@ impl Workspace {
         let before = self.sketch.as_ref().map(|_| self.session.visible().clone());
         match self.session.dispatch(c) {
             Ok(()) => {
+                if self.edit_repair.take().is_some() {
+                    self.rendered_key.clear();
+                }
                 self.changed = Instant::now();
                 if self.session.last_dispatch_reused_evaluation {
                     self.requested = Some(self.session.identity());
@@ -809,6 +814,7 @@ impl Workspace {
                 ) {
                     self.context_selection = None;
                 }
+                self.edit_repair = None;
                 self.tool_checkpoint = None;
                 self.dialog = None;
                 self.manager_tree = true;
@@ -844,6 +850,7 @@ impl Workspace {
             self.status = "Use Cancel Publish to stop the current publication".into();
             return;
         }
+        self.edit_repair = None;
         assembly_scope_ui::close(self);
         git_ui::cancel_preview(self);
         component_fork_ui::cancel(self);
@@ -974,6 +981,9 @@ impl Workspace {
         }
     }
     pub fn open_editor(&mut self, name: &str) {
+        if self.dialog.as_deref() != Some(name) && self.edit_repair.take().is_some() {
+            self.rendered_key.clear();
+        }
         if name == "commands" {
             command_palette::before_open(self);
         }
@@ -1022,6 +1032,7 @@ impl Workspace {
             self.status = "Use Cancel Publish to stop the current publication".into();
             return;
         }
+        self.edit_repair = None;
         assembly_scope_ui::close(self);
         git_ui::cancel_preview(self);
         component_fork_ui::cancel(self);

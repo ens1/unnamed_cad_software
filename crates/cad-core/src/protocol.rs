@@ -40,6 +40,9 @@ pub struct MeshData {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FaceRange {
+    /// Proven native axis for a rotational-face replacement during a mate repair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_axis: Option<crate::reference_geometry::Axis>,
     pub start: usize,
     pub count: usize,
     pub reference: TopologyRef,
@@ -244,6 +247,8 @@ pub struct OperationPreview {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Evaluation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_mate_reference: Option<Box<crate::assembly_geometry::FailedReference>>,
     /// Current finished-part dimensions for each evaluated definition/configuration.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub model_dimensions: BTreeMap<Id, crate::model_dimensions::Report>,

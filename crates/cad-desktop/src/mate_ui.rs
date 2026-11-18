@@ -363,9 +363,31 @@ fn reference_from_pick(
     assembly: &Assembly,
     selected: &viewport::Selection,
 ) -> Result<(Id, Reference)> {
+    let curve = parsed(w)
+        .ok()
+        .is_some_and(|m| matches!(m.kind.as_str(), "path" | "slot" | "cam"));
+    typed_reference_from_pick(
+        w,
+        assembly,
+        selected,
+        curve.then_some(assembly_geometry::ReferenceClass::Curve),
+    )
+}
+pub(crate) fn typed_reference_from_pick(
+    w: &Workspace,
+    assembly: &Assembly,
+    selected: &viewport::Selection,
+    expected: Option<assembly_geometry::ReferenceClass>,
+) -> Result<(Id, Reference)> {
     let doc = w.session.visible();
     let (participant, path) = participant_path(doc, assembly, &selected.path)?;
     let source = match selected.reference.topology.as_str() {
+        "face" if expected == Some(assembly_geometry::ReferenceClass::Profile) => {
+            Source::FaceCenter {
+                reference: selected.reference.clone(),
+                body: crate::reference_ui::selected_body(w, selected),
+            }
+        }
         "face" if crate::reference_ui::selected_face_planar(w, selected) => Source::Plane {
             plane: PlaneSource::Face {
                 reference: selected.reference.clone(),
@@ -376,16 +398,10 @@ fn reference_from_pick(
             reference: selected.reference.clone(),
             body: crate::reference_ui::selected_body(w, selected),
         },
-        "edge"
-            if parsed(w)
-                .ok()
-                .is_some_and(|m| matches!(m.kind.as_str(), "path" | "slot" | "cam")) =>
-        {
-            Source::EdgeCurve {
-                reference: selected.reference.clone(),
-                body: crate::reference_ui::selected_body(w, selected),
-            }
-        }
+        "edge" if expected == Some(assembly_geometry::ReferenceClass::Curve) => Source::EdgeCurve {
+            reference: selected.reference.clone(),
+            body: crate::reference_ui::selected_body(w, selected),
+        },
         "edge" => Source::Axis {
             axis: crate::reference_ui::picked_axis(w, selected),
         },
