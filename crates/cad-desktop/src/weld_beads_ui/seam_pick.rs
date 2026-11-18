@@ -48,8 +48,25 @@ fn choose(w: &mut Workspace, owner: &str, seam: SeamSource) {
         assembly_welds_ui::create(w, owner, seam);
     }
 }
+fn replacement(w: &Workspace) -> Option<(cad_core::NodeRef, super::Definition, bool)> {
+    let pick: Value = serde_json::from_str(w.fields.get(super::PICK)?).ok()?;
+    if pick["mode"] != "seam" {
+        return None;
+    }
+    let (node, definition, generation, part) = super::authoring(w)?;
+    (pick["owner"] == json!(node) && pick["editor"] == generation)
+        .then_some((node, definition, part))
+}
+pub(crate) fn active(w: &Workspace) -> bool {
+    owner(w).is_some() || replacement(w).is_some()
+}
 pub(crate) fn capture_click(w: &mut Workspace, rect: egui::Rect, point: egui::Pos2) -> bool {
-    let Some(owner) = owner(w).map(str::to_owned) else {
+    let replacing = replacement(w);
+    let Some(owner) = owner(w).map(str::to_owned).or_else(|| {
+        replacing
+            .as_ref()
+            .map(|(node, _, _)| node.definition.clone())
+    }) else {
         return false;
     };
     let picked = viewport::pick(w, rect, point)
@@ -68,10 +85,26 @@ pub(crate) fn capture_click(w: &mut Workspace, rect: egui::Rect, point: egui::Po
             path,
         })
     });
-    if let Some(seam) = seam {
-        choose(w, &owner, seam);
-    } else {
+    let Some(seam) = seam else {
         w.status = PROMPT.into();
+        return true;
+    };
+    if let Some((node, mut definition, part)) = replacing {
+        if part && !super::upstream_part_source(w, &node, seam.dependency()) {
+            w.status = "Pick geometry made before this weld in the owning part.".into();
+            return true;
+        }
+        definition.seam = seam;
+        definition.supports.clear();
+        match super::submit_joint(w, definition, part) {
+            Ok(()) => {
+                w.fields.remove(super::PICK);
+                w.status = "Seam updated.".into();
+            }
+            Err(error) => w.status = error.to_string(),
+        }
+    } else {
+        choose(w, &owner, seam);
     }
     true
 }

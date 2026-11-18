@@ -1062,22 +1062,28 @@ pub(crate) fn face_caption(
 }
 pub(crate) fn preset(w: &mut Workspace) {
     crate::history::latest(w);
-    if w.tool_checkpoint.is_some() || w.sketch.is_some() || w.confirm_requested {
+    if w.tool_checkpoint.is_some()
+        || w.session.draft.is_some()
+        || w.sketch.is_some()
+        || w.settings.is_some()
+        || w.assembly_motion.is_some()
+        || w.confirm_requested
+        || crate::publish_ui::busy(w)
+    {
         w.status = "Confirm or cancel the current operation before adding weld metal".into();
         return;
     }
-    let Some(part) = w
-        .view
-        .active_part
-        .as_ref()
-        .and_then(|owner| w.session.visible().parts.get(owner))
-    else {
-        w.status =
-            "Select the intended part; assembly welds use the assembly's own Weld Bead command"
-                .into();
+    let part = if crate::workspace_controls::in_place(w) {
+        w.view.active_part.clone()
+    } else {
+        crate::initial_part_context(w.session.visible())
+    };
+    let Some(owner) = part else {
+        let root = w.session.visible().root.clone();
+        crate::assembly_welds_ui::new(w, &root);
         return;
     };
-    let owner = part.id.clone();
+    w.view.active_part = Some(owner.clone());
     let Some(seam) = selected_seam(w, true).filter(|seam| seam.dependency().definition == owner)
     else {
         seam_pick::open(w, &owner);
@@ -1118,6 +1124,9 @@ fn create_part(w: &mut Workspace, owner: &str, seam: SeamSource) {
     part.outputs.push(feature.id.clone());
     part.features.push(feature.clone());
     w.start_tool();
+    if w.tool_checkpoint.is_none() {
+        return;
+    }
     w.dispatch(Command::PutPart {
         part,
         assembly: None,

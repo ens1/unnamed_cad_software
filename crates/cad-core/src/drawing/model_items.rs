@@ -678,10 +678,11 @@ pub(super) fn project_items(
     }
     // A moved item reserves its original page and location before automatic placement.
     items.sort_by_key(|item| {
-        sheet
+        let automatic = sheet
             .model_item_placements
             .get(&item.id)
-            .is_none_or(|p| p.auto_offset)
+            .is_none_or(|p| p.auto_offset);
+        (automatic, !matches!(item.style, Style::Weld(_)))
     });
     let bounds = paper_bounds(sheet);
     let mut main_area = bounds;
@@ -823,6 +824,11 @@ pub(super) fn project_items(
             primitive_start: start,
             primitive_count: layer.primitives.len() - start,
         });
+        let text = if let Some(weld) = &weld_layout {
+            weld.description(at, value, &layer.primitives[start..])
+        } else {
+            value
+        };
         layer.items.insert(
             item.id,
             PaperItem {
@@ -835,7 +841,7 @@ pub(super) fn project_items(
                 weld: matches!(item.style, Style::Weld(_)),
                 weld_views: p.weld_views,
                 label: item.label,
-                text: value,
+                text,
                 view: p.view,
                 anchor_mm: p.anchor,
                 label_mm: at,

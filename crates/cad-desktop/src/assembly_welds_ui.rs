@@ -88,6 +88,8 @@ pub fn cancel(w: &mut Workspace) {
 fn busy(w: &Workspace) -> bool {
     w.tool_checkpoint.is_some()
         || w.sketch.is_some()
+        || w.settings.is_some()
+        || crate::publish_ui::busy(w)
         || w.session.draft.is_some()
         || w.confirm_requested
         || w.assembly_motion.is_some()
@@ -1060,16 +1062,8 @@ fn active_action(w: &mut Workspace, data: &Value) -> Result<()> {
 }
 pub fn action(w: &mut Workspace, command: &str, data: Option<&Value>) -> bool {
     if command == "weld.bead" {
-        if w.session
-            .visible()
-            .assemblies
-            .contains_key(&w.session.visible().root)
-        {
-            let owner = w.session.visible().root.clone();
-            new(w, &owner);
-            return true;
-        }
-        return false;
+        crate::weld_beads_ui::preset(w);
+        return true;
     }
     if !command.starts_with("assembly.weld-") {
         return false;

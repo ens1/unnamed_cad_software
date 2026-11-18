@@ -86,6 +86,7 @@ struct Capture {
     fields: BTreeMap<String, String>,
     source: Drawing,
     scene: Arc<Scene>,
+    prepared: Arc<cad_core::drawing::Sheet>,
     sheet: Id,
     page: u32,
     target: Target,
@@ -526,12 +527,13 @@ fn apply(w: &mut Workspace, state: &mut State, action: &Action) -> Result<()> {
         .cache
         .as_ref()
         .ok_or_else(|| invalid("Paper geometry is unavailable"))?;
-    let updated = interaction::apply(
+    let updated = interaction::apply_on_paper(
         w.session.visible(),
         &cache.evaluation,
         &source,
         page(w),
         action,
+        Some(&cache.paper),
     )?;
     publish(w, updated)
 }
@@ -570,12 +572,12 @@ fn begin_capture(w: &Workspace, state: &mut State, request: CaptureRequest<'_>) 
             "Wait for current model and drawing validation before starting a drag",
         ));
     }
-    let scene = state
+    let cache = state
         .cache
         .as_ref()
-        .ok_or_else(|| invalid("Paper geometry is unavailable"))?
-        .scene
-        .clone();
+        .ok_or_else(|| invalid("Paper geometry is unavailable"))?;
+    let scene = cache.scene.clone();
+    let prepared = cache.paper.clone();
     let cohort = if handle.kind == HandleKind::Move && state.cohort.len() > 1 {
         let ids = crate::drawing_layout_ui::ids(&state.cohort)?;
         if ids.iter().any(|id| {
@@ -594,6 +596,7 @@ fn begin_capture(w: &Workspace, state: &mut State, request: CaptureRequest<'_>) 
         vec![]
     };
     state.capture = Some(Capture {
+        prepared,
         session: w.session.clone(),
         fields: w.fields.clone(),
         source: source.clone(),
@@ -827,12 +830,13 @@ fn update_capture(w: &mut Workspace, state: &mut State, pointer: Pos2) -> Result
         };
         let native = session_native(&capture.session)
             .ok_or_else(|| invalid("Gesture-start model geometry is unavailable"))?;
-        let updated = interaction::apply(
-            w.session.visible(),
+        let updated = interaction::apply_on_paper(
+            capture.session.visible(),
             native,
             &capture.source,
             capture.page,
             &action,
+            Some(&capture.prepared),
         )?;
         publish(w, updated)?;
         capture.expected = w.session.identity();

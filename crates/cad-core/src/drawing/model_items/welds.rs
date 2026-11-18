@@ -35,7 +35,7 @@ impl ProjectedSide {
 struct Collector<'a> {
     doc: &'a Document,
     evaluation: &'a Evaluation,
-    section: Option<&'a crate::drawing_sections::Evaluated>,
+    section_anchors: BTreeMap<(&'a [Id], &'a crate::NodeRef), Vec<[f64; 3]>>,
     items: &'a mut Vec<Item>,
     review: &'a mut Vec<String>,
 }
@@ -56,10 +56,34 @@ impl WeldItems {
         if !sheet.show_weld_symbols {
             return Ok(result);
         }
+        let mut section_anchors = BTreeMap::new();
+        if let Some(section) = e.drawing_sections.get(&sheet.id) {
+            for vertex in &section.vertices {
+                let PointReference::SectionVertex { source, .. } = &vertex.reference else {
+                    continue;
+                };
+                let CurveReference::ModelEdge {
+                    edge,
+                    body,
+                    instance_path,
+                } = source.as_ref()
+                else {
+                    continue;
+                };
+                let owners = std::iter::once(&edge.producer)
+                    .chain(body.iter().filter(|owner| *owner != &edge.producer));
+                for owner in owners {
+                    section_anchors
+                        .entry((instance_path.as_slice(), owner))
+                        .or_insert_with(Vec::new)
+                        .push(vertex.position);
+                }
+            }
+        }
         let mut collector = Collector {
             doc,
             evaluation: e,
-            section: e.drawing_sections.get(&sheet.id),
+            section_anchors,
             items: &mut result.items,
             review: &mut result.review,
         };
@@ -106,9 +130,12 @@ impl WeldItems {
     ) {
         // Check the center first. Large assemblies can exhaust this optional budget
         // without changing model visibility, the weld's identity or its physical side.
-        let mut remaining = 250_000;
-        for item in &mut self.items {
-            if remaining == 0 {
+        let mut total = 250_000;
+        let count = self.items.len();
+        for (ordinal, item) in self.items.iter_mut().enumerate() {
+            let allowance = total / (count - ordinal);
+            let mut remaining = allowance;
+            if total == 0 {
                 break;
             }
             let Style::Weld(bead) = &mut item.style else {
@@ -123,6 +150,7 @@ impl WeldItems {
                 let i = (n / 2 + step) % n;
                 hints[i] = scene.callout_visible(bead.stations[i].point, &mut remaining);
             }
+            total -= allowance - remaining;
             bead.visibility.insert(view.into(), hints);
         }
     }
@@ -168,37 +196,19 @@ impl Collector<'_> {
         let mut section_stations = Vec::new();
         // A cut can pass between sampled seam stations. Its actual intersection
         // with this weld is an authoritative arrow target on the section.
-        if let Some(section) = self.section {
-            for vertex in &section.vertices {
-                let PointReference::SectionVertex { source, .. } = &vertex.reference else {
-                    continue;
-                };
-                let CurveReference::ModelEdge {
-                    edge,
-                    body,
-                    instance_path,
-                } = source.as_ref()
-                else {
-                    continue;
-                };
-                if instance_path != &instance.path
-                    || (body.as_ref() != Some(&bead.source) && edge.producer != bead.source)
-                {
-                    continue;
-                }
+        if let Some(vertices) = self
+            .section_anchors
+            .get(&(instance.path.as_slice(), &bead.source))
+        {
+            for &point in vertices {
                 let distance = |s: &CalloutStation| {
-                    (0..3)
-                        .map(|i| (s.point[i] - vertex.position[i]).powi(2))
-                        .sum::<f64>()
+                    (0..3).map(|i| (s.point[i] - point[i]).powi(2)).sum::<f64>()
                 };
                 if let Some(closest) = stations
                     .iter()
                     .min_by(|a, b| distance(a).total_cmp(&distance(b)))
                 {
-                    section_stations.push(CalloutStation {
-                        point: vertex.position,
-                        ..*closest
-                    });
+                    section_stations.push(CalloutStation { point, ..*closest });
                 }
             }
         }
@@ -391,6 +401,31 @@ impl Layout<'_> {
             usize::from(offset[0] >= 0.),
         )
     }
+    pub(super) fn description(&self, at: Point, mut value: String, marks: &[Primitive]) -> String {
+        let (side, _) = self.orientation(at);
+        let symbol = &self.bead.symbols[side];
+        value.push_str(if side == 1 {
+            " · Arrow side"
+        } else {
+            " · Other side"
+        });
+        if symbol.field_weld {
+            value.push_str(" · Field weld");
+        }
+        if symbol.all_around {
+            value.push_str(" · All around");
+        }
+        for primitive in marks {
+            if let Primitive::Text { text, .. } = primitive
+                && !text.is_empty()
+            {
+                value.push_str(" · ");
+                value.push_str(text);
+            }
+        }
+        value
+    }
+
     pub(super) fn bounds(&self, at: Point) -> Bounds {
         let (side, hand) = self.orientation(at);
         self.bounds[side][hand].map(|corner| sum(at, corner))

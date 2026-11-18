@@ -42,6 +42,12 @@ Each action and tree item is also an independent semantic binding. Existing
 `drawing-editor` confirmation action identities remain available to custom
 layouts; their default visual position has moved to the pinned footer.
 
+## Welds on paper
+
+Part and assembly sheets show symbols for the model’s deposited welds by default. Select a symbol and use **Show weld in view** to choose a projection. Front and Back show opposite sides of a joint, as do Left and Right or Top and Bottom. A symbol updates its leader and side when the view changes. Drag its handle to position it on paper, or use **Place automatically** to restore automatic view selection and placement.
+
+Use **Edit weld in model…** to change the joint or mark it as a field weld. To hide generated symbols on one sheet, clear **Sheet → Model scope → Show model weld symbols**. Manual welding annotations have their own placement. The sheet preview, drawing PDF and drawing DXF share the resulting symbols. [Weld symbol conventions](drawing-symbols.md)
+
 ## Model dimensions on paper
 
 A new part sheet shows finished model dimensions and established datums automatically. **Sheet → Model scope → Show model dimensions and datums** also enables them on an existing sheet. Each callout follows its part and configuration. Select a label and choose **Edit in model…** to change its tolerance. Drag its handle to change where it prints. A label move is a sheet edit and uses Apply, Cancel and Undo.

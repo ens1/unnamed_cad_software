@@ -83,7 +83,7 @@ pub struct Selection {
 }
 const PICK_FILTER: &str = "model-pick-filter";
 fn edge_tool_active(w: &Workspace) -> bool {
-    if crate::weld_beads_ui::seam_pick::owner(w).is_some() {
+    if crate::weld_beads_ui::seam_pick::active(w) {
         return true;
     }
     w.tool_checkpoint.is_some()

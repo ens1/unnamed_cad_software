@@ -3159,18 +3159,7 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
 }
 pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
     if name == "Weld Bead" {
-        if w.view.active_part.is_some() {
-            crate::weld_beads_ui::preset(w);
-        } else {
-            let doc = w.session.visible();
-            let owner = w
-                .fields
-                .get("assembly-id")
-                .filter(|id| doc.assemblies.contains_key(*id))
-                .unwrap_or(&doc.root)
-                .clone();
-            crate::assembly_welds_ui::new(w, &owner);
-        }
+        crate::weld_beads_ui::preset(w);
         return;
     }
     if crate::assembly_tools_ui::active(w)

@@ -16,6 +16,18 @@ tolerance widened or a cosmetic bead substituted.
 
 ## Supported joint authoring
 
+Select **Weldments → Weld Bead**, then click a joint edge or a visible sketch
+member. **Choose a sketch or curve…** also lists saved sources. You can select
+the seam before starting the command. A standalone part or a part edited in
+place owns its bead feature. In an assembly the bead keeps the selected
+component paths and follows their placement.
+
+Use **Joint type** to designate a butt, tee, lap, corner or edge joint.
+**Weld profile** and **Leg size** or **Bead width** control the deposited
+solid. Use **Drawing symbol** for a field weld, a complete all-around weld, or
+a square-groove designation on a butt cap. All-around requires continuous metal
+on a closed seam with zero end offsets. [Drawing weld symbols](drawing-symbols.md)
+
 - **Fillet:** two proven joint faces, with each complete root-to-toe strip on its
   own support. Straight joints use planar faces; circular joints use the existing
   transverse-plane/coaxial-cylinder contact construction.

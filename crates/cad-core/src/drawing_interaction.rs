@@ -1585,20 +1585,59 @@ pub fn apply(
     page: u32,
     action: &Action,
 ) -> Result<Drawing> {
+    apply_on_paper(doc, evaluation, source, page, action, None)
+}
+
+/// Gestures use the same projected weld station and page the user picked.
+/// The fallback builds a full preview for callers without prepared paper.
+pub fn apply_on_paper(
+    doc: &Document,
+    evaluation: &Evaluation,
+    source: &Drawing,
+    page: u32,
+    action: &Action,
+    prepared: Option<&drawing::Sheet>,
+) -> Result<Drawing> {
     if !evaluation.valid && !evaluation.geometry_valid {
         return Err(invalid(
             "Paper source actions require complete current native geometry",
         ));
     }
+    let callout = |id: &str| -> Result<drawing::model_items::PaperItem> {
+        let built;
+        let paper = if let Some(paper) = prepared {
+            let expected = if page == 0 {
+                source.id.clone()
+            } else {
+                format!("{}::continuation:{page}", source.id)
+            };
+            if paper.id != expected
+                || paper.source_info.document != doc.id
+                || paper.source_info.revision != doc.revision
+                || paper.source_info.backend != evaluation.identity.backend
+            {
+                return Err(invalid(
+                    "The model callout belongs to a different drawing revision or page",
+                ));
+            }
+            paper
+        } else {
+            built = drawing::build_sheet_preview(doc, evaluation, source, page)?;
+            &built
+        };
+        paper
+            .model_items
+            .get(id)
+            .cloned()
+            .ok_or_else(|| invalid("The model callout is no longer on this page"))
+    };
     let mut sheet = source.clone();
     match action {
         Action::SetWeldView { id, view } => {
-            let paper = drawing::build_sheet_layout(doc, evaluation, source, page)?;
-            let weld = paper
-                .model_items
-                .get(id)
-                .filter(|item| item.weld && item.weld_views.contains(view))
-                .ok_or_else(|| invalid("Choose a view that contains this weld"))?;
+            let weld = callout(id)?;
+            if !weld.weld || !weld.weld_views.contains(view) {
+                return Err(invalid("Choose a view that contains this weld"));
+            }
             sheet.model_item_placements.insert(
                 id.clone(),
                 drawing::model_items::Placement {
@@ -1674,11 +1713,7 @@ pub fn apply(
                     }
                 }
                 Target::ModelItem { id } => {
-                    let rendered = drawing::build_sheet_layout(doc, evaluation, source, page)?;
-                    let item = rendered
-                        .model_items
-                        .get(id)
-                        .ok_or_else(|| invalid("The model callout is no longer on this sheet"))?;
+                    let item = callout(id)?;
                     sheet.model_item_placements.insert(
                         id.clone(),
                         drawing::model_items::Placement {
@@ -2144,7 +2179,12 @@ pub fn apply(
     // Resetting the last pinned callout can remove its continuation page.
     let updated_page = if matches!(
         action,
-        Action::ResetModelPlacement { .. } | Action::SetWeldView { .. }
+        Action::ResetModelPlacement { .. }
+            | Action::SetWeldView { .. }
+            | Action::Move {
+                target: Target::ModelItem { .. },
+                ..
+            }
     ) {
         0
     } else {
