@@ -110,9 +110,11 @@ pub(crate) fn concise_problem(detail: &str) -> String {
     // Preserve the actual failure category; full kernel/reference detail remains
     // independently available in the diagnostics descriptor and expansion.
     let message = detail.lines().next().unwrap_or(detail).trim();
+    // Remove the part/feature path when present. Keep both sides of a
+    // diagnostic such as "Invalid distance: use a positive length".
     let message = message
-        .rsplit_once(": ")
-        .map(|(_, message)| message)
+        .split_once(": ")
+        .and_then(|(prefix, text)| prefix.contains(" / ").then_some(text))
         .unwrap_or(message);
     let mut text = message.chars().take(150).collect::<String>();
     if message.chars().count() > 150 {
@@ -166,7 +168,7 @@ pub(crate) fn task_status(w: &Workspace) -> (String, String) {
         if let Some(reason) = crate::cad_ui::confirmation_disabled_reason(w) {
             return ("required".into(), reason.into());
         }
-        return ("valid".into(), "Preview ready. Choose OK to apply.".into());
+        return ("valid".into(), "Preview ready".into());
     }
     (state.into(), label.into())
 }
@@ -219,24 +221,8 @@ pub(crate) fn disclosure(ui: &mut egui::Ui, w: &mut Workspace, group: &str, labe
 
 pub(crate) fn task_status_control(ui: &mut egui::Ui, w: &Workspace) {
     let (state, text) = task_status(w);
-    let props = controls::properties(
-        "workspace.task-status",
-        "task-status",
-        &["task-status"],
-        &state,
-    );
-    if props.get("display").is_some_and(|v| v == "none") {
-        return;
-    }
-    let height = controls::number(&props, "height", 24.).max(0.);
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), height),
-        egui::Sense::hover(),
-    );
-    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(rect).id_salt("task-status"));
-    row.set_clip_rect(rect.intersect(ui.clip_rect()));
     controls::label(
-        &mut row,
+        ui,
         "workspace.task-status",
         "task-status",
         &["task-status"],
@@ -675,6 +661,14 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data: serde_json::json!({"contract":"tcad.presentation.workspace-controls","version":1,"renderer":renderer,"available":available}),
         });
     }
+    for (key, label, gesture) in crate::navigation::shortcuts(w) {
+        out.push(SemanticElement {
+            id: format!("navigation-help/{key}"), role: "navigation-shortcut".into(),
+            label: label.into(), value: Some(gesture.into()), state: "ready".into(),
+            commands: vec![], relationships: vec!["viewport.navigation-hint".into()],
+            data: serde_json::json!({"contract":"tcad.presentation.workspace-controls","version":1}),
+        });
+    }
     for (id, role, label, value) in [
         (
             "workspace.model-context",
@@ -911,22 +905,18 @@ pub(crate) fn toolbar(ui: &mut egui::Ui, w: &mut Workspace) {
     });
     if w.view.history_cursor.is_some() {
         ui.horizontal(|ui| {
-            controls::label(
-                ui,
-                "workspace.history-context",
-                "model-context-label",
-                &[],
-                "Cached history",
-                "inspection",
-            );
-            button(ui, w, "history.latest", "Latest", true, false);
+            button(ui, w, "history.latest", "Return to latest", true, false);
         });
     }
     if w.tool_checkpoint.is_some() && !crate::presentation_composition::task_controls_hosted(w) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             crate::cad_ui::confirmation(ui, w)
         });
-    } else if w.selected.is_some() || w.selected_component.is_some() {
+    } else if w.tool_checkpoint.is_none()
+        && w.selection_popup.is_none()
+        && (w.selected.is_some() || w.selected_component.is_some())
+        && crate::selection_ui::current(w).is_some()
+    {
         ui.horizontal(|ui| {
             controls::label(
                 ui,
@@ -1053,13 +1043,51 @@ pub(crate) fn isolation(ui: &mut egui::Ui, w: &mut Workspace) {
 }
 
 pub(crate) fn navigation_hint(ui: &mut egui::Ui, w: &mut Workspace) {
-    controls::label(
+    controls::menu_button_as(
         ui,
-        "workspace.navigation-instructions",
-        "navigation-instructions",
-        &[],
-        &crate::navigation::hint(w),
-        "ready",
+        "viewport.navigation-hint",
+        "navigation-help",
+        "Navigation help",
+        |ui| {
+            egui::Grid::new(ui.id().with("navigation-shortcuts")).show(ui, |ui| {
+                for (key, label, gesture) in crate::navigation::shortcuts(w) {
+                    controls::label(
+                        ui,
+                        &format!("navigation-help/{key}"),
+                        "navigation-gesture-label",
+                        &[],
+                        label,
+                        "ready",
+                    );
+                    controls::label(
+                        ui,
+                        &format!("navigation-help/{key}/gesture"),
+                        "navigation-gesture",
+                        &[],
+                        gesture,
+                        "ready",
+                    );
+                    ui.end_row();
+                }
+            });
+            ui.separator();
+            let unavailable = crate::cad_ui::command_disabled_reason(w, "controls");
+            if controls::button(
+                ui,
+                "command-menu/controls",
+                "menu-action",
+                &["menu-item"],
+                "Navigation settings…",
+                unavailable.is_none(),
+                false,
+            )
+            .on_disabled_hover_text(unavailable.unwrap_or_default())
+            .clicked()
+            {
+                ui.close();
+                ui::action(w, "controls");
+            }
+        },
     );
 }
 

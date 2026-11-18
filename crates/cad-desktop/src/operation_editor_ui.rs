@@ -106,6 +106,12 @@ impl<'a> Fields<'a> {
             data,
         });
     }
+    fn folding_group(&mut self, group: &'static str, label: &str, expanded: bool) {
+        self.group(group, label);
+        if let Some(element) = self.out.last_mut() {
+            element.data["default_expanded"] = json!(expanded);
+        }
+    }
     fn field(&mut self, path: &str, label: &str, choices: Vec<Value>, unit: Option<&str>) {
         let Some(value) = self.source.pointer(path).cloned() else {
             return;
@@ -2185,6 +2191,12 @@ pub(crate) fn render_elements(
         }
     }
     for (group, children) in groups {
+        if children
+            .iter()
+            .all(|element| element.data.get("inline_parent").is_some())
+        {
+            continue;
+        }
         let classes = group
             .data
             .get("classes")
@@ -2202,18 +2214,20 @@ pub(crate) fn render_elements(
                 classes: &classes,
                 label: &group.label,
                 state: "draft",
-                collapse: Some(!matches!(
-                    group.data["group"].as_str(),
-                    Some(
-                        "guides"
-                            | "placement"
-                            | "orientation"
-                            | "appearance"
-                            | "priority"
-                            | "conditions"
-                            | "advanced"
+                collapse: Some(group.data["default_expanded"].as_bool().unwrap_or_else(|| {
+                    !matches!(
+                        group.data["group"].as_str(),
+                        Some(
+                            "guides"
+                                | "placement"
+                                | "orientation"
+                                | "appearance"
+                                | "priority"
+                                | "conditions"
+                                | "advanced"
+                        )
                     )
-                )),
+                })),
                 open: None,
             },
             |ui| {

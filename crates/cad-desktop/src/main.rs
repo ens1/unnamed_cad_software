@@ -51,6 +51,7 @@ mod inspection_ui;
 mod mate_ui;
 mod materials_ui;
 mod mold_ui;
+mod named_parameter_ui;
 mod navigation;
 mod operation_editor_ui;
 mod operation_preview;
@@ -537,6 +538,11 @@ impl Workspace {
         }
     }
     pub fn apply(&mut self) {
+        if named_parameter_ui::active(self) {
+            self.confirm_requested = false;
+            self.status = "Add or cancel the named parameter first".into();
+            return;
+        }
         if !component_fork_ui::current_source_is_valid(self)
             || !feature_transfer_ui::ready_to_confirm(self)
         {
@@ -1055,6 +1061,11 @@ impl Workspace {
         drawing_ui::retain_workspace(self);
     }
     pub fn confirm_tool(&mut self) {
+        if named_parameter_ui::active(self) {
+            self.confirm_requested = false;
+            self.status = "Add or cancel the named parameter first".into();
+            return;
+        }
         if publish_ui::busy(self) {
             self.status = "Wait for Publish to finish or cancel it before applying an edit".into();
             return;

@@ -102,13 +102,27 @@ fn picked_face(fields: &Fields<'_>, body: &NodeRef) -> Option<Value> {
 
 pub(super) fn fields(fields: &mut Fields<'_>) {
     let operation = fields.feature.operation.clone();
-    fields.group("sources", "Input bodies");
     match &operation {
         Operation::Boolean { .. } => {
+            fields.group("sources", "Input bodies");
             fields.reference("/operation/left", "Main body", "solid", false);
             fields.reference("/operation/right", "Tool body", "solid", false);
         }
-        _ => fields.reference("/operation/body", "Input body", "solid", false),
+        _ => {
+            let choices = node_choices(fields.w, fields.owner, &fields.feature.id, "solid");
+            let name = choices
+                .iter()
+                .find(|candidate| {
+                    Some(&candidate["value"]) == fields.source.pointer("/operation/body")
+                })
+                .and_then(|candidate| candidate["label"].as_str());
+            let heading = name.map_or_else(
+                || "Input body".to_owned(),
+                |name| format!("Input body · {name}"),
+            );
+            fields.folding_group("sources", &heading, name.is_none());
+            fields.choice("/operation/body", "Input body", choices);
+        }
     }
     match &operation {
         Operation::Fillet { .. } | Operation::Chamfer { .. } => {
@@ -125,7 +139,15 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                         ("distance_angle", "Distance and angle"),
                     ]),
                 );
-                fields.quantity("/operation/distance", "Distance 1", "mm");
+                fields.quantity(
+                    "/operation/distance",
+                    if options.method == cad_core::edge_features::ChamferMethod::EqualDistance {
+                        "Distance"
+                    } else {
+                        "Distance 1"
+                    },
+                    "mm",
+                );
                 match options.method {
                     cad_core::edge_features::ChamferMethod::EqualDistance => {}
                     cad_core::edge_features::ChamferMethod::TwoDistances => {
@@ -144,10 +166,38 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                     fields.choice("/operation/options/first_face", "Distance 1 face", choices);
                 }
             }
-            fields.group("selection", "Selected edges");
-            fields
-                .out
-                .extend(crate::selection_ui::edge_controls(fields.w));
+            let (picking, selection): (Vec<_>, Vec<_>) =
+                crate::selection_ui::edge_controls(fields.w)
+                    .into_iter()
+                    .partition(|element| {
+                        matches!(
+                            element.data["contract"].as_str(),
+                            Some(
+                                "tcad.presentation.edge-picking"
+                                    | "tcad.presentation.selection-sets"
+                            )
+                        )
+                    });
+            let count = selection
+                .iter()
+                .filter(|element| element.role == "edge-selection-item")
+                .count();
+            fields.group("selection", &format!("Edges ({count})"));
+            let group_id = fields.identity("group/selection");
+            fields.out.extend(selection.into_iter().map(|mut element| {
+                // The group already reports the count. Direct bindings still
+                // offer the complete summary and all actions to custom layouts.
+                if element.role == "edge-selection"
+                    || element.role == "edge-selection-action"
+                        && element.state == "disabled"
+                        && element.data["inline_parent"].is_null()
+                {
+                    element.data["inline_parent"] = json!(group_id);
+                }
+                element
+            }));
+            fields.folding_group("edge-picking", "Edge chains and picking", false);
+            fields.out.extend(picking);
         }
         Operation::Shell {
             body,
@@ -167,7 +217,11 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                     "ready",
                 );
             }
-            fields.group("face-thickness", "Individual face thicknesses");
+            fields.folding_group(
+                "face-thickness",
+                "Face thickness overrides",
+                !options.face_thicknesses.is_empty(),
+            );
             for (index, wall) in options.face_thicknesses.iter().enumerate() {
                 let key = format!("face-thickness/{}", item_identity(&json!(wall.face), index));
                 fields.quantity(
@@ -266,7 +320,11 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
             {
                 fields.coordinates("/operation/axis", "Axis component", "");
             }
-            fields.group("second-direction", "Pattern direction 2");
+            fields.folding_group(
+                "second-direction",
+                "Pattern direction 2",
+                options.second_direction.is_some(),
+            );
             if optional(
                 fields,
                 "/operation/options/second_direction",
@@ -284,7 +342,7 @@ pub(super) fn fields(fields: &mut Fields<'_>) {
                     "mm",
                 );
             }
-            fields.group("skipped", "Instances to skip");
+            fields.folding_group("skipped", "Instances to skip", !options.skipped.is_empty());
             let secondary = options
                 .second_direction
                 .as_ref()

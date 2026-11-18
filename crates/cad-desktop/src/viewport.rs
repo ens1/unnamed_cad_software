@@ -213,27 +213,31 @@ fn candidate_label(w: &Workspace, candidate: &Selection) -> String {
 pub fn picking_controls(ui: &mut egui::Ui, w: &mut Workspace) {
     let current = pick_filter(w);
     let label = match current {
-        "edge" => "Pick edges",
-        "face" => "Pick faces",
-        "reference" => "Pick references",
-        _ => "Pick: all",
+        "edge" => "Edges only",
+        "face" => "Faces only",
+        "reference" => "References only",
+        _ => "Selection filter",
     };
     crate::presentation_controls::menu_button(ui, "viewport.pick-filter-menu", label, |ui| {
         for control in picking_semantics(w)
             .into_iter()
             .filter(|control| control.role == "selection-filter")
         {
+            let actions = control.action_descriptors();
             if crate::presentation_controls::button(
                 ui,
                 &control.id,
                 &control.role,
                 &["compact"],
                 &control.label,
-                control
-                    .action_descriptors()
-                    .iter()
-                    .any(|action| action.enabled),
+                actions.iter().any(|action| action.enabled),
                 control.state == "selected",
+            )
+            .on_disabled_hover_text(
+                actions
+                    .iter()
+                    .find_map(|action| action.disabled_reason.as_deref())
+                    .unwrap_or_default(),
             )
             .clicked()
             {
@@ -248,7 +252,7 @@ pub fn candidate_controls(ui: &mut egui::Ui, w: &mut Workspace) {
         return;
     }
     let label = format!(
-        "Candidates {}/{} · Tab",
+        "Select other ({} of {})",
         w.candidate_index + 1,
         w.candidates.len()
     );

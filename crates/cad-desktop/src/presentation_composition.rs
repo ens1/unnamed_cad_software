@@ -464,6 +464,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             elements.push(element);
         }
     }
+    elements.extend(crate::named_parameter_ui::semantics(w));
     elements.extend(crate::configuration_ui::semantics(w));
     elements.extend(crate::sketch_ui::dimension_semantics(w));
     elements.extend(crate::holes_ui::sketch_semantics(w));
@@ -1051,6 +1052,11 @@ fn build_value_adapters() -> ValueAdapters {
         "sketch-feedback",
         crate::sketch_relations_ui::set_field,
         crate::sketch_relations_ui::field_value,
+    );
+    adapters.register(
+        "named-parameter",
+        crate::named_parameter_ui::set_value,
+        crate::named_parameter_ui::current_value,
     );
     adapters.register(
         "settings",

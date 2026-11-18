@@ -494,7 +494,8 @@ pub fn icon_button(
                 "only"
             } else if classes.contains(&"icon-label") {
                 "top"
-            } else if classes.contains(&"submenu-heading") {
+            } else if classes.contains(&"submenu-heading") || classes.contains(&"toolbar-dropdown")
+            {
                 "right"
             } else {
                 "left"
@@ -1179,15 +1180,29 @@ pub fn menu_button_as<R>(
     let nested = egui::containers::menu::is_in_menu(ui);
     let classes = if nested {
         &["menu-heading", "submenu-heading"][..]
+    } else if role == "ribbon-group-menu" {
+        &["menu-heading", "toolbar-dropdown"][..]
     } else {
         &["menu-heading"][..]
     };
     let chevron = |painter: &egui::Painter, center: egui::Pos2, size: f32, color| {
         let offset = size * 0.23;
-        let tip = center + egui::vec2(offset, 0.);
+        let (start, tip, end) = if nested {
+            (
+                egui::vec2(-offset, -offset),
+                egui::vec2(offset, 0.),
+                egui::vec2(-offset, offset),
+            )
+        } else {
+            (
+                egui::vec2(-offset, -0.5 * offset),
+                egui::vec2(0., 0.5 * offset),
+                egui::vec2(offset, -0.5 * offset),
+            )
+        };
         let stroke = Stroke::new((size * 0.12).max(1.), color);
-        painter.line_segment([center - egui::vec2(offset, offset * 1.6), tip], stroke);
-        painter.line_segment([tip, center + egui::vec2(-offset, offset * 1.6)], stroke);
+        painter.line_segment([center + start, center + tip], stroke);
+        painter.line_segment([center + tip, center + end], stroke);
     };
     let response = icon_button(
         ui,
@@ -1197,7 +1212,7 @@ pub fn menu_button_as<R>(
         label,
         true,
         false,
-        nested.then_some(&chevron as IconPainter<'_>),
+        (nested || role == "ribbon-group-menu").then_some(&chevron as IconPainter<'_>),
     );
     let target = STYLES.with(|snapshot| {
         let snapshot = snapshot.borrow();

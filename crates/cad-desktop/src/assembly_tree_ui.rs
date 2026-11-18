@@ -1,5 +1,6 @@
 //! Hierarchical occurrence navigation over source IDs. Tree visibility is
 //! presentation state; selecting an occurrence does not enter its definition.
+pub(crate) mod features;
 use crate::{Workspace, presentation_controls as controls};
 use bevy_egui::egui;
 use cad_core::{Document, Id, Instance, commands::Command, presentation::SemanticElement};
@@ -21,6 +22,7 @@ pub struct State {
     roots: Vec<Node>,
     expanded: BTreeSet<String>,
     query: String,
+    features: features::State,
 }
 fn key(w: &Workspace) -> String {
     format!(
@@ -177,6 +179,7 @@ pub fn value(w: &Workspace, control: &SemanticElement) -> Option<Value> {
         return None;
     }
     match control.data.get("field").and_then(Value::as_str) {
+        Some("feature-query") => features::field_value(w, &control.data),
         Some("query") => Some(json!(w.assembly_tree.query)),
         Some("name")
             if control.data.get("path").map(Value::to_string).as_ref()
@@ -194,7 +197,7 @@ pub fn set_value(
 ) -> cad_core::Result<()> {
     if self::value(w, control).is_none() {
         return Err(cad_core::CadError::Invalid(
-            "The assembly search belongs to another document".into(),
+            "This model browser field is no longer active".into(),
         ));
     }
     let text = value
@@ -204,6 +207,11 @@ pub fn set_value(
             cad_core::CadError::Invalid("Enter at most 1024 bytes of search text".into())
         })?;
     match control.data.get("field").and_then(Value::as_str) {
+        Some("feature-query") => {
+            if let Some(part) = control.data["part"].as_str() {
+                features::set_query(w, part, text);
+            }
+        }
         Some("query") => w.assembly_tree.query = text.into(),
         Some("name") => {
             w.fields.insert("assembly-tree-name".into(), text.into());
@@ -294,33 +302,71 @@ fn edit(w: &mut Workspace, path: Vec<Id>) {
     }
 }
 fn matches(node: &Node, query: &str) -> bool {
-    query.is_empty()
-        || node.name.to_lowercase().contains(query)
-        || node.children.iter().any(|n| matches(n, query))
+    node.name.to_lowercase().contains(query) || node.children.iter().any(|n| matches(n, query))
 }
-fn rows<'a>(nodes: &'a [Node], state: &State, depth: usize, out: &mut Vec<(&'a Node, usize)>) {
-    let query = state.query.to_lowercase();
+fn rows<'a>(
+    nodes: &'a [Node],
+    state: &State,
+    query: Option<&str>,
+    depth: usize,
+    out: &mut Vec<(&'a Node, usize)>,
+) {
     for node in nodes {
-        if !matches(node, &query) {
+        if query.is_some_and(|query| !matches(node, query)) {
             continue;
         }
         out.push((node, depth));
-        if !query.is_empty() || state.expanded.contains(&node.id) {
-            rows(&node.children, state, depth + 1, out);
+        if query.is_some() || state.expanded.contains(&node.id) {
+            // Matching a group should also show its members.
+            let child_query = query.map(|query| {
+                if node.name.to_lowercase().contains(query) {
+                    ""
+                } else {
+                    query
+                }
+            });
+            rows(&node.children, state, child_query, depth + 1, out);
         }
     }
 }
 pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
     let mut state = std::mem::take(&mut w.assembly_tree);
     refresh(w, &mut state);
-    ui.add(
-        egui::TextEdit::singleline(&mut state.query)
-            .id_salt("assembly.tree-search")
-            .hint_text("Find components or patterns")
-            .desired_width(f32::INFINITY),
-    );
+    if !state.roots.is_empty() || !state.query.is_empty() {
+        ui.add(
+            egui::TextEdit::singleline(&mut state.query)
+                .id_salt("assembly.tree-search")
+                .hint_text("Find components or patterns")
+                .desired_width(f32::INFINITY),
+        );
+    }
+    if !state.query.is_empty()
+        && controls::button(
+            ui,
+            "assembly.tree-clear-search",
+            "component-tree-action",
+            &["compact"],
+            "Clear filter",
+            true,
+            false,
+        )
+        .clicked()
+    {
+        state.query.clear();
+    }
+    let query = state.query.trim().to_lowercase();
+    let filtering = !query.is_empty();
     let mut visible = Vec::new();
-    rows(&state.roots, &state, 0, &mut visible);
+    rows(
+        &state.roots,
+        &state,
+        filtering.then_some(query.as_str()),
+        0,
+        &mut visible,
+    );
+    if visible.is_empty() && filtering {
+        ui.weak("No matching components or patterns");
+    }
     let props = controls::properties(
         "assembly.tree-row",
         "component-instance",
@@ -345,14 +391,16 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                             &format!("{}/toggle", node.id),
                             "component-disclosure",
                             &["compact"],
-                            if state.expanded.contains(&node.id) {
+                            if filtering || state.expanded.contains(&node.id) {
                                 "▾"
                             } else {
                                 "▸"
                             },
-                            true,
+                            !filtering,
                             false,
                         )
+                        .on_hover_text(format!("Show or hide the contents of {}", node.name))
+                        .on_disabled_hover_text("Clear the filter to expand or collapse this group")
                         .clicked()
                         {
                             toggled.push(node.id.clone());
@@ -373,13 +421,18 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                         "component-instance",
                         &["feature-tree-row", node.kind],
                         &label,
-                        true,
+                        node.definition.is_some() || !filtering,
                         selected,
                     )
-                    .on_hover_text(format!(
-                        "{} · {}\nClick to select · Double-click to edit",
-                        node.name, node.kind
-                    ));
+                    .on_hover_text(if node.definition.is_some() {
+                        format!(
+                            "{} · {}\nClick to select. Double-click to edit.",
+                            node.name, node.kind
+                        )
+                    } else {
+                        format!("Show or hide the members of {}", node.name)
+                    })
+                    .on_disabled_hover_text("Clear the filter to expand or collapse this group");
                     if response.double_clicked() && node.definition.is_some() {
                         edit(w, node.path.clone());
                     } else if response.clicked() {
@@ -405,11 +458,20 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
                                 crate::ui::action(w, "assembly.rotate");
                                 ui.close();
                             }
-                            if ui.button("Rename occurrence").clicked() {
+                            if ui.button("Rename this instance…").clicked() {
                                 rename(w, &node.path);
                                 ui.close();
                             }
-                            if ui.button("Ground / release").clicked() {
+                            let grounded = lookup(w.session.visible(), &node.path)
+                                .is_some_and(|(_, instance)| instance.fixed);
+                            if ui
+                                .button(if grounded {
+                                    "Release component"
+                                } else {
+                                    "Ground component"
+                                })
+                                .clicked()
+                            {
                                 ground(w, &node.path);
                                 ui.close();
                             }
@@ -435,12 +497,41 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             .fields
             .entry("assembly-tree-name".into())
             .or_insert_with(|| instance.name.clone());
-        let response = ui.text_edit_singleline(text);
-        if response.lost_focus()
-            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-            && !text.trim().is_empty()
+        let caption = ui.label("Instance name");
+        let response = ui.text_edit_singleline(text).labelled_by(caption.id);
+        let valid = !text.trim().is_empty() && !text.chars().any(char::is_control);
+        let (save, cancel) = ui
+            .horizontal(|ui| {
+                (
+                    controls::button(
+                        ui,
+                        "assembly.tree-rename-apply",
+                        "occurrence-name-action",
+                        &["compact"],
+                        "Rename",
+                        valid,
+                        false,
+                    )
+                    .clicked(),
+                    controls::button(
+                        ui,
+                        "assembly.tree-rename-cancel",
+                        "occurrence-name-action",
+                        &["compact"],
+                        "Cancel",
+                        true,
+                        false,
+                    )
+                    .clicked(),
+                )
+            })
+            .inner;
+        if save || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && valid)
         {
             apply_rename(w);
+        } else if cancel {
+            w.fields.remove("assembly-tree-rename");
+            w.fields.remove("assembly-tree-name");
         }
     }
     w.assembly_tree = state;
@@ -463,8 +554,14 @@ fn ground(w: &mut Workspace, path: &[Id]) {
     w.confirm_tool();
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
-    if w.view.active_part.is_some() {
-        return vec![];
+    if let Some(id) = &w.view.active_part {
+        return w
+            .session
+            .visible()
+            .parts
+            .get(id)
+            .map(|part| features::semantics(w, part))
+            .unwrap_or_default();
     }
     let mut state = State::default();
     let roots = if w.assembly_tree.key == key(w) {
@@ -481,10 +578,24 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
         out: &mut Vec<SemanticElement>,
     ) {
         for node in nodes {
+            let filtering = !w.assembly_tree.query.trim().is_empty();
+            let mut commands = if node.definition.is_some() {
+                vec![
+                    "assembly.tree-select".into(),
+                    "assembly.tree-edit".into(),
+                    "assembly.tree-ground".into(),
+                    "assembly.tree-rename".into(),
+                ]
+            } else {
+                vec![]
+            };
+            if !node.children.is_empty() && !filtering {
+                commands.push("assembly.tree-toggle".into());
+            }
             out.push(SemanticElement{id:node.id.clone(),role:"component-instance".into(),label:node.name.clone(),value:Some(node.kind.into()),
                 state:if w.selected_component.as_ref()==Some(&node.path)&&node.definition.is_some(){"selected"}else{"ready"}.into(),
-                commands:if node.definition.is_some(){vec!["assembly.tree-select".into(),"assembly.tree-edit".into(),"assembly.tree-ground".into(),"assembly.tree-rename".into()]}else{vec!["assembly.tree-toggle".into()]},relationships:vec![parent.into()],
-                data:json!({"contract":"tcad.presentation.assembly-tree","version":1,"document":w.session.visible().id,"path":node.path,"definition":node.definition,"kind":node.kind,"depth":depth,"children":node.children.iter().map(|n|&n.id).collect::<Vec<_>>(),"node":node.id,"classes":["feature-tree-row",node.kind]})});
+                commands,relationships:vec![parent.into()],
+                data:json!({"contract":"tcad.presentation.assembly-tree","version":1,"document":w.session.visible().id,"path":node.path,"definition":node.definition,"kind":node.kind,"depth":depth,"expanded":!node.children.is_empty() && (filtering || w.assembly_tree.expanded.contains(&node.id)),"children":node.children.iter().map(|n|&n.id).collect::<Vec<_>>(),"node":node.id,"classes":["feature-tree-row",node.kind]})});
             visit(w, &node.children, &node.id, depth + 1, out);
         }
     }
@@ -510,6 +621,18 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
             data: json!({"contract":"tcad.presentation.assembly-tree","version":1,"setter":"assembly-tree","field":"query","document":w.session.visible().id,"json":w.assembly_tree.query,"value_type":"string","editable":true,"classes":["compact","search-field"],"geometry_changes":false}),
         },
     ];
+    if !w.assembly_tree.query.is_empty() {
+        out.push(SemanticElement {
+            id: "assembly.tree-clear-search".into(),
+            role: "component-tree-action".into(),
+            label: "Clear filter".into(),
+            value: None,
+            state: "ready".into(),
+            commands: vec!["assembly.tree-clear-search".into()],
+            relationships: vec!["assembly.tree-search".into()],
+            data: json!({"document":w.session.visible().id,"classes":["compact"]}),
+        });
+    }
     visit(w, roots, "assembly.tree", 0, &mut out);
     if let Some(path) = w
         .fields
@@ -536,6 +659,9 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     out
 }
 pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
+    if command.starts_with("model-tree.") {
+        return args.is_some_and(|args| features::action(w, command, args));
+    }
     if !command.starts_with("assembly.tree-") {
         return false;
     }
@@ -549,6 +675,7 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
         .and_then(|v| serde_json::from_value::<Vec<Id>>(v.clone()).ok())
         .unwrap_or_default();
     match command {
+        "assembly.tree-clear-search" => w.assembly_tree.query.clear(),
         "assembly.tree-select" => select(w, path),
         "assembly.tree-edit" => edit(w, path),
         "assembly.tree-ground" => ground(w, &path),
@@ -564,7 +691,7 @@ pub fn action(w: &mut Workspace, command: &str, args: Option<&Value>) -> bool {
                 w.fields.remove("assembly-tree-name");
             }
         }
-        "assembly.tree-toggle" => {
+        "assembly.tree-toggle" if w.assembly_tree.query.trim().is_empty() => {
             if let Some(id) = args.get("node").and_then(Value::as_str)
                 && !w.assembly_tree.expanded.remove(id)
             {

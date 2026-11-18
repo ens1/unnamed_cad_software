@@ -130,6 +130,13 @@
   padding: 0px;
 }
 
+[role=model-property-row] {
+  width: 100%;
+  max-width: 100%;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
 [role=property-manager], [role=parameter-instrument] {
   font-size: var(--font-size);
   font-variant-numeric: tabular-nums;
@@ -236,6 +243,15 @@
 }
 
 [role=menu-action], [role=selection-action] { text-align: left; }
+.toolbar-dropdown {
+  height: var(--control-height);
+  padding: 2px 6px;
+  border: 1px solid var(--control-border);
+  border-radius: 3px;
+  icon-size: 10px;
+  icon-position: right;
+}
+.toolbar-dropdown:hover { background: var(--hover-surface); }
 .submenu-heading {
   width: 100%;
   height: var(--control-height);
@@ -297,6 +313,16 @@
   padding: 0px;
 }
 
+[role=navigation-help] {
+  height: 22px;
+  padding: 2px 6px;
+  border: 1px solid var(--control-border);
+  border-radius: 3px;
+  color: var(--muted-text);
+  background: var(--control-surface);
+  font-size: 10px;
+}
+[role=navigation-gesture-label] { font-weight: bold; }
 [role=navigation-hint] {
   font-size: 10px;
   color: #666666;
@@ -888,9 +914,7 @@
   padding: 2px 0px;
 }
 [role=task-status] {
-  height: 24px;
   font-size: 11px;
-  text-overflow: ellipsis;
   max-width: 100%;
 }
 [role=task-status][state=required] { color: var(--reference); font-weight: bold; }

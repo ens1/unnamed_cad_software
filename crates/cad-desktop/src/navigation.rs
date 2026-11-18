@@ -810,16 +810,41 @@ pub fn action(w: &mut Workspace, command: &str, data: Option<&serde_json::Value>
     }
     true
 }
-pub fn hint(w: &Workspace) -> String {
-    let profile = if w.sketch.is_some() || w.view.navigation.alternate_pan {
-        "Two fingers: pan · Shift: orbit"
-    } else {
-        "Two fingers: orbit · Shift: pan"
-    };
-    format!(
-        "{profile} · Pinch / Ctrl or ⌘ scroll: zoom · F: fit · Shift+F: fit selection · Controls: navigation preferences"
-    )
+pub(crate) fn shortcuts(w: &Workspace) -> [(&'static str, &'static str, &'static str); 5] {
+    let pan_first = w.sketch.is_some() || w.view.navigation.alternate_pan;
+    [
+        (
+            "orbit",
+            "Orbit",
+            if pan_first {
+                "Shift + two-finger scroll"
+            } else {
+                "Two-finger scroll"
+            },
+        ),
+        (
+            "pan",
+            "Pan",
+            if pan_first {
+                "Two-finger scroll"
+            } else {
+                "Shift + two-finger scroll"
+            },
+        ),
+        ("zoom", "Zoom", "Pinch or Ctrl + scroll"),
+        ("fit-model", "Fit model", "F"),
+        ("fit-selection", "Fit selection", "Shift + F"),
+    ]
 }
+
+pub fn hint(w: &Workspace) -> String {
+    shortcuts(w)
+        .into_iter()
+        .map(|(_, action, gesture)| format!("{action}   {gesture}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub fn semantic_control(
     ui: &mut egui::Ui,
     w: &mut Workspace,

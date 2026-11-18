@@ -1,7 +1,8 @@
 //! Familiar CAD workspace widgets over the same document commands and user layout.
 use crate::{Workspace, presentation_controls as controls, sketch, ui, viewport};
 use bevy_egui::egui::{self, RichText, Stroke};
-use cad_core::{Feature, Operation, Part};
+use cad_core::{Feature, Operation, Part, presentation::SemanticElement};
+mod profile_features;
 
 fn tool_button(
     ui: &mut egui::Ui,
@@ -208,6 +209,19 @@ fn shortcut_label(ctx: &egui::Context, command: &str, label: &str) -> String {
     format!("{label}  {shortcut}")
 }
 
+// Insert and the full feature menu always address modeling commands, including
+// when the Sketch tab offers its own Reference and Pattern menus.
+fn feature_menu_ids() -> Vec<String> {
+    feature_groups()
+        .into_iter()
+        .map(|group| match group {
+            "Reference" => "menu/feature-reference".into(),
+            "Pattern" => "menu/feature-pattern".into(),
+            _ => format!("menu/{}", group.to_lowercase().replace(' ', "-")),
+        })
+        .collect()
+}
+
 fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
     let commands: Vec<&str> = match name {
         "File" => vec![
@@ -235,13 +249,30 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
                 "command-menu/sketch.new".into(),
                 "command-menu/sketch.new-3d".into(),
             ];
-            items.extend(
-                feature_groups()
-                    .into_iter()
-                    .map(|group| format!("menu/{}", group.to_lowercase().replace(' ', "-"))),
-            );
+            items.extend(feature_menu_ids());
             return items;
         }
+        "All features" => return feature_menu_ids(),
+        "Draw geometry" => vec![
+            "menu/shapes",
+            "menu/curves",
+            "menu/sketch-references",
+            "sketch.text",
+            "sketch.equation",
+        ],
+        "Edit geometry" => vec![
+            "menu/edit-entities",
+            "menu/transform",
+            "menu/patterns",
+            "menu/blocks",
+        ],
+        "Dimensions and relations" => vec![
+            "sketch.smart-dimension",
+            "sketch.reference-dimension",
+            "sketch.relations",
+            "sketch.toggle-dimension-mode",
+            "menu/dimension-groups",
+        ],
         "View" => vec![
             "menu/Themes",
             "viewport.visibility-menu",
@@ -325,7 +356,9 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
             .map(|tool| format!("command-toolbar/sketch.tool.{tool}"))
             .collect();
         }
-        "Reference" if w.command_tab == "Sketch" => {
+        "Sketch references" | "Reference"
+            if name == "Sketch references" || w.command_tab == "Sketch" =>
+        {
             return ["point", "centerline", "midpoint-line"]
                 .into_iter()
                 .map(|tool| format!("command-toolbar/sketch.tool.{tool}"))
@@ -346,7 +379,13 @@ fn menu_items(name: &str, w: &Workspace) -> Vec<String> {
                 .filter(|tool| tool.2 == category)
                 .map(|tool| tool.0)
                 .collect::<Vec<_>>();
-            if w.command_tab == "Sketch" && !sketch.is_empty() {
+            if !sketch.is_empty()
+                && (w.command_tab == "Sketch"
+                    || matches!(
+                        name,
+                        "Edit Entities" | "Transform" | "Patterns" | "Blocks" | "Dimension Groups"
+                    ))
+            {
                 sketch
             } else {
                 cad_core::modeling_tools::TOOLS
@@ -382,6 +421,21 @@ pub fn semantic_menu_as(
     controls::menu_button_as(ui, id, role, &element.label, |ui| {
         menu_contents(ui, w, element, snapshot);
     });
+}
+
+fn bound_menu(ui: &mut egui::Ui, w: &mut Workspace, snapshot: &[SemanticElement], id: &str) {
+    if let Some(menu) = snapshot.iter().find(|entry| entry.id == id) {
+        let role = if menu
+            .relationships
+            .iter()
+            .any(|parent| parent == "command-manager")
+        {
+            "ribbon-group-menu"
+        } else {
+            &menu.role
+        };
+        semantic_menu_as(ui, w, menu, &menu.id, role, snapshot);
+    }
 }
 
 fn menu_contents(
@@ -589,6 +643,13 @@ pub fn presentation_action(w: &mut Workspace, command: &str) -> bool {
             .iter()
             .find(|mode| mode.eq_ignore_ascii_case(name))
     {
+        if let Some(reason) = command_disabled_reason(w, command) {
+            w.status = reason.into();
+            return true;
+        }
+        if *mode != "History" {
+            crate::history::latest(w);
+        }
         w.manager_tree = true;
         w.view.mode = (*mode).into();
         return true;
@@ -785,6 +846,11 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
         "Patterns",
         "Blocks",
         "Dimension Groups",
+        "Draw geometry",
+        "Edit geometry",
+        "Dimensions and relations",
+        "Sketch references",
+        "All features",
     ] {
         publish(
             format!("menu/{}", menu.to_lowercase().replace(' ', "-")),
@@ -1007,6 +1073,22 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             element.value = confirmation_disabled_reason(w).map(str::to_owned);
         }
     }
+    for (group, id) in [
+        ("Reference", "menu/feature-reference"),
+        ("Pattern", "menu/feature-pattern"),
+    ] {
+        let items = cad_core::modeling_tools::TOOLS
+            .iter()
+            .filter(|tool| tool.group == group)
+            .map(|tool| format!("command-menu/{}", tool.command))
+            .collect::<Vec<_>>();
+        out.push(SemanticElement {
+            id: id.into(), role: "menu".into(), label: group.into(), value: None,
+            state: "ready".into(), commands: vec![],
+            relationships: vec!["menu/all-features".into(), "menu/insert".into()],
+            data: serde_json::json!({"presentation_control":true,"classes":["menu-heading"],"items":items}),
+        });
+    }
     for ((id, label, commands), parent) in TOOL_GROUPS
         .iter()
         .copied()
@@ -1048,7 +1130,7 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
         .and_then(|id| w.session.visible().parts.get(id))
     {
         for (key, label, items) in [
-            ("bodies", "Body outputs", part.outputs.clone()),
+            ("bodies", "Bodies", part.outputs.clone()),
             (
                 "appearance",
                 "Material and finish",
@@ -1056,7 +1138,7 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
             ),
             (
                 "references",
-                "Reference geometry",
+                "Planes and origin",
                 vec![
                     "Front Plane".into(),
                     "Top Plane".into(),
@@ -1097,6 +1179,9 @@ pub fn semantics(w: &Workspace) -> Vec<cad_core::presentation::SemanticElement> 
 }
 
 pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
+    if crate::named_parameter_ui::active(w) {
+        return Some("Add or cancel the named parameter first");
+    }
     if !crate::component_fork_ui::current_source_is_valid(w)
         || !crate::feature_transfer_ui::current_source_is_valid(w)
     {
@@ -1164,15 +1249,22 @@ pub fn confirmation_disabled_reason(w: &Workspace) -> Option<&'static str> {
     if w.confirm_requested {
         return Some("Waiting for the current operation to finish validation");
     }
-    if w.sketch.as_ref().is_some_and(|s| {
-        !s.closed
-            || s.error.is_some()
-            || s.choosing_plane
-            || s.edit.is_some()
-            || !s.clicks.is_empty()
-            || s.tool.is_spline() && !s.chain.is_empty()
-    }) {
-        return Some("Finish drawing and resolve sketch errors before applying");
+    if let Some(sketch) = &w.sketch {
+        if sketch.choosing_plane {
+            return Some("Choose a plane or a flat face for this sketch");
+        }
+        if sketch.edit.is_some() {
+            return Some("Finish or cancel the current sketch tool first");
+        }
+        if !sketch.clicks.is_empty() || sketch.tool.is_spline() && !sketch.chain.is_empty() {
+            return Some("Finish placing the current curve or press Esc to end the tool");
+        }
+        if sketch.error.is_some() {
+            return Some("Resolve the sketch error before finishing");
+        }
+        if !sketch.closed {
+            return Some("Finish placing sketch geometry first");
+        }
     }
     if [
         "feature-source-invalid",
@@ -1222,6 +1314,16 @@ pub fn confirmation_available(w: &Workspace) -> bool {
 /// One availability policy for menus, command search and user-composed controls.
 /// These are prerequisites only; each operation still validates its actual input.
 pub fn command_disabled_reason(w: &Workspace, command: &str) -> Option<&'static str> {
+    if w.sketch
+        .as_ref()
+        .is_some_and(|sketch| sketch.edit.is_some())
+        && (command.starts_with("sketch.tool.") || sketch::tool_for_command(command).is_some())
+    {
+        return Some("Finish or cancel the current sketch tool first");
+    }
+    if command == "presentation.navigation.history" && w.view.active_part.is_none() {
+        return Some("Open a part to see its feature history");
+    }
     if crate::publish_ui::busy(w)
         && !matches!(command, "file.publish" | "publish.settings")
         && !command.starts_with("publish.")
@@ -1415,36 +1517,9 @@ pub fn menu(
         .show(ui, |ui| { ui.horizontal(|ui| {
         let row_start = ui.cursor().min.x;
         ui.label(RichText::new("TCAD").strong());
-        for id in ["menu/file", "menu/edit"] {
-            if let Some(menu) = snapshot.iter().find(|entry| entry.id == id) {
-                semantic_menu_as(ui, w, menu, id, "menu", snapshot);
-            }
+        for id in ["menu/file", "menu/edit", "menu/insert"] {
+            bound_menu(ui, w, snapshot, id);
         }
-        menu_button(ui, "Insert", |ui| {
-            for (command, label) in [
-                ("sketch.new", "Planar Sketch…"),
-                ("sketch.new-3d", "3D Sketch…"),
-            ] {
-                if menu_action(ui, w, command, label, w.tool_checkpoint.is_none()).clicked() {
-                    ui::action(w, command);
-                    ui.close();
-                }
-            }
-            ui.separator();
-            for group in feature_groups() {
-                menu_button(ui, group, |ui| {
-                    for tool in cad_core::modeling_tools::TOOLS
-                        .iter()
-                        .filter(|t| t.group == group)
-                    {
-                        if menu_action(ui, w, tool.command, tool.label, true).clicked() {
-                            ui::action(w, tool.command);
-                            ui.close();
-                        }
-                    }
-                });
-            }
-        });
         menu_button(ui, "View", |ui| {
             crate::theme_library::menu(ui, w, "view.themes");
             ui.separator();
@@ -1514,7 +1589,7 @@ pub fn menu(
     });
     });
 }
-pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
+pub fn commands(ui: &mut egui::Ui, w: &mut Workspace, snapshot: &[SemanticElement]) {
     let viewport_width = ui.available_width();
     egui::ScrollArea::horizontal()
         .id_salt("cad-command-tabs-overflow")
@@ -1582,7 +1657,6 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
             });
         });
     let sketching = w.sketch.is_some();
-    let blocked = w.tool_checkpoint.is_some() && !sketching;
     let tab = w.command_tab.clone();
     if tab == "Sketch" && crate::sketch3d_ui::active(w) {
         crate::sketch3d_ui::toolbar(ui, w);
@@ -1594,177 +1668,126 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
         .show(ui, |ui| {
             ui.horizontal(|ui| match tab.as_str() {
                 "Sketch" => {
-                    if !sketching
-                        && tool_button(
-                            ui,
-                            "sketch.new-3d",
-                            "3D Sketch",
-                            command_disabled_reason(w, "sketch.new-3d"),
-                            false,
-                            "Draw spatial sketch geometry in the model",
-                        )
+                    if !sketching {
+                        for (command, label, hint) in [
+                            (
+                                "sketch.new",
+                                "New sketch",
+                                "Sketch on a plane or a flat face",
+                            ),
+                            (
+                                "sketch.new-3d",
+                                "3D sketch",
+                                "Sketch points and curves in three dimensions",
+                            ),
+                        ] {
+                            if tool_button(
+                                ui,
+                                command,
+                                label,
+                                command_disabled_reason(w, command),
+                                false,
+                                hint,
+                            ) {
+                                ui::action(w, command);
+                            }
+                        }
+                        return;
+                    }
+                    if w.sketch
+                        .as_ref()
+                        .is_some_and(|sketch| sketch.choosing_plane)
                     {
-                        ui::action(w, "sketch.new-3d");
+                        controls::label(
+                            ui,
+                            "workspace.sketch-start-description",
+                            "workspace-description",
+                            &[],
+                            "Sketch plane",
+                            "required",
+                        );
+                        for plane in snapshot
+                            .iter()
+                            .filter(|entry| entry.role == "sketch-plane-action")
+                        {
+                            if controls::button(
+                                ui,
+                                &plane.id,
+                                &plane.role,
+                                &["toolbar-control"],
+                                &plane.label,
+                                true,
+                                false,
+                            )
+                            .clicked()
+                            {
+                                ui::semantic_action(w, plane, "sketch.select-entity");
+                            }
+                        }
+                        return;
+                    }
+                    let dimensioning = w.fields.contains_key("smart-dimension-mode");
+                    for (tool, label, hint) in [
+                        (
+                            sketch::Tool::Select,
+                            "Select",
+                            "Select or move sketch geometry",
+                        ),
+                        (
+                            sketch::Tool::Polyline,
+                            "Line",
+                            "Pick connected line endpoints",
+                        ),
+                        (
+                            sketch::Tool::Rectangle,
+                            "Rectangle",
+                            "Pick opposite corners",
+                        ),
+                        (
+                            sketch::Tool::Circle,
+                            "Circle",
+                            "Pick the center and a point on the circle",
+                        ),
+                    ] {
+                        let command = sketch_tool_command(tool);
+                        if tool_button(
+                            ui,
+                            &command,
+                            label,
+                            command_disabled_reason(w, &command),
+                            !dimensioning && w.sketch.as_ref().is_some_and(|s| s.tool == tool),
+                            hint,
+                        ) {
+                            ui::action(w, &command);
+                        }
                     }
                     if tool_button(
                         ui,
-                        "sketch.new",
-                        if sketching { "Finish sketch" } else { "Sketch" },
-                        if sketching {
-                            confirmation_disabled_reason(w)
-                        } else {
-                            command_disabled_reason(w, "sketch.new")
-                        },
-                        sketching,
-                        "Finish the sketch or select a plane to begin",
-                    ) {
-                        if sketching {
-                            w.confirm_tool();
-                        } else {
-                            ui::action(w, "sketch.new");
-                        }
-                    }
-                    for (label, tool) in [
-                        ("Line", sketch::Tool::Polyline),
-                        ("Rectangle", sketch::Tool::Rectangle),
-                        ("Circle", sketch::Tool::Circle),
-                        ("Select", sketch::Tool::Select),
-                    ] {
-                        if tool_button(
-                            ui,
-                            &sketch_tool_command(tool),
-                            label,
-                            blocked.then_some("Finish or cancel the active operation first"),
-                            w.sketch.as_ref().is_some_and(|s| s.tool == tool),
-                            "Draw on the active sketch plane",
-                        ) {
-                            if !sketching {
-                                ui::action(w, "sketch.new");
-                            }
-                            sketch::set_tool(w, tool);
-                        }
-                    }
-                    for (group, tools) in [
-                        (
-                            "Shapes",
-                            vec![
-                                ("Corner Rectangle", sketch::Tool::Rectangle),
-                                ("Center Rectangle", sketch::Tool::CenterRectangle),
-                                (
-                                    "3-point Corner Rectangle",
-                                    sketch::Tool::ThreePointRectangle,
-                                ),
-                                (
-                                    "3-point Center Rectangle",
-                                    sketch::Tool::ThreePointCenterRectangle,
-                                ),
-                                ("Parallelogram", sketch::Tool::Parallelogram),
-                                ("Regular Polygon", sketch::Tool::Polygon),
-                                ("Straight Slot", sketch::Tool::Slot),
-                                ("Centerpoint Straight Slot", sketch::Tool::CenterSlot),
-                                ("Arc Slot", sketch::Tool::ArcSlot),
-                            ],
-                        ),
-                        (
-                            "Curves",
-                            vec![
-                                ("Circle", sketch::Tool::Circle),
-                                ("Perimeter Circle", sketch::Tool::PerimeterCircle),
-                                ("3-point Arc", sketch::Tool::Arc),
-                                ("Centerpoint Arc", sketch::Tool::CenterArc),
-                                ("Tangent Arc", sketch::Tool::TangentArc),
-                                ("Ellipse", sketch::Tool::Ellipse),
-                                ("Partial Ellipse", sketch::Tool::EllipseArc),
-                                ("Conic", sketch::Tool::Conic),
-                                ("Parabola", sketch::Tool::Parabola),
-                                ("Control-point Spline", sketch::Tool::Spline),
-                                ("Interpolating Spline", sketch::Tool::InterpolatingSpline),
-                                ("Control-point NURBS", sketch::Tool::Nurbs),
-                            ],
-                        ),
-                        (
-                            "Reference",
-                            vec![
-                                ("Point", sketch::Tool::Point),
-                                ("Centerline", sketch::Tool::Centerline),
-                                ("Midpoint Line", sketch::Tool::MidpointLine),
-                            ],
-                        ),
-                    ] {
-                        menu_button(ui, group, |ui| {
-                            for (label, tool) in &tools {
-                                if command_button(
-                                    ui,
-                                    w,
-                                    &sketch_tool_command(*tool),
-                                    label,
-                                    !blocked,
-                                )
-                                .clicked()
-                                {
-                                    if w.sketch.is_none() {
-                                        ui::action(w, "sketch.new");
-                                    }
-                                    sketch::set_tool(w, *tool);
-                                    ui.close();
-                                }
-                            }
-                        });
-                    }
-                    for (menu, category) in [
-                        ("Edit Entities", "Edit"),
-                        ("Transform", "Transform"),
-                        ("Patterns", "Pattern"),
-                        ("Blocks", "Block"),
-                        ("Dimension Groups", "Dimension Groups"),
-                    ] {
-                        menu_button(ui, menu, |ui| {
-                            for (command, label, group) in cad_core::modeling_tools::SKETCH_TOOLS {
-                                if *group == category
-                                    && command_button(ui, w, command, label, sketching).clicked()
-                                {
-                                    ui::action(w, command);
-                                    ui.close();
-                                }
-                            }
-                        });
-                    }
-                    if command_button(
-                        ui,
-                        w,
                         "sketch.smart-dimension",
-                        "Smart Dimension  D",
-                        sketching,
-                    )
-                    .clicked()
-                    {
+                        "Smart Dimension",
+                        command_disabled_reason(w, "sketch.smart-dimension"),
+                        dimensioning,
+                        "Pick geometry to dimension, or dimension your current selection (D)",
+                    ) {
                         ui::action(w, "sketch.smart-dimension");
                     }
-                    if command_button(ui, w, "sketch.text", "Text", sketching).clicked() {
-                        ui::action(w, "sketch.text");
-                    }
-                    if command_button(ui, w, "sketch.equation", "Equation Curve", sketching)
-                        .clicked()
-                    {
-                        ui::action(w, "sketch.equation");
-                    }
-                    if command_button(
+                    if tool_button(
                         ui,
-                        w,
-                        "sketch.reference-dimension",
-                        "Reference Dimension",
-                        sketching,
-                    )
-                    .clicked()
-                    {
-                        ui::action(w, "sketch.reference-dimension");
+                        "draft.apply",
+                        "Finish sketch",
+                        confirmation_disabled_reason(w),
+                        false,
+                        "Save this sketch and return to the model",
+                    ) {
+                        w.confirm_tool();
                     }
-                    if command_button(ui, w, "sketch.relations", "Relations", sketching).clicked() {
-                        ui::action(w, "sketch.relations");
-                    }
-                    if command_button(ui, w, "viewport.normal-sketch", "Normal To", true).clicked()
-                    {
-                        sketch::normal_to(w);
+                    ui.separator();
+                    for id in [
+                        "menu/draw-geometry",
+                        "menu/edit-geometry",
+                        "menu/dimensions-and-relations",
+                    ] {
+                        bound_menu(ui, w, snapshot, id);
                     }
                 }
                 "Graph" => {
@@ -1891,19 +1914,7 @@ pub fn commands(ui: &mut egui::Ui, w: &mut Workspace) {
                         }
                     }
                     ui.separator();
-                    for group in feature_groups() {
-                        menu_button(ui, group, |ui| {
-                            for tool in cad_core::modeling_tools::TOOLS
-                                .iter()
-                                .filter(|tool| tool.group == group)
-                            {
-                                if menu_action(ui, w, tool.command, tool.label, true).clicked() {
-                                    ui::action(w, tool.command);
-                                    ui.close();
-                                }
-                            }
-                        });
-                    }
+                    bound_menu(ui, w, snapshot, "menu/all-features");
                 }
             });
         });
@@ -1929,17 +1940,26 @@ pub fn navigation(ui: &mut egui::Ui, w: &mut Workspace) {
             ("History", "History"),
             ("Graph", "Flow"),
         ] {
-            if controls::selectable(
+            let command = format!("presentation.navigation.{}", mode.to_lowercase());
+            let reason = command_disabled_reason(w, &command);
+            if controls::button(
                 ui,
                 &format!("navigation/{}", mode.to_lowercase()),
                 "navigation-action",
+                &["selectable"],
                 label,
+                reason.is_none(),
                 w.manager_tree && w.view.mode == mode,
             )
+            .on_hover_text(match mode {
+                "History" => "Inspect the model after each feature",
+                "Flow" => "View feature and component relationships",
+                _ => "Show the current model tree",
+            })
+            .on_disabled_hover_text(reason.unwrap_or_default())
             .clicked()
             {
-                w.manager_tree = true;
-                w.view.mode = mode.into();
+                presentation_action(w, &command);
             }
         }
         if controls::button(
@@ -1994,7 +2014,7 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
         return;
     }
     let doc = w.session.visible().clone();
-    if doc.parts.len() > 1 || w.view.active_part.is_none() {
+    if doc.parts.len() > 1 || (w.view.active_part.is_none() && !doc.parts.is_empty()) {
         let mut active = w.view.active_part.clone();
         ui.add_enabled_ui(w.tool_checkpoint.is_none(), |ui| {
             egui::ComboBox::from_id_salt("editing-component")
@@ -2015,14 +2035,8 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
             w.activate_context(active, None);
         }
     }
-    if w.view.active_layout == "graph-workspace"
-        || (w.view.mode == "Flow" && w.view.active_part.is_none())
-    {
-        crate::graph_ui::show(
-            ui,
-            w,
-            w.view.active_part.as_ref().and_then(|id| doc.parts.get(id)),
-        );
+    if w.view.mode == "Flow" && w.view.active_part.is_none() {
+        crate::graph_ui::show(ui, w, None);
         return;
     }
     let Some(part) = w.view.active_part.as_ref().and_then(|id| doc.parts.get(id)) else {
@@ -2053,7 +2067,15 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
                 },
                 |ui| {
                     crate::assembly_tree_ui::show(ui, w);
-                    if ui.button("Insert Component").clicked() {
+                    if command_button(
+                        ui,
+                        w,
+                        "assembly.insert-existing",
+                        "Insert component…",
+                        !task_active,
+                    )
+                    .clicked()
+                    {
                         ui::action(w, "assembly.insert-existing");
                     }
                 },
@@ -2081,7 +2103,15 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
         });
         return;
     };
-    if doc.assemblies.contains_key(&doc.root)
+    // A standalone part also has an internal assembly that places it once.
+    // Only offer assembly navigation when there is an actual assembly to edit.
+    let assembly_context = doc.assemblies.get(&doc.root).is_some_and(|assembly| {
+        crate::initial_part_context(&doc).is_none()
+            || doc.parts.len() > 1
+            || doc.assemblies.len() > 1
+            || assembly.instances.len() > 1
+    });
+    if assembly_context
         && controls::button(
             ui,
             "feature-tree/assembly-root",
@@ -2128,6 +2158,95 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
                     doc.active_configurations.get(&part.id).map(String::as_str),
                 )
                 .unwrap_or_else(|_| part.clone());
+                crate::assembly_tree_ui::features::show(ui, w, part);
+                controls::inspector_section(
+                    ui,
+                    controls::InspectorSection {
+                        id: &format!("feature-tree:{}:references", part.id),
+                        role: "feature-tree-group",
+                        classes: &["reference-geometry"],
+                        label: "Planes and origin",
+                        state: "ready",
+                        collapse: Some(part.features.is_empty()),
+                        open: None,
+                    },
+                    |ui| {
+                        for name in ["Front Plane", "Top Plane", "Right Plane"] {
+                            let choosing_plane = w
+                                .sketch
+                                .as_ref()
+                                .is_some_and(|sketch| sketch.choosing_plane);
+                            let can_choose_plane = !task_active || choosing_plane;
+                            let response = controls::button(
+                                ui,
+                                &format!("reference:{}::{name}", part.id),
+                                "reference-plane",
+                                &["feature-tree-row"],
+                                &format!("▱  {name}"),
+                                can_choose_plane,
+                                w.active_plane.as_deref() == Some(name),
+                            );
+                            if response.clicked() {
+                                w.selected = None;
+                                if !choosing_plane {
+                                    w.view.active_node = None;
+                                }
+                                sketch::choose_origin(w, name);
+                                if !choosing_plane && !response.double_clicked() {
+                                    w.status = format!("{name} selected. Double-click to start a sketch.");
+                                    crate::selection_ui::object_selected(
+                                        w,
+                                        cad_core::selection_actions::SelectionTarget::Reference {
+                                            definition: part.id.clone(),
+                                            reference: name.into(),
+                                        },
+                                    );
+                                }
+                            }
+                            if response.double_clicked() && w.sketch.is_none() {
+                                ui::action(w, "sketch.new");
+                            }
+                            response.on_hover_text(if choosing_plane {
+                                "Use this plane for the sketch"
+                            } else {
+                                "Click to select. Double-click to sketch on this plane."
+                            }).context_menu(|ui| {
+                                if ui
+                                    .add_enabled(
+                                        can_choose_plane,
+                                        egui::Button::new("Sketch on this plane"),
+                                    )
+                                    .clicked()
+                                {
+                                    sketch::choose_origin(w, name);
+                                    if w.sketch.is_none() {
+                                        ui::action(w, "sketch.new");
+                                    }
+                                    ui.close();
+                                }
+                            });
+                        }
+                        let response = controls::button(
+                            ui,
+                            &format!("reference:{}::Origin", part.id),
+                            "reference-origin",
+                            &["feature-tree-row"],
+                            "+  Origin",
+                            !task_active,
+                            matches!(&w.context_selection, Some(cad_core::selection_actions::SelectionTarget::Reference { definition, reference }) if definition == &part.id && reference == "Origin"),
+                        );
+                        if response.clicked() {
+                            w.active_plane = None;
+                            crate::selection_ui::object_selected(
+                                w,
+                                cad_core::selection_actions::SelectionTarget::Reference {
+                                    definition: part.id.clone(),
+                                    reference: "Origin".into(),
+                                },
+                            );
+                        }
+                    },
+                );
                 let body_counts = crate::body_inventory::counts(w, &part.id);
                 let has_bodies = body_counts
                     .is_some_and(|counts| counts.solids + counts.surfaces > 0)
@@ -2145,9 +2264,9 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
                             id: &format!("feature-tree:{}:bodies", part.id),
                             role: "feature-tree-group",
                             classes: &["body-outputs"],
-                            label: "Body outputs",
+                            label: "Bodies",
                             state: "ready",
-                            collapse: Some(true),
+                            collapse: Some(false),
                             open: None,
                         },
                         |ui| {
@@ -2182,8 +2301,7 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
                                             outputs.len()
                                         )
                                     });
-                                if !is_surface
-                                    || count.is_some_and(|count| count > 0)
+                                if count.is_some_and(|count| count > 0)
                                     || !outputs.is_empty()
                                 {
                                     egui::CollapsingHeader::new(heading)
@@ -2256,147 +2374,6 @@ fn tree_contents(ui: &mut egui::Ui, w: &mut Workspace, persistent: bool) {
                         {
                             w.view.active_part = Some(part.id.clone());
                             crate::appearances_ui::begin(w, false);
-                        }
-                    },
-                );
-                controls::inspector_section(
-                    ui,
-                    controls::InspectorSection {
-                        id: &format!("feature-tree:{}:references", part.id),
-                        role: "feature-tree-group",
-                        classes: &["reference-geometry"],
-                        label: "Reference geometry",
-                        state: "ready",
-                        collapse: Some(true),
-                        open: None,
-                    },
-                    |ui| {
-                        for name in ["Front Plane", "Top Plane", "Right Plane"] {
-                            let choosing_plane = w
-                                .sketch
-                                .as_ref()
-                                .is_some_and(|sketch| sketch.choosing_plane);
-                            let can_choose_plane = !task_active || choosing_plane;
-                            let response = controls::button(
-                                ui,
-                                &format!("reference:{}::{name}", part.id),
-                                "reference-plane",
-                                &["feature-tree-row"],
-                                &format!("▱  {name}"),
-                                can_choose_plane,
-                                w.active_plane.as_deref() == Some(name),
-                            );
-                            if response.clicked() {
-                                w.selected = None;
-                                if !choosing_plane {
-                                    w.view.active_node = None;
-                                }
-                                sketch::choose_origin(w, name);
-                                w.status =
-                                    format!("{name} selected. Choose a sketch or viewing action.");
-                                if !choosing_plane && !response.double_clicked() {
-                                    crate::selection_ui::object_selected(
-                                        w,
-                                        cad_core::selection_actions::SelectionTarget::Reference {
-                                            definition: part.id.clone(),
-                                            reference: name.into(),
-                                        },
-                                    );
-                                }
-                            }
-                            if response.double_clicked() && w.sketch.is_none() {
-                                ui::action(w, "sketch.new");
-                            }
-                            response.context_menu(|ui| {
-                                if ui
-                                    .add_enabled(
-                                        can_choose_plane,
-                                        egui::Button::new("Sketch on this plane"),
-                                    )
-                                    .clicked()
-                                {
-                                    sketch::choose_origin(w, name);
-                                    if w.sketch.is_none() {
-                                        ui::action(w, "sketch.new");
-                                    }
-                                    ui.close();
-                                }
-                            });
-                        }
-                        let response = controls::button(
-                            ui,
-                            &format!("reference:{}::Origin", part.id),
-                            "reference-origin",
-                            &["feature-tree-row"],
-                            "+  Origin",
-                            !task_active,
-                            false,
-                        );
-                        if response.clicked() {
-                            w.active_plane = None;
-                            crate::selection_ui::object_selected(
-                                w,
-                                cad_core::selection_actions::SelectionTarget::Reference {
-                                    definition: part.id.clone(),
-                                    reference: "Origin".into(),
-                                },
-                            );
-                        }
-                    },
-                );
-                controls::inspector_section(
-                    ui,
-                    controls::InspectorSection {
-                        id: &format!("feature-tree:{}:features", part.id),
-                        role: "feature-tree-group",
-                        classes: &["model-features"],
-                        label: "Features",
-                        state: "ready",
-                        collapse: Some(true),
-                        open: None,
-                    },
-                    |ui| {
-                        if part.features.is_empty() {
-                            ui.small("No features yet");
-                        }
-                        for feature in &part.features {
-                            let consumed = matches!(
-                                feature.operation,
-                                Operation::Profile { .. } | Operation::Sketch3d { .. }
-                            ) && part.features.iter().any(|f| {
-                                part.feature_dependencies(f)
-                                    .iter()
-                                    .any(|n| n.definition == part.id && n.node == feature.id)
-                            });
-                            if consumed {
-                                continue;
-                            }
-                            feature_row(ui, w, part, feature);
-                            if !matches!(
-                                feature.operation,
-                                Operation::Profile { .. } | Operation::Sketch3d { .. }
-                            ) {
-                                for input in part.feature_dependencies(feature) {
-                                    if let Some(sketch) = part.features.iter().find(|f| {
-                                        f.id == input.node
-                                            && matches!(
-                                                f.operation,
-                                                Operation::Profile { .. }
-                                                    | Operation::Sketch3d { .. }
-                                            )
-                                    }) {
-                                        ui.indent((&feature.id, &sketch.id), |ui| {
-                                            feature_row(ui, w, part, sketch);
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                        if let Some(s) = &w.sketch {
-                            ui.colored_label(
-                                ui.visuals().selection.stroke.color,
-                                format!("{} (Editing)", s.name),
-                            );
                         }
                     },
                 );
@@ -2599,15 +2576,21 @@ fn history(ui: &mut egui::Ui, w: &mut Workspace, part: &Part) {
         },
     );
 }
-fn feature_row(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, feature: &Feature) {
+pub(crate) fn feature_row(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, feature: &Feature) {
+    let suppressed =
+        cad_core::configuration::feature_suppressed(w.session.visible(), &part.id, feature);
+    let editing = w
+        .sketch
+        .as_ref()
+        .is_some_and(|sketch| sketch.feature == feature.id);
     let response = controls::button(
         ui,
         &feature.id,
         "feature-station",
         &["feature-tree-row"],
         &format!(
-            "{}  {}",
-            if cad_core::configuration::feature_suppressed(w.session.visible(), &part.id, feature) {
+            "{}  {}{}",
+            if suppressed {
                 "○"
             } else if matches!(
                 feature.operation,
@@ -2617,12 +2600,24 @@ fn feature_row(ui: &mut egui::Ui, w: &mut Workspace, part: &Part, feature: &Feat
             } else {
                 "◇"
             },
-            feature.name
+            feature.name,
+            if editing { " (Editing)" } else { "" }
         ),
         true,
-        w.view.active_node.as_ref() == Some(&feature.id),
+        editing || w.view.active_node.as_ref() == Some(&feature.id),
     );
     let response = crate::feature_order_ui::row(ui, w, part, &feature.id, response);
+    let response = response.on_hover_text(format!(
+        "{} · {}{}{}",
+        feature.name,
+        feature.operation.name(),
+        if suppressed { " (suppressed)" } else { "" },
+        if w.tool_checkpoint.is_none() && w.sketch.is_none() {
+            "\nDouble-click to edit. Right-click for more actions."
+        } else {
+            ""
+        }
+    ));
     if response.clicked() {
         crate::selection_ui::feature_selected(w, &part.id, feature, &response);
     }
@@ -2739,7 +2734,10 @@ pub fn confirmation(ui: &mut egui::Ui, w: &mut Workspace) {
             enabled,
             false,
         )
-        .on_hover_text("Confirm this operation · Command + Enter")
+        .on_hover_text("Finish this operation")
+        .on_disabled_hover_text(
+            confirmation_disabled_reason(w).unwrap_or("Finish the required inputs first"),
+        )
         .clicked()
         {
             w.confirm_tool();
@@ -2755,11 +2753,7 @@ pub fn confirmation(ui: &mut egui::Ui, w: &mut Workspace) {
         )
         .clicked()
         {
-            if w.tool_checkpoint.is_some() {
-                w.cancel_tool();
-            } else {
-                w.cancel();
-            }
+            ui::action(w, "draft.cancel");
         }
     });
 }
@@ -2941,24 +2935,6 @@ fn result_fields(
     body: &mut Option<cad_core::NodeRef>,
     mode: &mut String,
 ) -> bool {
-    let mut changed = false;
-    egui::ComboBox::from_label("Result")
-        .selected_text(match mode.as_str() {
-            "cut" => "Remove Material",
-            "intersect" => "Common Material",
-            "join" => "Merge Result",
-            _ => "New Body",
-        })
-        .show_ui(ui, |ui| {
-            for (value, label) in [
-                ("new", "New Body"),
-                ("join", "Merge Result"),
-                ("cut", "Remove Material"),
-                ("intersect", "Common Material"),
-            ] {
-                changed |= ui.selectable_value(mode, value.into(), label).changed();
-            }
-        });
     let candidates = doc
         .parts
         .values()
@@ -2970,17 +2946,64 @@ fn result_fields(
                 .map(|f| (p.reference(&f.id), format!("{} / {}", p.name, f.name)))
         })
         .collect::<Vec<_>>();
-    if body.is_none() && mode != "new" && !mode.is_empty() {
-        *body = candidates.last().map(|(r, _)| r.clone());
+    let mut changed = false;
+    let selected = match mode.as_str() {
+        "" | "new" => "New body",
+        "cut" | "difference" => "Cut",
+        "join" | "union" => "Join",
+        "intersect" | "intersection" => "Intersect",
+        other => other,
+    };
+    let choice = egui::ComboBox::from_label("Result")
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            for (value, label) in [
+                ("new", "New body"),
+                ("join", "Join"),
+                ("cut", "Cut"),
+                ("intersect", "Intersect"),
+            ] {
+                let available = value == "new" || !candidates.is_empty();
+                let response = ui
+                    .add_enabled(
+                        available,
+                        egui::Button::selectable(selected == label, label),
+                    )
+                    .on_disabled_hover_text("Create a solid body first.");
+                if response.clicked() && selected != label {
+                    return Some(value);
+                }
+            }
+            None
+        })
+        .inner
+        .flatten();
+    if let Some(value) = choice {
+        *mode = value.into();
         changed = true;
     }
-    if mode != "new" {
+    if changed && body.is_none() && mode != "new" {
+        // Prefer the current part when a user changes the result. Simply
+        // inspecting a feature must never assign a different input body.
+        let owner = doc
+            .parts
+            .values()
+            .find(|part| part.features.iter().any(|f| f.id == current))
+            .map(|part| &part.id);
+        *body = candidates
+            .iter()
+            .rev()
+            .find(|(reference, _)| Some(&reference.definition) == owner)
+            .or_else(|| (candidates.len() == 1).then(|| &candidates[0]))
+            .map(|(reference, _)| reference.clone());
+    }
+    if mode != "new" && !mode.is_empty() {
         let label = body
             .as_ref()
             .and_then(|r| candidates.iter().find(|(candidate, _)| candidate == r))
             .map(|(_, name)| name.as_str())
             .unwrap_or("Select target body");
-        egui::ComboBox::from_id_salt("result-body")
+        egui::ComboBox::from_label("Target body")
             .selected_text(label)
             .show_ui(ui, |ui| {
                 for (reference, name) in &candidates {
@@ -3025,273 +3048,18 @@ fn body_selector(
         });
     changed
 }
-fn extrusion_vertex_field(
-    ui: &mut egui::Ui,
-    doc: &cad_core::Document,
-    current: &str,
-    label: &str,
-    selected: &mut Option<(cad_core::NodeRef, cad_core::Id)>,
-) -> bool {
-    let vertices = doc
-        .parts
-        .values()
-        .flat_map(|part| {
-            part.features
-                .iter()
-                .take_while(|f| f.id != current)
-                .filter(|f| !f.suppressed)
-                .filter_map(move |feature| {
-                    if let Operation::Profile {
-                        profile: cad_core::Profile::Sketch { sketch },
-                        ..
-                    } = &feature.operation
-                    {
-                        part.sketches
-                            .get(sketch)
-                            .map(|sketch| (part, feature, sketch))
-                    } else {
-                        None
-                    }
-                })
-                .flat_map(|(part, feature, sketch)| {
-                    sketch.points.iter().map(move |(id, p)| {
-                        (
-                            (part.reference(&feature.id), id.clone()),
-                            format!(
-                                "{} / {}: ({:.3}, {:.3})",
-                                part.name, feature.name, p[0], p[1]
-                            ),
-                        )
-                    })
-                })
-        })
-        .collect::<Vec<_>>();
-    let name = selected
-        .as_ref()
-        .and_then(|selected| vertices.iter().find(|(value, _)| value == selected))
-        .map(|(_, name)| name.as_str())
-        .unwrap_or("Select sketch vertex");
-    let mut changed = false;
-    egui::ComboBox::from_label(label)
-        .selected_text(name)
-        .show_ui(ui, |ui| {
-            for (value, name) in vertices {
-                changed |= ui.selectable_value(selected, Some(value), name).changed();
-            }
-        });
-    changed
-}
-fn extrusion_end_fields(
-    ui: &mut egui::Ui,
-    w: &Workspace,
-    doc: &cad_core::Document,
-    current: &str,
-    end: &mut cad_core::extrusion::DirectionEnd,
-    combined: bool,
-) -> bool {
-    use cad_core::ExtrudeEnd;
-    let mut changed = false;
-    let before = end.end.clone();
-    let name = match end.end {
-        ExtrudeEnd::Blind => "Blind",
-        ExtrudeEnd::MidPlane => "Mid-plane",
-        ExtrudeEnd::ThroughAll => "Through All",
-        ExtrudeEnd::ThroughAllBoth => "Through All Both",
-        ExtrudeEnd::UpToFace => "Up to Face / Offset from Face",
-        ExtrudeEnd::UpToVertex => "Up to Vertex",
-        ExtrudeEnd::UpToNext => "Up to Next",
-        ExtrudeEnd::UpToBody => "Up to Body",
-    };
-    egui::ComboBox::from_label("End Condition")
-        .selected_text(name)
-        .show_ui(ui, |ui| {
-            for (value, name) in [
-                (ExtrudeEnd::Blind, "Blind"),
-                (ExtrudeEnd::MidPlane, "Mid-plane"),
-                (ExtrudeEnd::ThroughAll, "Through All"),
-                (ExtrudeEnd::ThroughAllBoth, "Through All Both"),
-                (ExtrudeEnd::UpToFace, "Up to Face / Offset from Face"),
-                (ExtrudeEnd::UpToVertex, "Up to Vertex"),
-                (ExtrudeEnd::UpToNext, "Up to Next"),
-                (ExtrudeEnd::UpToBody, "Up to Body"),
-            ] {
-                if combined || !matches!(value, ExtrudeEnd::MidPlane | ExtrudeEnd::ThroughAllBoth) {
-                    changed |= ui.selectable_value(&mut end.end, value, name).changed();
-                }
-            }
-        });
-    if before != end.end {
-        if end.end != ExtrudeEnd::UpToFace {
-            end.target = None;
-        }
-        if !matches!(end.end, ExtrudeEnd::UpToFace | ExtrudeEnd::UpToBody) {
-            end.target_body = None;
-        }
-        if end.end != ExtrudeEnd::UpToVertex {
-            end.target_vertex = None;
-        }
-    }
-    match end.end {
-        ExtrudeEnd::Blind | ExtrudeEnd::MidPlane => {
-            changed |= expression(ui, "Depth", &mut end.distance)
-        }
-        ExtrudeEnd::UpToFace => {
-            ui.label(if end.target.is_some() {
-                "End reference selected"
-            } else {
-                "Select an end face or datum plane"
-            });
-            if let Some(selected) = w.selected.as_ref().filter(|s| {
-                matches!(s.reference.topology.as_str(), "face" | "plane")
-                    && s.reference.producer.node != current
-            }) && ui.button("Use Selected End Face / Plane").clicked()
-            {
-                end.target = Some(selected.reference.clone());
-                end.target_body = Some(crate::reference_ui::selected_body(w, selected));
-                changed = true;
-            }
-            changed |= expression(ui, "Offset from End Face", &mut end.end_offset);
-            ui.small("Planar carriers, or complete bounded positive rational graph patches over rectangular sections. Curved end offsets require an exact offset surface.");
-        }
-        ExtrudeEnd::UpToVertex => {
-            changed |=
-                extrusion_vertex_field(ui, doc, current, "End Vertex", &mut end.target_vertex);
-            changed |= expression(ui, "Offset from End Vertex", &mut end.end_offset);
-        }
-        ExtrudeEnd::UpToBody => {
-            changed |= body_selector(ui, doc, current, "Termination Body", &mut end.target_body);
-            changed |= expression(ui, "Offset from Body", &mut end.end_offset);
-        }
-        ExtrudeEnd::UpToNext => {
-            ui.small("Finds the nearest complete forward face in Feature Scope. Piecewise termination across several faces needs exact segmented construction.");
-            changed |= expression(ui, "Offset from Next Face", &mut end.end_offset);
-        }
-        ExtrudeEnd::ThroughAll | ExtrudeEnd::ThroughAllBoth => {
-            ui.small("Through All follows the finite exact bounds of Feature Scope.");
-        }
-    };
-    changed
-}
-fn extrusion_start_fields(
-    ui: &mut egui::Ui,
-    w: &Workspace,
-    doc: &cad_core::Document,
-    current: &str,
-    start: &mut cad_core::extrusion::Start,
-) -> bool {
-    use cad_core::extrusion::Start;
-    let mut changed = false;
-    let picked = w.selected.as_ref().filter(|s| {
-        matches!(s.reference.topology.as_str(), "face" | "plane")
-            && s.reference.producer.node != current
-    });
-    egui::ComboBox::from_label("From")
-        .selected_text(match start {
-            Start::SketchPlane => "Sketch Plane",
-            Start::Face { .. } => "Face / Plane",
-            Start::Vertex { .. } => "Vertex",
-            Start::Point { .. } => "Reference Point",
-        })
-        .show_ui(ui, |ui| {
-            if ui
-                .selectable_label(matches!(start, Start::SketchPlane), "Sketch Plane")
-                .clicked()
-            {
-                *start = Start::SketchPlane;
-                changed = true;
-            }
-            if ui
-                .selectable_label(matches!(start, Start::Point { .. }), "Reference Point")
-                .clicked()
-                && !matches!(start, Start::Point { .. })
-            {
-                *start = Start::Point {
-                    point: Box::default(),
-                };
-                changed = true;
-            }
-            if ui
-                .add_enabled(picked.is_some(), egui::Button::new("Selected Face / Plane"))
-                .clicked()
-                && let Some(selected) = picked
-            {
-                *start = Start::Face {
-                    face: Box::new(selected.reference.clone()),
-                    body: crate::reference_ui::selected_body(w, selected),
-                };
-                changed = true;
-            }
-        });
-    if picked.is_none() {
-        ui.small("Select a model face or datum plane to use it as the start.");
-    }
-    if let Start::Point { point } = start {
-        changed |= crate::reference_ui::point(ui, w, doc, current, "Start Point", point);
-        ui.small("The start plane passes through this point. Start Offset moves it along the extrusion direction.");
-    }
-    let mut vertex = if let Start::Vertex { profile, point } = start {
-        Some((profile.clone(), point.clone()))
-    } else {
-        None
-    };
-    if extrusion_vertex_field(ui, doc, current, "From Vertex", &mut vertex)
-        && let Some((profile, point)) = vertex
-    {
-        *start = Start::Vertex { profile, point };
-        changed = true;
-    }
-    changed
-}
-fn revolution_thin_fields(ui: &mut egui::Ui, thin: &mut Option<cad_core::ThinExtrude>) -> bool {
-    let mut changed = false;
-    let mut enabled = thin.is_some();
-    if ui.checkbox(&mut enabled, "Thin Feature").changed() {
-        *thin = enabled.then(|| cad_core::ThinExtrude {
-            mode: cad_core::ThinExtrudeMode::OneSide,
-            thickness: "2 mm".into(),
-            second_thickness: None,
-            reverse: false,
-        });
-        changed = true;
-    }
-    if let Some(thin) = thin {
-        egui::ComboBox::from_label("Thickness Mode")
-            .selected_text(match thin.mode {
-                cad_core::ThinExtrudeMode::OneSide => "One Side",
-                cad_core::ThinExtrudeMode::TwoSide => "Two Sides",
-                cad_core::ThinExtrudeMode::MidPlane => "Mid Plane",
-            })
-            .show_ui(ui, |ui| {
-                for (mode, label) in [
-                    (cad_core::ThinExtrudeMode::OneSide, "One Side"),
-                    (cad_core::ThinExtrudeMode::TwoSide, "Two Sides"),
-                    (cad_core::ThinExtrudeMode::MidPlane, "Mid Plane"),
-                ] {
-                    changed |= ui.selectable_value(&mut thin.mode, mode, label).changed();
-                }
-            });
-        changed |= expression(ui, "Thickness", &mut thin.thickness);
-        if thin.mode == cad_core::ThinExtrudeMode::TwoSide {
-            if thin.second_thickness.is_none() {
-                thin.second_thickness = Some("2 mm".into());
-                changed = true;
-            }
-            changed |= expression(ui, "Thickness 2", thin.second_thickness.as_mut().unwrap());
-        }
-        changed |= ui
-            .checkbox(&mut thin.reverse, "Reverse Thickness Side")
-            .changed();
-        ui.small("Exact straight and circular offsets; open ends receive flat caps.");
-    }
-    changed
-}
-
 pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Feature) -> bool {
     if matches!(feature.operation, Operation::ReferenceCurve { .. }) {
         return crate::reference_curves_ui::fields(ui, w, feature);
     }
     if feature.operation.is_reference() {
         return crate::reference_ui::fields(ui, w, feature);
+    }
+    if matches!(
+        feature.operation,
+        Operation::Extrude { .. } | Operation::Revolve { .. }
+    ) {
+        return profile_features::fields(ui, w, w.session.visible(), feature);
     }
     let doc = w.session.visible().clone();
     let part = w.view.active_part.as_ref().and_then(|id| doc.parts.get(id));
@@ -3339,331 +3107,6 @@ pub fn feature_fields(ui: &mut egui::Ui, w: &mut Workspace, feature: &mut Featur
         }
         Operation::Mold { operation } => {
             changed |= crate::mold_ui::fields(ui, w, &feature.id, operation);
-        }
-        Operation::Extrude {
-            profile,
-            distance,
-            direction,
-            body,
-            mode,
-            options,
-        } => {
-            changed |= profile_selector(ui, &doc, &feature.id, "Profile", profile);
-            changed |= crate::contours_ui::fields(
-                ui,
-                w,
-                &doc,
-                std::slice::from_ref(profile),
-                &mut options.contours,
-                options.thin.is_some(),
-            );
-            ui.separator();
-            let previous_normal = options.profile_normal;
-            egui::ComboBox::from_label("Extrusion Direction")
-                .selected_text(if options.profile_normal {
-                    "Normal to Sketch"
-                } else {
-                    "Specified Vector"
-                })
-                .show_ui(ui, |ui| {
-                    changed |= ui
-                        .selectable_value(&mut options.profile_normal, true, "Normal to Sketch")
-                        .changed();
-                    changed |= ui
-                        .selectable_value(&mut options.profile_normal, false, "Specified Vector")
-                        .changed();
-                });
-            if previous_normal && !options.profile_normal {
-                let plane = w
-                    .session
-                    .draft
-                    .as_ref()
-                    .and_then(|d| d.evaluation.as_ref())
-                    .or(w.session.evaluation.as_ref())
-                    .and_then(|e| {
-                        e.sketches
-                            .get(&format!("{}::{}", profile.definition, profile.node))
-                    })
-                    .map(|s| &s.plane)
-                    .or_else(|| {
-                        doc.parts
-                            .get(&profile.definition)
-                            .and_then(|p| p.features.iter().find(|f| f.id == profile.node))
-                            .and_then(|f| {
-                                if let Operation::Profile { plane, .. } = &f.operation {
-                                    Some(plane)
-                                } else {
-                                    None
-                                }
-                            })
-                    });
-                if let Some(plane) = plane {
-                    *direction = [
-                        plane.u[1] * plane.v[2] - plane.u[2] * plane.v[1],
-                        plane.u[2] * plane.v[0] - plane.u[0] * plane.v[2],
-                        plane.u[0] * plane.v[1] - plane.u[1] * plane.v[0],
-                    ]
-                    .map(|v| v * if options.reverse_direction { -1. } else { 1. });
-                }
-            }
-            if !options.profile_normal {
-                ui.horizontal(|ui| {
-                    for (label, value) in ["X", "Y", "Z"].into_iter().zip(direction.iter_mut()) {
-                        changed |= ui
-                            .add(
-                                egui::DragValue::new(value)
-                                    .prefix(format!("{label} "))
-                                    .speed(0.01),
-                            )
-                            .changed();
-                    }
-                });
-            } else {
-                ui.small("Direction follows changes to the sketch plane.");
-            }
-            ui.separator();
-            ui.strong("Direction 1");
-            let mut first = cad_core::extrusion::DirectionEnd {
-                end: options.end.clone(),
-                distance: distance.clone(),
-                target: options.target.clone(),
-                target_body: options.target_body.clone(),
-                target_vertex: options.target_vertex.clone(),
-                end_offset: options.end_offset.clone(),
-            };
-            changed |= extrusion_end_fields(ui, w, &doc, &feature.id, &mut first, true);
-            options.end = first.end;
-            *distance = first.distance;
-            options.target = first.target;
-            options.target_body = first.target_body;
-            options.target_vertex = first.target_vertex;
-            options.end_offset = first.end_offset;
-            egui::CollapsingHeader::new("From and Direction 2").show(ui, |ui| {
-                changed |= extrusion_start_fields(ui, w, &doc, &feature.id, &mut options.start);
-                changed |= expression(ui, "Start Offset", &mut options.start_offset);
-                let combined = matches!(
-                    options.end,
-                    cad_core::ExtrudeEnd::MidPlane | cad_core::ExtrudeEnd::ThroughAllBoth
-                );
-                if combined && (options.direction2.is_some() || options.reverse_distance.is_some())
-                {
-                    options.direction2 = None;
-                    options.reverse_distance = None;
-                    changed = true;
-                }
-                let mut second = options.direction2.is_some()
-                    || (options.end == cad_core::ExtrudeEnd::Blind
-                        && options.reverse_distance.is_some());
-                if ui
-                    .add_enabled(!combined, egui::Checkbox::new(&mut second, "Direction 2"))
-                    .changed()
-                {
-                    options.direction2 = second.then(cad_core::extrusion::DirectionEnd::default);
-                    options.reverse_distance = None;
-                    changed = true;
-                }
-                if second && options.direction2.is_none() {
-                    options.direction2 = Some(cad_core::extrusion::DirectionEnd {
-                        distance: options
-                            .reverse_distance
-                            .take()
-                            .unwrap_or_else(|| "10 mm".into()),
-                        ..Default::default()
-                    });
-                    changed = true;
-                }
-                if let Some(end) = &mut options.direction2 {
-                    ui.push_id("direction-two", |ui| {
-                        changed |= extrusion_end_fields(ui, w, &doc, &feature.id, end, false);
-                    });
-                }
-            });
-            ui.small("Lengths accept units or expressions: 20 mm, thickness / 2.");
-            if ui.button("Reverse Direction").clicked() {
-                if options.profile_normal {
-                    options.reverse_direction = !options.reverse_direction;
-                } else {
-                    *direction = direction.map(|v| -v);
-                }
-                changed = true;
-            }
-            let mut thin = options.thin.is_some();
-            if ui.checkbox(&mut thin, "Thin Feature").changed() {
-                options.thin = thin.then(|| cad_core::ThinExtrude {
-                    mode: cad_core::ThinExtrudeMode::OneSide,
-                    thickness: "2 mm".into(),
-                    second_thickness: None,
-                    reverse: false,
-                });
-                changed = true;
-            }
-            if let Some(thin) = &mut options.thin {
-                egui::ComboBox::from_label("Thickness Mode")
-                    .selected_text(match thin.mode {
-                        cad_core::ThinExtrudeMode::OneSide => "One Side",
-                        cad_core::ThinExtrudeMode::TwoSide => "Two Sides",
-                        cad_core::ThinExtrudeMode::MidPlane => "Mid-plane",
-                    })
-                    .show_ui(ui, |ui| {
-                        for (mode, label) in [
-                            (cad_core::ThinExtrudeMode::OneSide, "One Side"),
-                            (cad_core::ThinExtrudeMode::TwoSide, "Two Sides"),
-                            (cad_core::ThinExtrudeMode::MidPlane, "Mid-plane"),
-                        ] {
-                            changed |= ui.selectable_value(&mut thin.mode, mode, label).changed();
-                        }
-                    });
-                changed |= expression(
-                    ui,
-                    if thin.mode == cad_core::ThinExtrudeMode::MidPlane {
-                        "Total Thickness"
-                    } else {
-                        "Side 1 Thickness"
-                    },
-                    &mut thin.thickness,
-                );
-                if thin.mode == cad_core::ThinExtrudeMode::TwoSide {
-                    if thin.second_thickness.is_none() {
-                        thin.second_thickness = Some("2 mm".into());
-                        changed = true;
-                    }
-                    changed |= expression(
-                        ui,
-                        "Side 2 Thickness",
-                        thin.second_thickness.as_mut().unwrap(),
-                    );
-                }
-                if thin.mode != cad_core::ThinExtrudeMode::MidPlane {
-                    changed |= ui
-                        .checkbox(&mut thin.reverse, "Reverse Thickness Side")
-                        .changed();
-                }
-                ui.small("Straight lines, circular arcs, and circles. Open ends receive flat caps. Closed contours use the outward side by default.");
-            }
-            let mut draft = options.draft.is_some();
-            if ui.checkbox(&mut draft, "Draft While Extruding").changed() {
-                options.draft = draft.then(|| cad_core::ExtrudeDraft {
-                    angle: "3 deg".into(),
-                    outward: false,
-                });
-                changed = true;
-            }
-            if let Some(draft) = &mut options.draft {
-                changed |= expression(ui, "Draft Angle", &mut draft.angle);
-                changed |= ui.checkbox(&mut draft.outward, "Draft Outward").changed();
-                ui.small("Straight-edge profiles; the sketch plane stays neutral. Curved tapering is unavailable.");
-            }
-            changed |= result_fields(ui, &doc, &feature.id, body, mode);
-            egui::CollapsingHeader::new("Feature Scope").show(ui,|ui| {
-                ui.small("The target and these additional feature outputs are edited together. Each selected output may contain several bodies.");
-                for part in doc.parts.values() {
-                    for candidate in part.features.iter().take_while(|f|f.id!=feature.id).filter(|f|!f.suppressed&&f.operation.produces_solid()) {
-                        let reference=part.reference(&candidate.id);
-                        if body.as_ref()==Some(&reference) {continue;}
-                        let mut included=options.scope.contains(&reference);
-                        if ui.checkbox(&mut included,format!("{} / {}",part.name,candidate.name)).changed() {
-                            if included {options.scope.push(reference);} else {options.scope.retain(|r|r!=&reference);}
-                            changed=true;
-                        }
-                    }
-                }
-            });
-        }
-        Operation::Revolve {
-            profile,
-            origin,
-            axis,
-            axis_reference,
-            angle,
-            body,
-            mode,
-            options,
-        } => {
-            changed |= profile_selector(ui, &doc, &feature.id, "Profile", profile);
-            changed |= crate::contours_ui::fields(
-                ui,
-                w,
-                &doc,
-                std::slice::from_ref(profile),
-                &mut options.contours,
-                options.thin.is_some(),
-            );
-            changed |= result_fields(ui, &doc, &feature.id, body, mode);
-            changed |= expression(ui, "Angle", angle);
-            changed |= ui
-                .checkbox(&mut options.reverse, "Reverse Direction")
-                .changed();
-            if ui.checkbox(&mut options.midplane, "Mid Plane").changed() {
-                if options.midplane {
-                    options.second_angle = None;
-                }
-                changed = true;
-            }
-            let mut second = options.second_angle.is_some();
-            if ui
-                .add_enabled(
-                    !options.midplane,
-                    egui::Checkbox::new(&mut second, "Direction 2"),
-                )
-                .changed()
-            {
-                options.second_angle = second.then(|| "90 deg".into());
-                changed = true;
-            }
-            if let Some(angle) = &mut options.second_angle {
-                changed |= expression(ui, "Direction 2 Angle", angle);
-            }
-            egui::CollapsingHeader::new("Start Angle").show(ui, |ui| {
-                let mut enabled = options.start_angle.is_some();
-                if ui.checkbox(&mut enabled, "Angular Offset").changed() {
-                    options.start_angle = enabled.then(|| "0 deg".into());
-                    changed = true;
-                }
-                if let Some(angle) = &mut options.start_angle {
-                    changed |= expression(ui, "Offset", angle);
-                }
-            });
-            changed |= revolution_thin_fields(ui, &mut options.thin);
-            ui.label("Axis of revolution");
-            changed |= crate::reference_ui::axis_fields(
-                ui,
-                w,
-                &doc,
-                &feature.id,
-                axis,
-                Some(origin),
-                axis_reference,
-            );
-            egui::CollapsingHeader::new("Feature Scope").show(ui, |ui| {
-                for part in doc.parts.values() {
-                    for candidate in part
-                        .features
-                        .iter()
-                        .take_while(|candidate| candidate.id != feature.id)
-                        .filter(|candidate| {
-                            !candidate.suppressed && candidate.operation.produces_solid()
-                        })
-                    {
-                        let reference = part.reference(&candidate.id);
-                        if body.as_ref() == Some(&reference) {
-                            continue;
-                        }
-                        let mut included = options.scope.contains(&reference);
-                        if ui
-                            .checkbox(&mut included, format!("{} / {}", part.name, candidate.name))
-                            .changed()
-                        {
-                            if included {
-                                options.scope.push(reference);
-                            } else {
-                                options.scope.retain(|candidate| candidate != &reference);
-                            }
-                            changed = true;
-                        }
-                    }
-                }
-            });
-            ui.small("Selected material regions are revolved. The section and its thin offsets must remain on one side of the axis.");
         }
         Operation::Fillet {
             body,
@@ -4369,7 +3812,7 @@ pub fn status(ui: &mut egui::Ui, w: &mut Workspace) {
                 )
                 .clicked()
                 {
-                    w.cancel();
+                    ui::action(w, "draft.cancel");
                 }
             }
             controls::bounded_label(

@@ -369,6 +369,18 @@ separately hideable with CSS. `workspace.model-context`,
 use `workspace-action` identity and styling. An Actions command is unavailable
 while an active editor owns the shared checkpoint.
 
+The Classic Features toolbar groups the full command list under `menu/all-features`.
+The Sketch toolbar uses `menu/draw-geometry`, `menu/edit-geometry` and
+`menu/dimensions-and-relations`. A theme can bind these menus or place the
+individual commands directly. The navigation help button follows the current
+gesture settings. Bind `navigation-help/orbit`, `navigation-help/pan`,
+`navigation-help/zoom`, `navigation-help/fit-model` or
+`navigation-help/fit-selection` to show a single gesture and its current value.
+
+A multiline field can request ordinary paragraph text with
+`data.multiline_style = "prose"`. The optional `data.visible_rows` hint sets its
+initial size from one to fifty rows. Explicit CSS sizing takes precedence.
+
 The default toolbar uses 28 px ready and 56 px selected/editing/inspection heights;
 selected history rows retain their 26 px height and feature-tree rows use 24 px. Users can override all of
 these values. Viewport overlay positioning now resolves the current state as well

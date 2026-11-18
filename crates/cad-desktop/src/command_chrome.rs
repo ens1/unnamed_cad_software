@@ -213,7 +213,7 @@ fn project_ribbon_node(
                     let mut element = menu.clone();
                     element.id = format!("{group_id}:menu");
                     element.role = "ribbon-group-menu".into();
-                    element.label = format!("{} ▾", group.label);
+                    element.label = group.label.clone();
                     element.relationships = vec![group_id.clone(), menu.id.clone()];
                     element.data["contract"] = json!("tcad.command-ribbon");
                     element.data["version"] = json!(1);
@@ -462,7 +462,7 @@ pub fn ribbon(ui: &mut egui::Ui, w: &mut Workspace, context: &RenderContext<'_>)
                                         context.semantics.iter().find(|element| &element.id == id)
                                     }) {
                                         let mut menu = menu.clone();
-                                        menu.label = format!("{} ▾", group.label);
+                                        menu.label = group.label.clone();
                                         crate::cad_ui::semantic_menu_as(
                                             ui,
                                             w,

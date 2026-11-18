@@ -19,6 +19,8 @@ const RENAME: &str = "properties-rename";
 const REFERENCES: &str = "properties-keep-bindings";
 const FILTER: &str = "properties-filter";
 const COMMON: &str = "properties-common";
+const PAGE: &str = "properties-page";
+const PAGE_SIZE: usize = 10;
 const ERRORS: &str = "properties-field-invalid:";
 
 fn available(w: &Workspace) -> bool {
@@ -67,6 +69,25 @@ fn editable(w: &Workspace) -> bool {
     available(w)
         && model_properties::local(w.session.visible(), &scope(w)).is_ok()
         && model_properties::editable(w.session.visible(), &scope(w))
+}
+// Add-property text is a form draft, scoped to its owner until Add is clicked.
+fn switch_form(w: &mut Workspace, previous: &Scope) {
+    let current = scope(w);
+    if &current == previous {
+        return;
+    }
+    let previous = serde_json::to_string(previous).unwrap_or_default();
+    let current = serde_json::to_string(&current).unwrap_or_default();
+    for field in [NEW_KEY, NEW_VALUE] {
+        if let Some(text) = w.fields.remove(field) {
+            w.fields.insert(format!("{field}:{previous}"), text);
+        }
+        if let Some(text) = w.fields.remove(&format!("{field}:{current}")) {
+            w.fields.insert(field.into(), text);
+        }
+    }
+    w.fields.remove(PAGE);
+    clear_selection(w);
 }
 fn clear_selection(w: &mut Workspace) {
     w.fields.remove(SELECTED);
@@ -168,6 +189,21 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
         }
         return true;
     }
+    if matches!(command, "properties.next-page" | "properties.previous-page") {
+        let pinned = !model_properties::editable(w.session.visible(), &scope(w));
+        let row_count = selected_rows(w)
+            .iter()
+            .filter(|row| listed(w, row, pinned))
+            .count();
+        let page = list_page(w, row_count);
+        let next = if command == "properties.next-page" {
+            (page + 1).min(row_count.saturating_sub(1) / PAGE_SIZE)
+        } else {
+            page.saturating_sub(1)
+        };
+        w.fields.insert(PAGE.into(), next.to_string());
+        return true;
+    }
     if !current_source_is_valid(w) {
         w.status = "Correct the current property fields or choose a valid scope before changing property keys".into();
         return true;
@@ -204,7 +240,9 @@ pub fn action(w: &mut Workspace, command: &str, arguments: Option<&Value>) -> bo
                         },
                     )?;
                     clear_selection(w);
+                    w.fields.insert(RENAME.into(), key.clone());
                     w.fields.insert(SELECTED.into(), key);
+                    w.fields.remove(FILTER);
                     w.fields.remove(NEW_KEY);
                     w.fields.remove(NEW_VALUE);
                 }
@@ -298,7 +336,7 @@ fn owner_field(w: &Workspace) -> SemanticElement {
         .chain(document.assemblies.values().map(|assembly|json!({"value":format!("definition:{}",assembly.id),"label":format!("Assembly · {}",assembly.name)}))).collect::<Vec<_>>();
     let mut element = field(
         "model-properties:owner".into(),
-        "Owner",
+        "Edit properties for",
         "properties-ui",
         "owner",
         json!(
@@ -316,7 +354,7 @@ fn configuration_field(w: &Workspace) -> Option<SemanticElement> {
     let definition = scope(w).definition()?.to_owned();
     let mut element = field(
         "model-properties:configuration".into(),
-        "Values for",
+        "Configuration",
         "properties-ui",
         "configuration",
         json!(scope(w).configuration().unwrap_or_default()),
@@ -336,26 +374,50 @@ fn configuration_field(w: &Workspace) -> Option<SemanticElement> {
     Some(element)
 }
 fn selected_rows(w: &Workspace) -> Vec<model_properties::Row> {
-    let common = w.fields.get(COMMON).is_none_or(|value| value == "true");
     let filter = w
         .fields
         .get(FILTER)
-        .map(|value| value.to_lowercase())
+        .map(|value| value.trim().to_lowercase())
         .unwrap_or_default();
-    model_properties::rows(w.session.visible(), &scope(w), common)
+    model_properties::rows(w.session.visible(), &scope(w), true)
         .unwrap_or_default()
         .into_iter()
         .filter(|row| {
             filter.is_empty()
+                || w.fields.get(SELECTED) == Some(&row.key)
                 || format!("{} {} {}", row.key, row.label, row.value)
                     .to_lowercase()
                     .contains(&filter)
         })
         .collect()
 }
-fn row_field(w: &Workspace, row: &model_properties::Row) -> SemanticElement {
-    let scope = scope(w);
-    let source = serde_json::to_string(&scope).unwrap_or_default();
+fn list_page(w: &Workspace, count: usize) -> usize {
+    w.fields
+        .get(PAGE)
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or_default()
+        .min(count.saturating_sub(1) / PAGE_SIZE)
+}
+
+fn listed(w: &Workspace, row: &model_properties::Row, pinned: bool) -> bool {
+    let assigned = row.local_value.is_some() || row.inherited;
+    assigned
+        || !pinned
+            && (matches!(row.key.as_str(), "part_number" | "description" | "revision")
+                || w.fields.get(SELECTED) == Some(&row.key)
+                || w.fields
+                    .get(FILTER)
+                    .is_some_and(|value| !value.trim().is_empty())
+                || w.fields.get(COMMON).is_some_and(|value| value == "true"))
+}
+
+fn row_field(
+    scope: &Scope,
+    row: &model_properties::Row,
+    writable: bool,
+    pinned: bool,
+) -> SemanticElement {
+    let source = serde_json::to_string(scope).unwrap_or_default();
     let encoded = row
         .key
         .as_bytes()
@@ -368,20 +430,23 @@ fn row_field(w: &Workspace, row: &model_properties::Row) -> SemanticElement {
         "model-property",
         &row.key,
         json!(row.value),
-        editable(w),
+        writable,
     );
     element.data["scope"] = json!(scope);
+    element.data["focus_request"] = json!(format!("focus-request:{}", element.id));
     element.data["key"] = json!(row.key);
     element.data["origin"] = json!(row.origin);
     element.data["inherited"] = json!(row.inherited);
     element.data["local"] = json!(row.local_value.is_some());
     if row.value.contains('\n') || matches!(row.key.as_str(), "notes" | "finish_notes") {
         element.data["multiline"] = true.into();
+        element.data["multiline_style"] = "prose".into();
+        element.data["visible_rows"] = json!(3);
     }
     if row.inherited {
         element.state = "inherited".into();
     }
-    if !model_properties::editable(w.session.visible(), &scope) {
+    if pinned {
         element.data["diagnostics"] = json!([
             "This definition is a pinned library snapshot. Make a component unique before editing its properties."
         ]);
@@ -397,11 +462,13 @@ fn action_element(command: &str, label: &str, enabled: bool, reason: &str) -> Se
         state: if enabled { "ready" } else { "disabled" }.into(),
         commands: vec![command.into()],
         relationships: vec!["workspace.properties".into()],
-        data: json!({"enabled":enabled,"disabled_reason":reason,"accessibility_label":label}),
+        data: json!({"enabled":enabled,"disabled_reason":(!enabled).then_some(reason),"accessibility_label":label}),
     }
 }
 pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     let scope = scope(w);
+    let pinned = !model_properties::editable(w.session.visible(), &scope);
+    let writable = editable(w);
     let mut elements = vec![
         SemanticElement {
             id: "workspace.properties".into(),
@@ -431,23 +498,65 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     ));
     let mut common = field(
         "model-properties:common".into(),
-        "Show common fields",
+        "Show other empty fields",
         "properties-ui",
         "common",
-        json!(w.fields.get(COMMON).is_none_or(|value| value == "true")),
+        json!(w.fields.get(COMMON).is_some_and(|value| value == "true")),
         true,
     );
     common.data["value_type"] = "boolean".into();
     elements.push(common);
+    let mut row_count = 0;
     for row in selected_rows(w) {
-        let field = row_field(w, &row);
-        elements.push(SemanticElement {id:format!("{}:select",field.id),role:"model-property-row".into(),label:format!("{} · {}",row.key, match &row.origin {model_properties::Origin::Unset=>"Unset".to_owned(),model_properties::Origin::Document=>"Document".to_owned(),model_properties::Origin::Base=>"Base".to_owned(),model_properties::Origin::Configuration{name,..}=>format!("Configuration · {name}")}),value:Some(row.value.clone()),state:if w.fields.get(SELECTED)==Some(&row.key){"selected"}else if row.inherited{"inherited"}else{"local"}.into(),commands:vec!["properties.select".into()],relationships:vec![field.id.clone()],data:json!({"key":row.key,"origin":row.origin,"local":row.local_value.is_some(),"inherited":row.inherited})});
+        let mut field = row_field(&scope, &row, writable, pinned);
+        let is_listed = listed(w, &row, pinned);
+        row_count += usize::from(is_listed);
+        field.data["listed"] = json!(is_listed);
+        elements.push(SemanticElement {
+            id: format!("{}:select", field.id),
+            role: "model-property-row".into(),
+            label: row.label.clone(),
+            value: Some(row.value.clone()),
+            state: if w.fields.get(SELECTED) == Some(&row.key) { "selected" } else if row.inherited { "inherited" } else if row.local_value.is_some() { "local" } else { "unset" }.into(),
+            commands: vec!["properties.select".into()],
+            relationships: vec![field.id.clone()],
+            data: json!({"key":row.key,"origin":row.origin,"local":row.local_value.is_some(),"inherited":row.inherited,"listed":is_listed}),
+        });
         elements.push(field);
     }
+    if row_count > PAGE_SIZE {
+        let page = list_page(w, row_count);
+        elements.push(action_element(
+            "properties.previous-page",
+            "Previous",
+            page > 0,
+            "First page",
+        ));
+        elements.push(action_element(
+            "properties.next-page",
+            "Next",
+            (page + 1) * PAGE_SIZE < row_count,
+            "Last page",
+        ));
+        elements.push(SemanticElement {
+            id: "model-properties:page".into(),
+            role: "model-property-page".into(),
+            label: format!(
+                "{}–{} of {row_count}",
+                page * PAGE_SIZE + 1,
+                ((page + 1) * PAGE_SIZE).min(row_count)
+            ),
+            value: None,
+            state: "ready".into(),
+            commands: vec![],
+            relationships: vec!["workspace.properties".into()],
+            data: json!({"page":page + 1,"page_size":PAGE_SIZE,"matches":row_count}),
+        });
+    }
     for (name, label, stored) in [
-        ("new-key", "Custom key", NEW_KEY),
+        ("new-key", "Property name", NEW_KEY),
         ("new-value", "Value", NEW_VALUE),
-        ("rename", "New key", RENAME),
+        ("rename", "New name", RENAME),
     ] {
         elements.push(field(
             format!("model-properties:{name}"),
@@ -460,7 +569,7 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     }
     let mut policy = field(
         "model-properties:keep-bindings".into(),
-        "Keep existing bindings even if their values become blank",
+        "Keep links to the old name even if values become blank",
         "properties-ui",
         "keep-bindings",
         json!(reference_policy(w) == ReferencePolicy::KeepBindings),
@@ -469,47 +578,61 @@ pub fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     policy.data["value_type"] = "boolean".into();
     elements.push(policy);
     let local = model_properties::local(w.session.visible(), &scope).unwrap_or_default();
+    let effective = model_properties::effective(w.session.visible(), &scope).unwrap_or_default();
     let selected = w.fields.get(SELECTED);
     let has_local = selected.is_some_and(|key| local.contains_key(key));
-    let has_inherited = selected.is_some_and(|key| {
-        !local.contains_key(key)
-            && model_properties::effective(w.session.visible(), &scope)
-                .is_ok_and(|values| values.contains_key(key))
-    });
-    let keys_editable = editable(w) && current_source_is_valid(w);
+    let has_inherited = !has_local && selected.is_some_and(|key| effective.contains_key(key));
+    let keys_editable = writable && current_source_is_valid(w);
+    let add_key = w.fields.get(NEW_KEY);
+    let exists = add_key.is_some_and(|key| local.contains_key(key));
+    let rename_key = w.fields.get(RENAME);
+    let rename_taken =
+        rename_key.is_some_and(|key| Some(key) != selected && effective.contains_key(key));
     for (command, label, enabled, reason) in [
         (
             "properties.add",
-            "Add / override property",
+            if !exists && add_key.is_some_and(|key| effective.contains_key(key)) {
+                "Override property"
+            } else {
+                "Add property"
+            },
             keys_editable
-                && w.fields
-                    .get(NEW_KEY)
-                    .is_some_and(|key| model_properties::validate_key(key).is_ok()),
-            "Enter a printable key and choose an editable scope",
+                && !exists
+                && add_key.is_some_and(|key| model_properties::validate_key(key).is_ok()),
+            if exists {
+                "This property already exists here. Select it to edit the value."
+            } else {
+                "Enter a property name."
+            },
         ),
         (
             "properties.remove",
             if scope.configuration().is_some() {
-                "Remove override · inherit"
+                "Remove local value"
             } else {
-                "Remove selected property"
+                "Remove property"
             },
             keys_editable && has_local,
-            "Select a local property; inherited values belong to their source scope",
+            "Select a property with a local value.",
         ),
         (
             "properties.rename",
-            "Rename local key · keep existing bindings",
+            "Rename property",
             keys_editable
+                && !rename_taken
                 && has_local
                 && w.fields.get(RENAME).is_some_and(|key| {
                     model_properties::validate_key(key).is_ok() && Some(key) != selected
                 }),
-            "Select a local key and enter a different valid key",
+            if rename_taken {
+                "This name already exists here."
+            } else {
+                "Enter a different property name."
+            },
         ),
         (
             "properties.copy-inherited",
-            "Copy inherited value into this configuration",
+            "Override in this configuration",
             keys_editable && has_inherited,
             "Select an inherited value",
         ),
@@ -549,7 +672,7 @@ pub fn value(w: &Workspace, element: &SemanticElement) -> Option<Value> {
             ),
             "configuration" => json!(scope(w).configuration().unwrap_or_default()),
             "filter" => json!(w.fields.get(FILTER).cloned().unwrap_or_default()),
-            "common" => json!(w.fields.get(COMMON).is_none_or(|value| value == "true")),
+            "common" => json!(w.fields.get(COMMON).is_some_and(|value| value == "true")),
             "new-key" => json!(w.fields.get(NEW_KEY).cloned().unwrap_or_default()),
             "new-value" => json!(w.fields.get(NEW_VALUE).cloned().unwrap_or_default()),
             "rename" => json!(w.fields.get(RENAME).cloned().unwrap_or_default()),
@@ -589,9 +712,10 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                 {
                     return Err(CadError::Invalid("The property owner is missing".into()));
                 }
+                let previous = scope(w);
                 w.fields.insert(OWNER.into(), owner.into());
                 w.fields.insert(CONFIGURATION.into(), String::new());
-                clear_selection(w);
+                switch_form(w, &previous);
             }
             "configuration" => {
                 let configuration = value.as_str().ok_or_else(|| {
@@ -608,13 +732,17 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                 {
                     return Err(CadError::Invalid("The configuration is missing".into()));
                 }
+                let previous = scope(w);
                 w.fields.insert(CONFIGURATION.into(), configuration.into());
-                clear_selection(w);
+                switch_form(w, &previous);
             }
             "common" | "keep-bindings" => {
                 let value = value
                     .as_bool()
                     .ok_or_else(|| CadError::Invalid("Choose enabled or disabled".into()))?;
+                if field == "common" {
+                    w.fields.remove(PAGE);
+                }
                 w.fields.insert(
                     if field == "common" {
                         COMMON
@@ -635,6 +763,12 @@ pub fn set_value(w: &mut Workspace, element: &SemanticElement, value: Value) -> 
                     "new-value" => NEW_VALUE,
                     _ => RENAME,
                 };
+                if field == "filter" {
+                    w.fields.remove(PAGE);
+                    if !w.fields.keys().any(|key| key.starts_with(ERRORS)) {
+                        clear_selection(w);
+                    }
+                }
                 w.fields.insert(stored.into(), value.into());
             }
             _ => return Err(CadError::Invalid("Unknown property browser field".into())),
@@ -699,13 +833,7 @@ fn render_action(ui: &mut egui::Ui, w: &mut Workspace, element: &SemanticElement
         enabled,
         false,
     )
-    .on_hover_text(
-        element
-            .data
-            .get("disabled_reason")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-    )
+    .on_disabled_hover_text(element.value.as_deref().unwrap_or_default())
     .clicked()
     {
         action(w, &element.commands[0], Some(&element.data));
@@ -756,7 +884,9 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             return;
         }
     }
-    cad_ui::confirmation(ui, w);
+    if !crate::presentation_composition::confirmation_hosted(w) {
+        cad_ui::confirmation(ui, w);
+    }
     if let Err(error) = model_properties::local(w.session.visible(), &scope(w)) {
         controls::label(
             ui,
@@ -767,147 +897,280 @@ pub fn show(ui: &mut egui::Ui, w: &mut Workspace) {
             "invalid",
         );
     }
+    let starting_scope = scope(w);
     let elements = semantics(w);
-    for id in [
-        "model-properties:owner",
-        "model-properties:configuration",
-        "model-properties:filter",
-        "model-properties:common",
-    ] {
-        if let Some(element) = elements.iter().find(|element| element.id == id) {
-            crate::ui::semantic_field(ui, w, element);
-        }
+    let find = |id: &str| elements.iter().find(|element| element.id == id);
+    if let Some(owner) = find("model-properties:owner") {
+        crate::ui::semantic_field(ui, w, owner);
     }
-    if !model_properties::editable(w.session.visible(), &scope(w)) {
+    if scope(w) != starting_scope {
+        return;
+    }
+    if let Some(config) = find("model-properties:configuration")
+        && (config.data["choices"]
+            .as_array()
+            .is_some_and(|choices| choices.len() > 1)
+            || starting_scope.configuration().is_some())
+    {
+        crate::ui::semantic_field(ui, w, config);
+    }
+    // A dropdown change invalidates the row descriptors rendered for the old scope.
+    if scope(w) != starting_scope
+        || model_properties::local(w.session.visible(), &starting_scope).is_err()
+    {
+        return;
+    }
+    let pinned = !model_properties::editable(w.session.visible(), &starting_scope);
+    if pinned {
         controls::label(
             ui,
             "model-properties:pinned",
             "model-property-help",
             &[],
-            "This definition is a pinned library snapshot. Make a component unique before editing its properties.",
+            "Read-only library component. Make the component unique to edit its properties.",
             "readonly",
         );
     }
-    let props = controls::properties("model-properties:rows", "model-property-list", &[], "ready");
-    egui::ScrollArea::vertical()
-        .id_salt("model-property-rows")
-        .max_height(controls::number(&props, "max-height", 360.))
-        .show(ui, |ui| {
-            for row in selected_rows(w) {
-                let element = row_field(w, &row);
-                ui.horizontal(|ui| {
-                    if controls::button(
-                        ui,
-                        &format!("{}:select", element.id),
-                        "model-property-row",
-                        &["semantic-control"],
-                        &row.key,
-                        true,
-                        w.fields.get(SELECTED) == Some(&row.key),
-                    )
-                    .on_hover_text(
-                        "Select this key to inspect linked uses, rename or remove its local value",
-                    )
-                    .clicked()
-                    {
-                        action(w, "properties.select", Some(&json!({"key":row.key})));
-                    }
-                    let origin = match &row.origin {
-                        model_properties::Origin::Unset => "Unset".to_owned(),
-                        model_properties::Origin::Document => "Document".to_owned(),
-                        model_properties::Origin::Base => "Base".to_owned(),
-                        model_properties::Origin::Configuration { name, .. } => name.clone(),
-                    };
-                    controls::label(
-                        ui,
-                        &format!("{}:origin", element.id),
-                        "model-property-origin",
-                        &[],
-                        &format!(
-                            "{}{}",
-                            if row.inherited { "Inherited · " } else { "" },
-                            origin
-                        ),
-                        if row.inherited { "inherited" } else { "local" },
-                    );
-                });
-                crate::ui::semantic_field(ui, w, &element);
-            }
-        });
-    controls::label(
-        ui,
-        "model-properties:add-heading",
-        "model-property-heading",
-        &[],
-        "Custom property / local override",
-        "ready",
-    );
-    for id in ["model-properties:new-key", "model-properties:new-value"] {
-        if let Some(element) = elements.iter().find(|element| element.id == id) {
-            crate::ui::semantic_field(ui, w, element);
-        }
-    }
-    if let Some(element) = elements
+
+    let mut rows: Vec<_> = elements
         .iter()
-        .find(|element| element.id == "command:properties.add")
+        .filter(|element| element.data["setter"] == "model-property")
+        .collect();
+    let common_rank = |key: &str| {
+        model_properties::COMMON_FIELDS
+            .iter()
+            .position(|(name, _)| *name == key)
+            .unwrap_or(usize::MAX)
+    };
+    rows.sort_by_key(|field| {
+        (
+            field.data["local"] != true && field.data["inherited"] != true,
+            common_rank(field.data["key"].as_str().unwrap_or_default()),
+        )
+    });
+    let visible = |field: &SemanticElement| {
+        field.data["local"] == true
+            || field.data["inherited"] == true
+            || matches!(
+                field.data["key"].as_str(),
+                Some("part_number" | "description" | "revision")
+            )
+    };
+    let searching = w
+        .fields
+        .get(FILTER)
+        .is_some_and(|query| !query.trim().is_empty());
+    let show_empty = w.fields.get(COMMON).is_some_and(|value| value == "true");
+    let count = rows.iter().filter(|row| show_empty || visible(row)).count();
+    if (count > 8 || searching)
+        && let Some(filter) = find("model-properties:filter")
     {
-        render_action(ui, w, element);
+        crate::ui::semantic_field(ui, w, filter);
     }
-    if let Some(key) = w.fields.get(SELECTED).cloned() {
-        let impacts = impact_data(w, &key);
+    if !searching
+        && !pinned
+        && rows.iter().any(|row| !visible(row))
+        && let Some(common) = find("model-properties:common")
+    {
+        crate::ui::semantic_field(ui, w, common);
+    }
+    rows.retain(|row| row.data["listed"] == true);
+    let list_id = "model-properties:rows";
+    let props = controls::properties(list_id, "model-property-list", &[], "ready");
+    if rows.is_empty() {
         controls::label(
             ui,
-            "model-properties:selected-heading",
-            "model-property-heading",
+            "model-properties:no-results",
+            "model-property-help",
             &[],
-            &format!("{key} · {} linked uses", impacts.len()),
-            "selected",
+            if searching {
+                "No matching properties."
+            } else {
+                "No saved properties."
+            },
+            "ready",
         );
-        for impact in &impacts {
-            controls::label(
-                ui,
-                &format!("model-properties:impact:{}", impact.id),
-                "model-property-impact",
-                &[],
-                &impact.label,
-                "associated",
-            )
-            .on_hover_text(&impact.detail);
+    } else {
+        // Keep long property collections cheap to draw even when a theme makes each row tall.
+        // Filters and targets reset the page, while editing a value keeps the current place.
+        let page = list_page(w, rows.len());
+        egui::ScrollArea::vertical()
+            .id_salt((list_id, page))
+            .max_height(controls::number(&props, "max-height", 250.))
+            .show(ui, |ui| {
+                for field in rows.iter().skip(page * PAGE_SIZE).take(PAGE_SIZE) {
+                    let Some(key) = field.data["key"].as_str() else {
+                        continue;
+                    };
+                    let selected = w.fields.get(SELECTED).is_some_and(|saved| saved == key);
+                    let value = field.value.as_deref().unwrap_or_default();
+                    let mut preview = value.lines().next().unwrap_or_default().chars();
+                    let mut summary: String = preview.by_ref().take(46).collect();
+                    if preview.next().is_some() || value.contains('\n') {
+                        summary.push('…');
+                    }
+                    if summary.is_empty() {
+                        summary = if pinned { "Empty" } else { "Enter value…" }.into();
+                    }
+                    let row_id = format!("{}:select", field.id);
+                    let response = controls::button(
+                        ui,
+                        &row_id,
+                        "model-property-row",
+                        &["semantic-control"],
+                        &format!("{} · {summary}", field.label),
+                        true,
+                        selected,
+                    )
+                    .on_hover_text(format!("{} · {key}", field.label));
+                    if response.clicked() {
+                        action(w, "properties.select", Some(&json!({"key":key})));
+                        if !pinned {
+                            w.fields
+                                .insert(format!("focus-request:{}", field.id), "true".into());
+                        }
+                    }
+                }
+            });
+        if let Some(detail) = find("model-properties:page") {
+            ui.horizontal_wrapped(|ui| {
+                if let Some(previous) = find("command:properties.previous-page") {
+                    render_action(ui, w, previous);
+                }
+                controls::label(ui, &detail.id, &detail.role, &[], &detail.label, "ready");
+                if let Some(next) = find("command:properties.next-page") {
+                    render_action(ui, w, next);
+                }
+            });
         }
-        if !impacts.is_empty() {
+    }
+
+    if let Some(field) = rows
+        .into_iter()
+        .find(|row| row.data["key"].as_str() == w.fields.get(SELECTED).map(String::as_str))
+    {
+        crate::ui::semantic_field(ui, w, field);
+        let key = field.data["key"].as_str().unwrap_or_default();
+        let inherited = field.data["inherited"] == true;
+        if inherited {
+            let source = field.data["origin"]
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("the base definition");
+            let explanation = if pinned {
+                format!("Inherited from {source}.")
+            } else {
+                format!(
+                    "Inherited from {source}. Editing the value overrides it in this configuration."
+                )
+            };
             controls::label(
                 ui,
-                "model-properties:binding-help",
-                "model-property-help",
+                &format!("{}:origin", field.id),
+                "model-property-origin",
                 &[],
-                "Renaming retains the old drawing/BOM keys. Missing values display blank or use the listed fallback; value edits preserve every binding.",
-                "associated",
+                &explanation,
+                "inherited",
             );
-            if let Some(element) = elements
-                .iter()
-                .find(|element| element.id == "model-properties:keep-bindings")
-            {
-                crate::ui::semantic_field(ui, w, element);
-            }
         }
-        if let Some(element) = elements
-            .iter()
-            .find(|element| element.id == "model-properties:rename")
-        {
-            crate::ui::semantic_field(ui, w, element);
+        if field.data["local"] == true || inherited {
+            controls::inspector_section(
+                ui,
+                controls::InspectorSection {
+                    id: "model-properties:selected-heading",
+                    role: "model-property-group",
+                    classes: &["secondary"],
+                    label: if pinned {
+                        "Linked uses"
+                    } else {
+                        "Property actions and links"
+                    },
+                    state: "selected",
+                    collapse: Some(false),
+                    open: None,
+                },
+                |ui| {
+                    let impacts = impact_data(w, key);
+                    for impact in &impacts {
+                        controls::label(
+                            ui,
+                            &format!("model-properties:impact:{}", impact.id),
+                            "model-property-impact",
+                            &[],
+                            &impact.label,
+                            "associated",
+                        )
+                        .on_hover_text(&impact.detail);
+                    }
+                    if impacts.is_empty() {
+                        controls::label(
+                            ui,
+                            "model-properties:binding-help",
+                            "model-property-help",
+                            &[],
+                            "No linked drawing fields or BOM columns.",
+                            "ready",
+                        );
+                    }
+                    if pinned {
+                        return;
+                    }
+                    if inherited {
+                        if let Some(element) = find("command:properties.copy-inherited") {
+                            render_action(ui, w, element);
+                        }
+                        return;
+                    }
+                    if !impacts.is_empty() {
+                        controls::label(
+                            ui,
+                            "model-properties:binding-help",
+                            "model-property-help",
+                            &[],
+                            "Renaming or removing this property keeps the links above pointed at the old name.",
+                            "associated",
+                        );
+                        if let Some(policy) = find("model-properties:keep-bindings") {
+                            crate::ui::semantic_field(ui, w, policy);
+                        }
+                    }
+                    if let Some(rename) = find("model-properties:rename") {
+                        crate::ui::semantic_field(ui, w, rename);
+                    }
+                    ui.horizontal_wrapped(|ui| {
+                        for id in ["command:properties.rename", "command:properties.remove"] {
+                            if let Some(element) = find(id) {
+                                render_action(ui, w, element);
+                            }
+                        }
+                    });
+                },
+            );
         }
-        for command in [
-            "properties.copy-inherited",
-            "properties.remove",
-            "properties.rename",
-        ] {
-            if let Some(element) = elements
-                .iter()
-                .find(|element| element.id == format!("command:{command}"))
-            {
-                render_action(ui, w, element);
-            }
-        }
+    }
+    if !pinned {
+        controls::inspector_section(
+            ui,
+            controls::InspectorSection {
+                id: "model-properties:add-heading",
+                role: "model-property-group",
+                classes: &["secondary"],
+                label: "Add custom property",
+                state: "ready",
+                collapse: Some(false),
+                open: None,
+            },
+            |ui| {
+                for id in ["model-properties:new-key", "model-properties:new-value"] {
+                    if let Some(element) = find(id) {
+                        crate::ui::semantic_field(ui, w, element);
+                    }
+                }
+                if let Some(element) = find("command:properties.add") {
+                    render_action(ui, w, element);
+                }
+            },
+        );
     }
     for (id, error) in w.fields.iter().filter(|(key, _)| key.starts_with(ERRORS)) {
         controls::label(ui, id, "model-property-error", &[], error, "invalid");

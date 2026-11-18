@@ -296,7 +296,8 @@ pub fn evaluate(
     }
     Ok(q)
 }
-pub fn value(doc: &Document, definition: &str, expr: &Expr, dimension: Dimension) -> Result<f64> {
+/// Evaluate an expression and retain its dimension before applying field-unit defaults.
+pub fn quantity(doc: &Document, definition: &str, expr: &Expr) -> Result<Quantity> {
     fn resolve(
         doc: &Document,
         def: &str,
@@ -349,9 +350,12 @@ pub fn value(doc: &Document, definition: &str, expr: &Expr, dimension: Dimension
         }
         Ok(q)
     }
-    let q = evaluate(&expr.0, |name| {
+    evaluate(&expr.0, |name| {
         resolve(doc, definition, name, &mut BTreeSet::new())
-    })?;
+    })
+}
+pub fn value(doc: &Document, definition: &str, expr: &Expr, dimension: Dimension) -> Result<f64> {
+    let q = quantity(doc, definition, expr)?;
     if q.matches(dimension) {
         Ok(q.value)
     } else if q.length == 0 && q.angle == 0 {

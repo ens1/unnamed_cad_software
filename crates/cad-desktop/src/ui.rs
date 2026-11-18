@@ -174,6 +174,10 @@ pub fn workspace_ui(
     crate::selection_ui::show(ctx, &mut w);
     crate::settings_ui::show(ctx, &mut w);
     crate::file_switch_ui::show(ctx, &mut w);
+    // egui releases keyboard focus at the start of an Escape frame. Remember
+    // which widget held it so closing a field cannot also discard its feature.
+    let focused = ctx.memory(|memory| memory.focused());
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("tcad-last-focus"), focused));
     crate::navigation::finish_ui(&mut w);
     // UI edits happen after worker polling. Wake once at the validation deadline
     // instead of rendering the entire workspace continuously while it is idle.
@@ -226,6 +230,20 @@ pub(crate) fn color(s: &str) -> Option<Color32> {
     }
 }
 fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
+    // One physical keypress closes one level, even with key repeat enabled.
+    ctx.input_mut(|i| {
+        i.events.retain(|event| {
+            !matches!(
+                event,
+                egui::Event::Key {
+                    key: egui::Key::Escape,
+                    pressed: true,
+                    repeat: true,
+                    ..
+                }
+            )
+        })
+    });
     // Recovery stays reachable even when a user theme hides the Settings overlay.
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F9)) {
         if w.settings.is_some() {
@@ -237,6 +255,27 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
             w.status = "Restored default presentation and navigation".into();
         }
         return;
+    }
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if egui::Popup::is_any_open(ctx) {
+            egui::Popup::close_all(ctx);
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            return;
+        }
+        let editing_form = w.settings.is_some()
+            || w.tool_checkpoint.is_some() && w.sketch.is_none() && !crate::sketch3d_ui::active(w);
+        if editing_form
+            && !crate::named_parameter_ui::active(w)
+            && w.dialog.as_deref() != Some("commands")
+            && let Some(id) = ctx
+                .data(|data| data.get_temp::<Option<egui::Id>>(egui::Id::new("tcad-last-focus")))
+                .flatten()
+            && egui::TextEdit::load_state(ctx, id).is_some()
+        {
+            ctx.memory_mut(|memory| memory.surrender_focus(id));
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            return;
+        }
     }
     if crate::publish_ui::busy(w) {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -283,6 +322,7 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
         if w.dialog.as_deref() == Some("sketch-block-library") {
             crate::sketch_block_library_ui::close(w);
         } else if crate::command_palette::escape(w)
+            || crate::named_parameter_ui::cancel(w)
             || crate::drawing_interaction_ui::escape(w)
             || crate::assembly_motion_ui::cancel_drag(w)
             || crate::component_pattern_ui::picking_direction(w)
@@ -323,6 +363,10 @@ fn shortcuts(ctx: &egui::Context, w: &mut Workspace) {
         } else {
             w.cancel();
         }
+    }
+    if shortcuts.1 && crate::named_parameter_ui::active(w) {
+        crate::named_parameter_ui::action(w, "parameter.add-to-draft", None);
+        return;
     }
     if shortcuts.1 && w.dialog.as_deref() != Some("commands") {
         if w.sketch
@@ -380,109 +424,78 @@ pub(crate) fn graph(ui: &mut egui::Ui, w: &mut Workspace, part: &Part) {
     crate::graph_ui::show(ui, w, Some(part));
 }
 pub(crate) fn parameters(ui: &mut egui::Ui, w: &mut Workspace) {
-    let doc = w.session.visible().clone();
-    let owner = w
-        .view
-        .active_part
-        .clone()
-        .unwrap_or_else(|| doc.root.clone());
-    let params = doc
-        .parts
-        .get(&owner)
-        .map(|p| &p.parameters)
-        .or_else(|| doc.assemblies.get(&owner).map(|a| &a.parameters));
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("PARAMETERS").strong().size(11.));
-        if ui.small_button("+").clicked() {
-            w.open_editor("parameter");
-            w.fields.insert("parameter-name".into(), "dimension".into());
-            w.fields.insert("parameter-value".into(), "10 mm".into());
+    if crate::presentation_controls::button(
+        ui,
+        "parameter.new",
+        "parameter-action",
+        &["compact"],
+        "New parameter…",
+        true,
+        false,
+    )
+    .clicked()
+    {
+        action(w, "parameter.new");
+        return;
+    }
+    let doc = w.session.visible();
+    let owner = w.view.active_part.as_deref().unwrap_or(&doc.root);
+    let mut rows = Vec::new();
+    if let Some(assembly) = doc.assemblies.get(owner) {
+        for (alias, reference) in &assembly.promoted_parameters {
+            if let Some(p) = crate::named_parameter_ui::parameters(doc, &reference.definition)
+                .and_then(|params| params.get(&reference.parameter))
+            {
+                rows.push((
+                    reference.definition.clone(),
+                    reference.parameter.clone(),
+                    p.clone(),
+                    Some(format!("Promoted as {alias}")),
+                ));
+            }
         }
-    });
+    }
+    if let Some((definition, key)) = w
+        .fields
+        .get("editing-parameter")
+        .and_then(|target| target.rsplit_once("::"))
+        && definition != owner
+        && !rows
+            .iter()
+            .any(|(def, id, _, _)| def == definition && id == key)
+        && let Some(value) = crate::named_parameter_ui::parameters(doc, definition)
+            .and_then(|params| params.get(key))
+    {
+        rows.insert(
+            0,
+            (
+                definition.into(),
+                key.into(),
+                value.clone(),
+                Some(format!(
+                    "From {}",
+                    cad_core::presentation::definition_name(doc, definition)
+                )),
+            ),
+        );
+    }
+    if let Some(parameters) = crate::named_parameter_ui::parameters(doc, owner) {
+        rows.extend(
+            parameters
+                .iter()
+                .map(|(id, value)| (owner.to_owned(), id.clone(), value.clone(), None)),
+        );
+    }
     egui::ScrollArea::vertical()
         .id_salt("instruments")
         .show(ui, |ui| {
-            if let Some(target) = w.fields.get("editing-parameter").cloned()
-                && let Some((definition, key)) = target.rsplit_once("::")
-                && definition != owner
-                && let Some(value) = doc
-                    .parts
-                    .get(definition)
-                    .map(|p| &p.parameters)
-                    .or_else(|| doc.assemblies.get(definition).map(|a| &a.parameters))
-                    .and_then(|parameters| parameters.get(key))
-            {
-                ui.small(format!(
-                    "Referenced parameter · {}",
-                    cad_core::presentation::definition_name(&doc, definition)
-                ));
-                parameter(ui, w, definition, key, value);
-                ui.separator();
-            }
-            if let Some(assembly) = doc.assemblies.get(&owner) {
-                for (alias, reference) in &assembly.promoted_parameters {
-                    if let Some(p) = doc
-                        .parts
-                        .get(&reference.definition)
-                        .and_then(|p| p.parameters.get(&reference.parameter))
-                    {
-                        ui.small(format!("Promoted: {alias}"));
-                        parameter(ui, w, &reference.definition, &reference.parameter, p);
+            for (definition, id, value, context) in rows {
+                ui.push_id((&definition, &id, &context), |ui| {
+                    if let Some(context) = &context {
+                        ui.small(context);
                     }
-                }
-            }
-            if let Some(params) = params {
-                for (id, p) in params {
-                    parameter(ui, w, &owner, id, p);
+                    parameter(ui, w, &definition, &id, &value);
                     ui.add_space(6.);
-                }
-            }
-            if let Some(part) = doc.parts.get(&owner)
-                && let Some(f) = w
-                    .view
-                    .active_node
-                    .as_ref()
-                    .and_then(|id| part.features.iter().find(|f| &f.id == id))
-            {
-                ui.separator();
-                ui.label(RichText::new(&f.name).strong());
-                let mut json = serde_json::to_value(&f.operation).unwrap_or(Value::Null);
-                if edit_value(ui, &mut json, "operation") {
-                    match serde_json::from_value(json) {
-                        Ok(operation) => w.dispatch(Command::PutFeature {
-                            definition: owner.clone(),
-                            feature: Feature {
-                                operation,
-                                ..f.clone()
-                            }
-                            .into(),
-                            output: false,
-                        }),
-                        Err(e) => w.status = e.to_string(),
-                    }
-                }
-                let suppressed =
-                    cad_core::configuration::feature_suppressed(w.session.visible(), &owner, f);
-                ui.horizontal(|ui| {
-                    if ui.small_button("Source").clicked() {
-                        feature_dialog(w, Some(f.clone()));
-                    }
-                    if ui
-                        .small_button(if suppressed { "Resume" } else { "Suppress" })
-                        .clicked()
-                    {
-                        w.dispatch(Command::SuppressFeature {
-                            definition: owner.clone(),
-                            feature: f.id.clone(),
-                            suppressed: !suppressed,
-                        });
-                    }
-                    if ui.small_button("Delete").clicked() {
-                        w.dispatch(Command::DeleteFeature {
-                            definition: owner.clone(),
-                            feature: f.id.clone(),
-                        });
-                    }
                 });
             }
         });
@@ -563,67 +576,6 @@ fn parameter(ui: &mut egui::Ui, w: &mut Workspace, owner: &str, id: &str, p: &Pa
         }
     }
 }
-fn edit_value(ui: &mut egui::Ui, v: &mut Value, path: &str) -> bool {
-    let mut changed = false;
-    match v {
-        Value::Object(o) => {
-            for (k, value) in o {
-                if k == "kind" {
-                    ui.small(format!("Type: {value}"));
-                    continue;
-                }
-                ui.push_id(format!("{path}/{k}"), |ui| {
-                    if value.is_array() || value.is_object() {
-                        egui::CollapsingHeader::new(k)
-                            .default_open(false)
-                            .show(ui, |ui| {
-                                changed |= edit_value(ui, value, &format!("{path}/{k}"))
-                            });
-                    } else {
-                        ui.horizontal(|ui| {
-                            ui.small(k);
-                            changed |= edit_value(ui, value, &format!("{path}/{k}"));
-                        });
-                    }
-                });
-            }
-        }
-        Value::Array(a) => {
-            for (index, v) in a.iter_mut().enumerate() {
-                ui.push_id(index, |ui| {
-                    changed |= edit_value(ui, v, &format!("{path}/{index}"))
-                });
-            }
-        }
-        Value::String(s) => {
-            changed |= ui
-                .add(egui::TextEdit::singleline(s).desired_width(150.))
-                .changed();
-        }
-        Value::Number(n) => {
-            if n.is_u64() {
-                let mut x = n.as_u64().unwrap_or(0);
-                if ui.add(egui::DragValue::new(&mut x).speed(1)).changed() {
-                    *n = x.into();
-                    changed = true;
-                }
-            } else {
-                let mut x = n.as_f64().unwrap_or(0.);
-                if ui.add(egui::DragValue::new(&mut x).speed(0.1)).changed()
-                    && let Some(num) = serde_json::Number::from_f64(x)
-                {
-                    *n = num;
-                    changed = true;
-                }
-            }
-        }
-        Value::Bool(b) => changed = ui.checkbox(b, "").changed(),
-        Value::Null => {
-            ui.small("None");
-        }
-    }
-    changed
-}
 fn preview_status(ui: &mut egui::Ui, w: &Workspace) {
     let (label, state) = crate::workspace_controls::validation_summary(w);
     crate::presentation_controls::label(
@@ -660,7 +612,9 @@ fn presentation_registry() -> crate::presentation_composition::Registry {
     registry.register("document-context", |ui, w, context| {
         crate::cad_ui::menu(ui, w, context.semantics)
     });
-    registry.register("command-manager", |ui, w, _| crate::cad_ui::commands(ui, w));
+    registry.register("command-manager", |ui, w, context| {
+        crate::cad_ui::commands(ui, w, context.semantics)
+    });
     registry.register("command-ribbon", crate::command_chrome::ribbon);
     registry.register("feature-timeline", crate::command_chrome::timeline);
     registry.register("model-browser", |ui, w, _| {
@@ -1094,6 +1048,12 @@ pub(crate) fn semantic_element(
 pub(crate) fn semantic_action(w: &mut Workspace, element: &SemanticElement, command: &str) {
     if w.file_switch.is_some() {
         crate::file_switch_ui::action(w, command);
+        return;
+    }
+    if command == "draft.cancel" && crate::named_parameter_ui::cancel(w) {
+        return;
+    }
+    if crate::named_parameter_ui::action(w, command, Some(&element.data)) {
         return;
     }
     if command.starts_with("sketch.")
@@ -1833,9 +1793,16 @@ pub(crate) fn semantic_field(ui: &mut egui::Ui, w: &mut Workspace, element: &Sem
                 };
                 let editor = if element.data.get("multiline").and_then(Value::as_bool) == Some(true)
                 {
-                    egui::TextEdit::multiline(&mut text)
-                        .code_editor()
-                        .desired_rows(12)
+                    let rows = element.data["visible_rows"]
+                        .as_u64()
+                        .unwrap_or(12)
+                        .clamp(1, 50);
+                    let editor = egui::TextEdit::multiline(&mut text).desired_rows(rows as usize);
+                    if element.data["multiline_style"].as_str() == Some("prose") {
+                        editor
+                    } else {
+                        editor.code_editor()
+                    }
                 } else {
                     egui::TextEdit::singleline(&mut text)
                 };
@@ -2381,6 +2348,12 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         crate::file_switch_ui::action(w, cmd);
         return;
     }
+    if cmd == "draft.cancel" && crate::named_parameter_ui::cancel(w) {
+        return;
+    }
+    if crate::named_parameter_ui::action(w, cmd, None) {
+        return;
+    }
     if cmd.starts_with("sketch.")
         && let Some(reason) = crate::cad_ui::command_disabled_reason(w, cmd)
     {
@@ -2646,7 +2619,7 @@ pub(crate) fn action(w: &mut Workspace, cmd: &str) {
         }
         "configurations" => crate::configuration_ui::begin(w, "configuration"),
         "equations" => crate::configuration_ui::begin(w, "equations"),
-        "parameter.new" => w.open_editor("parameter"),
+        "parameter.new" => crate::named_parameter_ui::begin(w),
         "libraries" => w.open_editor("libraries"),
         "file.new-part" => {
             crate::file_switch_ui::request(w, crate::file_switch_ui::Destination::NewPart)
@@ -3123,15 +3096,17 @@ pub(crate) fn feature_dialog(w: &mut Workspace, f: Option<Feature>) {
 }
 pub(crate) fn feature_preset(w: &mut Workspace, name: &str) {
     if name == "Weld Bead" {
-        if w.session
-            .visible()
-            .assemblies
-            .contains_key(&w.session.visible().root)
-        {
-            let owner = w.session.visible().root.clone();
-            crate::assembly_welds_ui::new(w, &owner);
-        } else {
+        if w.view.active_part.is_some() {
             crate::weld_beads_ui::preset(w);
+        } else {
+            let doc = w.session.visible();
+            let owner = w
+                .fields
+                .get("assembly-id")
+                .filter(|id| doc.assemblies.contains_key(*id))
+                .unwrap_or(&doc.root)
+                .clone();
+            crate::assembly_welds_ui::new(w, &owner);
         }
         return;
     }
@@ -3730,8 +3705,8 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
         crate::command_palette::show(ui, w);
         return;
     }
-    if dialog == "properties" {
-        crate::cad_ui::properties(ui, w);
+    if dialog == "parameter" {
+        crate::named_parameter_ui::show(ui, w);
         return;
     }
     if dialog == "document-identity" {
@@ -3778,7 +3753,9 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             "properties" => "Model Properties",
             _ => "Command search",
         };
-        let title = if w.tool_checkpoint.is_some() && dialog != "publish" {
+        let title = if w.tool_checkpoint.is_some()
+            && !matches!(dialog.as_str(), "publish" | "properties")
+        {
             operation_title.as_str()
         } else {
             title
@@ -3831,11 +3808,12 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             }
         }
     });
-    if let Some(part) = w
-        .view
-        .active_part
-        .as_ref()
-        .and_then(|id| w.session.visible().parts.get(id))
+    if crate::workspace_controls::in_place(w)
+        && let Some(part) = w
+            .view
+            .active_part
+            .as_ref()
+            .and_then(|id| w.session.visible().parts.get(id))
     {
         crate::presentation_controls::label(
             ui,
@@ -3855,6 +3833,7 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
             && !matches!(
                 dialog.as_str(),
                 "drawings"
+                    | "properties"
                     | "materials"
                     | "standard-parts"
                     | "camera-views"
@@ -3943,66 +3922,6 @@ fn property_manager(ui: &mut egui::Ui, w: &mut Workspace) {
                 "controls" => {
                     if ui.button("Open Settings…").clicked() {
                         crate::settings::open(w, Some("application.navigation"));
-                    }
-                }
-                "parameter" => {
-                    let mut name = w
-                        .fields
-                        .get("parameter-name")
-                        .cloned()
-                        .unwrap_or("dimension".into());
-                    let mut value = w
-                        .fields
-                        .get("parameter-value")
-                        .cloned()
-                        .unwrap_or("10 mm".into());
-                    ui.label("Identity / name");
-                    ui.text_edit_singleline(&mut name);
-                    ui.label("Expression");
-                    ui.text_edit_singleline(&mut value);
-                    w.fields.insert("parameter-name".into(), name.clone());
-                    w.fields.insert("parameter-value".into(), value.clone());
-                    let mut dimension = w
-                        .fields
-                        .get("parameter-dimension")
-                        .cloned()
-                        .unwrap_or("length".into());
-                    egui::ComboBox::from_id_salt("param-dimension")
-                        .selected_text(&dimension)
-                        .show_ui(ui, |ui| {
-                            for d in ["length", "angle", "scalar"] {
-                                ui.selectable_value(&mut dimension, d.into(), d);
-                            }
-                        });
-                    w.fields
-                        .insert("parameter-dimension".into(), dimension.clone());
-                    if ui.button("Add to draft").clicked() {
-                        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')
-                        {
-                            let definition = w
-                                .view
-                                .active_part
-                                .clone()
-                                .unwrap_or(w.session.visible().root.clone());
-                            w.dispatch(Command::PutParameter {
-                                definition,
-                                parameter: name.clone(),
-                                value: Parameter {
-                                    name,
-                                    expression: Expr(value),
-                                    dimension: match dimension.as_str() {
-                                        "angle" => Dimension::Angle,
-                                        "scalar" => Dimension::Scalar,
-                                        _ => Dimension::Length,
-                                    },
-                                },
-                            });
-                            w.dialog = None;
-                        } else {
-                            w.status =
-                                "Use letters, digits and underscores for the parameter identity"
-                                    .into();
-                        }
                     }
                 }
                 _ => crate::command_palette::show(ui, w),

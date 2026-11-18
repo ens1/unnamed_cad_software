@@ -505,20 +505,16 @@ pub(crate) fn fields(
     let sources = choices(w, doc, profiles, thin);
     let listed = !selections.is_empty();
     let can_choose = can_choose_contours(&sources);
-    controls::label(
-        ui,
-        "contours.heading",
-        "field-label",
-        &[],
-        "Sketch contours",
-        "ready",
-    );
     ui.horizontal_wrapped(|ui| {
         if controls::selectable(
             ui,
             "contours.mode.all",
             "contour-mode",
-            "Automatic",
+            if thin {
+                "All contours"
+            } else {
+                "All closed contours"
+            },
             !listed,
         )
         .on_hover_text(selection_hint(true, thin))
@@ -544,14 +540,6 @@ pub(crate) fn fields(
         }
     });
     if selections.is_empty() {
-        controls::label(
-            ui,
-            "contours.hint",
-            "context-hint",
-            &[],
-            selection_hint(true, thin),
-            "ready",
-        );
         for source in &sources {
             if let Some(error) = &source.error {
                 controls::label(ui, "contours.error", "diagnostic", &[], error, "error");
@@ -890,7 +878,11 @@ pub(crate) fn semantics(w: &Workspace) -> Vec<SemanticElement> {
     for (id, label, selected, change) in [
         (
             "contours.mode.all",
-            "Automatic",
+            if thin {
+                "All contours"
+            } else {
+                "All closed contours"
+            },
             selections.is_empty(),
             Change::All,
         ),
